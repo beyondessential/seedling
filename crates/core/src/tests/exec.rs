@@ -32,12 +32,12 @@ impl RecordingExecutor {
 impl crate::runtime::barrier::Executor for RecordingExecutor {
     fn exec(
         &self,
-        name: &str,
+        target: &crate::runtime::ResourceInstance,
         argv: &[String],
         extra_env: &[(String, String)],
     ) -> Result<i32, String> {
         self.calls.lock().push(RecordedExec {
-            name: name.to_owned(),
+            name: target.display_name.clone(),
             argv: argv.to_vec(),
             env: extra_env.to_vec(),
         });
@@ -167,7 +167,7 @@ fn rt_exec_rejects_scale_range_with_upper_above_one() {
         r#"
         let api = app.deployment("api")
             .image("docker.io/library/busybox:latest")
-            .scale(1..3);
+            .scale(1..=3);
         app.on_action("nope", |rt, _param| {
             rt.exec(api, ["echo", "hi"]);
         });
@@ -189,15 +189,18 @@ fn rt_exec_rejects_scale_range_with_upper_above_one() {
 }
 
 // spec: RT#command-execution
+// spec: AUTO#scale
+// The range's upper bound of 1 is accepted; at its effective scale of 0 the
+// deployment has no container for the command to run in.
 #[test]
-fn rt_exec_accepts_zero_to_one_range() {
+fn rt_exec_accepts_zero_to_one_range_and_finds_no_container_at_scale_zero() {
     let exec = Arc::new(RecordingExecutor::default());
     let log = InMemoryActionLog::new();
     let result = run_action_with_executor(
         r#"
         let api = app.deployment("api")
             .image("docker.io/library/busybox:latest")
-            .scale(0..1);
+            .scale(0..=1);
         app.on_action("ping", |rt, _param| {
             rt.exec(api, ["echo", "hi"]);
         });
@@ -206,11 +209,14 @@ fn rt_exec_accepts_zero_to_one_range() {
         Arc::clone(&exec),
         &log,
     );
+    let OperationResult::Failed(err) = result else {
+        panic!("a deployment at scale 0 has no container to run in, got {result:?}");
+    };
     assert!(
-        matches!(result, OperationResult::Completed),
-        "scale(0..1) must be accepted, got {result:?}"
+        err.to_string().contains("resolved to no instances"),
+        "refused for something other than having no instance: {err}"
     );
-    assert_eq!(exec.calls.lock().len(), 1);
+    assert!(exec.calls.lock().is_empty());
 }
 
 // spec: RT#command-execution
@@ -366,11 +372,39 @@ fn rt_exec_rejects_invalid_env_var_name() {
     match result {
         OperationResult::Failed(e) => {
             assert!(
-                e.to_string().contains("env var name"),
-                "error should mention the bad env var name, got: {e}"
+                e.to_string().contains("1BAD"),
+                "error should name the bad env var, got: {e}"
             );
         }
         other => panic!("expected Failed for invalid env var, got {other:?}"),
+    }
+}
+
+// spec: RT#command-execution
+// spec: CTR#environment
+#[test]
+fn rt_exec_env_meets_the_rules_of_a_container_environment() {
+    for (name, value) in [("PATH", "x"), ("LD_PRELOAD", "x"), ("OK", "a\\u0000b")] {
+        let exec = Arc::new(RecordingExecutor::default());
+        let log = InMemoryActionLog::new();
+        let result = run_action_with_executor(
+            &format!(
+                r#"
+                let api = app.deployment("api").image("docker.io/library/busybox:latest");
+                app.on_action("nope", |rt, _param| {{
+                    rt.exec(api, ["echo", "hi"], #{{ env: #{{ "{name}": "{value}" }} }});
+                }});
+                "#
+            ),
+            "nope",
+            Arc::clone(&exec),
+            &log,
+        );
+        assert!(
+            matches!(result, OperationResult::Failed(_)),
+            "{name}: expected Failed, got {result:?}"
+        );
+        assert!(exec.calls.lock().is_empty(), "{name}: the command ran");
     }
 }
 
@@ -462,5 +496,52 @@ fn rt_exec_skipped_on_replay_recovers_exit_code() {
         exec.calls.lock().len(),
         1,
         "rt.exec must be at-most-once across replays"
+    );
+}
+
+/// An executor whose target is never running.
+struct NotRunning;
+
+impl crate::runtime::barrier::Executor for NotRunning {
+    fn check_running(&self, target: &crate::runtime::ResourceInstance) -> Result<(), String> {
+        Err(format!("{} is not running", target.display_name))
+    }
+
+    fn exec(
+        &self,
+        _target: &crate::runtime::ResourceInstance,
+        _argv: &[String],
+        _extra_env: &[(String, String)],
+    ) -> Result<i32, String> {
+        panic!("a command was run in a container that is not running");
+    }
+}
+
+// spec: RT#command-execution
+#[test]
+fn rt_exec_throws_before_anything_is_recorded_when_the_target_is_not_running() {
+    let log = InMemoryActionLog::new();
+    let result = run_action_with(
+        r#"
+        let api = app.deployment("api").image("docker.io/library/busybox:latest");
+        app.on_action("ping", |rt, _param| {
+            rt.exec(api, ["echo", "hi"]);
+        });
+        "#,
+        &[],
+        "ping",
+        Some(&log),
+        ActionHooks {
+            executor: Some(Arc::new(NotRunning)),
+            ..Default::default()
+        },
+    );
+    match result {
+        OperationResult::Failed(e) => assert!(e.to_string().contains("is not running"), "{e}"),
+        other => panic!("expected a failure, got {other:?}"),
+    }
+    assert!(
+        crate::runtime::ActionLog::load(&log).unwrap().is_empty(),
+        "the call was put on record although it never ran"
     );
 }

@@ -5,8 +5,9 @@ use rhai::{CustomType, Dynamic, EvalAltResult, TypeBuilder};
 use seedling_protocol::names::AppName;
 
 /// The exec target resolved by `ShellControl::attach` from a Job.
-/// Passed back to the OI layer which translates it to a `ContainerSpec`
-/// via the standard `job_spec` pipeline and runs `podman run --rm -it`.
+/// Handed to the session's `ShellHost`, which translates it to a
+/// `ContainerSpec` via the standard `job_spec` pipeline and runs
+/// `podman run --rm -it`.
 pub struct ShellExecTarget {
     pub job_def: crate::defs::job::JobDef,
     /// BSL-level name of the Job (from `app.job("name")`), used to derive
@@ -20,17 +21,114 @@ pub struct ShellExecTarget {
     pub instance_id: crate::runtime::identity::InstanceId,
 }
 
-/// Outcome of a shell closure: either an exec target or an error message.
-pub enum ShellOutcome {
-    Attach(ShellExecTarget),
-    Error(String),
+// spec: ACN#shellexit
+/// How a shell's attachment ended: the job's exit status if its process
+/// exited, and nothing if the attachment ended first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellExit {
+    exit_code: Option<i32>,
+}
+
+impl ShellExit {
+    /// The job's process exited with this status.
+    pub fn exited(exit_code: i32) -> Self {
+        Self {
+            exit_code: Some(exit_code),
+        }
+    }
+
+    /// The attachment ended without the job's process exiting, or its exit
+    /// was never observed.
+    pub fn ended() -> Self {
+        Self { exit_code: None }
+    }
+
+    pub fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
+}
+
+impl CustomType for ShellExit {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("ShellExit")
+            // spec: ACN#shellexit
+            .with_fn("exited", |this: &mut Self| -> bool {
+                this.exit_code.is_some()
+            })
+            // spec: ACN#shellexit
+            .with_fn("exit_code", |this: &mut Self| -> Dynamic {
+                this.exit_code
+                    .map_or(Dynamic::UNIT, |code| Dynamic::from(i64::from(code)))
+            })
+            // spec: ACN#shellexit
+            .with_fn("success", |this: &mut Self| -> bool {
+                this.exit_code == Some(0)
+            })
+            // spec: ACN#shellexit
+            .with_fn(
+                "ensure_success",
+                |this: &mut Self| -> Result<(), Box<EvalAltResult>> {
+                    match this.exit_code {
+                        Some(0) => Ok(()),
+                        Some(code) => Err(Box::new(EvalAltResult::ErrorRuntime(
+                            format!(
+                                "shell job failed with exit code {}",
+                                super::runtime::format_exit_code(code)
+                            )
+                            .into(),
+                            rhai::Position::NONE,
+                        ))),
+                        None => Err(Box::new(EvalAltResult::ErrorRuntime(
+                            "shell job did not exit".into(),
+                            rhai::Position::NONE,
+                        ))),
+                    }
+                },
+            );
+    }
+}
+
+/// What starts and runs a shell's job while the closure waits in
+/// `shell.attach`.
+pub trait ShellHost: Send + Sync {
+    /// Starts the job, connects the operator's input and output to it, and
+    /// returns once the attachment has ended, with the job stopped and the
+    /// output finished. Called on the closure's own thread, so it blocks.
+    /// An error is why the job could not be attached.
+    fn attach(&self, target: ShellExecTarget) -> Result<ShellExit, String>;
+}
+
+/// What a shell closure has done, as the session needs to read it once the
+/// closure has returned.
+#[derive(Default)]
+pub struct ShellProgress {
+    attachment: Mutex<Option<Result<ShellExit, String>>>,
+    error: Mutex<Option<String>>,
+}
+
+impl ShellProgress {
+    /// Whether the closure called `shell.attach`, whether or not it worked.
+    pub fn attached(&self) -> bool {
+        self.attachment.lock().is_some()
+    }
+
+    /// Why the job could not be attached, if the closure tried.
+    pub fn attach_failure(&self) -> Option<String> {
+        self.attachment.lock().as_ref()?.as_ref().err().cloned()
+    }
+
+    /// The message of the closure's `shell.error`, if it called it.
+    pub fn error(&self) -> Option<String> {
+        self.error.lock().clone()
+    }
 }
 
 /// Context installed in the thread-local before running a shell closure.
-/// Provides a slot for `ShellControl` methods to write results into.
 pub struct ShellAttachCtx {
     pub app_name: AppName,
-    pub result: Arc<Mutex<Option<ShellOutcome>>>,
+    pub host: Arc<dyn ShellHost>,
+    pub progress: Arc<ShellProgress>,
 }
 
 thread_local! {
@@ -63,47 +161,60 @@ impl ShellControl {
     }
 
     // spec: ACN#shell-control
-    fn do_attach(&mut self, job: Dynamic) -> Result<(), Box<EvalAltResult>> {
+    fn do_attach(&mut self, job: Dynamic) -> Result<ShellExit, Box<EvalAltResult>> {
         use crate::defs::job::Job;
 
-        if self.attached {
-            return Err(Box::new(EvalAltResult::ErrorRuntime(
-                "shell.attach() already called".into(),
-                rhai::Position::NONE,
-            )));
-        }
-
-        let j = job.try_cast::<Job>().ok_or_else(|| {
+        let throw = |message: String| {
             Box::new(EvalAltResult::ErrorRuntime(
-                "shell.attach() requires a Job argument".into(),
+                message.into(),
                 rhai::Position::NONE,
             ))
-        })?;
+        };
 
-        SHELL_ATTACH_CTX.with(|ctx| {
-            let ctx = ctx.borrow();
-            let Some(ref c) = *ctx else { return };
+        if self.attached {
+            return Err(throw("shell.attach() already called".into()));
+        }
 
-            let job_def = j.def.lock().clone();
-            let job_name = j.name.to_string();
-
-            *c.result.lock() = Some(ShellOutcome::Attach(ShellExecTarget {
-                job_def,
-                job_name,
-                app_name: c.app_name.clone(),
-                instance_id: crate::runtime::identity::InstanceId::generate(),
-            }));
-        });
-
+        let j = job
+            .try_cast::<Job>()
+            .ok_or_else(|| throw("shell.attach() requires a Job argument".into()))?;
         self.attached = true;
-        Ok(())
+
+        let Some((host, progress, app_name)) = SHELL_ATTACH_CTX.with(|ctx| {
+            ctx.borrow().as_ref().map(|c| {
+                (
+                    Arc::clone(&c.host),
+                    Arc::clone(&c.progress),
+                    c.app_name.clone(),
+                )
+            })
+        }) else {
+            // Image discovery and script exercising run the closure with no
+            // session to attach to.
+            return Ok(ShellExit::exited(0));
+        };
+
+        // The closure runs again from its start each time a later call
+        // suspends it, and the attachment is not undone by that.
+        if let Some(recorded) = progress.attachment.lock().clone() {
+            return recorded.map_err(throw);
+        }
+
+        let attached = host.attach(ShellExecTarget {
+            job_def: j.def.lock().clone(),
+            job_name: j.name.to_string(),
+            app_name,
+            // spec: IDN#job-instances
+            instance_id: crate::runtime::identity::InstanceId::generate(),
+        });
+        *progress.attachment.lock() = Some(attached.clone());
+        attached.map_err(throw)
     }
 
     fn do_error(&mut self, msg: &str) -> Result<(), Box<EvalAltResult>> {
         SHELL_ATTACH_CTX.with(|ctx| {
-            let ctx = ctx.borrow();
-            if let Some(ref c) = *ctx {
-                *c.result.lock() = Some(ShellOutcome::Error(msg.to_owned()));
+            if let Some(c) = ctx.borrow().as_ref() {
+                *c.progress.error.lock() = Some(msg.to_owned());
             }
         });
 
@@ -120,7 +231,7 @@ impl CustomType for ShellControl {
             .with_name("ShellControl")
             .with_fn(
                 "attach",
-                |this: &mut Self, job: Dynamic| -> Result<(), Box<EvalAltResult>> {
+                |this: &mut Self, job: Dynamic| -> Result<ShellExit, Box<EvalAltResult>> {
                     this.do_attach(job)
                 },
             )

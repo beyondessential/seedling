@@ -118,6 +118,7 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | `desired_state_unreadable` | none | the runtime cannot compute the app's [desired state](reconciliation.md#desired-state) from its stored records | the runtime next computes it | condition |
 | `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes successfully | event |
 | `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes successfully | event |
+| `operation_cleanup_stalled` | the operation | the [dynamic resources](../language/app.md#dynamic-resource-lifetime) of an ended operation are not all torn down within a minute of its end, or the runtime cannot read their records | every dynamic resource of the operation is torn down | condition |
 | `install_interrupted` | none | at startup, an interrupted install cannot be resumed because its parameter values are missing or cannot be decrypted | a later install of the app completes, or an operator clears it | latched |
 | `teardown_identities_unreadable` | none | the runtime cannot read the app's recorded identities during its [teardown](app-teardown.md#uninstall-scope) | the runtime next reads them | condition |
 | `uninstall_unidentifiable_units` | none | an uninstall of an app with no recorded identities finds resources on the host that may belong to it, as [uninstall scope](app-teardown.md#uninstall-scope) specifies | the app's teardown completes, or an operator clears it | latched |
@@ -186,8 +187,11 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `ipv4_egress_undetermined` | whether the host has [IPv4 egress](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
 | `timezone_undetermined` | the host's [local time zone](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
 | `host_constant_undetermined` | the value of `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `HAS_SNAPSHOTS` or `NODE_NAME` cannot be [determined](../language/constants.md#determining-host-constants); the description names each such constant | every one of them is determined | condition |
+| `site_ingresses_unreadable` | the runtime cannot read the [site ingresses or their attachments](site-resources.md#unreadable-site-ingresses) | the runtime next reads them | condition |
+| `site_services_unreadable` | the runtime cannot read the [site services or the external service mappings](site-resources.md#unreadable-site-services) | the runtime next reads them | condition |
 | `schedules_unreadable` | the runtime cannot read the [schedule records](scheduled-actions.md#schedule-records) at all | the runtime next reads them | condition |
 | `operation_state_unreadable` | the runtime cannot read the [persisted operation, its cancel, or the persisted queue](operations.md#unreadable-operation-state) | the read succeeds | condition |
+| `dynamic_resources_unreadable` | the runtime cannot read the records of the [dynamic resources](suspension.md#abandoned-replay) that previous runs left to tear down | the runtime next reads them | condition |
 | `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running, or the resolver is stopped because no app is installed or installing | condition |
 | `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | for a failed bring-up, an iteration finds the proxy healthy; for a rejected upgrade, an upgrade succeeds; in either case, the proxy is stopped because no app is installed or installing | condition |
 | `routes_failed` | applying the host's routes fails | the routes are next applied | condition |

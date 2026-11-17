@@ -7,6 +7,7 @@ use super::{
     pod::PodDef,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
+use crate::runtime::identity::InstanceId;
 
 // spec: JOB#instances
 #[derive(Debug, Default, Clone)]
@@ -22,13 +23,16 @@ pub struct Job {
     pub name: ResourceName,
     pub def: Holder<JobDef>,
     pub frozen: bool,
+    /// The identity an anonymous Job holds for its lifetime; `None` for a named one.
+    // spec: IDN#anonymous-instances
+    pub anon_id: Option<InstanceId>,
 }
 
 impl super::Freezable for Job {
     // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
-        // Anonymous jobs use an empty name as a sentinel (see app/job.rs).
-        self.frozen || (!self.name.is_empty() && is_in_action_closure())
+        // An anonymous job stays mutable inside the action that creates it.
+        self.frozen || (self.anon_id.is_none() && is_in_action_closure())
     }
 }
 

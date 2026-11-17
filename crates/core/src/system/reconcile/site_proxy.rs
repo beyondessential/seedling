@@ -18,7 +18,7 @@ use crate::{
         site_ingresses::{self, SiteIngressDef, TlsProvider},
     },
     system::{
-        translate::proxy::{RedirectTarget, ServiceUpstream, instance_ipv6},
+        translate::proxy::{RedirectTarget, ServiceUpstream},
         types::{L4Proto, L4Route},
     },
 };
@@ -38,6 +38,10 @@ pub(super) struct SiteProxyData {
     /// `(site_ingress, port, protocol, reason)` for entries that couldn't
     /// be resolved this tick. Used for fault filing.
     pub unresolved: Vec<UnresolvedAttachment>,
+    /// When each site ingress first had an attachment on a port, which orders
+    /// site ingresses claiming the same `(hostname, port)`.
+    // spec: SITE#ingress-conflicts
+    pub created: std::collections::BTreeMap<(SiteIngressName, u16), String>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,20 +74,18 @@ pub(super) struct SiteIngressSnapshot {
     pub attachments: Vec<SiteIngressAttachment>,
 }
 
+/// Read the site ingresses and their attachments for one tick.
+///
+/// A failed read is an error, never an empty snapshot: the snapshot feeds the
+/// proxy configuration and the redirect rules, which are applied wholesale, so
+/// an empty one would withdraw every site ingress port.
 // spec: SITE#site-ingresses, SITE#attachments
-pub(super) fn load(db: &crate::runtime::db::Db) -> SiteIngressSnapshot {
-    let ingresses = site_ingresses::list(db).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "site_proxy: failed to list site ingresses; using empty");
-        Vec::new()
-    });
-    let attachments = site_ingress_attachments::list_all(db).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "site_proxy: failed to list site ingress attachments; using empty");
-        Vec::new()
-    });
-    SiteIngressSnapshot {
-        ingresses,
-        attachments,
-    }
+// spec: SITE#unreadable-site-ingresses
+pub(super) fn load(db: &crate::runtime::db::Db) -> rusqlite::Result<SiteIngressSnapshot> {
+    Ok(SiteIngressSnapshot {
+        ingresses: site_ingresses::list(db)?,
+        attachments: site_ingress_attachments::list_all(db)?,
+    })
 }
 
 // spec: SITE#site-ingresses, SITE#attachments
@@ -99,6 +101,7 @@ pub(super) fn collect(
         redirects: Vec::new(),
         l4_routes: Vec::new(),
         unresolved: Vec::new(),
+        created: std::collections::BTreeMap::new(),
     };
 
     for ingress in &snapshot.ingresses {
@@ -113,6 +116,14 @@ pub(super) fn collect(
             .iter()
             .filter(|a| a.site_ingress == ingress.name)
         {
+            data.created
+                .entry((ingress.name.clone(), att.port))
+                .and_modify(|first| {
+                    if att.created_at < *first {
+                        first.clone_from(&att.created_at);
+                    }
+                })
+                .or_insert_with(|| att.created_at.clone());
             resolve_attachment(
                 ingress,
                 att,
@@ -150,6 +161,7 @@ fn resolve_attachment(
                 match resolve_forward_upstream(
                     app,
                     service,
+                    att,
                     apps,
                     running_pods_by_app,
                     node_prefix,
@@ -170,6 +182,7 @@ fn resolve_attachment(
                                 port: att.port,
                                 proto,
                                 upstreams: vec![upstream_url],
+                                terminate_tls: false,
                             },
                         });
                     }
@@ -237,6 +250,7 @@ fn resolve_attachment(
             match resolve_forward_upstream(
                 app,
                 service,
+                att,
                 apps,
                 running_pods_by_app,
                 node_prefix,
@@ -272,6 +286,7 @@ fn resolve_attachment(
 fn resolve_forward_upstream(
     target_app: &AppName,
     target_service: &seedling_protocol::names::AppServiceName,
+    att: &SiteIngressAttachment,
     apps: &[AppSnapshot],
     running_pods_by_app: &std::collections::HashMap<AppName, Vec<super::RunningPod>>,
     node_prefix: &Ipv6Net,
@@ -298,13 +313,13 @@ fn resolve_forward_upstream(
     let svc_instance = registry
         .get_or_create_singleton(target_app, ResourceKind::Service, Some(svc_name_str))
         .map_err(|e| format!("registry lookup for {target_app}/{svc_name_str} failed: {e}"))?;
-    let service_ip = instance_ipv6(node_prefix, &svc_instance);
+    let service_ip = registry
+        .service_address(node_prefix, &svc_instance)
+        .map_err(|e| format!("address lookup for {target_app}/{svc_name_str} failed: {e}"))?;
 
-    // Find the listening pod port for this service (matches
-    // `super::proxy::find_upstream_port`'s strategy). When no binding is
-    // declared we fall back to a sentinel so the operator sees an obvious
-    // failure rather than a silent 502.
-    let upstream_port = scan_apps_for_service_port(snapshot, svc_name_str)
+    // A service no pod binds for the attachment's transport leaves the
+    // attachment out, reported as unresolved, rather than serving a 502.
+    let forwarded_port = scan_apps_for_service_port(snapshot, svc_name_str, att.protocol)
         .ok_or_else(|| format!("no pod binding found for {target_app}/{svc_name_str}"))?;
 
     // spec: PRX#route-emission
@@ -336,51 +351,94 @@ fn resolve_forward_upstream(
     // site ingress attached to the same service.
     let redirects = super::proxy::collect_redirect_routes(&service_def);
 
+    // spec: SITE#attachments
+    // spec: PRX#route-emission
+    // A TCP or UDP attachment's traffic reaches the forwarded port. An HTTP
+    // attachment's routes are the service's, as an app ingress's would be, so
+    // its fallback route's upstream is where an app ingress's would be.
+    let service_port = match att.protocol {
+        AttachmentProtocol::Tcp | AttachmentProtocol::Udp => forwarded_port,
+        AttachmentProtocol::Http | AttachmentProtocol::Http2 => service_def.fallback_port(att.port),
+    };
+
     Ok(ServiceUpstream {
         routes,
         redirects,
         service_ip,
-        service_port: upstream_port,
+        service_port,
         // Resolved against the app that declares the service, not the site,
         // so an attachment serves a route exactly as its own ingress would.
         proxy: super::proxy::service_level_proxy(&snapshot.app_def, svc_name_str, &service_def),
     })
 }
 
-fn scan_apps_for_service_port(snapshot: &AppSnapshot, service_name: &str) -> Option<u16> {
-    for resource in snapshot.app_def.resources.values() {
-        let result = match resource {
+/// The forwarded port of an attachment of `protocol` to `service_name`: the
+/// service port of the first binding of it a pod of the app makes, looking in
+/// the Deployments and then the Jobs, each in byte order of name.
+// spec: SITE#attachments
+fn scan_apps_for_service_port(
+    snapshot: &AppSnapshot,
+    service_name: &str,
+    protocol: AttachmentProtocol,
+) -> Option<u16> {
+    let mut deployments = Vec::new();
+    let mut jobs = Vec::new();
+    for (id, resource) in &snapshot.app_def.resources {
+        match resource {
+            Resource::Deployment(_) => deployments.push((id.name.as_str(), resource)),
+            Resource::Job(_) => jobs.push((id.name.as_str(), resource)),
+            _ => {}
+        }
+    }
+    deployments.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    jobs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    deployments
+        .into_iter()
+        .chain(jobs)
+        .find_map(|(_, resource)| match resource {
             Resource::Deployment(dep) => {
                 let def = dep.def.lock();
                 let pod = def.pod.lock();
-                pod_first_port(&pod, service_name)
+                pod_first_port(&pod, service_name, protocol)
             }
             Resource::Job(job) => {
                 let def = job.def.lock();
                 let pod = def.pod.lock();
-                pod_first_port(&pod, service_name)
+                pod_first_port(&pod, service_name, protocol)
             }
             _ => None,
-        };
-        if let Some(p) = result {
-            return Some(p);
-        }
-    }
-    None
+        })
 }
 
-fn pod_first_port(pod: &crate::defs::pod::PodDef, service_name: &str) -> Option<u16> {
-    for b in &pod.tcp_bindings {
-        if b.service_port.service.name().as_str() == service_name {
-            return Some(b.service_port.port.get());
+/// The service port of the pod's first binding of `service_name` for an
+/// attachment of `protocol`: its port bindings of the attachment's transport,
+/// in the order the script made them, then, but never for UDP, its HTTP route
+/// bindings.
+// spec: SITE#attachments
+fn pod_first_port(
+    pod: &crate::defs::pod::PodDef,
+    service_name: &str,
+    protocol: AttachmentProtocol,
+) -> Option<u16> {
+    let port_bindings = match protocol {
+        AttachmentProtocol::Udp => &pod.udp_bindings,
+        AttachmentProtocol::Tcp | AttachmentProtocol::Http | AttachmentProtocol::Http2 => {
+            &pod.tcp_bindings
         }
+    };
+    if let Some(b) = port_bindings
+        .iter()
+        .find(|b| b.service_port.service.name().as_str() == service_name)
+    {
+        return Some(b.service_port.port.get());
     }
-    for b in &pod.http_bindings {
-        if b.route.http.service.name().as_str() == service_name {
-            return Some(b.route.http.port.get());
-        }
+    if protocol == AttachmentProtocol::Udp {
+        return None;
     }
-    None
+    pod.http_bindings
+        .iter()
+        .find(|b| b.route.http.service.name().as_str() == service_name)
+        .map(|b| b.route.http.port.get())
 }
 
 /// (hostname, port) tuples that the proxy config rejected because both an
@@ -395,6 +453,164 @@ pub(super) struct ConflictReport {
     pub conflicts: BTreeSet<(String, u16)>,
     /// Per-conflict roster of involved parties, used for fault descriptions.
     pub parties: Vec<ConflictParties>,
+    /// App ingresses left out because another app's ingress claims the same
+    /// `(hostname, port)`.
+    // spec: ING#claims-across-apps
+    pub app_claims: Vec<LostAppClaim>,
+    /// Site ingress attachments left out because an attachment of another site
+    /// ingress, created first, claims the same `(hostname, port)`.
+    // spec: SITE#ingress-conflicts
+    pub site_claims: Vec<LostSiteClaim>,
+    /// `(hostname, port)` claimed by an app ingress's HTTP redirect and by a
+    /// plaintext site ingress attachment. Only the redirect and the
+    /// attachment are left out; the app ingress itself is served.
+    // spec: PRX#port-scope
+    pub redirect_conflicts: BTreeSet<(String, u16)>,
+}
+
+/// A site ingress attachment left out of the proxy because an attachment of
+/// another site ingress, created first, claims the same `(hostname, port)`.
+// spec: SITE#ingress-conflicts
+#[derive(Debug, Clone)]
+pub(super) struct LostSiteClaim {
+    pub hostname: String,
+    pub port: u16,
+    pub site_ingress: SiteIngressName,
+    /// The site ingress whose attachment is served.
+    pub served: SiteIngressName,
+}
+
+/// Keep, of the site ingresses claiming each `(hostname, port)`, only the one
+/// whose attachment was created first, and report the rest.
+///
+/// The name breaks a tie, so the outcome is the same on every tick.
+// spec: SITE#ingress-conflicts
+pub(super) fn resolve_site_claims(mut data: SiteProxyData) -> (SiteProxyData, Vec<LostSiteClaim>) {
+    use std::collections::BTreeMap;
+
+    let created = |name: &SiteIngressName, port: u16| {
+        data.created
+            .get(&(name.clone(), port))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let claims: Vec<(String, u16, SiteIngressName)> = data
+        .forwards
+        .iter()
+        .map(|(n, d, _)| (d.hostname.clone(), d.port.get(), n.clone()))
+        .chain(
+            data.redirects
+                .iter()
+                .map(|(n, d, _)| (d.hostname.clone(), d.port.get(), n.clone())),
+        )
+        .chain(
+            data.l4_routes
+                .iter()
+                .map(|e| (e.hostname.clone(), e.route.port, e.site_ingress.clone())),
+        )
+        .collect();
+
+    let rank = |name: &SiteIngressName, port: u16| (created(name, port), name.clone());
+    let mut served: BTreeMap<(String, u16), SiteIngressName> = BTreeMap::new();
+    for (hostname, port, name) in &claims {
+        let key = (hostname.clone(), *port);
+        match served.get(&key) {
+            Some(current) if rank(current, *port) <= rank(name, *port) => {}
+            _ => {
+                served.insert(key, name.clone());
+            }
+        }
+    }
+
+    let mut lost: BTreeMap<(String, u16, SiteIngressName), SiteIngressName> = BTreeMap::new();
+    for (hostname, port, name) in &claims {
+        let winner = &served[&(hostname.clone(), *port)];
+        if winner != name {
+            lost.insert((hostname.clone(), *port, name.clone()), winner.clone());
+        }
+    }
+    let is_lost = |hostname: &str, port: u16, name: &SiteIngressName| {
+        lost.contains_key(&(hostname.to_owned(), port, name.clone()))
+    };
+    data.forwards
+        .retain(|(n, d, _)| !is_lost(&d.hostname, d.port.get(), n));
+    data.redirects
+        .retain(|(n, d, _)| !is_lost(&d.hostname, d.port.get(), n));
+    data.l4_routes
+        .retain(|e| !is_lost(&e.hostname, e.route.port, &e.site_ingress));
+
+    let lost = lost
+        .into_iter()
+        .map(|((hostname, port, site_ingress), served)| LostSiteClaim {
+            hostname,
+            port,
+            site_ingress,
+            served,
+        })
+        .collect();
+    (data, lost)
+}
+
+/// An app ingress left out of the proxy because an ingress of an app whose
+/// install completed earlier claims the same `(hostname, port)`.
+// spec: ING#claims-across-apps
+#[derive(Debug, Clone)]
+pub(super) struct LostAppClaim {
+    pub hostname: String,
+    pub port: u16,
+    pub app: AppName,
+    pub ingress: String,
+    /// The app whose ingress is served, and that ingress.
+    pub served: (AppName, String),
+}
+
+/// Keep, of the app ingresses claiming each `(hostname, port)`, only the one
+/// of the app whose install completed first, and report the rest.
+///
+/// `install_seq` gives each app's place in the order installs completed; an
+/// app with none ranks after every app with one, and the app name breaks a
+/// tie, so the outcome is the same on every tick.
+// spec: ING#claims-across-apps
+pub(super) fn resolve_app_claims(
+    pairs: Vec<(AppName, IngressDef, ServiceUpstream)>,
+    install_seq: impl Fn(&AppName) -> Option<i64>,
+) -> (
+    Vec<(AppName, IngressDef, ServiceUpstream)>,
+    Vec<LostAppClaim>,
+) {
+    use std::collections::BTreeMap;
+
+    let rank = |app: &AppName| (install_seq(app).unwrap_or(i64::MAX), app.clone());
+    let mut served: BTreeMap<(String, u16), (AppName, String)> = BTreeMap::new();
+    for (app, def, _up) in &pairs {
+        let key = (def.hostname.clone(), def.port.get());
+        let claim = (app.clone(), ingress_resource_name(def));
+        match served.get(&key) {
+            Some((current, _)) if rank(current) <= rank(app) => {}
+            _ => {
+                served.insert(key, claim);
+            }
+        }
+    }
+
+    let mut kept = Vec::new();
+    let mut lost = Vec::new();
+    for (app, def, up) in pairs {
+        let key = (def.hostname.clone(), def.port.get());
+        let winner = &served[&key];
+        if winner.0 == app {
+            kept.push((app, def, up));
+        } else {
+            lost.push(LostAppClaim {
+                hostname: key.0,
+                port: key.1,
+                app,
+                ingress: ingress_resource_name(&def),
+                served: winner.clone(),
+            });
+        }
+    }
+    (kept, lost)
 }
 
 #[derive(Debug, Clone)]
@@ -405,6 +621,8 @@ pub(super) struct ConflictParties {
     pub apps: Vec<(AppName, String /* ingress resource name */)>,
     /// Site ingresses with a colliding attachment on this `(hostname, port)`.
     pub site: Vec<String /* site ingress name */>,
+    /// The apps' claim is an ingress's HTTP redirect, not the ingress itself.
+    pub redirect: bool,
 }
 
 /// Find every `(hostname, port)` tuple claimed by both an app ingress and a
@@ -455,6 +673,49 @@ pub(super) fn detect_conflicts(
                 port: key.1,
                 apps: apps.clone(),
                 site: site.clone(),
+                redirect: false,
+            });
+        }
+    }
+
+    // spec: PRX#port-scope
+    // An ingress's HTTP redirect claims its hostname on the redirect's port,
+    // and conflicts with a plaintext ingress's claim there.
+    let mut plaintext_index: BTreeMap<(String, u16), Vec<String>> = BTreeMap::new();
+    for (name, def, _) in &site_data.forwards {
+        if !def.tls {
+            plaintext_index
+                .entry((def.hostname.clone(), def.port.get()))
+                .or_default()
+                .push(name.as_str().to_owned());
+        }
+    }
+    for (name, def, _) in &site_data.redirects {
+        if !def.tls {
+            plaintext_index
+                .entry((def.hostname.clone(), def.port.get()))
+                .or_default()
+                .push(name.as_str().to_owned());
+        }
+    }
+    let mut redirect_index: BTreeMap<(String, u16), Vec<(AppName, String)>> = BTreeMap::new();
+    for (app, def, _up) in app_pairs {
+        if let Some(redirect) = &def.redirect {
+            redirect_index
+                .entry((def.hostname.clone(), redirect.port.get()))
+                .or_default()
+                .push((app.clone(), ingress_resource_name(def)));
+        }
+    }
+    for (key, apps) in &redirect_index {
+        if let Some(site) = plaintext_index.get(key) {
+            report.redirect_conflicts.insert(key.clone());
+            report.parties.push(ConflictParties {
+                hostname: key.0.clone(),
+                port: key.1,
+                apps: apps.clone(),
+                site: site.clone(),
+                redirect: true,
             });
         }
     }
@@ -478,6 +739,42 @@ pub(super) fn drop_conflicting_app_pairs(
         .into_iter()
         .filter(|(_app, def, _u)| !conflicts.contains(&(def.hostname.clone(), def.port.get())))
         .collect()
+}
+
+/// Take the HTTP redirect off each app ingress whose redirect claim is in
+/// `conflicts`; the ingress itself stays.
+// spec: PRX#port-scope
+pub(super) fn drop_conflicting_redirects(
+    pairs: Vec<(AppName, IngressDef, ServiceUpstream)>,
+    conflicts: &BTreeSet<(String, u16)>,
+) -> Vec<(AppName, IngressDef, ServiceUpstream)> {
+    pairs
+        .into_iter()
+        .map(|(app, mut def, up)| {
+            if def
+                .redirect
+                .as_ref()
+                .is_some_and(|r| conflicts.contains(&(def.hostname.clone(), r.port.get())))
+            {
+                def.redirect = None;
+            }
+            (app, def, up)
+        })
+        .collect()
+}
+
+/// Drop the plaintext HTTP attachments claiming a `(hostname, port)` in
+/// `conflicts`.
+// spec: PRX#port-scope
+pub(super) fn drop_conflicting_plaintext(
+    mut data: SiteProxyData,
+    conflicts: &BTreeSet<(String, u16)>,
+) -> SiteProxyData {
+    let keep =
+        |def: &IngressDef| def.tls || !conflicts.contains(&(def.hostname.clone(), def.port.get()));
+    data.forwards.retain(|(_n, def, _u)| keep(def));
+    data.redirects.retain(|(_n, def, _r)| keep(def));
+    data
 }
 
 pub(super) fn drop_conflicting_site_data(
@@ -536,6 +833,147 @@ mod tests {
         SiteIngressName::new(name).unwrap()
     }
 
+    fn snapshot(script: &str) -> AppSnapshot {
+        let name = AppName::new("demo").unwrap();
+        let (app, err) = crate::runtime::apps::evaluate_script(
+            &name,
+            script,
+            &std::collections::BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "test script must evaluate: {err:?}");
+        AppSnapshot {
+            name,
+            desired: Default::default(),
+            steady: true,
+            app_def: (*app.def.load_full()).clone(),
+            phase: crate::runtime::AppPhase::Installed,
+            phase_handle: std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::runtime::AppPhase::Installed,
+            )),
+            warm_cert_hostnames: Default::default(),
+            app_priority: Default::default(),
+            install_seq: Some(1),
+        }
+    }
+
+    // spec: SITE#attachments
+    #[test]
+    fn the_forwarded_port_is_found_by_the_attachments_transport() {
+        let app = snapshot(
+            r#"
+            let dns = app.service("dns");
+            let web = app.service("web").http(80);
+            app.job("aaa").image("docker.io/library/busybox:1").tcp(1, dns.port(5999));
+            app.deployment("ccc").image("docker.io/library/nginx:1").udp(2, dns.port(5353));
+            app.deployment("bbb").image("docker.io/library/nginx:1")
+                .http(8080, web.route("/"))
+                .tcp(3, dns.port(5300));
+        "#,
+        );
+        let port = |service, protocol| scan_apps_for_service_port(&app, service, protocol);
+
+        // Deployments before Jobs, and a UDP attachment takes a UDP binding.
+        assert_eq!(port("dns", AttachmentProtocol::Tcp), Some(5300));
+        assert_eq!(port("dns", AttachmentProtocol::Udp), Some(5353));
+        // An HTTP route binding serves a TCP transport, never UDP.
+        assert_eq!(port("web", AttachmentProtocol::Http), Some(80));
+        assert_eq!(port("web", AttachmentProtocol::Udp), None);
+    }
+
+    // spec: PRX#route-emission
+    // spec: SITE#attachments
+    #[test]
+    fn an_http_attachments_fallback_route_reaches_where_an_app_ingress_would() {
+        let app = snapshot(
+            r#"
+            let web = app.service("web");
+            web.http(8080);
+            app.deployment("app").image("docker.io/library/nginx:1").tcp(1, web.port(7000));
+        "#,
+        );
+        let attachment = |port, protocol| SiteIngressAttachment {
+            site_ingress: site("edge"),
+            port,
+            protocol,
+            target: AttachmentTarget::Forward {
+                app: app.name.clone(),
+                service: seedling_protocol::names::AppServiceName::new("web").unwrap(),
+            },
+            created_at: String::new(),
+        };
+        let upstream_port = |att: SiteIngressAttachment| {
+            let AttachmentTarget::Forward {
+                app: target,
+                service,
+            } = &att.target
+            else {
+                unreachable!()
+            };
+            resolve_forward_upstream(
+                target,
+                service,
+                &att,
+                std::slice::from_ref(&app),
+                &Default::default(),
+                &"fd5e:ed12:3456::/48".parse().unwrap(),
+                &crate::runtime::EphemeralInstanceRegistry::new(),
+            )
+            .expect("resolves")
+            .service_port
+        };
+
+        assert_eq!(
+            upstream_port(attachment(443, AttachmentProtocol::Http)),
+            8080
+        );
+        assert_eq!(
+            upstream_port(attachment(4433, AttachmentProtocol::Tcp)),
+            7000
+        );
+    }
+
+    // spec: ING#claims-across-apps
+    #[test]
+    fn the_app_that_installed_first_keeps_a_shared_hostname_and_port() {
+        let first = AppName::new("first").unwrap();
+        let second = AppName::new("second").unwrap();
+        let never = AppName::new("never").unwrap();
+        let seq = |app: &AppName| match app.as_str() {
+            "first" => Some(1),
+            "second" => Some(2),
+            _ => None,
+        };
+        let pairs = vec![
+            (never.clone(), def("shared.example.com", 443), upstream()),
+            (second.clone(), def("shared.example.com", 443), upstream()),
+            (first.clone(), def("shared.example.com", 443), upstream()),
+            (second.clone(), def("shared.example.com", 8443), upstream()),
+        ];
+
+        let (kept, lost) = resolve_app_claims(pairs, seq);
+        let kept: Vec<_> = kept
+            .iter()
+            .map(|(app, def, _)| (app.as_str(), def.port.get()))
+            .collect();
+        assert_eq!(kept, vec![("first", 443), ("second", 8443)]);
+        let mut losers: Vec<_> = lost.iter().map(|l| l.app.as_str()).collect();
+        losers.sort();
+        assert_eq!(losers, vec!["never", "second"]);
+        assert!(lost.iter().all(|l| l.served.0 == first && l.port == 443));
+
+        // Once the served ingress stops claiming them, the next is served.
+        let (kept, lost) = resolve_app_claims(
+            vec![
+                (never.clone(), def("shared.example.com", 443), upstream()),
+                (second.clone(), def("shared.example.com", 443), upstream()),
+            ],
+            seq,
+        );
+        assert_eq!(kept[0].0, second);
+        assert_eq!(lost[0].app, never);
+    }
+
     #[test]
     fn no_conflict_when_disjoint() {
         let app = AppName::new("web").unwrap();
@@ -545,6 +983,7 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert!(report.conflicts.is_empty());
@@ -559,6 +998,7 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert_eq!(report.conflicts.len(), 1);
@@ -586,6 +1026,7 @@ mod tests {
             )],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert_eq!(report.conflicts.len(), 1);
@@ -600,6 +1041,7 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert!(report.conflicts.is_empty());
@@ -619,9 +1061,11 @@ mod tests {
                     port: 5432,
                     proto: L4Proto::Tcp,
                     upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                    terminate_tls: false,
                 },
             }],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert_eq!(report.conflicts.len(), 1);
@@ -644,6 +1088,7 @@ mod tests {
                         port: 5432,
                         proto: L4Proto::Tcp,
                         upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                        terminate_tls: false,
                     },
                 },
                 SiteL4Entry {
@@ -653,14 +1098,129 @@ mod tests {
                         port: 5432,
                         proto: L4Proto::Tcp,
                         upstreams: vec!["[fd5e::2]:5432".to_owned()],
+                        terminate_tls: false,
                     },
                 },
             ],
             unresolved: vec![],
+            created: Default::default(),
         };
         let kept = drop_conflicting_site_data(data, &conflicts);
         assert_eq!(kept.l4_routes.len(), 1);
         assert_eq!(kept.l4_routes[0].hostname, "kept.example.com");
+    }
+
+    fn created(
+        entries: &[(&str, u16, &str)],
+    ) -> std::collections::BTreeMap<(SiteIngressName, u16), String> {
+        entries
+            .iter()
+            .map(|(name, port, at)| ((site(name), *port), (*at).to_owned()))
+            .collect()
+    }
+
+    // spec: SITE#ingress-conflicts
+    #[test]
+    fn the_site_ingress_whose_attachment_was_created_first_is_served() {
+        let data = SiteProxyData {
+            forwards: vec![
+                (site("second"), def("shared.example.com", 443), upstream()),
+                (site("first"), def("shared.example.com", 443), upstream()),
+                (site("second"), def("shared.example.com", 8443), upstream()),
+            ],
+            redirects: vec![],
+            l4_routes: vec![],
+            unresolved: vec![],
+            created: created(&[
+                ("first", 443, "2026-01-01T00:00:00Z"),
+                ("second", 443, "2026-02-01T00:00:00Z"),
+                ("second", 8443, "2026-02-01T00:00:00Z"),
+            ]),
+        };
+
+        let (kept, lost) = resolve_site_claims(data);
+        let served: Vec<_> = kept
+            .forwards
+            .iter()
+            .map(|(n, d, _)| (n.as_str().to_owned(), d.port.get()))
+            .collect();
+        assert_eq!(
+            served,
+            vec![("first".to_owned(), 443), ("second".to_owned(), 8443)],
+            "another port on the same hostname is unaffected"
+        );
+        assert_eq!(lost.len(), 1);
+        assert_eq!(lost[0].site_ingress, site("second"));
+        assert_eq!(lost[0].served, site("first"));
+        assert_eq!(lost[0].port, 443);
+
+        // Once the served attachment no longer claims the pair, the other is
+        // served.
+        let data = SiteProxyData {
+            forwards: vec![(site("second"), def("shared.example.com", 443), upstream())],
+            redirects: vec![],
+            l4_routes: vec![],
+            unresolved: vec![],
+            created: created(&[("second", 443, "2026-02-01T00:00:00Z")]),
+        };
+        let (kept, lost) = resolve_site_claims(data);
+        assert_eq!(kept.forwards.len(), 1);
+        assert!(lost.is_empty());
+    }
+
+    fn plaintext(hostname: &str, port: u16) -> IngressDef {
+        IngressDef {
+            tls: false,
+            ..def(hostname, port)
+        }
+    }
+
+    // spec: PRX#port-scope
+    #[test]
+    fn an_app_ingress_redirect_conflicts_with_a_plaintext_attachment_on_its_port() {
+        let app = AppName::new("web").unwrap();
+        let mut ingress = def("clinic.example.com", 443);
+        ingress.redirect = Some(crate::defs::ingress::RedirectDef {
+            port: Port::new(80).unwrap(),
+            code: 307,
+        });
+        let app_pairs = vec![(app.clone(), ingress, upstream())];
+        let data = SiteProxyData {
+            forwards: vec![
+                (
+                    site("plain"),
+                    plaintext("clinic.example.com", 80),
+                    upstream(),
+                ),
+                // A TLS attachment on the redirect's port is not a plaintext ingress.
+                (site("tls"), def("other.example.com", 80), upstream()),
+            ],
+            redirects: vec![],
+            l4_routes: vec![],
+            unresolved: vec![],
+            created: Default::default(),
+        };
+
+        let report = detect_conflicts(&app_pairs, &data);
+        assert!(
+            report.conflicts.is_empty(),
+            "the ingress's own port is not in conflict"
+        );
+        assert_eq!(
+            report.redirect_conflicts,
+            BTreeSet::from([("clinic.example.com".to_owned(), 80)])
+        );
+        assert_eq!(report.parties.len(), 1);
+        assert!(report.parties[0].redirect);
+        assert_eq!(report.parties[0].site, vec!["plain".to_owned()]);
+
+        // The ingress keeps serving; only its redirect and the attachment go.
+        let kept = drop_conflicting_redirects(app_pairs, &report.redirect_conflicts);
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].1.redirect.is_none());
+        let kept = drop_conflicting_plaintext(data, &report.redirect_conflicts);
+        assert_eq!(kept.forwards.len(), 1);
+        assert_eq!(kept.forwards[0].0, site("tls"));
     }
 
     #[test]
@@ -678,6 +1238,7 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let conflicts: BTreeSet<(String, u16)> = [("dropped.example.com".to_owned(), 443)]
             .into_iter()

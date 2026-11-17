@@ -579,22 +579,41 @@ fn sync_faults(state: &Arc<OiState>, managed: &[ManagedIngress], snap: &Snapshot
 /// Why Canopy cannot provide a hostname's certificate, if it cannot and an
 /// operator should be told.
 ///
-/// A hostname that holds a usable certificate and is still inside a strategy's
-/// window is not in trouble: the chain is still working on it.
+/// A hostname that is served a usable certificate while its responsible
+/// strategy still has a fall-through point ahead is not in trouble: the chain
+/// is still working on it.
+// spec: TCAN#faults
 fn trouble(hostname: &str, c: &ChainDecision) -> Option<String> {
-    if c.act == ChainAct::CannotAskCanopy {
-        return Some(match c.canopy {
-            CanopyStanding::NotPublicName => format!(
-                "{hostname} is bound to the Canopy-only policy but no public CA can issue for it"
-            ),
-            _ => format!(
-                "{hostname} is bound to the Canopy-only policy but no app declaring it has a \
-                 Canopy type, so Canopy cannot be asked"
-            ),
+    let canopy_only = c.strategies == [Strategy::Canopy];
+    let (responsible, fall_through_ahead) = match &c.cycle {
+        chain::Cycle::Running(r) => (r.responsible, r.fall_through_at.is_some()),
+        // No cycle is running, so the strategy that will act is the first, and
+        // its fall-through point is ahead if there is a next strategy.
+        chain::Cycle::Idle { .. } => (*c.strategies.first()?, c.strategies.len() > 1),
+    };
+    if c.serving.is_some() && fall_through_ahead {
+        return None;
+    }
+
+    if !c.canopy.applies() && (canopy_only || responsible == Strategy::Canopy) {
+        let why = match c.canopy {
+            CanopyStanding::NotPublicName => "no public CA can issue for it",
+            _ => "no app declaring it has a Canopy type, so Canopy cannot be asked",
+        };
+        return Some(if canopy_only {
+            format!("{hostname} is bound to the Canopy-only policy but {why}")
+        } else {
+            format!("Canopy is the responsible strategy for {hostname} but {why}")
         });
     }
     if !c.strategies.contains(&Strategy::Canopy) {
         return None;
+    }
+    if c.csr_rejected {
+        let reason = c.last_error.as_deref().unwrap_or("no reason was given");
+        return Some(format!(
+            "Canopy rejected the certificate signing request for {hostname}: {reason}"
+        ));
     }
     let chain::Cycle::Running(running) = &c.cycle else {
         return None;
@@ -780,6 +799,106 @@ mod tests {
         });
         oi.block_on(async { sync_all_faults(&oi.state) });
         assert!(active_faults(&oi).is_empty());
+    }
+
+    fn serve_fresh_certificate(oi: &TestOi) {
+        let now = jiff::Timestamp::now().as_second();
+        let pem = crate::runtime::tls::test_support::self_signed_pem(&["shop.example.com"]);
+        oi.state.db.call(move |db| {
+            store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: "shop.example.com",
+                    requested_hostnames: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Canopy,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        not_before: Some(now - 86_400),
+                        not_after: Some(now + 89 * 86_400),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                    renews: None,
+                },
+            )
+            .unwrap();
+        });
+    }
+
+    // spec: TCAN#faults
+    #[test]
+    fn a_canopy_only_hostname_nothing_can_ask_about_is_faulted_though_a_certificate_serves_it() {
+        let oi = TestOi::new();
+        shop(&oi, UNTYPED);
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        serve_fresh_certificate(&oi);
+
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        let filed = active_faults(&oi);
+        assert_eq!(
+            filed.len(),
+            1,
+            "a Canopy-only chain has no fall-through point to wait for"
+        );
+        assert!(
+            filed[0].description.contains("Canopy-only policy"),
+            "{}",
+            filed[0].description
+        );
+    }
+
+    // spec: TCAN#faults
+    #[test]
+    fn a_rejected_signing_request_is_faulted_until_a_later_answer_replaces_it() {
+        let oi = TestOi::new();
+        shop(&oi, TYPED);
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        serve_fresh_certificate(&oi);
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        assert!(active_faults(&oi).is_empty());
+
+        let row = chain::Row {
+            identity: chain::Identity::NONE,
+            step: 0,
+            since: 0,
+            open_order_since: None,
+            retry_not_before: None,
+        };
+        let rejected = row.clone();
+        oi.state.db.call(move |db| {
+            store::put_chain_row(db, "shop.example.com", &rejected, Some("bad csr")).unwrap();
+            store::set_csr_rejected(db, "shop.example.com").unwrap();
+        });
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        let filed = active_faults(&oi);
+        assert_eq!(filed.len(), 1);
+        assert!(
+            filed[0].description.contains("rejected") && filed[0].description.contains("bad csr"),
+            "{}",
+            filed[0].description
+        );
+
+        oi.state.db.call(move |db| {
+            store::put_chain_row(db, "shop.example.com", &row, Some("order failed")).unwrap();
+        });
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        assert!(
+            active_faults(&oi).is_empty(),
+            "a later answer is not a rejection"
+        );
     }
 
     // spec: TCAN#faults
@@ -1214,6 +1333,50 @@ mod tests {
             "and the hostname passes to the next strategy at once"
         );
         assert_eq!(recorder.0.lock().len(), 1, "a replacement was asked for");
+    }
+
+    // spec: TCAN#revocation
+    #[test]
+    fn a_revocation_leaves_a_canopy_only_hostname_with_canopy() {
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        let now = jiff::Timestamp::now().as_second();
+        let cert_id = canopy_cert(&oi, "shop.example.com", now - 86_400, now + 89 * 86_400);
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        let names = revoking(&oi, cert_id, "shop.example.com");
+        oi.block_on(async {
+            let snap = snapshot(&oi.state, &managed).expect("the state can be read");
+            replace_condemned(
+                &oi.state,
+                &engine(&oi, &recorder),
+                &snap,
+                &names,
+                &mut Budget::new(),
+            )
+            .await;
+        });
+
+        let row = oi
+            .state
+            .db
+            .call(|db| store::get_chain_row(db, "shop.example.com").unwrap())
+            .expect("a revocation records what the hostname is replacing");
+        assert_eq!(
+            row.row.step, 0,
+            "a chain of Canopy alone has nowhere to pass to"
+        );
+        assert_eq!(
+            recorder.0.lock().len(),
+            1,
+            "Canopy is asked for a replacement"
+        );
     }
 
     /// The fingerprint Canopy names a stored certificate's key by.

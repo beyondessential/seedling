@@ -31,7 +31,7 @@ mod applications;
 pub mod certificates;
 pub mod store;
 
-pub use store::{CanopySettings, get_settings, set_enabled, set_server_id};
+pub use store::{CanopySettings, get_settings, set_enabled};
 
 // spec: CNR#report-schedule
 /// How often a report is sent.
@@ -141,13 +141,13 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
     if !state.canopy.is_enabled() {
         return Outcome::Skipped;
     }
-    if state.canopy.current().is_none() {
+    let Some(offer) = state.canopy.current() else {
         return Outcome::Skipped;
-    }
+    };
 
-    let client = CanopyClient::with_transport(OiCanopyTransport::new(Arc::clone(&state.canopy)));
+    let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&state.canopy)));
 
-    let server_id = match server_id(state, &client).await {
+    let server_id = match server_id(state, &client, offer.key_fingerprint.as_deref()).await {
         Ok(id) => id,
         Err(e) => return Outcome::Failed(e),
     };
@@ -156,7 +156,8 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         Ok(payload) => payload,
         Err(e) => return Outcome::Failed(e),
     };
-    match client.status(&server_id, &payload).await {
+    let sent = send_status(&client, &server_id, &payload).await;
+    match sent {
         // spec: CNR#report-response — the response carries return-path
         // instructions, including backups to run now. That list is addressed to
         // whichever source owns backups on a host, which is never this one, so it
@@ -164,28 +165,68 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         // do" and acted on.
         Ok(response) => Outcome::Reported(Box::new(response.names)),
         Err(e) => {
-            // The cached identity is the most likely thing to be wrong when a
-            // report is rejected, so drop it and let the next attempt re-resolve
-            // rather than retrying the same bad address forever.
-            state.db.call(|db| {
-                let _ = store::set_server_id(db, None);
-            });
+            // spec: CNR#server-identity
+            // Whatever the failure, the cached identifier is the likeliest thing
+            // to be wrong, so drop it and let the next report resolve it again.
+            discard_cached_server_id(state);
             Outcome::Failed(format!("{e}"))
         }
     }
 }
 
+/// `POST /status/<server_id>` with the document as built.
+///
+/// The typed status payload the client offers requires a top-level `health`
+/// array, which this report does not carry, and filling one in would put a
+/// member on the wire the spec does not give it.
+// spec: CNR#report-payload
+async fn send_status<T: bestool_canopy::CanopyTransport>(
+    client: &CanopyClient<T>,
+    server_id: &str,
+    payload: &Value,
+) -> Result<bestool_canopy::schema::StatusResponse, bestool_canopy::Error> {
+    if server_id.is_empty() || server_id.contains(['/', '?', '#', '%']) {
+        return Err(bestool_canopy::Error::transport(std::io::Error::other(
+            format!("the server identifier {server_id:?} is not a path segment"),
+        )));
+    }
+    client
+        .call_json(
+            http::Method::POST,
+            &format!("/status/{server_id}"),
+            Some(payload),
+        )
+        .await
+}
+
+fn discard_cached_server_id(state: &Arc<OiState>) {
+    if let Err(e) = state.db.call(store::discard_server_id) {
+        tracing::warn!("cannot discard the cached Canopy server identifier: {e}");
+    }
+}
+
 // spec: CNR#server-identity
 /// The server identifier Canopy knows this instance by, from cache or resolved.
+///
+/// `offer_key` is the fingerprint of the key the selected offer's client
+/// authenticated with. The cache serves only that key; an identifier cached
+/// for another one is discarded, and one that cannot be tied to the offer's key
+/// is not used.
 async fn server_id(
     state: &Arc<OiState>,
     client: &CanopyClient<OiCanopyTransport>,
+    offer_key: Option<&str>,
 ) -> Result<String, String> {
-    let cached = state
-        .db
-        .call(|db| store::get_settings(db).ok().and_then(|s| s.server_id));
-    if let Some(id) = cached {
-        return Ok(id);
+    match state.db.call(store::get_settings) {
+        Ok(settings) => {
+            if let Some(id) = settings.server_id_for(offer_key) {
+                return Ok(id.to_owned());
+            }
+            if settings.server_id.is_some() {
+                discard_cached_server_id(state);
+            }
+        }
+        Err(e) => tracing::warn!("cannot read the cached Canopy server identifier: {e}"),
     }
 
     let resolved = client
@@ -193,10 +234,20 @@ async fn server_id(
         .await
         .map_err(|e| format!("cannot resolve which server this instance is: {e}"))?;
     let id = resolved.server_id.to_string();
-    let to_store = id.clone();
-    state.db.call(move |db| {
-        let _ = store::set_server_id(db, Some(&to_store));
-    });
+    match offer_key {
+        Some(key) => {
+            let (to_store, key) = (id.clone(), key.to_owned());
+            if let Err(e) = state
+                .db
+                .call(move |db| store::cache_server_id(db, &to_store, &key))
+            {
+                tracing::warn!("cannot cache the Canopy server identifier: {e}");
+            }
+        }
+        None => tracing::debug!(
+            "the offering client's key is unknown, so the Canopy server identifier is not cached"
+        ),
+    }
     Ok(id)
 }
 
@@ -254,7 +305,8 @@ fn check(name: &str, result: Result_, extra: Value) -> Value {
 // spec: CNR#applications
 async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
     // One sweep serves the health check, the totals and the applications.
-    let statuses = status::all(&state.registry, &state.scheduler, &state.db);
+    let statuses = status::all(&state.registry, &state.scheduler, &state.db)
+        .map_err(|e| format!("could not read the apps' status: {e}"))?;
     let (apps_check, apps_total, apps_by_status) = apps_check(&statuses);
     let faults_check = faults_check(state);
     let proxy = component_check(
@@ -273,9 +325,7 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
     let health = vec![apps_check, faults_check, proxy, resolver];
     let healthy = overall_healthy(&health);
 
-    let active_faults = state
-        .db
-        .call(|db| faults::count_active_faults(db).unwrap_or(0));
+    let active_faults = active_fault_count(state);
 
     // A report that cannot say which apps there are fails rather than going
     // out without them: an absent application reads to Canopy as unreachable.
@@ -373,9 +423,19 @@ fn grade_apps(apps: &[(AppName, AppStatus)]) -> Value {
 
 // spec: CNR#machine-checks
 fn faults_check(state: &Arc<OiState>) -> Value {
-    let active = state
-        .db
-        .call(|db| faults::list_active_faults(db, None).unwrap_or_default());
+    // A fault table that cannot be read says nothing about whether a fault
+    // is active, so the check is broken rather than passed.
+    let active = match state.db.call(|db| faults::list_active_faults(db, None)) {
+        Ok(active) => active,
+        Err(e) => {
+            tracing::error!("cannot read the active faults for the Canopy report: {e}");
+            return check(
+                "health/faults",
+                Result_::Broken,
+                json!({ "reason": format!("the active faults cannot be read: {e}") }),
+            );
+        }
+    };
     if active.is_empty() {
         return check("health/faults", Result_::Passed, json!({ "count": 0 }));
     }
@@ -428,6 +488,19 @@ async fn component_check(state: &Arc<OiState>, name: &str, containers: &[&str]) 
 /// How many lifecycle operations are running. The scheduler runs one at a time,
 /// so this is zero or one; it is reported as a count because that is the shape
 /// the rest of the status surface uses.
+// spec: CNR#machine-detail
+/// The number of active faults, or `None` where it cannot be read, which the
+/// report carries as null rather than 0.
+fn active_fault_count(state: &Arc<OiState>) -> Option<i64> {
+    state.db.call(|db| match faults::count_active_faults(db) {
+        Ok(count) => Some(count),
+        Err(e) => {
+            tracing::error!("cannot count the active faults for the Canopy report: {e}");
+            None
+        }
+    })
+}
+
 fn active_operations(state: &Arc<OiState>) -> usize {
     usize::from(state.scheduler.lock().active().is_some())
 }
@@ -463,6 +536,50 @@ pub(crate) fn clear_fault_if_not_expected(state: &Arc<OiState>) {
 mod tests {
     use super::*;
     use crate::oi::test_support::TestOi;
+
+    /// Answers every request with an empty status response, keeping the one it
+    /// was sent.
+    struct Capture(std::sync::Mutex<Option<(String, Vec<u8>)>>);
+
+    #[bestool_canopy::async_trait]
+    impl bestool_canopy::CanopyTransport for Capture {
+        async fn call(
+            &self,
+            request: bestool_canopy::CanopyRequest,
+        ) -> Result<bestool_canopy::CanopyResponse, bestool_canopy::Error> {
+            let (parts, body) = request.into_parts();
+            *self.0.lock().unwrap() = Some((parts.uri.path().to_owned(), body.to_vec()));
+            Ok(http::Response::builder()
+                .status(200)
+                .body(
+                    br#"{"backup_now":[],"check_severities":{},"names":{"certificates":[],"domains":[],"may_manage_dns":false,"may_manage_tls":false,"paused":false,"registered_names":[]},"tags":{}}"#
+                        .to_vec()
+                        .into(),
+                )
+                .unwrap())
+        }
+    }
+
+    // spec: CNR#report-payload
+    // The document is sent as the spec gives it, with no `health` member at the
+    // top level.
+    #[tokio::test]
+    async fn the_report_is_sent_as_built() {
+        let client = CanopyClient::new(Capture(Default::default()));
+        let payload = json!({
+            "source": "seedling",
+            "healthy": true,
+            "machine": { "health": [], "detail": {} },
+            "applications": {},
+        });
+        send_status(&client, "srv-1", &payload).await.unwrap();
+        let (path, body) = client.transport().0.lock().unwrap().take().unwrap();
+        assert_eq!(path, "/status/srv-1");
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), payload);
+
+        let refused = send_status(&client, "../x", &payload).await;
+        assert!(refused.is_err(), "an identifier that is not a path segment");
+    }
 
     fn app(name: &str, status: AppStatus) -> (AppName, AppStatus) {
         (AppName::new_unchecked(name), status)
@@ -546,6 +663,21 @@ mod tests {
         ]);
         assert_eq!(result_of(&entry), "passed");
         assert_eq!(entry["total"], 4);
+    }
+
+    // spec: CNR#machine-detail
+    // spec: CNR#machine-checks
+    #[test]
+    fn unreadable_faults_are_a_null_count_and_a_broken_check() {
+        let oi = TestOi::new();
+        oi.state
+            .db
+            .call(|db| db.conn.execute_batch("DROP TABLE faults;").unwrap());
+
+        assert_eq!(active_fault_count(&oi.state), None);
+        let faults = faults_check(&oi.state);
+        assert_eq!(faults["result"], "broken");
+        assert!(faults["reason"].is_string());
     }
 
     // spec: CNR#machine-detail
@@ -804,6 +936,7 @@ mod tests {
             "test".into(),
             "https://example.invalid".into(),
             None,
+            None,
             crate::oi::canopy::test_peer(),
         );
 
@@ -846,6 +979,7 @@ mod tests {
             "test".into(),
             "https://example.invalid".into(),
             None,
+            None,
             crate::oi::canopy::test_peer(),
         );
 
@@ -861,6 +995,94 @@ mod tests {
             filed.len(),
             1,
             "successive failures of one condition are one fault with the latest detail"
+        );
+    }
+
+    const SERVER: &str = "6f8a2b1c-0000-4000-8000-000000000000";
+
+    /// Offer a client that authenticated with `key` and answers
+    /// `/servers/self` with the server `SERVER`, returning the paths it was
+    /// asked for in order.
+    fn offer_naming_a_server(
+        oi: &TestOi,
+        key: Option<&str>,
+    ) -> Arc<parking_lot::Mutex<Vec<String>>> {
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        oi.state.canopy.offer(
+            1,
+            "test".into(),
+            "https://example.invalid".into(),
+            None,
+            key.map(str::to_owned),
+            crate::oi::canopy::test_peer_answering(move |path| {
+                log.lock().push(path.to_owned());
+                (
+                    200,
+                    format!(
+                        r#"{{"server_id":"{SERVER}","device_id":"1111aaaa-0000-4000-8000-000000000000"}}"#
+                    )
+                    .into_bytes(),
+                )
+            }),
+        );
+        seen
+    }
+
+    fn resolve(oi: &TestOi, key: &str) -> String {
+        let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&oi.state.canopy)));
+        oi.block_on(server_id(&oi.state, &client, Some(key)))
+            .expect("the server is resolved")
+    }
+
+    fn cache(oi: &TestOi, key: &'static str) {
+        oi.state
+            .db
+            .call(move |db| store::cache_server_id(db, "cached-server", key))
+            .unwrap();
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn the_cached_identifier_is_used_only_for_the_key_it_was_resolved_through() {
+        let oi = TestOi::new();
+        cache(&oi, "key-a");
+        let seen = offer_naming_a_server(&oi, Some("key-a"));
+
+        assert_eq!(resolve(&oi, "key-a"), "cached-server");
+        assert!(seen.lock().is_empty(), "the same key resolves nothing");
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn an_identifier_cached_for_another_key_is_discarded_and_resolved_again() {
+        let oi = TestOi::new();
+        cache(&oi, "key-a");
+        let seen = offer_naming_a_server(&oi, Some("key-b"));
+
+        assert_eq!(resolve(&oi, "key-b"), SERVER);
+        assert_eq!(*seen.lock(), ["/servers/self"]);
+        let settings = oi.state.db.call(store::get_settings).unwrap();
+        assert_eq!(settings.server_id_for(Some("key-b")), Some(SERVER));
+        assert_eq!(settings.server_id_for(Some("key-a")), None);
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn an_offer_with_no_known_key_neither_uses_nor_fills_the_cache() {
+        let oi = TestOi::new();
+        cache(&oi, "key-a");
+        let seen = offer_naming_a_server(&oi, None);
+        let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&oi.state.canopy)));
+
+        let id = oi
+            .block_on(server_id(&oi.state, &client, None))
+            .expect("the server is resolved");
+        assert_eq!(id, SERVER);
+        assert_eq!(*seen.lock(), ["/servers/self"]);
+        assert_eq!(
+            oi.state.db.call(store::get_settings).unwrap().server_id,
+            None
         );
     }
 }

@@ -72,6 +72,11 @@ impl FromStr for AppPriority {
 // spec: PRIO#priority-setting
 /// Load the stored app priority for an app. Returns `None` when no decision has
 /// been stored, which means the app is at its default (`normal`).
+///
+/// A stored value that is not a level is an error, not an absent decision: a
+/// value written by an older or divergent build must not read as a level the
+/// operator never chose.
+// spec: PRIO#unreadable-priorities
 pub fn load_app_priority(db: &Db, app: &AppName) -> rusqlite::Result<Option<AppPriority>> {
     let mut stmt = db
         .conn
@@ -80,10 +85,13 @@ pub fn load_app_priority(db: &Db, app: &AppName) -> rusqlite::Result<Option<AppP
     match rows.next()? {
         Some(row) => {
             let stored: String = row.get(0)?;
-            // A value written by an older or divergent build that no longer
-            // parses is treated as the default rather than surfaced as a
-            // definite level the operator never chose.
-            Ok(Some(stored.parse().unwrap_or_default()))
+            stored.parse().map(Some).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })
         }
         None => Ok(None),
     }
@@ -121,21 +129,27 @@ pub fn effective_app_priority(db: &Db, app: &AppName) -> rusqlite::Result<AppPri
     Ok(load_app_priority(db, app)?.unwrap_or_default())
 }
 
+/// Every app's stored priority, each as read: the level, or the value that
+/// is not one.
+pub type StoredPriorities = HashMap<AppName, Result<AppPriority, InvalidAppPriority>>;
+
 // spec: PRIO#priority-setting
+// spec: PRIO#unreadable-priorities
 /// Every stored app priority, in one read.
 ///
 /// Callers that need the standing of many apps at once — the reconcile tick and
 /// `/apps/list` — use this rather than a query per app. An app absent from the
-/// map has no stored decision and stands at `normal`; an error means the
-/// standings could not be read at all, which is not the same thing.
-pub fn load_all_app_priorities(db: &Db) -> rusqlite::Result<HashMap<AppName, AppPriority>> {
+/// map has no stored decision and stands at `normal`; an app whose stored value
+/// is not a level is present as an error, and an error from this function means
+/// the standings could not be read at all. Neither is the same as `normal`.
+pub fn load_all_app_priorities(db: &Db) -> rusqlite::Result<StoredPriorities> {
     let mut stmt = db
         .conn
         .prepare("SELECT app, priority FROM app_priorities")?;
     let rows = stmt.query_map([], |row| {
         let app: AppName = row.get(0)?;
         let stored: String = row.get(1)?;
-        Ok((app, stored.parse().unwrap_or_default()))
+        Ok((app, stored.parse::<AppPriority>()))
     })?;
     let mut out = HashMap::new();
     for row in rows {
@@ -193,6 +207,31 @@ mod tests {
         );
     }
 
+    // spec: PRIO#unreadable-priorities
+    #[test]
+    fn a_stored_value_that_is_not_a_level_is_not_read_as_normal() {
+        let db = Db::open_in_memory().unwrap();
+        save_app_priority(&db, &app(), AppPriority::High).unwrap();
+        save_app_priority(&db, &AppName::new("other").unwrap(), AppPriority::Low).unwrap();
+        db.conn
+            .execute(
+                "UPDATE app_priorities SET priority = 'urgent' WHERE app = 'myapp'",
+                [],
+            )
+            .unwrap();
+
+        assert!(load_app_priority(&db, &app()).is_err());
+        assert!(effective_app_priority(&db, &app()).is_err());
+
+        let all = load_all_app_priorities(&db).unwrap();
+        assert!(all[&app()].is_err());
+        assert_eq!(
+            all[&AppName::new("other").unwrap()].as_ref().ok(),
+            Some(&AppPriority::Low),
+            "one unreadable value does not hide the others"
+        );
+    }
+
     // spec: CTL#app-priority
     #[test]
     fn delete_removes_the_decision() {
@@ -211,8 +250,8 @@ mod tests {
         save_app_priority(&db, &other, AppPriority::Low).unwrap();
 
         let all = load_all_app_priorities(&db).unwrap();
-        assert_eq!(all.get(&app()), Some(&AppPriority::High));
-        assert_eq!(all.get(&other), Some(&AppPriority::Low));
+        assert_eq!(all.get(&app()), Some(&Ok(AppPriority::High)));
+        assert_eq!(all.get(&other), Some(&Ok(AppPriority::Low)));
         // An app with no stored decision is absent rather than present as
         // `normal`: the caller supplies the default, so "never set" and
         // "set to normal" stay distinguishable here.

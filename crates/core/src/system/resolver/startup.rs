@@ -80,6 +80,10 @@ pub enum ResolverStartupError {
 
 fn resolver_db_open(data_dir: &Path) -> Result<rusqlite::Connection, rusqlite::Error> {
     let conn = rusqlite::Connection::open(data_dir.join("seedling.db"))?;
+    // spec: INFRA#database
+    // Another connection holds the write lock for moments at a time; waiting
+    // for it is not a failure.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS resolver_state (
@@ -556,5 +560,19 @@ mod tests {
     fn other_slot_alternates() {
         assert_eq!(other_slot(RESOLVER_BLUE), RESOLVER_GREEN);
         assert_eq!(other_slot(RESOLVER_GREEN), RESOLVER_BLUE);
+    }
+}
+
+#[cfg(test)]
+mod db_tests {
+    // spec: INFRA#database
+    #[test]
+    fn the_resolvers_database_connection_waits_for_a_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = super::resolver_db_open(dir.path()).unwrap();
+        let ms: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert!(ms > 0);
     }
 }

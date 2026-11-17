@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use snafu::{IntoError, ResultExt, Snafu};
-use zbus::{
-    Connection,
-    zvariant::{Array, OwnedObjectPath, Signature, StructureBuilder, Value},
-};
+use zbus::{Array, Connection, OwnedObjectPath, Signature, Structure, Variant as Value};
 
 use crate::system::{
     BoxError, BoxFuture, ProcessManager,
@@ -13,6 +10,8 @@ use crate::system::{
         UnitState, UnitSummary,
     },
 };
+
+mod slice_files;
 
 const UNIT_DIR: &str = "/etc/systemd/system";
 
@@ -92,19 +91,19 @@ fn validate_unit_name(name: &str) -> Result<(), SystemdError> {
 // D-Bus proxy — systemd Manager interface
 // ---------------------------------------------------------------------------
 
-#[derive(serde::Serialize, zbus::zvariant::Type)]
+#[derive(serde::Serialize, zbus::Type)]
 struct UnitProperty<'a> {
     name: &'a str,
     value: Value<'a>,
 }
 
-#[derive(serde::Serialize, zbus::zvariant::Type)]
+#[derive(serde::Serialize, zbus::Type)]
 struct AuxUnit<'a> {
     name: &'a str,
     properties: Vec<UnitProperty<'a>>,
 }
 
-#[derive(Debug, serde::Deserialize, zbus::zvariant::Type)]
+#[derive(Debug, serde::Deserialize, zbus::Type)]
 struct ListedUnit {
     name: String,
 
@@ -201,6 +200,11 @@ trait Systemd1Service {
     #[zbus(property, name = "NRestarts")]
     fn n_restarts(&self) -> zbus::Result<u32>;
 
+    /// Why the unit last ended: `success`, `exit-code`, `start-limit-hit` and
+    /// so on.
+    #[zbus(property, name = "Result")]
+    fn result(&self) -> zbus::Result<String>;
+
     /// The main process's exit status, or the signal number that killed it,
     /// depending on `ExecMainCode`.
     #[zbus(property, name = "ExecMainStatus")]
@@ -235,14 +239,21 @@ fn parse_exec_main(code: i32, status: i32) -> Option<UnitExit> {
 
 pub(crate) struct SystemdManager {
     conn: Arc<Connection>,
+    /// The record of the slice unit files this runtime has written, in the data
+    /// directory.
+    slice_record: std::path::PathBuf,
 }
+
+/// The file in the data directory that records the slice unit files written.
+const SLICE_RECORD: &str = "slice-units";
 
 impl SystemdManager {
     /// Connect to the system D-Bus. Called once at startup.
-    pub(crate) async fn connect() -> Result<Self, SystemdError> {
+    pub(crate) async fn connect(data_dir: &std::path::Path) -> Result<Self, SystemdError> {
         let conn = Connection::system().await.context(DBusSnafu)?;
         Ok(Self {
             conn: Arc::new(conn),
+            slice_record: data_dir.join(SLICE_RECORD),
         })
     }
 
@@ -279,13 +290,13 @@ impl SystemdManager {
             },
             // spec: LINUX#supervised-units
             // Garbage-collect the transient unit (and remove its file from
-            // /run/systemd/transient/) as soon as it reaches inactive or
-            // failed state with no pending restart jobs. Without this the
-            // default CollectMode=inactive leaves units stuck in
-            // failed/start-limit-hit loaded indefinitely.
+            // /run/systemd/transient/) once it is inactive with no pending
+            // restart job. A failed unit stays loaded until the reconciler
+            // has recorded its result and discards it, so a unit that went
+            // away on its own is one whose result was success.
             UnitProperty {
                 name: "CollectMode",
-                value: Value::from("inactive-or-failed"),
+                value: Value::from("inactive"),
             },
         ];
 
@@ -418,46 +429,28 @@ impl SystemdManager {
         )
     }
 
-    /// Whether `name` is a slice this runtime owns, and so may write or unlink.
+    /// Whether `name` has the shape of a slice this runtime names.
     ///
     /// The unit directory is shared with the operator and with every other
-    /// package on the host. Generated names all have this shape, and the only
-    /// names offered for removal are ones read back out of the directory, so
-    /// this is what keeps a malformed or unexpected entry from being unlinked.
+    /// package on the host, so this only vets the names the runtime writes; the
+    /// names it may remove are the ones it recorded writing.
     // spec: PRIO#resource-control-groups
     // spec: LINUX#resource-control-groups
     fn is_owned_slice(name: &str) -> bool {
         name.starts_with("seedling-") && name.ends_with(".slice")
     }
 
-    /// Names of the slices this runtime owns that currently exist on disk.
-    async fn existing_owned_slices(&self) -> Result<Vec<String>, SystemdError> {
-        let mut found = Vec::new();
-        let mut dir = match tokio::fs::read_dir(UNIT_DIR).await {
-            Ok(d) => d,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(found),
-            Err(e) => return Err(IoSnafu.into_error(e)),
-        };
-        while let Some(entry) = dir.next_entry().await.map_err(|e| IoSnafu.into_error(e))? {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if Self::is_owned_slice(&name) {
-                found.push(name);
-            }
-        }
-        Ok(found)
-    }
-
     // spec: PRIO#resource-control-groups
     // spec: LINUX#resource-control-groups
     /// Bring the set of owned slices on this host into line with `desired`.
     ///
-    /// The unit directory is the state, not any record this process keeps: what
-    /// is written is decided by comparing against the files that are actually
-    /// there. That is what makes the first pass after a restart free — the files
-    /// already match, so nothing is written, the supervisor is not asked to
-    /// re-read its units, and no slice is contacted over the bus — and it is
-    /// what lets a slice left behind by an app that went away while this process
-    /// was not running still be collected.
+    /// What is written is decided by comparing against the files that are
+    /// actually there. That is what makes the first pass after a restart free:
+    /// the files already match, so nothing is written, the supervisor is not
+    /// asked to re-read its units, and no slice is contacted over the bus. The
+    /// record of what was written is kept in the data directory, so a slice left
+    /// behind by an app that went away while this process was not running is
+    /// still collected, and a file the runtime did not write never is.
     ///
     /// `prune` is false when the caller could not account for every app, so a
     /// short desired set never unlinks a live app's slice.
@@ -476,43 +469,20 @@ impl SystemdManager {
             }
         }
 
-        let existing = self.existing_owned_slices().await?;
-
-        // Write only what differs, and remember which slices actually changed:
-        // those are the ones whose weights have to be pushed to the live group.
-        let mut changed = Vec::new();
-        for spec in &desired {
-            let wanted = Self::slice_unit_content(spec);
-            let path = std::path::Path::new(UNIT_DIR).join(&spec.name);
-            let current = tokio::fs::read_to_string(&path).await.ok();
-            if current.as_deref() != Some(wanted.as_str()) {
-                self.write_unit_impl(&spec.name, &wanted).await?;
-                changed.push(spec);
-            }
-        }
-
         // Unlink rather than stop. Stopping a slice stops every unit still
         // inside it, which would kill running workloads outright, bypassing
         // their stop signal and timeout. Unlinking releases an empty slice and
         // leaves a slice that still has members running.
-        let mut unlinked = false;
-        if prune {
-            let wanted: std::collections::HashSet<&str> =
-                desired.iter().map(|s| s.name.as_str()).collect();
-            for name in &existing {
-                if wanted.contains(name.as_str()) {
-                    continue;
-                }
-                let path = std::path::Path::new(UNIT_DIR).join(name);
-                match tokio::fs::remove_file(&path).await {
-                    Ok(()) => unlinked = true,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(IoSnafu.into_error(e)),
-                }
-            }
-        }
+        let changes = slice_files::sync_files(
+            std::path::Path::new(UNIT_DIR),
+            &self.slice_record,
+            &desired,
+            prune,
+            Self::slice_unit_content,
+        )
+        .await?;
 
-        if changed.is_empty() && !unlinked {
+        if changes.written.is_empty() && !changes.removed {
             return Ok(());
         }
         self.daemon_reload_impl().await?;
@@ -520,7 +490,7 @@ impl SystemdManager {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
-        for spec in changed {
+        for spec in desired.iter().filter(|s| changes.written.contains(&s.name)) {
             proxy
                 .start_unit(&spec.name, "replace")
                 .await
@@ -606,9 +576,7 @@ impl SystemdManager {
 
         let unit_proxy = Systemd1UnitProxy::builder(&self.conn)
             .destination("org.freedesktop.systemd1")
-            .context(DBusSnafu)?
             .path(unit_path.clone())
-            .context(DBusSnafu)?
             .build()
             .await
             .context(DBusSnafu)?;
@@ -622,17 +590,18 @@ impl SystemdManager {
         // SubState per instance. Failures are not fatal: the Service interface
         // only exists on .service units, and a unit that vanished between the
         // GetUnit call and here should still report the state we did read.
-        let (restarts, last_exit) = match self.service_accounting(&unit_path).await {
+        let (restarts, last_exit, result) = match self.service_accounting(&unit_path).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::debug!(unit = %name, error = %e, "systemd: no restart accounting for unit");
-                (None, None)
+                (None, None, None)
             }
         };
 
         Ok(Some(UnitState {
             active: parse_active_state(&active),
             sub,
+            result,
             restarts,
             last_exit,
         }))
@@ -642,17 +611,16 @@ impl SystemdManager {
     async fn service_accounting(
         &self,
         unit_path: &OwnedObjectPath,
-    ) -> Result<(Option<u32>, Option<UnitExit>), SystemdError> {
+    ) -> Result<(Option<u32>, Option<UnitExit>, Option<String>), SystemdError> {
         let proxy = Systemd1ServiceProxy::builder(&self.conn)
             .destination("org.freedesktop.systemd1")
-            .context(DBusSnafu)?
             .path(unit_path.clone())
-            .context(DBusSnafu)?
             .build()
             .await
             .context(DBusSnafu)?;
 
         let restarts = proxy.n_restarts().await.context(DBusSnafu)?;
+        let result = proxy.result().await.context(DBusSnafu)?;
         // The exit properties are best-effort on top of the counter: a unit
         // whose main process has not exited reports ExecMainCode 0, which
         // parse_exec_main turns into None.
@@ -660,7 +628,7 @@ impl SystemdManager {
             (Ok(code), Ok(status)) => parse_exec_main(code, status),
             _ => None,
         };
-        Ok((Some(restarts), last_exit))
+        Ok((Some(restarts), last_exit, Some(result)))
     }
 
     async fn list_units_impl(&self, prefix: &str) -> Result<Vec<UnitSummary>, SystemdError> {
@@ -825,7 +793,7 @@ fn build_exec_start(exec_start: &[String]) -> Result<Value<'static>, SystemdErro
     // Value directly) rather than add_field (which routes through Value::new and
     // wraps any Value<'_> as a variant because Value::SIGNATURE == "v").
     let entry = Value::Structure(
-        StructureBuilder::new()
+        Structure::builder()
             .append_field(Value::from(path))
             .append_field(Value::Array(argv_arr))
             .append_field(Value::from(false))

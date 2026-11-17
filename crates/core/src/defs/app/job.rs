@@ -1,6 +1,6 @@
 use rhai::{EvalAltResult, TypeBuilder};
 
-use crate::runtime::barrier::runtime::is_in_action_closure;
+use crate::runtime::barrier::runtime::{is_in_action_closure, next_anon_instance_id};
 
 use super::super::{
     job::Job,
@@ -18,7 +18,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
-                super::static_ref::<Job>(name)
+                super::static_ref::<Job>(this, name)
             } else {
                 let id = ResourceId {
                     kind: ResourceKind::Job,
@@ -31,6 +31,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                             name: rname.clone(),
                             def: Default::default(),
                             frozen: false,
+                            anon_id: None,
                         })
                     });
                     d
@@ -55,6 +56,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 name: ResourceName::new(String::new()),
                 def: Default::default(),
                 frozen: false,
+                anon_id: Some(next_anon_instance_id("job")),
             })
         },
     );

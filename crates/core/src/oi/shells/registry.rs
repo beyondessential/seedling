@@ -146,6 +146,15 @@ impl ShellRegistry {
         true
     }
 
+    /// Takes a session's job away again once its attachment has ended, while
+    /// the session itself goes on: its pty is closed and must not be resized.
+    pub(crate) fn detach(&self, id: &SessionId) {
+        if let Some(session) = self.sessions.lock().get_mut(id) {
+            session.container_name = None;
+            session.pty_master_fd = None;
+        }
+    }
+
     // spec: SHL#resizing-a-terminal
     pub fn resize(&self, id: &SessionId, rows: u16, cols: u16) -> bool {
         let mut sessions = self.sessions.lock();
@@ -167,6 +176,23 @@ impl ShellRegistry {
         };
         session.stop.request();
         true
+    }
+
+    // spec: SHL#session-end
+    /// Stops every session of `app`, as [`stop`](Self::stop) does each one.
+    pub fn stop_app(&self, app: &str) -> usize {
+        let mut sessions = self.sessions.lock();
+        let ids: Vec<SessionId> = sessions
+            .values()
+            .filter(|s| s.app == app)
+            .map(|s| s.session_id)
+            .collect();
+        for id in &ids {
+            if let Some(session) = sessions.remove(id) {
+                session.stop.request();
+            }
+        }
+        ids.len()
     }
 
     // spec: SHL#listing-sessions
@@ -241,6 +267,27 @@ mod tests {
         // SAFETY: `ws` is a valid winsize to write into.
         unsafe { libc::ioctl(fd, libc::TIOCGWINSZ as _, &mut ws) };
         (ws.ws_row, ws.ws_col)
+    }
+
+    // spec: SHL#session-end
+    #[test]
+    fn stopping_an_app_stops_only_its_sessions() {
+        let registry = ShellRegistry::new();
+        let (_, mine) = starting(&registry, (24, 80));
+        let other = StopSignal::new();
+        registry.insert(ShellSession::starting(
+            SessionId::generate(),
+            AppName::new_unchecked("elsewhere"),
+            "shell".to_owned(),
+            None,
+            (24, 80),
+            other.clone(),
+        ));
+
+        assert_eq!(registry.stop_app("app"), 1);
+        assert!(mine.is_requested());
+        assert!(!other.is_requested());
+        assert_eq!(registry.list(None).len(), 1);
     }
 
     // spec: SHL#session-startup
@@ -321,5 +368,29 @@ mod tests {
         );
         assert!(!registry.stop(&id));
         assert!(!registry.resize(&id, 1, 1));
+    }
+
+    // spec: SHL#session-end
+    #[test]
+    fn a_detached_session_stays_registered_without_a_terminal_to_resize() {
+        let registry = ShellRegistry::new();
+        let (id, _) = starting(&registry, (24, 80));
+
+        let (master, slave) = pty();
+        assert!(registry.attach(&id, "container".to_owned(), master));
+        registry.detach(&id);
+
+        // SAFETY: both fds were opened above and are not used again.
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
+
+        assert!(
+            registry.resize(&id, 10, 20),
+            "the session is still registered, and the closed pty is left alone"
+        );
+        assert_eq!(registry.list(None).len(), 1);
+        assert!(registry.active_container_names().is_empty());
     }
 }

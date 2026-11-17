@@ -41,7 +41,14 @@ fn unstop_removes_only_the_named_resource() {
     stop_resource(&db, &app("myapp"), ResourceKind::Deployment, "worker").expect("stop worker");
     stop_resource(&db, &app("myapp"), ResourceKind::Service, "web").expect("stop svc");
 
-    unstop_resource(&db, &app("myapp"), ResourceKind::Deployment, "web").expect("unstop");
+    assert!(
+        unstop_resource(&db, &app("myapp"), ResourceKind::Deployment, "web").expect("unstop"),
+        "removing a recorded stop reports it"
+    );
+    assert!(
+        !unstop_resource(&db, &app("myapp"), ResourceKind::Deployment, "web").expect("unstop"),
+        "removing nothing reports it"
+    );
 
     let stopped = load_stopped(&db, &app("myapp")).expect("load");
     assert!(!stopped.contains(&(ResourceKind::Deployment, "web".to_owned())));
@@ -64,24 +71,6 @@ fn unstop_all_clears_only_that_app() {
 
     assert!(load_stopped(&db, &app("app-a")).expect("load a").is_empty());
     assert_eq!(load_stopped(&db, &app("app-b")).expect("load b").len(), 1);
-}
-
-#[test]
-fn kind_str_and_parse_kind_round_trip_all_kinds() {
-    for kind in [
-        ResourceKind::Deployment,
-        ResourceKind::Job,
-        ResourceKind::Ingress,
-        ResourceKind::Service,
-        ResourceKind::Volume,
-        ResourceKind::ExternalVolume,
-        ResourceKind::ExternalService,
-        ResourceKind::Parameter,
-        ResourceKind::Action,
-    ] {
-        assert_eq!(parse_kind(kind_str(kind)), Some(kind), "{kind:?}");
-    }
-    assert_eq!(parse_kind("garbage"), None);
 }
 
 #[test]

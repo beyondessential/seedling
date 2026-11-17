@@ -213,6 +213,50 @@ fn auto_removed_short_lived_job_reaches_unscheduled() {
     assert_eq!(state, LifecycleState::Unscheduled);
 }
 
+// spec: LCY#transitions
+// The supervisor reports a stopped unit inactive after the container it ran
+// has been seen removed, which started a new cycle and left a torn-down
+// instance Pending for good.
+#[test]
+fn an_inactive_unit_after_removal_does_not_start_a_new_cycle() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(
+        &resource,
+        &[
+            obs("container_running"),
+            obs("stop_sent"),
+            obs("container_removed"),
+            obs("unit_inactive"),
+        ],
+    );
+    assert_eq!(state, LifecycleState::Unscheduled);
+}
+
+// spec: LCY#transitions
+// A pod whose container had already gone is seen removed before the stop
+// that cleans up what it left is recorded.
+#[test]
+fn a_stop_recorded_after_removal_does_not_start_a_new_cycle() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(&resource, &[obs("container_removed"), obs("stop_sent")]);
+    assert_eq!(state, LifecycleState::Unscheduled);
+}
+
+// spec: LCY#transitions
+#[test]
+fn a_container_running_again_after_removal_starts_a_new_cycle() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(
+        &resource,
+        &[
+            obs("container_running"),
+            obs("container_removed"),
+            obs("container_running"),
+        ],
+    );
+    assert_eq!(state, LifecycleState::Running);
+}
+
 // spec: LCY#derivation
 #[test]
 fn unknown_obs_kind_is_ignored() {
@@ -565,9 +609,63 @@ fn transition_time_works_for_service() {
     assert_eq!(time, Some(UNIX_EPOCH + Duration::from_millis(ts_ms as u64)));
 }
 
+// spec: LCY#services
+#[test]
+fn a_ready_service_whose_pool_empties_returns_to_scheduled_and_back() {
+    let resource = svc("lb");
+    let mut observations = vec![obs_at("network_created", 1), obs_at("backend_healthy", 2)];
+    assert_eq!(
+        derive_state_with_transition_time(&resource, &observations).0,
+        LifecycleState::Ready
+    );
+    observations.push(obs_at("backend_lost", 3));
+    assert_eq!(
+        derive_state_with_transition_time(&resource, &observations).0,
+        LifecycleState::Scheduled
+    );
+    observations.push(obs_at("backend_healthy", 4));
+    assert_eq!(
+        derive_state_with_transition_time(&resource, &observations).0,
+        LifecycleState::Ready
+    );
+}
+
 // -----------------------------------------------------------------------
 // DbWorldOracle (DB-backed)
 // -----------------------------------------------------------------------
+
+// spec: OBS#ingresses
+#[test]
+fn a_certificate_that_stops_being_usable_no_longer_satisfies_a_warm_certs_barrier() {
+    let db = DbHandle::from_db(Db::open_in_memory().expect("open"));
+    let ingress =
+        ResourceInstance::new_singleton(AppName::new("app").unwrap(), ResourceKind::Ingress, "web");
+    let observe = |kind: &'static str| {
+        let ingress = ingress.clone();
+        db.call(move |db| {
+            insert_observation(
+                db,
+                &ingress,
+                kind,
+                &serde_json::json!({ "hostname": "a.example.com" }),
+            )
+        })
+        .expect("insert");
+    };
+    let oracle = DbWorldOracle::new(db.clone());
+
+    observe("cert_valid");
+    assert!(oracle.cert_valid_for(&ingress));
+
+    observe("cert_not_valid");
+    assert!(
+        !oracle.cert_valid_for(&ingress),
+        "the latest observation says no usable certificate is served"
+    );
+
+    observe("cert_valid");
+    assert!(oracle.cert_valid_for(&ingress));
+}
 
 // spec: LCY#derivation
 #[test]
@@ -575,7 +673,10 @@ fn db_oracle_empty_gives_pending() {
     let db = Db::open_in_memory().expect("open");
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     let resource = dep("app", "web");
-    assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Pending);
+    assert_eq!(
+        oracle.lifecycle_state(&resource),
+        Ok(LifecycleState::Pending)
+    );
 }
 
 // spec: LCY#derivation
@@ -590,7 +691,10 @@ fn db_oracle_derives_from_observations() {
         .expect("insert");
 
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
-    assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Running);
+    assert_eq!(
+        oracle.lifecycle_state(&resource),
+        Ok(LifecycleState::Running)
+    );
 }
 
 // spec: LCY#derivation
@@ -608,7 +712,7 @@ fn db_oracle_full_sequence_to_terminated() {
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     assert_eq!(
         oracle.lifecycle_state(&resource),
-        LifecycleState::Terminated
+        Ok(LifecycleState::Terminated)
     );
 }
 
@@ -628,7 +732,21 @@ fn db_oracle_uses_query_observations_from_history() {
     assert_eq!(direct_state, LifecycleState::Ready);
 
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
-    assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Ready);
+    assert_eq!(oracle.lifecycle_state(&resource), Ok(LifecycleState::Ready));
+}
+
+// spec: LCY#derivation
+#[test]
+fn db_oracle_unreadable_history_is_undetermined_not_pending() {
+    let db = Db::open_in_memory().expect("open");
+    db.conn
+        .execute_batch("DROP TABLE world_observations;")
+        .expect("drop");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(
+        oracle.lifecycle_state(&dep("app", "web")),
+        Err(Undetermined)
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -738,10 +856,10 @@ fn db_oracle_termination_success_volume_terminated_is_success() {
 }
 
 // spec: RT#termination
+// spec: LINUX#exit-status
 // Jobs run with `podman --rm` auto-remove on exit. The observer then sees
 // ContainerMissing rather than ContainerExited, so no container_exited
-// observation is ever written. A healthy unit exit must still report
-// success — otherwise ensure_success() fails on every such job.
+// observation is ever written. The supervisor's success decides it.
 #[test]
 fn db_oracle_termination_success_rm_clean_exit_is_success() {
     let db = Db::open_in_memory().expect("open");
@@ -750,8 +868,25 @@ fn db_oracle_termination_success_rm_clean_exit_is_success() {
         .expect("insert");
     insert_observation(&db, &resource, "container_removed", &serde_json::json!({}))
         .expect("insert");
+    insert_observation(&db, &resource, "unit_inactive", &serde_json::json!({})).expect("insert");
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     assert_eq!(oracle.termination_success(&resource), Some(true));
+}
+
+// spec: RT#termination
+// With no exit status and no word from the supervisor, the run is not known
+// to have succeeded.
+#[test]
+fn db_oracle_termination_without_the_supervisors_success_is_not_success() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(&db, &resource, "unit_inactive", &serde_json::json!({})).expect("insert");
+    insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
+        .expect("insert");
+    insert_observation(&db, &resource, "container_removed", &serde_json::json!({}))
+        .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_ne!(oracle.termination_success(&resource), Some(true));
 }
 
 // spec: RT#termination
@@ -796,8 +931,7 @@ fn db_oracle_termination_success_exit_code_wins_over_unit_success() {
 
 // spec: RT#termination
 // A container_exited with exit_code = -1 (podman didn't tell us) is an
-// unknown outcome. If no unit_failed is observed, fall through to the
-// terminal-seen fallback and succeed.
+// unknown outcome, which the supervisor's success then decides.
 #[test]
 fn db_oracle_termination_success_exit_code_unknown_falls_through() {
     let db = Db::open_in_memory().expect("open");
@@ -811,6 +945,7 @@ fn db_oracle_termination_success_exit_code_unknown_falls_through() {
         &serde_json::json!({ "exit_code": -1 }),
     )
     .expect("insert");
+    insert_observation(&db, &resource, "unit_inactive", &serde_json::json!({})).expect("insert");
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     assert_eq!(oracle.termination_success(&resource), Some(true));
 }

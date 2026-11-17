@@ -133,9 +133,9 @@ impl WebSessionRegistry {
                     "id": e.id.to_string(),
                     "connected_at": e.connected_at.to_string(),
                     "last_seen": e.last_seen.to_string(),
-                    "actor_kind": e.actor.kind,
-                    "actor_id": e.actor.id,
-                    "actor_display": e.actor.display,
+                    "actor_kind": e.actor.kind.as_deref().unwrap_or_default(),
+                    "actor_id": e.actor.id.as_deref().unwrap_or_default(),
+                    "actor_display": e.actor.display.as_deref().unwrap_or_default(),
                     // spec: UI#guarded-controls
                     "safety_mode": e.safety_mode.as_str(),
                 })
@@ -242,6 +242,23 @@ mod tests {
         assert_eq!(outcome, HeartbeatOutcome::Alive { mode_change: None });
         let listed = registry.list();
         assert_eq!(listed[0]["safety_mode"], "write");
+    }
+
+    // spec: WEB#connected-clients
+    #[test]
+    fn a_listed_entrys_actor_members_are_always_strings() {
+        let reg = WebSessionRegistry::default();
+        let now = Timestamp::now();
+        let id = Uuid::new_v4();
+        reg.insert(WebSessionEntry {
+            actor: Arc::new(Actor::default()),
+            ..entry(id, now)
+        });
+
+        let listed = reg.list();
+        for member in ["actor_kind", "actor_id", "actor_display"] {
+            assert_eq!(listed[0][member], "", "{member}");
+        }
     }
 
     // spec: WEB#session-tracking

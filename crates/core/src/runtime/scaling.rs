@@ -18,10 +18,9 @@ pub fn load_scaling_decision(
         .prepare("SELECT scale FROM scaling_decisions WHERE app = ?1 AND deployment = ?2")?;
     let mut rows = stmt.query(params![app, deployment])?;
     match rows.next()? {
-        Some(row) => {
-            let scale: i64 = row.get(0)?;
-            Ok(Some(scale as u16))
-        }
+        // spec: AUTO#scale — a stored value outside the scale range is unreadable,
+        // never wrapped into it.
+        Some(row) => Ok(Some(row.get::<_, u16>(0)?)),
         None => Ok(None),
     }
 }
@@ -42,7 +41,7 @@ pub fn save_scaling_decision(
          ON CONFLICT(app, deployment) DO UPDATE SET
              scale = excluded.scale,
              updated_at = excluded.updated_at",
-        params![app, deployment, scale as i64, now],
+        params![app, deployment, scale, now],
     )?;
     Ok(())
 }
@@ -68,7 +67,7 @@ pub fn clamp_scaling_decisions(
     let mut stmt = db
         .conn
         .prepare("SELECT deployment, scale FROM scaling_decisions WHERE app = ?1")?;
-    let rows: Vec<(String, i64)> = stmt
+    let rows: Vec<(String, u16)> = stmt
         .query_map(params![app], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     drop(stmt);
@@ -82,14 +81,47 @@ pub fn clamp_scaling_decisions(
                 )?;
             }
             Some(&(low, high)) => {
-                let clamped = (scale as u16).clamp(low, high);
-                if clamped != scale as u16 {
+                let clamped = scale.clamp(low, high);
+                if clamped != scale {
                     save_scaling_decision(db, app, &deployment, clamped)?;
                 }
             }
         }
     }
     Ok(())
+}
+
+// spec: AUTO#clamping
+/// Clamp an app's stored scaling decisions to the bounds `app`'s definition
+/// declares, and delete those of Deployments it no longer declares.
+///
+/// Run on every successful re-evaluation of a definition, so a change to the
+/// bounds, whether the definition was replaced or its parameters or the host
+/// moved what it reads, is in the store before reconciliation acts on it.
+pub fn clamp_to_definition(
+    db: &Db,
+    name: &AppName,
+    app: &crate::defs::app::App,
+) -> rusqlite::Result<()> {
+    use crate::defs::resource::Resource;
+
+    let bounds: std::collections::BTreeMap<String, (u16, u16)> = app
+        .def
+        .load()
+        .resources
+        .iter()
+        .filter_map(|(id, resource)| match resource {
+            Resource::Deployment(deployment) => {
+                let def = deployment.def.lock();
+                Some((
+                    id.name.as_str().to_owned(),
+                    (*def.scale.start(), *def.scale.end()),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    clamp_scaling_decisions(db, name, &bounds)
 }
 
 /// Every stored scaling decision in the node, keyed by app and deployment.
@@ -108,8 +140,8 @@ pub fn load_all_scaling_decisions(db: &Db) -> rusqlite::Result<ScalingDecisions>
     let rows = stmt.query_map([], |row| {
         let app: AppName = row.get(0)?;
         let deployment: String = row.get(1)?;
-        let scale: i64 = row.get(2)?;
-        Ok(((app, deployment), scale as u16))
+        let scale: u16 = row.get(2)?;
+        Ok(((app, deployment), scale))
     })?;
     rows.collect()
 }

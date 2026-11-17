@@ -10,8 +10,8 @@ use ipnet::{Ipv4Net, Ipv6Net};
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime, ProcessManager,
     types::{
-        ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ImageSummary,
-        NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
+        ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ExecOutput,
+        ImageSummary, NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
     },
 };
 
@@ -108,13 +108,6 @@ impl ContainerRuntime for UnavailableContainerRuntime {
         Box::pin(async { Err(unavailable()) })
     }
 
-    fn list_volumes_by_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>> {
-        Box::pin(async { Err(unavailable()) })
-    }
-
     fn volume_mountpoint<'a>(
         &'a self,
         name: &'a str,
@@ -147,7 +140,7 @@ impl ContainerRuntime for UnavailableContainerRuntime {
         name: &'a str,
         argv: &'a [String],
         extra_env: &'a [(String, String)],
-    ) -> BoxFuture<'a, Result<i32, BoxError>> {
+    ) -> BoxFuture<'a, Result<ExecOutput, BoxError>> {
         Box::pin(async { Err(unavailable()) })
     }
 }

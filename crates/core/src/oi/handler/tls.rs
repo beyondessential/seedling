@@ -82,6 +82,8 @@ pub(crate) fn upsert_dns_provider(
             "name must not be empty",
         ));
     }
+    crate::runtime::tls::dns::check_config(kind, &params.config)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
     let config_json = serde_json::to_string(&params.config).map_err(|e| {
         OiError::new(
             ErrorCode::RequirementsInvalid,
@@ -150,12 +152,6 @@ pub(crate) fn list_policies(state: &OiState) -> HandlerResult {
                 "hostname": row.hostname,
                 "strategy": "acme_dns",
                 "dns_provider": dns_provider,
-                "updated_at": row.updated_at,
-            }),
-            // spec: SITE#tailscale-discovery
-            TlsPolicy::Tailscale => json!({
-                "hostname": row.hostname,
-                "strategy": "tailscale",
                 "updated_at": row.updated_at,
             }),
             // spec: TCAN#canopy-only-policy
@@ -378,7 +374,7 @@ pub(crate) struct IssueAcmeDnsParams {
 // spec: TLSM#operator-driven-issuance
 pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> HandlerResult {
     let coord = Arc::clone(&state.tls_coordinator);
-    let hostname = params.hostname;
+    let hostname = request_hostname(state, params.hostname)?;
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move { coord.issue_now(&hostname).await })
     });
@@ -387,10 +383,21 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
             "cert_id": issued.cert_id,
             "not_after": issued.not_after,
         })),
-        Err(e) => Err(OiError::new(
-            ErrorCode::Internal,
-            format!("acme-dns issuance failed: {e}"),
-        )),
+        Err(e) => {
+            use crate::runtime::tls::issuance::CoordinatorError as E;
+            let code = match e {
+                // spec: TLSM#operator-driven-issuance
+                // The request could not proceed as asked; nothing failed.
+                E::NoPolicy { .. }
+                | E::Paused { .. }
+                | E::NoContactEmail
+                | E::TakesTailscale { .. } => ErrorCode::RequirementsInvalid,
+                // spec: TLS#issuance
+                E::IssuanceRunning { .. } => ErrorCode::OperationInProgress,
+                _ => ErrorCode::Internal,
+            };
+            Err(OiError::new(code, format!("acme-dns issuance failed: {e}")))
+        }
     }
 }
 
@@ -951,6 +958,27 @@ pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult
 /// and to an operator retry: without this they would all go on acting on the
 /// world as it was before the write.
 // spec: CHAIN#cycles
+/// The hostname a request names, checked to be a hostname, and spelt as the
+/// managed hostname it matches ignoring ASCII case, where it matches one.
+// spec: TLSM#conventions
+fn request_hostname(state: &OiState, hostname: String) -> Result<String, OiError> {
+    if !super::is_valid_dns_name(&hostname) {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("{hostname:?} is not a hostname"),
+        ));
+    }
+    let managed = {
+        let reg = state.registry.read();
+        state::managed_ingresses(&reg)
+    };
+    Ok(managed
+        .into_iter()
+        .map(|m| m.hostname)
+        .find(|m| m.eq_ignore_ascii_case(&hostname))
+        .unwrap_or(hostname))
+}
+
 fn decisions_have_moved(state: &OiState) {
     state.tls_coordinator.forget_chain_state();
 }
@@ -972,7 +1000,7 @@ pub(crate) struct RetryParams {
 /// the force-retry row stays in the DB until consumed.
 // spec: TLSM#operator-driven-issuance
 pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
-    let RetryParams { hostname } = params;
+    let hostname = request_hostname(state, params.hostname)?;
     let host_for_db = hostname.clone();
     state
         .db
@@ -1007,6 +1035,11 @@ pub(crate) struct ListHostnamesParams {
 // spec: TLSM#hostname-view
 // spec: TLS#hostname-state
 pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> HandlerResult {
+    if let Some(app) = params.app.as_deref()
+        && !state.registry.read().is_registered(app)
+    {
+        return Err(OiError::not_found(format!("app not found: {app}")));
+    }
     // Use the same managed-ingresses enumeration the issuance
     // coordinator and expiry sweep consume, so the rollup cannot
     // disagree with them about which hostnames the runtime is
@@ -1056,7 +1089,7 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
                 Some(state::ProxyHolding::Holds(cert)) => Some(cert),
                 Some(state::ProxyHolding::Nothing | state::ProxyHolding::Unreadable) | None => None,
             };
-            project_hostname_state(&hostname, &apps, &st, caddy_cert)
+            project_hostname_state(&hostname, &apps, &snapshot, &st, caddy_cert)
         })
         .collect();
 
@@ -1070,6 +1103,7 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
 fn project_hostname_state(
     hostname: &str,
     apps: &BTreeSet<String>,
+    snapshot: &state::Snapshot,
     st: &state::HostnameState<'_>,
     caddy_cert: Option<&state::ProxyCert>,
 ) -> Value {
@@ -1078,12 +1112,6 @@ fn project_hostname_state(
         Some((TlsPolicy::AcmeDns { dns_provider }, pattern)) => json!({
             "strategy": "acme_dns",
             "dns_provider": dns_provider,
-            "pattern": pattern,
-            "is_wildcard_match": pattern != hostname,
-        }),
-        // spec: SITE#tailscale-discovery
-        Some((TlsPolicy::Tailscale, pattern)) => json!({
-            "strategy": "tailscale",
             "pattern": pattern,
             "is_wildcard_match": pattern != hostname,
         }),
@@ -1108,8 +1136,8 @@ fn project_hostname_state(
         }),
         (None, Some(cc)) => json!({
             "id": null,
-            "origin": "caddy",
-            "caddy_issuer": cc.issuer_kind,
+            "origin": "proxy",
+            "proxy_issuer": state::proxy_issuer(&cc.issuer_kind),
             "issuer": cc.issuer,
             "not_before": cc.not_before,
             "not_after": cc.not_after,
@@ -1130,7 +1158,8 @@ fn project_hostname_state(
             _ => None,
         });
     let chain_json = project_chain(st);
-    let status = decision_status(st, caddy_cert);
+    // spec: TLS#certificate-status
+    let status = state::certificate_status(snapshot, st).map(state::CertStatus::as_str);
     let (next_issuance_at, next_issuance_source) = decision_next_issuance(st);
     let block_json = st.retry_block.map_or(
         Value::Null,
@@ -1151,85 +1180,6 @@ fn project_hostname_state(
         "next_issuance_at": next_issuance_at,
         "next_issuance_source": next_issuance_source,
     })
-}
-
-/// Map the unified [`state::Decision`] (plus the active cert it
-/// resolved against) to a status label for the UI. The label is a
-/// projection of the decision, not a re-computation — when the
-/// decision says "Issue now (renewal)" but the existing cert is still
-/// valid, status is `"active"` because the operator's mental model of
-/// the cert is "it's serving".
-///
-/// For `Decision::Default`, the runtime has no opinion; the status
-/// reflects whichever cert is actually serving — a SAN-bound manual
-/// cert from the runtime store, or whatever proxy-managed cert is on
-/// disk.
-fn decision_status(
-    st: &state::HostnameState<'_>,
-    caddy_cert: Option<&state::ProxyCert>,
-) -> &'static str {
-    use state::Decision::*;
-    use state::IssueReason as R;
-    let now = jiff::Timestamp::now().as_second();
-    let active_not_after = st.active_cert.and_then(|c| c.not_after);
-    match &st.decision {
-        Default => serving_status(active_not_after, caddy_cert, now).unwrap_or("default"),
-        Chain(c) => {
-            if matches!(c.act, state::ChainAct::Blocked { .. }) {
-                return "blocked";
-            }
-            if let Some(status) = serving_status(active_not_after, caddy_cert, now) {
-                return status;
-            }
-            // Nothing is serving the hostname. Canopy cannot be asked about it,
-            // so nothing is in progress and the operator has something to fix.
-            if c.act == state::ChainAct::CannotAskCanopy {
-                return "error";
-            }
-            // Canopy being asked is an acquisition in progress, and a failure it
-            // reported is an error.
-            match (&c.cycle, &c.last_error) {
-                (chain::Cycle::Running(r), Some(_)) if r.responsible == Strategy::Canopy => "error",
-                (chain::Cycle::Running(r), None) if r.responsible == Strategy::Canopy => "pending",
-                _ => "default",
-            }
-        }
-        Blocked { .. } => "blocked",
-        NoContactEmail | Debounced { .. } => "error",
-        Scheduled { .. } => "active",
-        IssueNow {
-            reason: R::First | R::ForceRetry,
-        } => "pending",
-        IssueNow {
-            reason: R::Renewal { .. },
-        } => {
-            // Cert is past its renewal trigger. If it's also past expiry
-            // (which can happen if every retry has failed), surface that
-            // instead of pretending it's still active.
-            if active_not_after.is_some_and(|na| na < now) {
-                "expired"
-            } else {
-                "active"
-            }
-        }
-    }
-}
-
-/// The status a hostname reflects from whichever certificate is actually
-/// serving it: a stored one, or whatever the proxy has on disk. `None` when
-/// there is neither.
-fn serving_status(
-    stored_not_after: Option<i64>,
-    caddy_cert: Option<&state::ProxyCert>,
-    now: i64,
-) -> Option<&'static str> {
-    match (stored_not_after, caddy_cert.and_then(|c| c.not_after)) {
-        (Some(na), _) if na < now => Some("expired"),
-        (Some(_), _) => Some("active"),
-        (None, Some(na)) if na < now => Some("expired"),
-        (None, Some(_)) => Some("active"),
-        (None, None) => None,
-    }
 }
 
 /// The `chain` object of the hostname view: the strategy responsible, when it
@@ -1368,10 +1318,10 @@ fn build_last_issuance(
         // rewriting the file for unrelated reasons (restart, metadata
         // refresh, …).
         return json!({
-            "kind": "caddy",
+            "kind": "proxy",
             "at": cc.not_before,
             "cert_id": null,
-            "provider": cc.issuer_kind,
+            "provider": state::proxy_issuer(&cc.issuer_kind),
         });
     }
     Value::Null
@@ -1396,6 +1346,12 @@ fn default_attempts_limit() -> i64 {
 // spec: TLSM#issuance-attempts
 pub(crate) fn list_attempts(state: &OiState, params: ListAttemptsParams) -> HandlerResult {
     let ListAttemptsParams { hostname, limit } = params;
+    if !(1..=500).contains(&limit) {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("limit must be from 1 to 500, got {limit}"),
+        ));
+    }
     let rows = state
         .db
         .call(move |db| store::list_attempts(db, hostname.as_deref(), limit))
@@ -1449,6 +1405,7 @@ pub(crate) struct SetRetryBlockParams {
 // spec: TLSM#retry-blocks
 pub(crate) fn set_retry_block(state: &OiState, params: SetRetryBlockParams) -> HandlerResult {
     let SetRetryBlockParams { hostname, reason } = params;
+    let hostname = request_hostname(state, hostname)?;
     state
         .db
         .call(move |db| {
@@ -1460,7 +1417,7 @@ pub(crate) fn set_retry_block(state: &OiState, params: SetRetryBlockParams) -> H
 
 // spec: TLSM#retry-blocks
 pub(crate) fn clear_retry_block(state: &OiState, params: HostnameParams) -> HandlerResult {
-    let HostnameParams { hostname } = params;
+    let hostname = request_hostname(state, params.hostname)?;
     let cleared = state
         .db
         .call(move |db| store::clear_retry_block(db, &hostname))
@@ -1501,6 +1458,19 @@ pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> Handle
         contact_email,
         cert_profile,
     } = params;
+    // spec: TLSM#settings
+    if let Some(email) = contact_email.as_deref()
+        && !valid_contact_email(email)
+    {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "contact_email {email:?} must be empty or hold exactly one '@' with text on each side"
+            ),
+        ));
+    }
+    // An empty profile is no profile.
+    let cert_profile = cert_profile.map(|profile| profile.filter(|p| !p.is_empty()));
     state
         .db
         .call(move |db| -> rusqlite::Result<()> {
@@ -1516,10 +1486,24 @@ pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> Handle
     Ok(json!({ "ok": true }))
 }
 
+/// Whether `email` may be stored as the contact email: empty, which clears it,
+/// or exactly one `@` with at least one character on each side.
+// spec: TLSM#settings
+fn valid_contact_email(email: &str) -> bool {
+    if email.is_empty() {
+        return true;
+    }
+    let mut parts = email.split('@');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(local), Some(domain), None) if !local.is_empty() && !domain.is_empty()
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 fn db_error(e: rusqlite::Error) -> OiError {
-    OiError::new(ErrorCode::NotFound, format!("db error: {e}"))
+    OiError::internal(format!("db error: {e}"))
 }

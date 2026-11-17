@@ -20,6 +20,16 @@ pub enum ForwardError {
     KeySpaceExhausted,
 }
 
+impl ForwardError {
+    /// The wire error code for a request this error refused.
+    // spec: FWD#forward-keys
+    pub fn wire_code(&self) -> &'static str {
+        match self {
+            Self::KeySpaceExhausted => "server_busy",
+        }
+    }
+}
+
 impl fmt::Display for ForwardError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -90,6 +100,15 @@ pub struct ForwardEntry {
     pub status_tx: mpsc::Sender<ForwardStatus>,
     /// Datagrams dropped since the relay last kept up.
     pub udp_dropped: u64,
+}
+
+/// Where a TCP forward's tunnelled connections go.
+pub struct TcpTarget {
+    pub addr: Ipv6Addr,
+    pub port: u16,
+    pub status_tx: mpsc::Sender<ForwardStatus>,
+    /// Becomes true when the forward ends, however it ends.
+    pub stopped: watch::Receiver<bool>,
 }
 
 // spec: FWD#listing-forwards
@@ -225,15 +244,15 @@ impl ForwardRegistry {
         }
     }
 
-    /// Look up where a TCP forward's tunneled connections go, and where to
-    /// report a failure to reach it.
-    pub fn get_target(
-        &self,
-        id: &ForwardId,
-    ) -> Option<(Ipv6Addr, u16, mpsc::Sender<ForwardStatus>)> {
-        self.by_id
-            .get(id)
-            .map(|e| (e.target_addr, e.port, e.status_tx.clone()))
+    /// Look up where a TCP forward's tunneled connections go, where to report a
+    /// failure to reach it, and the signal that the forward has ended.
+    pub fn get_target(&self, id: &ForwardId) -> Option<TcpTarget> {
+        self.by_id.get(id).map(|e| TcpTarget {
+            addr: e.target_addr,
+            port: e.port,
+            status_tx: e.status_tx.clone(),
+            stopped: e.stop_tx.subscribe(),
+        })
     }
 
     // spec: FWD#listing-forwards
@@ -381,10 +400,11 @@ mod tests {
             reg.register(conn, |k| entry(conn, k, ForwardProto::Tcp))
                 .unwrap();
         }
-        assert!(matches!(
-            reg.register(conn, |k| entry(conn, k, ForwardProto::Udp)),
-            Err(ForwardError::KeySpaceExhausted)
-        ));
+        let refused = reg
+            .register(conn, |k| entry(conn, k, ForwardProto::Udp))
+            .expect_err("every key is held");
+        assert!(matches!(refused, ForwardError::KeySpaceExhausted));
+        assert_eq!(refused.wire_code(), "server_busy");
     }
 
     #[test]

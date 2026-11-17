@@ -9,19 +9,54 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+/// The write half of a relay stream.
+pub trait RelaySend: AsyncWrite + Send + Unpin {
+    /// Abandon the stream's send side: what was written and not yet delivered
+    /// is dropped, and the peer is told the stream was cut off rather than
+    /// ended. Harmless on a stream already reset.
+    fn reset(&mut self);
+}
+
+/// The read half of a relay stream.
+pub trait RelayRecv: AsyncRead + Send + Unpin {
+    /// Tell the peer to stop sending: the answer is no longer wanted.
+    fn stop(&mut self);
+}
+
 /// The two halves of a relay stream: what the server writes, and what it reads.
 ///
-/// Abandoning a request is expressed by dropping these rather than by a method
-/// of its own, because that is what the underlying transport already means by
-/// it. Dropping the read half tells the peer to stop sending — the answer is no
-/// longer wanted — and dropping the write half after the request has been
-/// written is a clean end of the request body. Note that abandoning cannot
-/// un-issue a request the peer has already passed to Canopy; it only stops
-/// Seedling waiting for an answer it will not use.
-pub type RelayStream = (
-    Box<dyn AsyncWrite + Send + Unpin>,
-    Box<dyn AsyncRead + Send + Unpin>,
-);
+/// A request that is given up on is abandoned with [`RelayStream::reset`],
+/// which resets both directions, so the peer learns it at once and stops
+/// working on an answer nobody will read. Note that abandoning cannot un-issue
+/// a request the peer has already passed to Canopy.
+pub struct RelayStream {
+    pub send: Box<dyn RelaySend>,
+    pub recv: Box<dyn RelayRecv>,
+}
+
+impl RelayStream {
+    /// Reset the stream in both directions.
+    // spec: RLY#relay-limits
+    pub fn reset(&mut self) {
+        self.send.reset();
+        self.recv.stop();
+    }
+}
+
+/// The application error code carried by a reset of a relay stream.
+const RELAY_RESET_CODE: u32 = 0;
+
+impl RelaySend for quinn::SendStream {
+    fn reset(&mut self) {
+        let _ = quinn::SendStream::reset(self, quinn::VarInt::from_u32(RELAY_RESET_CODE));
+    }
+}
+
+impl RelayRecv for quinn::RecvStream {
+    fn stop(&mut self) {
+        let _ = quinn::RecvStream::stop(self, quinn::VarInt::from_u32(RELAY_RESET_CODE));
+    }
+}
 
 // spec: WIRE#canopy-relay-streams
 /// A client that has offered to carry Canopy requests.
@@ -56,10 +91,10 @@ impl RelayPeer for QuicPeer {
                 .open_bi()
                 .await
                 .map_err(|e| format!("cannot open a relay stream: {e}"))?;
-            Ok((
-                Box::new(send) as Box<dyn AsyncWrite + Send + Unpin>,
-                Box::new(recv) as Box<dyn AsyncRead + Send + Unpin>,
-            ))
+            Ok(RelayStream {
+                send: Box::new(send),
+                recv: Box::new(recv),
+            })
         })
     }
 }
@@ -88,6 +123,60 @@ mod test_peers {
         responder: Box<dyn Fn(tokio::io::DuplexStream) + Send + Sync>,
         /// Whether opening should fail, to exercise the unreachable-peer path.
         fail: bool,
+        /// How many times a stream this peer opened was reset.
+        resets: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    struct CountedSend {
+        inner: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+        resets: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AsyncWrite for CountedSend {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+        }
+
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    impl RelaySend for CountedSend {
+        fn reset(&mut self) {
+            self.resets
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct PlainRecv(tokio::io::ReadHalf<tokio::io::DuplexStream>);
+
+    impl AsyncRead for PlainRecv {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+        }
+    }
+
+    impl RelayRecv for PlainRecv {
+        fn stop(&mut self) {}
     }
 
     impl DuplexPeer {
@@ -97,6 +186,7 @@ mod test_peers {
             Arc::new(Self {
                 responder: Box::new(responder),
                 fail: false,
+                resets: Arc::default(),
             })
         }
 
@@ -104,7 +194,13 @@ mod test_peers {
             Arc::new(Self {
                 responder: Box::new(|_| {}),
                 fail: true,
+                resets: Arc::default(),
             })
+        }
+
+        /// How many streams this peer opened have been reset.
+        pub fn resets(&self) -> usize {
+            self.resets.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -117,10 +213,13 @@ mod test_peers {
                 let (ours, theirs) = tokio::io::duplex(64 * 1024);
                 (self.responder)(theirs);
                 let (read, write) = tokio::io::split(ours);
-                Ok((
-                    Box::new(write) as Box<dyn AsyncWrite + Send + Unpin>,
-                    Box::new(read) as Box<dyn AsyncRead + Send + Unpin>,
-                ))
+                Ok(RelayStream {
+                    send: Box::new(CountedSend {
+                        inner: write,
+                        resets: Arc::clone(&self.resets),
+                    }),
+                    recv: Box::new(PlainRecv(read)),
+                })
             })
         }
     }

@@ -73,9 +73,43 @@ fn make_container_signaler(
 /// the same way the actuator does at container start.
 struct OperationVolumeWriter {
     driver: Arc<crate::system::System>,
+    db: crate::runtime::db::DbHandle,
 }
 
 impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
+    // spec: VOL#external-volumes
+    fn resolve_external(
+        &self,
+        app: &str,
+        name: &str,
+    ) -> Result<Option<crate::runtime::barrier::ResolvedExternalWrite>, String> {
+        use crate::system::types::MountSource;
+
+        let app = app
+            .parse::<AppName>()
+            .map_err(|e| format!("{app} is not an app name: {e}"))?;
+        let mappings = crate::system::actuator::try_resolve_external_volumes(
+            &self.db,
+            &self.driver.volume_store,
+            &app,
+        )
+        .map_err(|e| format!("the external volume mappings cannot be read: {e}"))?;
+        match mappings.get(name) {
+            None => Ok(None),
+            Some(mount) => match &mount.source {
+                MountSource::Bind(host_path) => {
+                    Ok(Some(crate::runtime::barrier::ResolvedExternalWrite {
+                        host_path: host_path.clone(),
+                        read_only: mount.read_only,
+                    }))
+                }
+                MountSource::Volume(_) | MountSource::Tmpfs => Err(format!(
+                    "the mapping of external volume {name} is not a directory on the host"
+                )),
+            },
+        }
+    }
+
     fn write(
         &self,
         app: &str,
@@ -83,10 +117,15 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
         path: &str,
         contents: &[u8],
     ) -> Result<(), String> {
-        use crate::runtime::barrier::VolumeWriteTarget;
-        use crate::runtime::identity::VolumeName;
-        use crate::system::actuator::{safe_volume_write, tmpfs_volume_path};
         use std::path::PathBuf;
+
+        use crate::{
+            runtime::{barrier::VolumeWriteTarget, identity::VolumeName},
+            system::actuator::{
+                ensure_named_volume_storage, ensure_tmpfs_volume_dir, safe_volume_write,
+                tmpfs_volume_path,
+            },
+        };
 
         let driver = Arc::clone(&self.driver);
         let app = app.to_owned();
@@ -96,13 +135,26 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let mountpoint: PathBuf = match target {
-                    VolumeWriteTarget::NamedVolume { name, tmpfs } => {
-                        let vol_name = VolumeName::for_app(&app, &name);
+                    // spec: RT#volume-writes
+                    // Storage that does not exist yet is created and seeded
+                    // first, as starting the volume would.
+                    VolumeWriteTarget::NamedVolume {
+                        name,
+                        tmpfs,
+                        writes,
+                    } => {
                         if tmpfs {
                             // spec: ACTU#volume-storage
-                            tmpfs_volume_path(vol_name.as_str())
+                            let host_path =
+                                tmpfs_volume_path(VolumeName::for_app(&app, &name).as_str());
+                            ensure_tmpfs_volume_dir(&host_path, &writes)
+                                .await
+                                .map_err(|e| format!("rt.write: {e}"))?;
+                            host_path
                         } else {
-                            driver.volume_store.path(&vol_name)
+                            ensure_named_volume_storage(&driver.volume_store, &app, &name, &writes)
+                                .await
+                                .map_err(|e| format!("rt.write: {e}"))?
                         }
                     }
                     VolumeWriteTarget::AnonymousVolume { anon_id, tmpfs } => {
@@ -127,9 +179,12 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
     }
 }
 
-fn make_volume_writer(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::VolumeWriter>> {
+pub(crate) fn make_volume_writer(
+    state: &OiState,
+) -> Option<Arc<dyn crate::runtime::barrier::VolumeWriter>> {
     Some(Arc::new(OperationVolumeWriter {
         driver: Arc::clone(&state.driver),
+        db: state.db.clone(),
     }))
 }
 
@@ -141,21 +196,52 @@ struct OperationExecutor {
 }
 
 impl crate::runtime::barrier::Executor for OperationExecutor {
+    fn check_running(&self, target: &crate::runtime::ResourceInstance) -> Result<(), String> {
+        let container = Arc::clone(&self.container);
+        let name = target.display_name.clone();
+        let state = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async move { container.inspect(&name).await })
+        });
+        match state {
+            Ok(Some(s)) if matches!(s.status, crate::system::types::ContainerStatus::Running) => {
+                Ok(())
+            }
+            Ok(Some(s)) => Err(format!(
+                "{} is not running (it is {:?})",
+                target.display_name, s.status
+            )),
+            Ok(None) => Err(format!(
+                "{} is not running: no such container",
+                target.display_name
+            )),
+            Err(e) => Err(format!(
+                "cannot tell whether {} is running: {e}",
+                target.display_name
+            )),
+        }
+    }
+
     fn exec(
         &self,
-        name: &str,
+        target: &crate::runtime::ResourceInstance,
         argv: &[String],
         extra_env: &[(String, String)],
     ) -> Result<i32, String> {
         let container = Arc::clone(&self.container);
-        let name = name.to_owned();
+        let name = target.display_name.clone();
         let argv: Vec<String> = argv.to_vec();
         let extra_env: Vec<(String, String)> = extra_env.to_vec();
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
                 .block_on(async move { container.exec_command(&name, &argv, &extra_env).await })
         });
-        result.map_err(|e| e.to_string())
+        let output = result.map_err(|e| e.to_string())?;
+        // spec: RT#command-execution
+        // What the command wrote goes with the container's logs, not to the
+        // script and not to the daemon's own.
+        crate::system::journal::record_exec_output(target, &output.stdout, &output.stderr);
+        Ok(output.exit_code)
     }
 }
 
@@ -165,38 +251,49 @@ fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Exe
     }))
 }
 
+/// The params an operation starts with.
+pub enum OperationParams {
+    /// As requested: volume params name site volumes and are bound at dispatch.
+    Requested(serde_json::Map<String, serde_json::Value>),
+    /// As persisted by an interrupted operation, with the bindings its
+    /// `<key>_volume` params name, which are established again as they were.
+    // spec: OPS#operation-scoped-volumes
+    Replayed {
+        params: serde_json::Map<String, serde_json::Value>,
+        bindings: crate::runtime::history::OperationVolumeBindings,
+    },
+}
+
+/// A dispatch's params with its volume params bound, and the bindings made.
+pub(crate) struct BoundParams {
+    pub params: serde_json::Map<String, serde_json::Value>,
+    pub bindings: HashMap<String, OperationVolumeBinding>,
+}
+
 // spec: ACN#volume-params
-/// For every `kind: "volume"` param in the action's schema, look up the
+/// For every `kind: "volume"` param in `schema`, look up the
 /// operator-supplied site volume name, build an
 /// [`OperationVolumeBinding`] keyed by a generated per-operation name, and
-/// rewrite the params map so the action closure sees `<key>_volume = <generated-name>`
+/// rewrite the params map so the closure sees `<key>_volume = <generated-name>`
 /// — consumed by `app.external_volume(param[...])`.
 ///
-/// Volumes that have already been validated to exist by `invoke_action`'s
-/// pre-flight; here we only resolve to the host path and warn (instead of
-/// failing) if a volume disappeared between validation and dispatch — the
-/// closure will then see a missing `<key>_volume` and can fail gracefully.
-fn resolve_action_volume_params(
+/// A binding that cannot be made is an error and the closure does not run:
+/// a volume that disappeared between validation and dispatch, a name that is
+/// not one, or a record that cannot be read. Running it with the key missing
+/// would have it act on a volume nobody chose.
+pub(crate) fn bind_volume_params(
     state: &OiState,
-    app: &App,
-    action_name: &ActionName,
+    schema: &std::collections::BTreeMap<
+        seedling_protocol::names::ParamName,
+        crate::defs::install::ParamDef,
+    >,
     mut params: serde_json::Map<String, serde_json::Value>,
     operation_id: &str,
-) -> (
-    serde_json::Map<String, serde_json::Value>,
-    HashMap<String, OperationVolumeBinding>,
-) {
+) -> Result<BoundParams, String> {
     use crate::defs::install::ParamKind;
     use crate::defs::volume::{VolumeParamSpec, build_operation_volume_params};
     use crate::runtime::site_volumes;
     use seedling_protocol::names::SiteVolumeName;
-
-    let def = app.def.load();
-    let schema = match def.actions.get(action_name.as_str()) {
-        Some(a) => a.params.clone(),
-        None => return (params, HashMap::new()),
-    };
-    drop(def);
 
     let mut specs: Vec<(String, VolumeParamSpec)> = Vec::new();
     let volume_keys: Vec<String> = schema
@@ -206,43 +303,23 @@ fn resolve_action_volume_params(
         .collect();
     for key in &volume_keys {
         let val = match params.remove(key.as_str()) {
-            Some(serde_json::Value::String(s)) => s,
-            other => {
-                if other.is_some() {
-                    tracing::warn!(
-                        action = %action_name,
-                        key = %key,
-                        "volume param value is not a string; skipping binding",
-                    );
-                }
-                continue;
-            }
+            Some(serde_json::Value::String(s)) if !s.is_empty() => s,
+            // An optional volume param that was not supplied, or was left
+            // empty, binds nothing.
+            Some(serde_json::Value::String(_)) | None => continue,
+            Some(_) => return Err(format!("volume param {key:?} is not a string")),
         };
-        let site_name = match SiteVolumeName::new(&val) {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!(
-                    action = %action_name,
-                    key = %key,
-                    value = %val,
-                    "invalid site volume name; skipping binding: {e}",
-                );
-                continue;
-            }
-        };
+        let site_name = SiteVolumeName::new(&val).map_err(|e| {
+            format!("volume param {key:?} names {val:?}, which is not a volume name: {e}")
+        })?;
         let lookup_name = site_name.clone();
-        let resolved = state
+        let site_vol = state
             .db
-            .call(move |db| site_volumes::get(db, &lookup_name).ok().flatten());
-        let Some(site_vol) = resolved else {
-            tracing::warn!(
-                action = %action_name,
-                key = %key,
-                value = %val,
-                "site volume not found at dispatch; skipping binding",
-            );
-            continue;
-        };
+            .call(move |db| site_volumes::get(db, &lookup_name))
+            .map_err(|e| format!("could not read site volume {val:?} for param {key:?}: {e}"))?
+            .ok_or_else(|| {
+                format!("site volume {val:?} named by param {key:?} no longer exists")
+            })?;
         let host_path = match &site_vol.kind {
             site_volumes::SiteVolumeKind::Bind { host_path } => std::path::PathBuf::from(host_path),
             _ => state.driver.volume_store.site_path(site_name.as_str()),
@@ -259,13 +336,34 @@ fn resolve_action_volume_params(
     }
 
     if specs.is_empty() {
-        return (params, HashMap::new());
+        return Ok(BoundParams {
+            params,
+            bindings: HashMap::new(),
+        });
     }
     let (bindings, injected) = build_operation_volume_params(operation_id, specs);
     for (k, v) in injected {
         params.insert(k, v);
     }
-    (params, bindings)
+    Ok(BoundParams { params, bindings })
+}
+
+/// End an operation that was accepted but cannot run, as a failed one ends.
+fn refuse_to_run(db: &DbHandle, op_ctx: &OperationEventCtx, description: String) {
+    let app_name = op_ctx.app.clone();
+    let operation_id = op_ctx.operation_id.clone();
+    let for_db = description.clone();
+    db.call(move |db| {
+        let _ = faults::file_fault(db, &app_name, None, None, None, "operation_failed", &for_db);
+        let _ = clear_current_operation(db);
+        let _ = crate::runtime::generations::record_operation_outcome(
+            db,
+            &operation_id,
+            crate::runtime::generations::Outcome::Failed,
+            Some(&for_db),
+        );
+    });
+    op_ctx.failed(&description);
 }
 
 /// Run the operation loop synchronously until completion or failure.
@@ -276,13 +374,12 @@ fn resolve_action_volume_params(
 fn run_operation_loop(
     app: &App,
     db: DbHandle,
-    params: serde_json::Map<String, serde_json::Value>,
+    bound: Result<BoundParams, String>,
     active_progress: Arc<RwLock<Option<OperationProgress>>>,
     tick_notify: Arc<Notify>,
     op_ctx: &OperationEventCtx,
     script_limits: &crate::ScriptLimits,
     cipher: Arc<crate::runtime::secrets::Cipher>,
-    operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
     cancel_token: Arc<CancelToken>,
     container_signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
     volume_writer: Option<Arc<dyn crate::runtime::barrier::VolumeWriter>>,
@@ -292,7 +389,80 @@ fn run_operation_loop(
     let action_name = &op_ctx.action_name;
     let operation_id = OperationId(op_ctx.operation_id.clone());
 
-    let (engine, mut scope, _) = crate::setup_language(script_limits, Arc::clone(&app.bundle));
+    // spec: ACN#volume-params
+    // The closure does not run if a volume param could not be bound.
+    let BoundParams {
+        params,
+        bindings: operation_volume_bindings,
+    } = match bound {
+        Ok(bound) => bound,
+        Err(why) => {
+            tracing::error!(app = %app_name, action = %action_name, "volume binding failed: {why}");
+            refuse_to_run(
+                &db,
+                op_ctx,
+                format!("{action_name} not run: a volume param could not be bound: {why}"),
+            );
+            return false;
+        }
+    };
+
+    // spec: OPS#initiating-events
+    // The operation runs against the definition and parameters of its target
+    // generation, however many generations have been committed since it was
+    // dispatched, and on every replay. If that generation cannot be rebuilt
+    // the operation fails; it is never run against another's state.
+    let target_app;
+    let app = {
+        let name = app_name.clone();
+        let current = db.call(move |db| crate::runtime::generations::current(db, &name));
+        match current {
+            Ok(Some(current))
+                if op_ctx.target_generation != 0 && current != op_ctx.target_generation =>
+            {
+                let name = app_name.clone();
+                let (limits, cipher, target) = (
+                    script_limits.clone(),
+                    Arc::clone(&cipher),
+                    op_ctx.target_generation,
+                );
+                match db.call(move |db| {
+                    crate::runtime::generations::reconstruct_app_def(
+                        db, &name, target, &limits, &cipher,
+                    )
+                }) {
+                    Ok(rebuilt) => {
+                        target_app = rebuilt;
+                        &target_app
+                    }
+                    Err(e) => {
+                        tracing::error!(app = %app_name, action = %action_name, "cannot rebuild generation {}: {e}", op_ctx.target_generation);
+                        refuse_to_run(
+                            &db,
+                            op_ctx,
+                            format!(
+                                "{action_name} not run: generation {} cannot be rebuilt: {e}",
+                                op_ctx.target_generation
+                            ),
+                        );
+                        return false;
+                    }
+                }
+            }
+            _ => app,
+        }
+    };
+
+    let (engine, mut scope, _) = match crate::setup_language(script_limits, Arc::clone(&app.bundle))
+    {
+        Ok(language) => language,
+        // spec: CONST#host-constants
+        Err(e) => {
+            tracing::error!(app = %app_name, action = %action_name, "{action_name} not run: {e}");
+            refuse_to_run(&db, op_ctx, format!("{action_name} not run: {e}"));
+            return false;
+        }
+    };
     // spec: BND#script-formation
     let compiled = app
         .bundle
@@ -344,15 +514,31 @@ fn run_operation_loop(
         target_generation: op_ctx.target_generation,
     };
     let params_for_persist = params.clone();
+    let bindings_for_persist = operation_volume_bindings.clone();
     let cipher_for_persist = Arc::clone(&cipher);
+    // spec: OPS#persistence
+    // The closure does not run unless the operation is on record: a restart
+    // could not otherwise replay it, and its params could not be recovered.
     if let Err(e) = db.call(move |db| {
-        save_current_operation(db, &cipher_for_persist, &record, &params_for_persist)
+        save_current_operation(
+            db,
+            &cipher_for_persist,
+            &record,
+            &params_for_persist,
+            &bindings_for_persist,
+        )
     }) {
-        tracing::warn!(
+        tracing::error!(
             app = %app_name,
             action = %action_name,
-            "failed to persist current_operation: {e}"
+            "failed to persist current_operation; not running the operation: {e}"
         );
+        refuse_to_run(
+            &db,
+            op_ctx,
+            format!("{action_name} not run: the operation could not be persisted: {e}"),
+        );
+        return false;
     }
 
     loop {
@@ -383,6 +569,7 @@ fn run_operation_loop(
             },
             &mut scope,
         );
+        let operation_id_for_outcome = operation_id.0.clone();
         match result {
             OperationResult::Completed => {
                 let app_name_owned = app_name.clone();
@@ -399,6 +586,13 @@ fn run_operation_loop(
                         faults::clear_faults_by_kind(db, &app_name_owned, kind).ok();
                     }
                     let _ = clear_current_operation(db);
+                    // spec: GEN#generation-numbers
+                    let _ = crate::runtime::generations::record_operation_outcome(
+                        db,
+                        &operation_id_for_outcome,
+                        crate::runtime::generations::Outcome::Succeeded,
+                        None,
+                    );
                 });
                 op_ctx.completed();
                 return true;
@@ -418,6 +612,12 @@ fn run_operation_loop(
                         &desc,
                     );
                     let _ = clear_current_operation(db);
+                    let _ = crate::runtime::generations::record_operation_outcome(
+                        db,
+                        &operation_id_for_outcome,
+                        crate::runtime::generations::Outcome::Failed,
+                        Some(&desc),
+                    );
                 });
                 op_ctx.failed(&e.to_string());
                 return false;
@@ -439,8 +639,16 @@ fn run_operation_loop(
                         &desc_for_fault,
                     );
                     let _ = clear_current_operation(db);
+                    let _ = crate::runtime::generations::record_operation_outcome(
+                        db,
+                        &operation_id_for_outcome,
+                        crate::runtime::generations::Outcome::Cancelled,
+                        None,
+                    );
                 });
-                op_ctx.failed(&desc);
+                // spec: OPS#cancellation
+                // A cancelled operation ends in an outcome of its own.
+                op_ctx.cancelled();
                 return false;
             }
             OperationResult::Suspended(cond) => {
@@ -525,143 +733,212 @@ pub(crate) fn dynamic_poll_interval(waited_secs: u64) -> Duration {
     Duration::from_secs(poll)
 }
 
+/// How long the end-of-operation cleanup waits for its dynamic resources
+/// before it holds `operation_cleanup_stalled`. It goes on waiting.
+// spec: OPS#completion
+const CLEANUP_STALL_AFTER: Duration = Duration::from_secs(60);
+
+/// What keeps the end-of-operation cleanup from finishing.
+enum CleanupBlocker {
+    /// The records of the operation's dynamic resources cannot be read.
+    Unreadable(String),
+    /// A dynamic resource is not yet torn down.
+    NotTornDown(String),
+}
+
+/// Pacing for the end-of-operation cleanup's looks at its dynamic resources,
+/// and the fault it holds while they are stalled.
+struct CleanupPace<'a> {
+    state: &'a OiState,
+    app: &'a AppName,
+    operation_id: &'a str,
+    started: tokio::time::Instant,
+}
+
+impl CleanupPace<'_> {
+    /// Hold `operation_cleanup_stalled` while `blocker` stands, if it is one
+    /// that stalls the cleanup now.
+    // spec: OPS#completion
+    // spec: FLT#app-faults
+    fn note(&self, blocker: &CleanupBlocker) {
+        let why = match blocker {
+            CleanupBlocker::Unreadable(why) => why.clone(),
+            CleanupBlocker::NotTornDown(why) if self.started.elapsed() >= CLEANUP_STALL_AFTER => {
+                why.clone()
+            }
+            CleanupBlocker::NotTornDown(why) => {
+                tracing::debug!(operation_id = %self.operation_id, "dynamic cleanup waiting: {why}");
+                return;
+            }
+        };
+        let (app, operation_id) = (self.app.clone(), self.operation_id.to_owned());
+        self.state.db.call(move |db| {
+            crate::runtime::faults::hold_operation_cleanup_stalled(db, &app, &operation_id, &why);
+        });
+    }
+
+    /// Hold the fault `blocker` calls for, then wait before the next look.
+    ///
+    /// The back-off is [`dynamic_poll_interval`] over the time spent so far:
+    /// two seconds at first, ramping to its cap. Every failure here, a read
+    /// or a probe, is taken as transient: nothing gives the cleanup up.
+    async fn wait(&self, blocker: CleanupBlocker) {
+        self.note(&blocker);
+        tokio::time::sleep(dynamic_poll_interval(self.started.elapsed().as_secs())).await;
+    }
+}
+
+/// Tear down the dynamic resources recorded against an operation that has
+/// ended, and forget their records once they are gone.
+///
+/// The records are the only thing that knows the resources exist, so neither
+/// a record that cannot be read nor a teardown that is taking long ends the
+/// cleanup: it keeps looking at a capped back-off until they are gone. A
+/// record naming no instance that can be torn down is kept, as the startup
+/// teardown keeps it.
+// spec: APP#dynamic-resource-lifetime
+// spec: OPS#cancellation
 async fn cleanup_dynamic_resources(
     state: &OiState,
+    app_name: &AppName,
     operation_id_str: &str,
     active_progress: &RwLock<Option<OperationProgress>>,
     tick_notify: &Notify,
 ) {
-    use crate::defs::deployment::Deployment;
-    use crate::defs::job::Job;
-    use crate::defs::resource::{Resource, ResourceKind};
+    use crate::defs::resource::ResourceKind;
     use crate::runtime::LifecycleState;
-    use crate::runtime::barrier::oracle::derive_lifecycle_state;
-    use crate::runtime::desired::{delete_dynamic_resources_for_operation, list_dynamic_resources};
-    use crate::runtime::history::query_observations;
+    use crate::runtime::desired::{
+        delete_dynamic_resource, list_dynamic_resources_for_operation, undeclared_pod,
+    };
+    use crate::runtime::history::read_lifecycle;
     use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
-    let op_id_for_filter = operation_id_str.to_owned();
-    let dynamic_records: Vec<_> = state
-        .db
-        .call(move |db| list_dynamic_resources(db).unwrap_or_default())
-        .into_iter()
-        .filter(|r| r.operation_id == op_id_for_filter)
-        .collect();
+    let pace = CleanupPace {
+        state,
+        app: app_name,
+        operation_id: operation_id_str,
+        started: tokio::time::Instant::now(),
+    };
 
-    if !dynamic_records.is_empty() {
-        let mut cleanup = OperationProgress::new();
-
-        for record in &dynamic_records {
-            let uuid = match uuid::Uuid::parse_str(&record.instance_id) {
-                Ok(u) => u,
-                Err(e) => {
-                    tracing::warn!(
-                        instance_id = %record.instance_id,
-                        "dynamic cleanup: bad instance_id: {e}"
-                    );
-                    continue;
-                }
-            };
-
-            let kind = match record.kind.as_str() {
-                "Deployment" => ResourceKind::Deployment,
-                "Job" => ResourceKind::Job,
-                _ => continue,
-            };
-
-            let instance = ResourceInstance {
-                id: InstanceId(uuid),
-                app: record.app.clone(),
-                kind,
-                name: None,
-                variant: InstanceVariant::Singleton,
-                display_name: record.display_name.clone(),
-            };
-
-            let minimal = match kind {
-                ResourceKind::Deployment => Resource::Deployment(Deployment {
-                    name: std::sync::Arc::new(String::new()),
-                    def: Default::default(),
-                    frozen: false,
-                }),
-                ResourceKind::Job => Resource::Job(Job {
-                    name: std::sync::Arc::new(String::new()),
-                    def: Default::default(),
-                    frozen: false,
-                }),
-                _ => unreachable!(),
-            };
-
-            cleanup.stopped(instance.clone());
-            cleanup.dynamic_defs.insert(instance, minimal);
+    let dynamic_records = loop {
+        let operation_id = operation_id_str.to_owned();
+        match state
+            .db
+            .call(move |db| list_dynamic_resources_for_operation(db, &operation_id))
+        {
+            Ok(records) => break records,
+            Err(e) => {
+                tracing::warn!(
+                    operation_id = %operation_id_str,
+                    "could not read the operation's dynamic resources: {e}"
+                );
+                pace.wait(CleanupBlocker::Unreadable(format!(
+                    "the records cannot be read: {e}"
+                )))
+                .await;
+            }
         }
+    };
 
-        if !cleanup.is_empty() {
-            *active_progress.write() = Some(cleanup);
-            tick_notify.notify_one();
+    let mut cleanup = OperationProgress::new();
+    // The records whose resources this cleanup tears down, or that have
+    // nothing to tear down.
+    let mut handled: Vec<(AppName, String)> = Vec::new();
+    // A record whose instance cannot be read is kept, and its resource cannot
+    // be torn down from it.
+    let mut unreadable: Option<String> = None;
+    for record in &dynamic_records {
+        let kind = match record.kind.as_str() {
+            "Deployment" => ResourceKind::Deployment,
+            "Job" => ResourceKind::Job,
+            // Not a pod: it stops being served when the operation's desired
+            // state no longer holds it.
+            _ => {
+                handled.push((record.app.clone(), record.instance_id.clone()));
+                continue;
+            }
+        };
+        let Some(id) = InstanceId::from_hex(&record.instance_id) else {
+            tracing::error!(
+                instance_id = %record.instance_id,
+                operation_id = %operation_id_str,
+                "dynamic cleanup: the recorded instance id does not parse; keeping its record"
+            );
+            unreadable = Some(format!(
+                "the recorded instance id {:?} does not parse",
+                record.instance_id
+            ));
+            continue;
+        };
+        let instance = ResourceInstance {
+            id,
+            app: record.app.clone(),
+            kind,
+            name: None,
+            variant: InstanceVariant::Singleton,
+            display_name: record.display_name.clone(),
+        };
+        let Some(minimal) = undeclared_pod(&instance) else {
+            continue;
+        };
+        cleanup.stopped(instance.clone());
+        cleanup.dynamic_defs.insert(instance, minimal);
+        handled.push((record.app.clone(), record.instance_id.clone()));
+    }
 
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-            loop {
-                if tokio::time::Instant::now() >= deadline {
-                    tracing::warn!(
-                        operation_id = %operation_id_str,
-                        "dynamic resource cleanup timed out"
-                    );
-                    break;
-                }
+    if !cleanup.is_empty() {
+        let cleanup_instances: Vec<ResourceInstance> =
+            cleanup.dynamic_defs.keys().cloned().collect();
+        *active_progress.write() = Some(cleanup);
+        tick_notify.notify_one();
 
-                // Collect the instances the reconciler is tearing down. Both
-                // checks below run against this snapshot so we don't hold
-                // the active_progress lock across .await.
-                let cleanup_instances: Vec<ResourceInstance> = {
-                    let guard = active_progress.read();
-                    guard
-                        .as_ref()
-                        .map(|p| p.dynamic_defs.keys().cloned().collect())
-                        .unwrap_or_default()
-                };
-
-                let lifecycles_terminal = cleanup_instances.iter().all(|inst| {
+        loop {
+            let mut waiting_on = None;
+            for inst in &cleanup_instances {
+                let lifecycle = {
                     let inst = inst.clone();
-                    state.db.call(move |db| {
-                        let obs = query_observations(db, &inst).unwrap_or_default();
-                        derive_lifecycle_state(&inst, &obs).has_reached(LifecycleState::Terminated)
-                    })
-                });
-
+                    state.db.call(move |db| read_lifecycle(db, &inst))
+                };
+                match lifecycle {
+                    Ok((s, _)) if s.has_reached(LifecycleState::Terminated) => {}
+                    Ok((s, _)) => {
+                        waiting_on = Some(format!("{} is {s:?}", inst.display_name));
+                        break;
+                    }
+                    Err(e) => {
+                        waiting_on = Some(format!(
+                            "the lifecycle of {} cannot be read: {e}",
+                            inst.display_name
+                        ));
+                        break;
+                    }
+                }
                 // A container with `podman --rm` can reach the Unscheduled
                 // lifecycle state via `container_removed` before the
                 // reconciler has had a chance to remove the pod network.
-                // Breaking out of cleanup at that point leaks the network
-                // and the next Job on the same app trips over "subnet
-                // already used". Require every pod network to also be gone.
-                let mut networks_all_gone = true;
-                for inst in &cleanup_instances {
-                    let net_name = format!("seedling-{}", inst.display_name);
-                    match state.driver.container.network_exists(&net_name).await {
-                        Ok(false) => {}
-                        Ok(true) => {
-                            networks_all_gone = false;
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                instance = %inst.display_name,
-                                "network_exists check failed during cleanup; assuming present: {e}"
-                            );
-                            networks_all_gone = false;
-                            break;
-                        }
+                // Ending the cleanup at that point leaks the network and the
+                // next Job on the same app trips over "subnet already used".
+                // Require every pod network to also be gone.
+                let net_name = format!("seedling-{}", inst.display_name);
+                match state.driver.container.network_exists(&net_name).await {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        waiting_on = Some(format!("network {net_name} still exists"));
+                        break;
+                    }
+                    Err(e) => {
+                        waiting_on = Some(format!(
+                            "whether network {net_name} still exists cannot be told: {e}"
+                        ));
+                        break;
                     }
                 }
-
-                if lifecycles_terminal && networks_all_gone {
-                    break;
-                }
-
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                tick_notify.notify_one();
             }
+            let Some(why) = waiting_on else {
+                break;
+            };
+            pace.wait(CleanupBlocker::NotTornDown(why)).await;
+            tick_notify.notify_one();
         }
     }
 
@@ -670,13 +947,19 @@ async fn cleanup_dynamic_resources(
     // tore down. Without this, faults filed against short-lived Job
     // instances (image_pull_failed, container_start_failed, …) persist
     // forever because the instance id they reference has gone away.
-    let instance_ids_to_clear: Vec<(AppName, String)> = dynamic_records
-        .iter()
-        .map(|r| (r.app.clone(), r.instance_id.clone()))
-        .collect();
-    let op_id_owned = operation_id_str.to_owned();
+    // spec: OPS#completion
+    // spec: FLT#app-faults
+    match unreadable {
+        Some(why) => pace.note(&CleanupBlocker::Unreadable(why)),
+        None => {
+            let (app, operation_id) = (app_name.clone(), operation_id_str.to_owned());
+            state.db.call(move |db| {
+                faults::clear_operation_cleanup_stalled(db, &app, &operation_id);
+            });
+        }
+    }
     state.db.call(move |db| {
-        for (app, instance_id) in &instance_ids_to_clear {
+        for (app, instance_id) in &handled {
             if let Err(e) = faults::clear_faults_for_instance(db, app, instance_id) {
                 tracing::warn!(
                     app = %app,
@@ -684,12 +967,12 @@ async fn cleanup_dynamic_resources(
                     "failed to clear per-instance faults during dynamic cleanup: {e}"
                 );
             }
-        }
-        if let Err(e) = delete_dynamic_resources_for_operation(db, &op_id_owned) {
-            tracing::error!(
-                operation_id = %op_id_owned,
-                "failed to delete dynamic resource records: {e}"
-            );
+            if let Err(e) = delete_dynamic_resource(db, instance_id) {
+                tracing::error!(
+                    instance_id = %instance_id,
+                    "failed to delete dynamic resource record: {e}"
+                );
+            }
         }
     });
 }
@@ -699,9 +982,19 @@ async fn cleanup_dynamic_resources(
 /// acquires registry.read(), so registry.write() + db.lock() in either order
 /// deadlocks with it.
 // spec: EVT#event-types
-pub fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: AppPhase) {
+pub fn set_phase_and_persist(
+    state: &OiState,
+    app_name: &AppName,
+    new_phase: AppPhase,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
     let phase_str = phase_event_name(&new_phase);
+    // spec: FWD#forward-lifetime
+    // spec: SHL#session-end
+    if !matches!(new_phase, AppPhase::Installed) {
+        state.end_sessions_of_app(app_name.as_str());
+    }
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(app_name.as_str()) {
@@ -727,7 +1020,7 @@ pub fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: App
             }
         }
     }
-    state.event_tx.app_phase_changed(app_name, phase_str, None);
+    state.event_tx.app_phase_changed(app_name, phase_str, actor);
     state.tick_notify.notify_one();
 }
 
@@ -741,20 +1034,64 @@ fn phase_event_name(phase: &AppPhase) -> &'static str {
 }
 
 // spec: ACI#install
-fn enter_installing_phase(state: &OiState, app_name: &AppName) {
-    set_phase_and_persist(state, app_name, AppPhase::Installing);
+fn enter_installing_phase(
+    state: &OiState,
+    app_name: &AppName,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
+    set_phase_and_persist(state, app_name, AppPhase::Installing, actor);
     tracing::info!(app = %app_name, "install started; entering Installing phase");
 }
 
+/// Place the app's just-completed install after every install completed
+/// before it, durably and then in memory.
+// spec: ING#claims-across-apps
+pub(crate) fn record_install_completed(state: &OiState, app_name: &AppName) {
+    let name = app_name.clone();
+    match state
+        .db
+        .call(move |db| crate::runtime::apps::AppRegistry::record_install_completed(db, &name))
+    {
+        Ok(seq) => {
+            if let Some(entry) = state.registry.write().get_mut(app_name.as_str()) {
+                entry.install_seq = Some(seq);
+            }
+        }
+        Err(e) => tracing::error!(app = %app_name, "record install completion order: {e}"),
+    }
+}
+
+/// An install of the app has completed, so an earlier interrupted one no
+/// longer needs the operator's attention.
+// spec: FLT#app-faults
+pub(crate) fn clear_install_interrupted(state: &OiState, app_name: &AppName) {
+    let name = app_name.clone();
+    if let Err(e) = state.db.call(move |db| {
+        crate::runtime::faults::clear_faults_by_kind(db, &name, "install_interrupted")
+    }) {
+        tracing::error!(app = %app_name, "clear install_interrupted: {e}");
+    }
+}
+
 // spec: ACI#install-completion
-fn finalize_install(state: &OiState, app_name: &AppName) {
-    set_phase_and_persist(state, app_name, AppPhase::Installed);
+fn finalize_install(
+    state: &OiState,
+    app_name: &AppName,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
+    record_install_completed(state, app_name);
+    clear_install_interrupted(state, app_name);
+    set_phase_and_persist(state, app_name, AppPhase::Installed, actor);
     tracing::info!(app = %app_name, "install completed; app is now installed");
 }
 
 // spec: ACI#install-completion
-fn revert_install_phase(state: &OiState, app_name: &AppName) {
-    set_phase_and_persist(state, app_name, AppPhase::NotInstalled);
+fn revert_install_phase(
+    state: &OiState,
+    app_name: &AppName,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
+    set_phase_and_persist(state, app_name, AppPhase::NotInstalled, actor);
     tracing::info!(app = %app_name, "install failed; reverted to NotInstalled");
 }
 
@@ -767,19 +1104,20 @@ pub fn spawn_accepted_operation(
     app_name: AppName,
     action_name: ActionName,
     operation_id: OperationId,
-    params: serde_json::Map<String, serde_json::Value>,
+    params: OperationParams,
     source_generation: u64,
     target_generation: u64,
     trigger: String,
     actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
 ) {
-    let (app, active_progress, tick_notify) = {
+    let (app, active_progress, tick_notify, start_pending) = {
         let reg = state.registry.read();
         match reg.get(app_name.as_str()) {
             Some(e) => (
                 e.app.clone(),
                 Arc::clone(&e.active_progress),
                 Arc::clone(&e.tick_notify),
+                Arc::clone(&e.start_pending),
             ),
             None => {
                 tracing::error!(app = %app_name, "spawn_accepted_operation: app not found");
@@ -792,6 +1130,9 @@ pub fn spawn_accepted_operation(
     let script_limits = state.script_limits.clone();
     let cipher = Arc::clone(&state.cipher);
     let is_install = action_name == "install";
+    let is_start = action_name == "start";
+
+    let requester = actor.clone();
 
     tokio::spawn(async move {
         // spec: WIRE#actor-attribution
@@ -805,12 +1146,21 @@ pub fn spawn_accepted_operation(
         );
         op_ctx.started(&trigger);
 
+        // spec: OPS#concurrency
+        // The request is no longer waiting, so its record goes.
+        {
+            let id = operation_id.clone();
+            state.db.call(move |db| {
+                let _ = crate::runtime::history::clear_queued_operation(db, &id);
+            });
+        }
+
         // spec: ACI#install
         // Flip to Installing as soon as the install operation actually starts
         // (covers both directly-accepted and later-dequeued installs because
         // both paths funnel through spawn_accepted_operation).
         if is_install {
-            enter_installing_phase(&state, &app_name);
+            enter_installing_phase(&state, &app_name, requester.clone());
         }
 
         let operation_id_str = operation_id.0.clone();
@@ -831,14 +1181,25 @@ pub fn spawn_accepted_operation(
         // operator-supplied volume reference, looked up to a host path and
         // exposed to the action closure as a per-operation external volume
         // binding via the standard `<key>_volume` convention.
-        let (params, operation_volume_bindings) =
-            resolve_action_volume_params(&state, &app, &action_name, params, &operation_id.0);
+        let schema = app
+            .def
+            .load()
+            .actions
+            .get(action_name.as_str())
+            .map(|a| a.params.clone())
+            .unwrap_or_default();
+        let bound = match params {
+            OperationParams::Requested(params) => {
+                bind_volume_params(&state, &schema, params, &operation_id.0)
+            }
+            // spec: OPS#operation-scoped-volumes
+            OperationParams::Replayed { params, bindings } => Ok(BoundParams { params, bindings }),
+        };
 
         let success = {
             let app_name = app_name.clone();
             let active_progress = Arc::clone(&active_progress);
             let tick_notify = Arc::clone(&tick_notify);
-            let params = params.clone();
             let op_ctx = op_ctx.clone();
             let cipher = Arc::clone(&cipher);
             let cancel_token = Arc::clone(&cancel_token);
@@ -854,13 +1215,12 @@ pub fn spawn_accepted_operation(
                 run_operation_loop(
                     &app,
                     db,
-                    params,
+                    bound,
                     active_progress,
                     tick_notify,
                     &op_ctx,
                     &script_limits,
                     cipher,
-                    operation_volume_bindings,
                     cancel_token,
                     signaler,
                     writer,
@@ -871,17 +1231,32 @@ pub fn spawn_accepted_operation(
             .unwrap_or(false)
         };
 
-        cleanup_dynamic_resources(&state, &operation_id_str, &active_progress, &tick_notify).await;
+        cleanup_dynamic_resources(
+            &state,
+            &app_name,
+            &operation_id_str,
+            &active_progress,
+            &tick_notify,
+        )
+        .await;
 
+        // spec: RCN#desired-state
+        // The start action has ended, however it ended. Released while the
+        // operation's progress still stands, so the desired state passes from
+        // what the closure placed there to the whole resource graph without a
+        // moment of holding nothing.
+        if is_start {
+            start_pending.store(false, std::sync::atomic::Ordering::Release);
+        }
         *active_progress.write() = None;
         tick_notify.notify_one();
 
         // spec: ACI#install-completion
         if is_install {
             if success {
-                finalize_install(&state, &app_name);
+                finalize_install(&state, &app_name, requester.clone());
             } else {
-                revert_install_phase(&state, &app_name);
+                revert_install_phase(&state, &app_name, requester.clone());
             }
         }
 
@@ -892,12 +1267,274 @@ pub fn spawn_accepted_operation(
                 queued.app,
                 queued.action,
                 queued.operation_id,
-                queued.params,
+                OperationParams::Requested(queued.params),
                 queued.source_generation,
                 queued.target_generation,
                 queued.trigger,
-                None,
+                queued.actor,
             );
+        }
+
+        // spec: OPS#initiating-events
+        // The install has finished and its slot is free, so the start action
+        // can be admitted: before this, the install itself held the app's.
+        if is_install && success {
+            initiate_start(&state, &app_name, "install", requester);
         }
     });
 }
+
+/// Recover an `Installing` app whose install cannot be replayed as a stuck
+/// install, and file a fault saying the install was interrupted.
+///
+/// The app moves to `Uninstalling` rather than back to `NotInstalled`: the
+/// install may have left running resources, which reconciliation leaves alone
+/// for a `NotInstalled` app, and teardown is what returns it to
+/// `NotInstalled`.
+// spec: OPS#interrupted-operations
+// spec: OPS#stuck-install-recovery
+pub fn recover_unreplayable_install(state: &OiState, app_name: &AppName) {
+    let was_installing = {
+        let reg = state.registry.read();
+        reg.get(app_name.as_str())
+            .map(|e| matches!(*e.phase.lock(), AppPhase::Installing))
+            .unwrap_or(false)
+    };
+
+    let app_owned = app_name.clone();
+    state.db.call(move |db| {
+        let _ = crate::runtime::history::clear_current_operation(db);
+        if was_installing {
+            let _ = crate::runtime::faults::file_fault(
+                db,
+                &app_owned,
+                None,
+                None,
+                None,
+                "install_interrupted",
+                "install was interrupted by a runtime restart and could not be replayed",
+            );
+        }
+    });
+    if was_installing {
+        set_phase_and_persist(state, app_name, AppPhase::Uninstalling, None);
+    }
+}
+
+/// Persist the request the scheduler has just queued as `operation_id`, so
+/// the queue survives a restart, and refuse the request if that fails.
+///
+/// The request is on the scheduler's queue until this returns, and is taken
+/// off it again when it cannot be persisted, so a request that is refused is
+/// one that never ran. A request that has already started by the time it is
+/// persisted leaves no record behind.
+// spec: OPS#concurrency
+pub fn persist_queued(
+    state: &OiState,
+    operation_id: &OperationId,
+) -> Result<(), seedling_protocol::error::OiError> {
+    let queued = state.scheduler.lock().queued(operation_id).cloned();
+    let Some(queued) = queued else {
+        return Ok(());
+    };
+    let cipher = Arc::clone(&state.cipher);
+    let saved = state
+        .db
+        .call(move |db| crate::runtime::history::save_queued_operation(db, &cipher, &queued));
+    if let Err(e) = saved {
+        state.scheduler.lock().unqueue(operation_id);
+        return Err(seedling_protocol::error::OiError::internal(format!(
+            "cannot persist the queued operation, so it is refused: {e}"
+        )));
+    }
+    if state.scheduler.lock().queued(operation_id).is_none() {
+        let id = operation_id.clone();
+        state.db.call(move |db| {
+            let _ = crate::runtime::history::clear_queued_operation(db, &id);
+        });
+    }
+    Ok(())
+}
+
+/// Restore the persisted queue after the decision to replay an interrupted
+/// operation, in the order the requests were made.
+///
+/// A request whose app is no longer registered is discarded. With nothing in
+/// progress the first restored request starts, and the rest queue behind it.
+// spec: OPS#concurrency
+pub fn restore_queue(
+    state: &Arc<OiState>,
+    queued: Vec<crate::runtime::scheduler::QueuedOperation>,
+) {
+    use crate::runtime::scheduler::ScheduleResult;
+    for op in queued {
+        let app = {
+            let reg = state.registry.read();
+            reg.get(op.app.as_str())
+                .map(|e| Arc::clone(&e.start_pending))
+        };
+        let Some(start_pending) = app else {
+            tracing::warn!(app = %op.app, action = %op.action, "queued operation names an unregistered app; discarding");
+            let id = op.operation_id.clone();
+            state.db.call(move |db| {
+                let _ = crate::runtime::history::clear_queued_operation(db, &id);
+            });
+            continue;
+        };
+        let result = state.scheduler.lock().request_with_id(
+            &op.app,
+            &op.action,
+            op.params.clone(),
+            op.source_generation,
+            op.target_generation,
+            &op.trigger,
+            op.operation_id.clone(),
+            op.actor.clone(),
+        );
+        match result {
+            ScheduleResult::Accepted => {
+                if op.action == "start" {
+                    start_pending.store(true, std::sync::atomic::Ordering::Release);
+                }
+                spawn_accepted_operation(
+                    Arc::clone(state),
+                    op.app,
+                    op.action,
+                    op.operation_id,
+                    OperationParams::Requested(op.params),
+                    op.source_generation,
+                    op.target_generation,
+                    op.trigger,
+                    op.actor,
+                );
+            }
+            ScheduleResult::Queued => {
+                if op.action == "start" {
+                    start_pending.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }
+            ScheduleResult::Rejected(reason) => {
+                tracing::warn!(app = %op.app, action = %op.action, ?reason, "restored queued operation refused; discarding");
+                let id = op.operation_id.clone();
+                state.db.call(move |db| {
+                    let _ = crate::runtime::history::clear_queued_operation(db, &id);
+                });
+            }
+        }
+    }
+}
+
+/// Persist a scheduled fire the scheduler queued, and stamp its fire time once
+/// it is on record. A fire that cannot be persisted is taken off the queue and
+/// left unstamped, so the next check fires it again.
+// spec: SCHED#fire-times
+// spec: OPS#concurrency
+pub fn persist_queued_fire(
+    state: &OiState,
+    fire: &crate::runtime::schedules::FiredSchedule,
+    now: jiff::Timestamp,
+) {
+    let Some(operation_id) = &fire.operation_id else {
+        return;
+    };
+    match persist_queued(state, operation_id) {
+        Ok(()) => {
+            let (app, action, cron) =
+                (fire.app.clone(), fire.action.clone(), fire.cronexpr.clone());
+            state.db.call(move |db| {
+                if let Err(e) =
+                    crate::runtime::db::upsert_schedule_fired(db, &app, &action, &cron, &now.to_string())
+                {
+                    tracing::error!(app = %app, action = %action, "failed to stamp a queued fire: {e}");
+                }
+            });
+        }
+        Err(e) => {
+            tracing::error!(app = %fire.app, action = %fire.action, "scheduled fire refused: {}", e.message);
+        }
+    }
+}
+
+/// Initiate `app_name`'s start action with `trigger`, holding the app's
+/// desired state from now until the start action ends.
+///
+/// The start action runs as any lifecycle operation does: at once if nothing
+/// else is in progress, or queued behind another app's.
+// spec: OPS#initiating-events
+// spec: ACN#start-action
+// spec: RCN#desired-state
+pub fn initiate_start(
+    state: &Arc<OiState>,
+    app_name: &AppName,
+    trigger: &str,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
+    let (generation, phase_handle, start_pending) = {
+        let reg = state.registry.read();
+        let Some(entry) = reg.get(app_name.as_str()) else {
+            return;
+        };
+        (
+            entry.current_generation,
+            Arc::clone(&entry.phase),
+            Arc::clone(&entry.start_pending),
+        )
+    };
+    start_pending.store(true, std::sync::atomic::Ordering::Release);
+    let start = ActionName::new_unchecked("start");
+    let (result, op_id) = {
+        let mut sched = state.scheduler.lock();
+        let result = sched.admit(
+            app_name,
+            &start,
+            serde_json::Map::new(),
+            generation,
+            generation,
+            trigger,
+            &phase_handle,
+            actor.clone(),
+        );
+        let op_id = match &result {
+            crate::runtime::scheduler::ScheduleResult::Accepted => {
+                sched.active().map(|a| a.operation_id.clone())
+            }
+            crate::runtime::scheduler::ScheduleResult::Queued => sched
+                .queue_iter()
+                .find(|q| q.app == *app_name)
+                .map(|q| q.operation_id.clone()),
+            crate::runtime::scheduler::ScheduleResult::Rejected(_) => None,
+        };
+        (result, op_id)
+    };
+    match (result, op_id) {
+        (crate::runtime::scheduler::ScheduleResult::Accepted, Some(operation_id)) => {
+            spawn_accepted_operation(
+                Arc::clone(state),
+                app_name.clone(),
+                start,
+                operation_id,
+                OperationParams::Requested(serde_json::Map::new()),
+                generation,
+                generation,
+                trigger.to_owned(),
+                actor,
+            )
+        }
+        (crate::runtime::scheduler::ScheduleResult::Queued, Some(operation_id)) => {
+            match persist_queued(state, &operation_id) {
+                Ok(()) => tracing::info!(app = %app_name, trigger, "start action queued"),
+                Err(e) => {
+                    tracing::error!(app = %app_name, trigger, "start action refused: {}", e.message);
+                    start_pending.store(false, std::sync::atomic::Ordering::Release);
+                }
+            }
+        }
+        (other, _) => {
+            tracing::warn!(app = %app_name, trigger, "start action not admitted: {other:?}");
+            start_pending.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

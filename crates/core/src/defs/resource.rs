@@ -34,6 +34,41 @@ pub enum ResourceKind {
 }
 
 impl ResourceKind {
+    /// The name a message uses for this resource type on the wire, and the
+    /// journal and unit descriptions use alongside it.
+    // spec: WIRE#resource-type-names
+    pub fn type_name(self) -> &'static str {
+        match self {
+            Self::Parameter => "parameter",
+            Self::Service => "service",
+            Self::Ingress => "ingress",
+            Self::Deployment => "deployment",
+            Self::Job => "job",
+            Self::Volume => "volume",
+            Self::ExternalVolume => "external_volume",
+            Self::ExternalService => "external_service",
+            Self::Action => "action",
+        }
+    }
+
+    /// The resource type a wire name stands for.
+    // spec: WIRE#resource-type-names
+    pub fn from_type_name(name: &str) -> Option<Self> {
+        [
+            Self::Parameter,
+            Self::Service,
+            Self::Ingress,
+            Self::Deployment,
+            Self::Job,
+            Self::Volume,
+            Self::ExternalVolume,
+            Self::ExternalService,
+            Self::Action,
+        ]
+        .into_iter()
+        .find(|kind| kind.type_name() == name)
+    }
+
     pub fn rhai_constant() -> Map {
         let mut map = Map::new();
         map.insert("Parameter".into(), Dynamic::from(Self::Parameter));
@@ -121,5 +156,30 @@ impl Resource {
             Self::ExternalVolume(v) => Dynamic::from(v.clone()),
             Self::ExternalService(s) => Dynamic::from(s.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // spec: WIRE#resource-type-names
+    #[test]
+    fn type_names_are_the_wire_names_and_read_back() {
+        let named = [
+            (ResourceKind::Deployment, "deployment"),
+            (ResourceKind::Job, "job"),
+            (ResourceKind::Service, "service"),
+            (ResourceKind::Ingress, "ingress"),
+            (ResourceKind::Volume, "volume"),
+            (ResourceKind::ExternalVolume, "external_volume"),
+            (ResourceKind::ExternalService, "external_service"),
+        ];
+        for (kind, name) in named {
+            assert_eq!(kind.type_name(), name);
+            assert_eq!(ResourceKind::from_type_name(name), Some(kind));
+        }
+        assert_eq!(ResourceKind::from_type_name("ExternalVolume"), None);
+        assert_eq!(ResourceKind::from_type_name("externalvolume"), None);
     }
 }

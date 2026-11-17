@@ -71,7 +71,7 @@ mod images;
 mod ingresses;
 mod key_mgmt;
 mod params;
-mod registries;
+pub mod registries;
 mod restarts;
 mod services;
 mod status;
@@ -180,8 +180,13 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         #[serde(default)]
         params: Value,
     }
-    let req: Request = serde_json::from_slice(buf)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("invalid request: {e}")))?;
+    // spec: WIRE#control-requests
+    let req: Request = serde_json::from_slice(buf).map_err(|e| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("invalid request: {e}"),
+        )
+    })?;
 
     let result = match req.method.as_str() {
         // spec: STS#liveness
@@ -223,7 +228,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         // spec: ACI#invoking-an-action
         "/apps/action/invoke" => actions::invoke_action(state, parse_params(req.params)?, ctx),
         // spec: ACI#cancellation
-        "/apps/action/cancel" => actions::cancel_action(state, parse_params(req.params)?),
+        "/apps/action/cancel" => actions::cancel_action(state, parse_params(req.params)?, ctx),
         // spec: ACI#install
         "/apps/install/invoke" => {
             actions::install::invoke_install(state, parse_params(req.params)?, ctx)
@@ -251,7 +256,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         // spec: FLTS#listing-faults
         "/faults/list" => faults::list_faults(state, parse_params(req.params)?),
         // spec: FLTS#clearing-faults
-        "/faults/clear" => faults::clear_app_faults(state, parse_params(req.params)?),
+        "/faults/clear" => faults::clear_app_faults(state, parse_params(req.params)?, ctx),
         // spec: FLTS#listing-restarts
         "/restarts/list" => restarts::list_restarts(state, parse_params(req.params)?),
         // spec: FLTS#crash-loop-settings

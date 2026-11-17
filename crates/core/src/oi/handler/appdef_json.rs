@@ -35,7 +35,7 @@ fn schedule_entries_json(schedules: &[String]) -> Vec<Value> {
 pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
     if let Resource::Deployment(deployment) = resource {
         let dep_def = deployment.def.lock();
-        Some((dep_def.scale.start, dep_def.scale.end))
+        Some((*dep_def.scale.start(), *dep_def.scale.end()))
     } else {
         None
     }
@@ -46,13 +46,35 @@ pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
 ///
 /// Callers building a richer view (/apps/show) augment the returned object
 /// with live `instances`, `faults`, `stopped`, and a `scale.current`.
+/// Report as null each environment value, in the described resources, that
+/// contains one of `secrets`.
+// spec: APPS#redacted-environment-values
+pub(crate) fn redact_secret_env(resources: &mut [Value], secrets: &[&str]) {
+    if secrets.is_empty() {
+        return;
+    }
+    for resource in resources {
+        let Some(Value::Object(env)) = resource.pointer_mut("/def/container/env") else {
+            continue;
+        };
+        for value in env.values_mut() {
+            if value
+                .as_str()
+                .is_some_and(|v| secrets.iter().any(|s| v.contains(s)))
+            {
+                *value = Value::Null;
+            }
+        }
+    }
+}
+
 pub(crate) fn resource_static_json(
     kind: ResourceKind,
     name: &str,
     resource: &Resource,
     app: &crate::defs::app::AppDef,
 ) -> Value {
-    let type_str = format!("{:?}", kind).to_lowercase();
+    let type_str = kind.type_name();
     let mut obj = json!({
         "name": name,
         "type": type_str,
@@ -61,8 +83,8 @@ pub(crate) fn resource_static_json(
     if let Resource::Deployment(deployment) = resource {
         let dep_def = deployment.def.lock();
         obj["scale"] = json!({
-            "low": dep_def.scale.start,
-            "high": dep_def.scale.end,
+            "low": *dep_def.scale.start(),
+            "high": *dep_def.scale.end(),
         });
         // spec: CTL#app-priority
         obj["priority"] = json!(dep_def.priority.as_str());

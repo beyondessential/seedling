@@ -172,7 +172,33 @@ fn parse_negative_interval_is_rejected() {
         ("interval", Dynamic::from(-1_i64)),
     ]);
     let err = parse_healthcheck(m).expect_err("negative interval");
-    assert!(err.to_string().contains("negative"));
+    assert!(err.to_string().contains("at least 1"), "{err}");
+}
+
+// spec: DEP#check-timing
+#[test]
+fn a_zero_interval_or_timeout_is_rejected_and_a_zero_start_period_is_not() {
+    let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
+    for key in ["interval", "timeout"] {
+        let m = map_with(&[
+            ("kind", Dynamic::from("command")),
+            ("cmd", Dynamic::from(cmd.clone())),
+            (key, Dynamic::from(0_i64)),
+        ]);
+        let err = parse_healthcheck(m).expect_err(key);
+        assert!(err.to_string().contains(key), "{key}: {err}");
+    }
+    let m = map_with(&[
+        ("kind", Dynamic::from("command")),
+        ("cmd", Dynamic::from(cmd)),
+        ("start_period", Dynamic::from(0_i64)),
+    ]);
+    assert_eq!(
+        parse_healthcheck(m)
+            .expect("zero start_period")
+            .start_period_secs,
+        0
+    );
 }
 
 // spec: DEP#check-timing

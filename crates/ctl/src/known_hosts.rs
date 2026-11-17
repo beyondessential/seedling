@@ -25,31 +25,30 @@ impl KnownHosts {
             .join("known_hosts")
     }
 
+    /// Read the file, which is empty when it does not exist. Any other failure
+    /// to read it is an error, never an empty set of entries.
+    // spec: CLI#server-trust
     pub fn load(path: &Path) -> io::Result<Self> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e),
+        };
         let mut entries = HashMap::new();
-        if path.exists() {
-            for line in std::fs::read_to_string(path)?.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                let mut parts = line.splitn(2, ' ');
-                if let (Some(ep), Some(fp)) = (parts.next(), parts.next()) {
-                    entries.insert(ep.to_owned(), fp.to_owned());
-                }
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut parts = line.splitn(2, ' ');
+            if let (Some(ep), Some(fp)) = (parts.next(), parts.next()) {
+                entries.insert(ep.to_owned(), fp.to_owned());
             }
         }
         Ok(Self {
             path: path.to_owned(),
             entries,
         })
-    }
-
-    pub fn empty(path: PathBuf) -> Self {
-        Self {
-            path,
-            entries: HashMap::new(),
-        }
     }
 
     pub fn check(&self, endpoint: &str, fingerprint: &str) -> Status {
@@ -81,5 +80,28 @@ impl KnownHosts {
             out.push('\n');
         }
         std::fs::write(&self.path, out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // spec: CLI#server-trust
+    #[test]
+    fn a_missing_file_has_no_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let kh = KnownHosts::load(&dir.path().join("known_hosts")).expect("a missing file loads");
+        assert!(matches!(kh.check("[::1]:7891", "fp"), Status::Unknown));
+    }
+
+    // spec: CLI#server-trust
+    #[test]
+    fn a_file_that_cannot_be_read_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_dir = dir.path().join("state");
+        std::fs::write(&not_a_dir, "").unwrap();
+        assert!(KnownHosts::load(&not_a_dir.join("known_hosts")).is_err());
+        assert!(KnownHosts::load(dir.path()).is_err());
     }
 }

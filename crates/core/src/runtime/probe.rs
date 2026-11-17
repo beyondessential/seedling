@@ -68,9 +68,10 @@ pub struct HandlerProbe {
 
 #[derive(Debug, Default, Clone)]
 pub struct ProbeRequest {
-    /// Per-handler supplied param values. Outer key: handler name. Inner
-    /// map: param name → string value.
-    pub action_params: HashMap<String, HashMap<String, String>>,
+    /// Per-handler supplied param values. Outer key: handler kind, as
+    /// [`HandlerKind::as_str`] writes it. Next: handler name. Inner map: param
+    /// name → string value.
+    pub action_params: HashMap<String, HashMap<String, HashMap<String, String>>>,
     /// `true` → handlers with unresolved required params are _skipped_.
     /// `false` → the same condition is reported as an error.
     pub lenient: bool,
@@ -95,7 +96,8 @@ pub fn probe_app(
     // app-level script_error fault and there's nothing to probe.
     let app_name = app.def.load().name.clone();
     let captured = {
-        let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle));
+        let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle))
+            .map_err(|e| format!("script evaluation failed: {e}"))?;
         fresh_app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = app_name.clone();
@@ -176,6 +178,7 @@ pub fn probe_app(
             closure,
             &param_schema,
             request,
+            script_ast,
         );
         results.push(probe_result);
     }
@@ -203,9 +206,13 @@ fn probe_handler(
     closure: FnPtr,
     schema: &BTreeMap<ParamName, ParamDef>,
     request: &ProbeRequest,
+    script_ast: &AST,
 ) -> HandlerProbe {
     // spec: IMG#probe-parameters
-    let supplied = request.action_params.get(handler_name);
+    let supplied = request
+        .action_params
+        .get(kind.as_str())
+        .and_then(|by_name| by_name.get(handler_name));
     let stored = app.stored.lock().clone();
     let (resolved_params, missing_required) = resolve_params(schema, supplied, &stored);
 
@@ -251,6 +258,7 @@ fn probe_handler(
     // The script's top-level references `app`; recreate the variable.
     scope.push("app", app.clone());
     scope.push("__bsl_rt", rt);
+    let handler_arity = crate::runtime::barrier::replay::closure_arity(script_ast, &closure);
     scope.push("__bsl_closure", closure);
     let param_map: rhai::Map = resolved_params
         .iter()
@@ -271,7 +279,7 @@ fn probe_handler(
             // depend on the previous generation's state are a best-effort
             // miss rather than a hard failure.
             scope.push("__bsl_old_app", App::default());
-            "__bsl_closure.call(__bsl_rt, __bsl_old_app)"
+            crate::runtime::barrier::replay::change_handler_call_script(handler_arity)
         }
         _ => "__bsl_closure.call(__bsl_rt, __bsl_param)",
     };
@@ -342,7 +350,7 @@ mod tests {
     fn setup_engine_and_app(script: &str) -> (Engine, AST, App) {
         let mut engine = Engine::new();
         defs::register(&mut engine);
-        let (mut scope, app) = defs::scope(Default::default());
+        let (mut scope, app) = defs::scope(Default::default()).expect("the scope builds");
         app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = AppName::new("testapp").unwrap();
@@ -408,6 +416,34 @@ mod tests {
         );
     }
 
+    // spec: IMG#image-discovery
+    #[test]
+    fn rt_query_records_no_images_during_a_probe() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("look", |rt, _param| {
+                rt.query(app.deployment().image("registry.example.com/queried:1.0")).ready();
+                rt.start(app.deployment().image("registry.example.com/started:1.0")).ready();
+            });
+        "#,
+        );
+
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response =
+            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+
+        assert!(
+            response
+                .all_images
+                .contains("registry.example.com/started:1.0")
+        );
+        assert!(
+            !response
+                .all_images
+                .contains("registry.example.com/queried:1.0")
+        );
+    }
+
     // spec: IMG#probe-parameters
     #[test]
     fn lenient_skips_action_with_missing_required_param() {
@@ -463,6 +499,65 @@ mod tests {
             !response
                 .all_images
                 .contains("registry.example.com/api:2.0.0")
+        );
+    }
+
+    // spec: IMG#probe-parameters
+    #[test]
+    fn supplied_values_are_keyed_by_handler_kind_then_name() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("deploy", |rt, param| {
+                rt.start(app.deployment().image(`registry.example.com/api:${param["version"]}`)).ready();
+            });
+        "#,
+        );
+        app.def.rcu(|d| {
+            let mut d = (**d).clone();
+            if let Some(action) = d.actions.get_mut("deploy") {
+                action.params.insert(
+                    ParamName::new("version").unwrap(),
+                    ParamDef {
+                        kind: crate::defs::install::ParamKind::Text,
+                        required: true,
+                        default_value: None,
+                        description: None,
+                        secret: None,
+                    },
+                );
+            }
+            d
+        });
+        let supplied = |kind: &str| ProbeRequest {
+            action_params: HashMap::from([(
+                kind.to_owned(),
+                HashMap::from([(
+                    "deploy".to_owned(),
+                    HashMap::from([("version".to_owned(), "1.2".to_owned())]),
+                )]),
+            )]),
+            lenient: false,
+        };
+
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            Arc::clone(&registry),
+            &supplied("action"),
+        )
+        .expect("probe");
+        assert!(
+            response.all_images.contains("registry.example.com/api:1.2"),
+            "{response:?}"
+        );
+
+        let response = probe_app(&engine, &ast, &app, registry, &supplied("shell")).expect("probe");
+        let deploy = &response.per_handler[0];
+        assert!(
+            deploy.error.is_some(),
+            "a value filed under another kind must not reach the action"
         );
     }
 
@@ -598,6 +693,38 @@ mod tests {
         assert!(response.all_images.contains("ghcr.io/example/foo:1.0"));
         // The broken handler's image must not pollute all_images.
         assert!(!response.all_images.contains("ghcr.io/example/tool:0.21.0"));
+    }
+
+    // spec: PARAM#change-handlers
+    #[test]
+    fn probes_change_handlers_declaring_zero_one_or_two_parameters() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.param("zero").on_change(|| {
+                app.job().image("ghcr.io/example/zero:1");
+            });
+            app.param("one").on_change(|rt| {
+                rt.start(app.job().image("ghcr.io/example/one:1"));
+            });
+            app.param("two").on_change(|rt, old| {
+                rt.start(app.job().image("ghcr.io/example/two:1"));
+            });
+        "#,
+        );
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response =
+            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+        assert_eq!(response.per_handler.len(), 3);
+        for handler in &response.per_handler {
+            assert!(
+                handler.error.is_none(),
+                "{}: {:?}",
+                handler.name,
+                handler.error
+            );
+        }
+        assert!(response.all_images.contains("ghcr.io/example/one:1"));
+        assert!(response.all_images.contains("ghcr.io/example/two:1"));
     }
 
     // spec: IMG#image-discovery

@@ -61,7 +61,7 @@ The cause records why, not who. On Linux systemd actions recovery restarts and s
 Restarts cannot be counted by watching container state. A container that goes down and comes back between two observation ticks looks running at both ends. On Linux the runtime instead reads systemd's own restart counter and records the difference, so what is recorded does not depend on how often the runtime looks.
 
 This log enables:
-- **Crash-loop detection**: a `crash_loop` fault is filed once an instance's recovery restarts within the configured window reach the configured threshold. That threshold and window are operator-settable, because the judgement of what counts as flapping is an operational one.
+- **Crash-loop detection**: a `crash_loop` fault is filed once an instance's recovery restarts within the configured window reach the configured threshold. That threshold and window are operator-settable, because the judgement of what counts as flapping is an operational one. The fault clears only once the instance has stayed running, with no recovery restart, for the whole window, or when an operator clears it: a supervisor brings a crashing instance up between its crashes, so being up is not recovery. While the fault is active no automatic restart happens: the reconciler does not start the instance, and a unit the supervisor is about to restart is stopped.
 - **Seeing sub-threshold flapping**: a container that crashes twice a day forever never exhausts systemd's own start limit, so before this history existed it was silent — no fault, no record, nothing to query.
 - **Diagnosis**: the per-attempt exit statuses say whether a workload is being OOM-killed, exiting on a config error, or dying on a signal.
 
@@ -112,6 +112,15 @@ Lifecycle operations are initiated by external events:
 
 See the scheduling rules above for how concurrent requests are handled.
 
+Each dynamic resource is recorded before `rt.start` places it in the desired state, and `rt.start` throws, starting nothing, when the record cannot be written: the record is what finds the resource again after a restart.
+When an operation ends, the runtime tears down the dynamic resources its closure created before the app's operation slot is freed.
+It waits for each to be torn down for as long as that takes, looking again at a back-off that ramps from two seconds to five minutes.
+While they are not all gone a minute after the cleanup began, or while their records cannot be read, the app holds an `operation_cleanup_stalled` fault whose subject is the operation, cleared once every one of them is torn down.
+A dynamic resource record is forgotten only once its resource is gone; one that cannot be read keeps the cleanup waiting rather than reading as nothing to clean up.
+At startup the runtime tears down the dynamic resources previous runs recorded, other than those of an operation it replays, from their records alone.
+Any it cannot tear down, or whose records it cannot read, it goes on tearing down in the background at a back-off doubling from two seconds to five minutes, holding the same fault for their operations once a minute has passed.
+While it cannot read those records it holds the host fault `dynamic_resources_unreadable`, cleared on its next read of them.
+
 ### Action Composition
 
 An action closure may invoke another action by getting an `Action` handle — either the return of `app.on_action(...)` / `app.on_start(...)` or a fresh lookup via `app.action(name)` in dynamic context — and calling `Action.invoke(params?)` on it. Validation runs against the called action's declared schema before the closure executes, with the same rules an operator-driven invocation gets: required-field enforcement, default application, reserved-key rejection, and `kind: "volume"` resolution.
@@ -128,6 +137,8 @@ The `obj.call(...)` syntax is reserved by the scripting engine for function-poin
 
 Shell actions are not lifecycle operations.
 They are interactive sessions that can run concurrently with a lifecycle operation and with each other.
+A shell's closure calls `shell.attach(job)`, which starts the job and blocks until the attachment ends, then returns a `ShellExit`.
+The closure then runs on, and the session ends when it returns.
 A shell creates temporary (dynamic) resources that are cleaned up when the session ends.
 
 ## Action Closure Suspension and Replay

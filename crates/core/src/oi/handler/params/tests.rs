@@ -88,6 +88,121 @@ fn secret_param_is_redacted_in_describe_and_history() {
     assert!(entry.get("new_value").is_none());
 }
 
+fn drain_events(
+    rx: &mut tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
+) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        out.push(serde_json::to_value(&event).unwrap());
+    }
+    out
+}
+
+// spec: SEC#redaction
+// spec: EVT#app-events
+#[test]
+fn setting_and_unsetting_a_secret_param_emits_no_value() {
+    let oi = oi_with_params_app();
+    let mut rx = oi.state.event_tx.subscribe();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "name": "api-key", "value": "hunter2hunter2" }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "name": "api-key", "value": "correcthorse9" }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/unset",
+        json!({ "app": "demo", "name": "api-key" }),
+    )
+    .unwrap();
+
+    let events = drain_events(&mut rx);
+    let changes: Vec<_> = events
+        .iter()
+        .filter(|e| e["type"] == "ParamSet" || e["type"] == "ParamUnset")
+        .collect();
+    assert_eq!(changes.len(), 3);
+    for change in changes {
+        assert_eq!(change["redacted"], true, "{change}");
+        assert!(change.get("previous_value").is_none(), "{change}");
+        assert!(change.get("new_value").is_none(), "{change}");
+    }
+    let everything = serde_json::to_string(&events).unwrap();
+    for value in ["hunter2hunter2", "correcthorse9"] {
+        assert!(!everything.contains(value), "{value} leaked: {everything}");
+    }
+}
+
+// spec: SEC#redaction
+// A value still in plain storage under a parameter the definition now marks
+// secret is withheld from the event as it is from every response.
+#[test]
+fn unsetting_a_param_the_definition_makes_secret_withholds_a_plain_stored_value() {
+    let oi = oi_with_params_app();
+    oi.state.db.call(|db| {
+        let app = seedling_protocol::names::AppName::new_unchecked("demo");
+        let key = seedling_protocol::names::ParamName::new_unchecked("api-key");
+        crate::runtime::apps::upsert_param(db, &app, &key, "plain-leftover-1").unwrap();
+    });
+    let mut rx = oi.state.event_tx.subscribe();
+    oi.call(
+        "/apps/params/unset",
+        json!({ "app": "demo", "name": "api-key" }),
+    )
+    .unwrap();
+
+    let events = drain_events(&mut rx);
+    let unset = events
+        .iter()
+        .find(|e| e["type"] == "ParamUnset")
+        .expect("a ParamUnset event");
+    assert_eq!(unset["redacted"], true, "{unset}");
+    assert!(unset.get("previous_value").is_none(), "{unset}");
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains("plain-leftover-1")
+    );
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_definition_update_changing_a_secret_param_emits_no_value() {
+    let oi = oi_with_params_app();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "name": "api-key", "value": "hunter2hunter2" }),
+    )
+    .unwrap();
+    let mut rx = oi.state.event_tx.subscribe();
+    oi.call(
+        "/apps/update",
+        json!({
+            "app": "demo",
+            "script": PARAMS_SCRIPT,
+            "param": { "name": "api-key", "value": "correcthorse9" },
+        }),
+    )
+    .unwrap();
+
+    let events = drain_events(&mut rx);
+    let updated = events
+        .iter()
+        .find(|e| e["type"] == "AppUpdated")
+        .expect("an AppUpdated event");
+    assert_eq!(updated["name"], "api-key");
+    assert_eq!(updated["previous_value"], serde_json::Value::Null);
+    assert_eq!(updated["new_value"], serde_json::Value::Null);
+    let everything = serde_json::to_string(&events).unwrap();
+    for value in ["hunter2hunter2", "correcthorse9"] {
+        assert!(!everything.contains(value), "{value} leaked: {everything}");
+    }
+}
+
 // spec: PRM#parameter-storage
 #[test]
 fn set_undeclared_param_is_stored_as_unknown() {
@@ -103,6 +218,33 @@ fn set_undeclared_param_is_stored_as_unknown() {
     assert_eq!(unknown.len(), 1);
     assert_eq!(unknown[0]["name"], "mystery");
     assert_eq!(unknown[0]["value"], "42");
+}
+
+// spec: SEC#redaction
+// spec: APPS#parameters
+#[test]
+fn unknown_param_held_in_secret_storage_is_not_returned() {
+    let oi = oi_with_params_app();
+    let cipher = std::sync::Arc::clone(&oi.state.cipher);
+    oi.state.db.call(move |db| {
+        crate::runtime::apps::secret_params::upsert_secret_param(
+            db,
+            &cipher,
+            &seedling_protocol::names::AppName::new_unchecked("demo"),
+            &seedling_protocol::names::ParamName::new_unchecked("retired-token"),
+            &secrecy::SecretString::new("hunter2hunter2".into()),
+        )
+        .unwrap();
+    });
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let unknown = desc["unknown_params"].as_array().unwrap();
+    let retired = unknown
+        .iter()
+        .find(|p| p["name"] == "retired-token")
+        .expect("the stored secret is listed as unknown");
+    assert!(retired["value"].is_null());
+    assert!(!desc.to_string().contains("hunter2hunter2"));
 }
 
 // spec: PRM#parameter-unset
@@ -242,6 +384,69 @@ fn a_param_set_during_an_uninstall_stores_the_value_and_runs_no_handler() {
     assert!(oi.state.scheduler.lock().active().is_none());
 }
 
+// spec: OPS#initiating-events
+// A change that matches a handler's transitions initiates an operation: the
+// handler was admitted to the scheduler but never run.
+#[test]
+fn a_param_change_runs_its_on_change_handler_as_an_operation_attributed_to_the_requester() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                let p = app.param("greeting");
+                p.on_change(|rt| {});
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+    let mut events = oi.state.event_tx.subscribe();
+
+    let result = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "name": "greeting", "value": "hello" }),
+        )
+        .unwrap();
+    assert_eq!(result["schedule"], "accepted");
+
+    let started = oi.block_on(async {
+        let wait = async {
+            loop {
+                if let Ok(OiEvent::OperationStarted {
+                    action_name,
+                    trigger,
+                    actor,
+                    source_generation,
+                    target_generation,
+                    ..
+                }) = events.recv().await
+                {
+                    break (
+                        action_name.to_string(),
+                        trigger,
+                        actor.and_then(|a| a.id.clone()),
+                        source_generation,
+                        target_generation,
+                    );
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), wait)
+            .await
+            .expect("the handler's operation starts")
+    });
+    assert_eq!(started.0, "greeting");
+    assert_eq!(started.1, "param_change");
+    assert_eq!(started.2.as_deref(), Some("test-suite"));
+    assert_eq!(started.4, started.3 + 1);
+}
+
 // spec: SEC#migration
 // Only startup and a definition update migrated, so a param made secret by
 // another param's change kept its plaintext row until the daemon restarted.
@@ -323,6 +528,7 @@ fn a_queued_on_change_handler_is_recorded_against_its_generation() {
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        None,
     );
 
     let result = oi

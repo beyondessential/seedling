@@ -14,11 +14,12 @@ use seedling_core::{
     runtime::{
         AppRegistry, InstanceRegistry, Scheduler, audit,
         db::{Db, DbHandle},
-        gc::{GcConfig, InstanceGcConfig},
+        gc::{DEFAULT_RETAIN_RESTART_RECORDS, GcConfig, InstanceGcConfig},
         registry::DbInstanceRegistry,
     },
     system::{
         System,
+        host_probes::{Fact, HostConstants, HostProbes, HostSource},
         nat64::should_activate_nat64,
         netinfo::{detect_ipv4_egress, detect_ipv6_egress},
         node_prefix_from_machine_id,
@@ -133,6 +134,10 @@ struct GcArgs {
     /// How long to retain unscheduled resource instances, in seconds.
     #[arg(long, default_value_t = 600)]
     gc_retain_unscheduled_instances_secs: u64,
+
+    /// How many of the most recent restart records to keep per resource instance.
+    #[arg(long, default_value_t = DEFAULT_RETAIN_RESTART_RECORDS)]
+    gc_retain_restart_records: usize,
 }
 
 impl From<GcArgs> for GcConfig {
@@ -142,6 +147,7 @@ impl From<GcArgs> for GcConfig {
             retain_action_log: Duration::from_secs(a.gc_retain_action_log_secs),
             retain_cleared_faults: Duration::from_secs(a.gc_retain_cleared_faults_secs),
             retain_completed_operations: Duration::from_secs(a.gc_retain_completed_operations_secs),
+            retain_restart_records: a.gc_retain_restart_records,
         }
     }
 }
@@ -151,6 +157,7 @@ impl From<&GcArgs> for InstanceGcConfig {
         Self {
             interval: Duration::from_secs(a.gc_interval_secs),
             retain: Duration::from_secs(a.gc_retain_unscheduled_instances_secs),
+            retain_restart_records: a.gc_retain_restart_records,
         }
     }
 }
@@ -161,8 +168,8 @@ struct ScriptLimitArgs {
     #[arg(long, default_value_t = 100_000)]
     script_max_operations: u64,
 
-    /// Maximum function call nesting depth (0 = unlimited)
-    #[arg(long, default_value_t = 64)]
+    /// Maximum function call nesting depth (at least 1)
+    #[arg(long, default_value_t = 64, value_parser = parse_call_depth)]
     script_max_call_depth: usize,
 
     /// Maximum expression nesting depth (0 = unlimited)
@@ -182,6 +189,15 @@ struct ScriptLimitArgs {
     script_max_map_size: usize,
 }
 
+// spec: LIM#limits
+fn parse_call_depth(raw: &str) -> Result<usize, String> {
+    let depth: usize = raw.parse().map_err(|e| format!("{e}"))?;
+    if depth == 0 {
+        return Err("a call depth of 0 would allow no function calls".to_owned());
+    }
+    Ok(depth)
+}
+
 impl From<ScriptLimitArgs> for seedling_core::ScriptLimits {
     fn from(a: ScriptLimitArgs) -> Self {
         Self {
@@ -192,6 +208,18 @@ impl From<ScriptLimitArgs> for seedling_core::ScriptLimits {
             max_array_size: a.script_max_array_size,
             max_map_size: a.script_max_map_size,
         }
+    }
+}
+
+/// Create the tmpfs-volume root if it is absent. Its contents are left as they
+/// are: a restart of the runtime while the host stays up must not lose them.
+// spec: ACTU#volume-storage
+fn ensure_tmpfs_volumes_root(root: &std::path::Path) {
+    if let Err(e) = std::fs::create_dir_all(root) {
+        tracing::warn!(
+            path = %root.display(),
+            "failed to create tmpfs-volumes root on startup: {e}"
+        );
     }
 }
 
@@ -295,14 +323,13 @@ async fn main() {
 
     let cipher = {
         let key_path = data_dir.join("seedling.db.key");
-        let c = seedling_core::runtime::secrets::Cipher::load_or_create(&key_path).unwrap_or_else(
-            |e| {
+        let c = seedling_core::runtime::secrets::Cipher::load_or_create(&key_path, &db)
+            .unwrap_or_else(|e| {
                 fatal!(
                     "cannot load or create secret key {}: {e}",
                     key_path.display()
                 )
-            },
-        );
+            });
         std::sync::Arc::new(c)
     };
 
@@ -317,50 +344,71 @@ async fn main() {
 
     // spec: NAT64#mode
     // spec: NAT64#detection
-    let nat64_active = if args.stub_backends {
-        false
+    let nat64_decision = if args.stub_backends {
+        seedling_core::system::nat64::Activation {
+            active: false,
+            undetermined: None,
+        }
     } else {
         should_activate_nat64(args.nat64).await
     };
+    let nat64_active = nat64_decision.active;
     tracing::info!(
         nat64_mode = %args.nat64,
         nat64_active,
+        nat64_detection_undetermined = nat64_decision.undetermined.as_deref(),
         stub_backends = args.stub_backends,
         "NAT64 decision",
     );
 
-    // spec: NAT64#translator
-    if !args.stub_backends
-        && nat64_active
-        && let Err(e) = seedling_core::system::jool::setup_nat64().await
-    {
-        // spec: NAT64#translator-lifecycle
-        fatal!("failed to set up NAT64 translator: {e}");
-    }
-
     // spec: NAT64#ipv6-egress
-    // spec: CONST#host-constants
-    let (ipv4_egress, ipv6_egress) = if args.stub_backends {
-        (false, false)
+    // spec: CONST#determining-host-constants
+    // An egress probe that cannot be made leaves the constant false and is
+    // looked for again by the reconciler on each iteration, which files a
+    // fault until it is.
+    let (ipv4_fact, ipv6_fact) = if args.stub_backends {
+        (Fact::Determined(false), Fact::Determined(false))
     } else {
-        (detect_ipv4_egress().await, detect_ipv6_egress().await)
+        (
+            Fact::from_result(detect_ipv4_egress().await),
+            Fact::from_result(detect_ipv6_egress().await),
+        )
     };
+    let timezone_fact = Fact::from_result(seedling_core::sysconst::detect_timezone());
+    let nat64_detection_fact = nat64_decision.undetermined.clone().map(Fact::Undetermined);
+    // spec: CONST#determining-host-constants
+    // A constant that cannot be determined at start is looked for again by
+    // the reconciler on each iteration, which files a fault until it is.
+    let constants = HostConstants::detect();
+    let host_probes = HostProbes::new(
+        Arc::new(HostSource),
+        nat64_detection_fact,
+        ipv4_fact.clone(),
+        ipv6_fact.clone(),
+        timezone_fact.clone(),
+        constants.clone(),
+    );
 
     // spec: CONST#host-constants
     seedling_core::sysconst::set(seedling_core::sysconst::SystemFacts {
-        ipv4_egress,
-        ipv6_egress,
+        ipv4_egress: ipv4_fact.determined().unwrap_or(false),
+        ipv6_egress: ipv6_fact.determined().unwrap_or(false),
         nat64_active,
+        available_threads: constants.available_threads.determined(),
+        available_memory: constants.available_memory.clone().into_result(),
+        // Determined at start: the daemon does not run without it.
         has_snapshots: use_btrfs,
-        node_name: whoami::devicename().unwrap_or_default(),
-        timezone: seedling_core::sysconst::detect_timezone(),
+        node_name: constants.node_name.clone().into_result(),
+        timezone: timezone_fact
+            .determined()
+            .unwrap_or_else(|| "UTC".to_owned()),
     });
 
     // spec: NAT64#dns64
     // Force DNS64 to translate all names only when seedling is itself
     // providing NAT64 and the host cannot route native IPv6. If an external
     // NAT64+DNS64 setup is in play, trust its own policy.
-    let force_dns64_translation = nat64_active && !ipv6_egress;
+    let force_dns64_translation = nat64_active && !ipv6_fact.determined().unwrap_or(false);
     tracing::info!(
         nat64_active,
         force_dns64_translation,
@@ -436,120 +484,12 @@ async fn main() {
     let db = DbHandle::from_db(db);
     let scheduler = Arc::new(parking_lot::Mutex::new(Scheduler::new()));
 
-    // ---------------------------------------------------------------------------
-    // Load the persisted in-flight operation (if any) so we can both skip its
-    // resources during orphan cleanup below and replay it after the reconciler
-    // comes online.
-    // spec: OPS#initiating-events, SUSP#replay
-    // ---------------------------------------------------------------------------
-
-    let persisted_operation = db
-        .call(seedling_core::runtime::history::load_current_operation)
-        .unwrap_or_else(|e| {
-            tracing::warn!("failed to load current_operation on startup: {e}");
-            None
-        });
-    if let Some(op) = &persisted_operation {
-        tracing::info!(
-            app = %op.app,
-            action = %op.action_name,
-            operation_id = %op.operation_id.0,
-            "found interrupted operation; will replay after startup"
-        );
-    }
-
-    // ---------------------------------------------------------------------------
-    // Startup orphan cleanup — remove dynamic resources left by a previous run.
-    // Resources owned by the operation we are about to replay are kept so the
-    // replay picks up where it left off.
-    // ---------------------------------------------------------------------------
-
-    let replay_op_id: Option<String> = persisted_operation
-        .as_ref()
-        .map(|op| op.operation_id.0.clone());
-    {
-        let records = db.call(seedling_core::runtime::desired::list_dynamic_resources);
-        // Keep resources that belong to the operation we're about to replay;
-        // the replay will take ownership of them. Everything else from a
-        // prior run gets cleaned up here.
-        let records: Result<Vec<_>, _> = records.map(|rs| {
-            rs.into_iter()
-                .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
-                .collect()
-        });
-        match records {
-            Ok(records) if !records.is_empty() => {
-                tracing::warn!(
-                    count = records.len(),
-                    "found orphaned dynamic resources from a previous run; cleaning up"
-                );
-                tear_down_dynamic_resources(&driver, &db, &records);
-                tracing::info!("orphaned dynamic resource cleanup complete");
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!("failed to check for orphaned dynamic resources: {e}");
-            }
-        }
-    }
-
-    // Podman-level scan for orphaned anonymous volumes.
-    // Any volume with the "seedling-anon-" prefix that isn't tracked in the DB
-    // is an orphan from a previous run.
-    {
-        let driver_ref = Arc::clone(&driver);
-        let orphan_vols = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                driver_ref
-                    .container
-                    .list_volumes_by_prefix("seedling-anon-")
-                    .await
-                    .unwrap_or_default()
-            })
-        });
-
-        if !orphan_vols.is_empty() {
-            tracing::warn!(
-                count = orphan_vols.len(),
-                "found orphaned seedling-anon- volumes in podman; removing"
-            );
-            let driver_ref = Arc::clone(&driver);
-            for vol_name in &orphan_vols {
-                tracing::info!(volume = %vol_name, "removing orphaned anonymous volume");
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let _ = driver_ref.container.remove_volume(vol_name).await;
-                    })
-                });
-            }
-        }
-    }
-
-    seedling_core::system::leftover_snapshots::sweep(&db, &driver.volume_store).await;
-
-    // spec: ACTU#volume-storage
-    // Reset the tmpfs-volume bind-mount root on startup. /run is tmpfs so
-    // contents are already gone after a host reboot, but a daemon restart
-    // alone leaves the directory tree intact — clear it so each fresh run
-    // starts from an empty slate, matching the spec's "tmpfs contents do not
-    // survive" guarantee. Skipped under --stub-backends since stub volumes
-    // live under {data_dir}/stub-volumes, not /run.
+    // Skipped under --stub-backends since stub volumes live under
+    // {data_dir}/stub-volumes, not /run.
     if !args.stub_backends {
-        let tmpfs_root = std::path::Path::new(seedling_core::system::actuator::TMPFS_VOLUMES_DIR);
-        if tmpfs_root.exists()
-            && let Err(e) = std::fs::remove_dir_all(tmpfs_root)
-        {
-            tracing::warn!(
-                path = %tmpfs_root.display(),
-                "failed to clear tmpfs-volumes root on startup: {e}"
-            );
-        }
-        if let Err(e) = std::fs::create_dir_all(tmpfs_root) {
-            tracing::warn!(
-                path = %tmpfs_root.display(),
-                "failed to (re)create tmpfs-volumes root on startup: {e}"
-            );
-        }
+        ensure_tmpfs_volumes_root(std::path::Path::new(
+            seedling_core::system::actuator::TMPFS_VOLUMES_DIR,
+        ));
     }
 
     // Podman-level scan for orphaned shell-session containers.
@@ -610,12 +550,18 @@ async fn main() {
 
         let driver_ref = Arc::clone(&driver);
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(
+            tokio::runtime::Handle::current().block_on(async {
                 seedling_core::system::startup_cleanup::sweep_orphaned_workloads(
                     &*driver_ref.container,
                     &known_apps,
-                ),
-            )
+                )
+                .await;
+                seedling_core::system::startup_cleanup::forget_removed_pod_networks(
+                    &*driver_ref.container,
+                    &db,
+                )
+                .await;
+            })
         });
     }
 
@@ -666,10 +612,20 @@ async fn main() {
     let tailscale_provider = seedling_core::runtime::tailscale::TailscaleProvider::new(
         db.clone(),
         seedling_core::runtime::tailscale::TailscaleConfig::default(),
+        event_tx.clone(),
     );
     let _tailscale_handle = Arc::clone(&tailscale_provider).spawn();
 
     let shells = seedling_core::oi::shells::ShellRegistry::new();
+
+    // spec: TLS#attempt-log
+    // Attempts a stopped runtime left pending are not issuances running now,
+    // and nothing else would ever close them.
+    match db.call(seedling_core::runtime::tls::store::close_interrupted_attempts) {
+        Ok(0) => {}
+        Ok(closed) => tracing::info!(closed, "closed issuance attempts a restart interrupted"),
+        Err(e) => fatal!("cannot close the issuance attempts a restart interrupted: {e}"),
+    }
 
     // spec: TLS#issuance
     // The TLS issuance coordinator owns every ACME-DNS flow: the
@@ -738,6 +694,11 @@ async fn main() {
             coord_for_renewal,
             seedling_core::runtime::tls::renewal::DEFAULT_TICK,
         );
+        // spec: TLS#renewal
+        let _ari_handle = seedling_core::runtime::tls::renewal::spawn_ari_refresh(
+            db.clone(),
+            Arc::clone(&cipher),
+        );
     }
 
     // spec: TLS#serving
@@ -775,6 +736,7 @@ async fn main() {
         Some(Arc::clone(&site_resolver)),
         instance_gc,
     );
+    let reconciler = reconciler.with_host_probes(host_probes);
 
     // The reconciler and schedule ticker are spawned below, after OiState is
     // constructed, so that scheduled-action fires can spawn lifecycle operations.
@@ -845,76 +807,16 @@ async fn main() {
     )));
 
     // ---------------------------------------------------------------------------
-    // Replay any interrupted lifecycle operation. Runs after OiState is built
-    // but before the reconciler starts ticking, so the install closure's
-    // rt.start() calls are picked up by the first reconciliation tick.
-    // spec: OPS#initiating-events, SUSP#replay
+    // Decide whether to replay an interrupted lifecycle operation, restore the
+    // queue, and start each installed app. Runs after OiState is built but
+    // before the reconciler starts ticking, so the install closure's
+    // rt.start() calls are picked up by the first reconciliation tick. If the
+    // persisted state cannot be read, nothing starts until a later iteration
+    // reads it.
+    // spec: OPS#initiating-events, SUSP#replay, OPS#unreadable-operation-state
     // ---------------------------------------------------------------------------
 
-    let persisted_op_app = persisted_operation.as_ref().map(|op| op.app.clone());
-    if let Some(op) = persisted_operation {
-        replay_interrupted_operation(Arc::clone(&oi_state), op);
-    }
-
-    // spec: OPS#stuck-install-recovery
-    // Recover apps left in inconsistent state by a previous run:
-    //
-    // 1. `Installing` phase with no matching current_operation. Causes: a
-    //    previous run cancelled an op and cleared current_operation but its
-    //    phase-revert persist was interrupted by crash/restart; or the daemon
-    //    died between persisting the phase and persisting current_operation.
-    //    Without this sweep, the operator can neither cancel nor uninstall
-    //    such an app — both gates check phase.
-    //
-    // 2. `NotInstalled` phase but resource_instances still exist for the
-    //    app. Causes: a previous recovery dropped Installing → NotInstalled
-    //    directly (older code path), or DB-level surgery. The reconciler
-    //    skips NotInstalled apps so the orphaned resources never get torn
-    //    down through normal reconciliation.
-    //
-    // Both stuck apps transition to Uninstalling so the reconciler runs the
-    // teardown loop; it converges to NotInstalled once teardown completes.
-    {
-        use seedling_core::runtime::apps::AppPhase;
-        let stuck: Vec<seedling_protocol::names::AppName> = {
-            let reg = oi_state.registry.read();
-            reg.iter()
-                .filter(|e| {
-                    if persisted_op_app.as_ref() == Some(&e.name) {
-                        return false;
-                    }
-                    let phase = e.phase.lock();
-                    if matches!(*phase, AppPhase::Installing) {
-                        return true;
-                    }
-                    if matches!(*phase, AppPhase::NotInstalled) {
-                        let app_for_query = e.name.clone();
-                        let count: i64 = db.call(move |db| {
-                            seedling_core::runtime::history::app_resource_instance_count(
-                                db,
-                                &app_for_query,
-                            )
-                            .unwrap_or(0)
-                        });
-                        return count > 0;
-                    }
-                    false
-                })
-                .map(|e| e.name.clone())
-                .collect()
-        };
-        for app_name in stuck {
-            tracing::warn!(
-                app = %app_name,
-                "app in stuck state at startup; transitioning to Uninstalling for teardown"
-            );
-            seedling_core::oi::handler::actions::lifecycle::set_phase_and_persist(
-                &oi_state,
-                &app_name,
-                AppPhase::Uninstalling,
-            );
-        }
-    }
+    resume_operations(&oi_state).await;
 
     // Pre-build the volume-shell image so it is warm before the first
     // operator opens a volume shell session. Building takes longer than a
@@ -1001,6 +903,16 @@ async fn main() {
             // spec: SCHED#firing
             let mut schedule_ticker = seedling_core::runtime::schedules::ScheduleTicker::new();
             loop {
+                // spec: OPS#unreadable-operation-state
+                // Until the persisted operation state can be read nothing
+                // starts, so each iteration tries again, and the loop keeps
+                // iterating rather than idling.
+                if oi_state_for_sched.scheduler.lock().is_state_unreadable() {
+                    resume_operations(&oi_state_for_sched).await;
+                    if oi_state_for_sched.scheduler.lock().is_state_unreadable() {
+                        idle = false;
+                    }
+                }
                 if idle {
                     tick_notify.notified().await;
                     idle = false;
@@ -1037,9 +949,21 @@ async fn main() {
                                     // can read the phase again under its own
                                     // lock: this reading is already stale by
                                     // the time a firing is admitted.
+                                    let schemas: std::collections::BTreeMap<_, _> = entry
+                                        .app
+                                        .def
+                                        .load()
+                                        .actions
+                                        .iter()
+                                        .map(|(n, a)| (n.clone(), a.params.clone()))
+                                        .collect();
                                     Some((
                                         name,
-                                        (entry.current_generation, Arc::clone(&entry.phase)),
+                                        (
+                                            entry.current_generation,
+                                            Arc::clone(&entry.phase),
+                                            Arc::new(schemas),
+                                        ),
                                     ))
                                 } else {
                                     None
@@ -1059,17 +983,30 @@ async fn main() {
                         drop(sched);
                         fired
                             .into_iter()
-                            .filter(|f| f.accepted && f.operation_id.is_some())
+                            .filter(|f| f.operation_id.is_some())
                             .collect::<Vec<_>>()
                     });
                     for fire in accepted_fires {
+                        if !fire.accepted {
+                            // spec: OPS#concurrency
+                            // A fire queued behind another app's operation is
+                            // persisted like any queued request.
+                            seedling_core::oi::handler::actions::lifecycle::persist_queued_fire(
+                                &oi_state_for_sched,
+                                &fire,
+                                now,
+                            );
+                            continue;
+                        }
                         if let Some(op_id) = fire.operation_id {
                             seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
                                 Arc::clone(&oi_state_for_sched),
                                 fire.app,
                                 fire.action,
                                 op_id,
-                                serde_json::Map::new(),
+                                seedling_core::oi::handler::actions::lifecycle::OperationParams::Requested(
+                                    serde_json::Map::new(),
+                                ),
                                 fire.generation,
                                 fire.generation,
                                 "schedule".to_owned(),
@@ -1079,7 +1016,13 @@ async fn main() {
                     }
                 }
 
-                match AssertUnwindSafe(reconciler.tick()).catch_unwind().await {
+                let tick = AssertUnwindSafe(reconciler.tick()).catch_unwind().await;
+                if reconciler.take_host_facts_changed() {
+                    seedling_core::oi::handler::registries::re_evaluate_all_apps(
+                        &oi_state_for_sched,
+                    );
+                }
+                match tick {
                     Ok(active) => {
                         if !active {
                             idle = true;
@@ -1148,169 +1091,37 @@ async fn main() {
 /// app no longer registered, decrypt failure), the function clears the
 /// current_operation row, reverts any Installing phase to NotInstalled, and
 /// files an install_interrupted fault so the operator can see why.
-/// Tear `records` down in the world and forget them.
-///
-/// Stops and resets the unit, removes the pod network, force-removes the
-/// container that may have outlived it, clears the faults a previous run filed
-/// against the instance, and deletes the row.
-///
-/// Only records actually torn down are deleted. One that could not be read is
-/// never in this list, and one whose teardown failed is left out of it, so
-/// both stay on the books rather than being written off as a teardown that did
-/// not happen. The next start finds them again.
-// spec: SUSP#abandoned-replay
-// spec: FLT#workload-faults
-fn tear_down_dynamic_resources(
-    driver: &Arc<seedling_core::system::System>,
-    db: &DbHandle,
-    records: &[seedling_core::runtime::desired::DynamicResourceRecord],
-) {
-    let mut handled: Vec<(AppName, String)> = Vec::new();
-    let mut retained = 0usize;
-    for record in records {
-        tracing::info!(
-            instance = %record.display_name,
-            kind = %record.kind,
-            operation_id = %record.operation_id,
-            "tearing down dynamic resource"
-        );
-        // The reconciler will not do this for us: these instances are absent
-        // from the desired state, so it ignores them rather than stopping
-        // them. A unit still loaded is reset so it does not linger.
-        let unit = format!("seedling-{}.service", record.display_name);
-        let net_name = format!("seedling-{}", record.display_name);
-        let container_name = record.display_name.clone();
-        let driver_ref = Arc::clone(driver);
-        // spec: SUSP#abandoned-replay
-        // Whether the world actually gave the resource up. A teardown that
-        // failed, or one whose outcome could not be established, is not a
-        // teardown: deleting the row on either would leave a live container
-        // with no record, no fault and no reconciler covering it, since the
-        // reconciler ignores instances absent from the desired state and the
-        // next start's orphan scan has nothing left to find it by.
-        let torn_down = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let mut torn_down = true;
-                match driver_ref.process.unit_state(&unit).await {
-                    Ok(Some(_)) => {
-                        if let Err(e) = driver_ref.process.stop_unit(&unit).await {
-                            tracing::warn!(unit = %unit, "could not stop the unit: {e}");
-                            torn_down = false;
-                        } else if let Err(e) = driver_ref.process.reset_failed_unit(&unit).await {
-                            tracing::warn!(unit = %unit, "could not reset the unit: {e}");
-                            torn_down = false;
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            unit = %unit,
-                            "could not tell whether the unit is still loaded: {e}"
-                        );
-                        torn_down = false;
-                    }
-                }
-                match driver_ref.container.network_exists(&net_name).await {
-                    Ok(true) => {
-                        if let Err(e) = driver_ref.container.remove_network(&net_name).await {
-                            tracing::warn!(network = %net_name, "could not remove the network: {e}");
-                            torn_down = false;
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            network = %net_name,
-                            "could not tell whether the network is still there: {e}"
-                        );
-                        torn_down = false;
-                    }
-                }
-                // Asked for first, rather than removing and discarding the
-                // error: the runtime reports a container that is not there as
-                // an error, and a dynamic resource's container has routinely
-                // already gone, removed on exit. Discarding it also discards
-                // the failure to remove one that is still there, against a
-                // runtime answering perfectly well.
-                match driver_ref.container.inspect(&container_name).await {
-                    Ok(None) => {}
-                    Ok(Some(_)) => {
-                        if let Err(e) =
-                            driver_ref.container.remove_container(&container_name, true).await
-                        {
-                            tracing::warn!(
-                                container = %container_name,
-                                "could not remove the container: {e}"
-                            );
-                            torn_down = false;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            container = %container_name,
-                            "could not tell whether the container is still there: {e}"
-                        );
-                        torn_down = false;
-                    }
-                }
-                torn_down
-            })
-        });
-        if torn_down {
-            handled.push((record.app.clone(), record.instance_id.clone()));
-        } else {
-            tracing::warn!(
-                instance = %record.display_name,
-                operation_id = %record.operation_id,
-                "dynamic resource not torn down; keeping its record so the next start finds it"
-            );
-            retained += 1;
-        }
-    }
+/// What a startup teardown leaves for [`keep_tearing_down`]: the records it
+/// could not tear down, or `None` where it could not read them.
+type Leftovers = Option<Vec<seedling_core::runtime::desired::DynamicResourceRecord>>;
 
-    if retained > 0 {
-        tracing::warn!(
-            retained,
-            "some dynamic resources could not be torn down and stay on the books"
-        );
+/// Go on tearing down, in the background, what a startup teardown left.
+// spec: OPS#completion
+fn keep_tearing_down(oi_state: &Arc<OiState>, left: Leftovers) {
+    if left.as_ref().is_some_and(Vec::is_empty) {
+        return;
     }
-    db.call(move |db| {
-        for (app, instance_id) in &handled {
-            if let Err(e) =
-                seedling_core::runtime::faults::clear_faults_for_instance(db, app, instance_id)
-            {
-                tracing::warn!(
-                    app = %app,
-                    instance_id = %instance_id,
-                    "failed to clear per-instance faults while tearing down dynamic resources: {e}"
-                );
-            }
-            if let Err(e) = db.conn.execute(
-                "DELETE FROM dynamic_resources WHERE instance_id = ?1",
-                [instance_id],
-            ) {
-                tracing::warn!(
-                    instance_id = %instance_id,
-                    "failed to delete dynamic resource record: {e}"
-                );
-            }
-        }
-    });
+    tokio::spawn(seedling_core::runtime::dynamic_teardown::keep_tearing_down(
+        Arc::clone(&oi_state.driver),
+        oi_state.db.clone(),
+        Arc::clone(&oi_state.scheduler),
+        left,
+    ));
 }
 
 /// Give back the dynamic resources startup spared for a replay that did not
-/// start.
+/// start, returning what is left of them.
 ///
 /// Startup cleanup skips the rows carrying this `operation_id` on the promise
 /// that the replay adopts them. Nothing else ever will: the rows name an
 /// operation no live operation claims, and the next start reads the same
 /// persisted row and spares them again on the same reasoning.
 // spec: SUSP#abandoned-replay
-fn abandon_spared_resources(
-    driver: &Arc<seedling_core::system::System>,
+async fn abandon_spared_resources(
+    driver: &seedling_core::system::System,
     db: &DbHandle,
     operation_id: &str,
-) {
+) -> Leftovers {
     let wanted = operation_id.to_owned();
     let records = db.call(move |db| {
         seedling_core::runtime::desired::list_dynamic_resources_for_operation(db, &wanted)
@@ -1322,17 +1133,253 @@ fn abandon_spared_resources(
                 count = records.len(),
                 "replay did not start; tearing down the resources startup spared for it"
             );
-            tear_down_dynamic_resources(driver, db, &records);
+            Some(seedling_core::runtime::dynamic_teardown::tear_down(driver, db, records).await)
         }
-        Ok(_) => {}
+        Ok(_) => Some(Vec::new()),
+        // spec: SUSP#abandoned-replay
+        // spec: FLT#host-faults
+        // Held until the background teardown next reads every record.
         Err(e) => {
-            // The resources stay recorded, so the next start spares them
-            // again and arrives back here. Say so rather than leaving a
-            // silent leak.
+            let why = format!(
+                "the resources spared for abandoned replay {operation_id}: {e}; \
+                 reading them again in the background"
+            );
+            db.call(move |db| {
+                seedling_core::runtime::faults::hold_dynamic_resources_unreadable(db, &why);
+            });
+            None
+        }
+    }
+}
+
+/// Read the persisted operation state and act on it: spare or tear down
+/// dynamic resources, replay an interrupted operation, recover stuck installs,
+/// restore the queue and run each installed app's start action.
+///
+/// If the state cannot be read, files `operation_state_unreadable`, starts no
+/// operation, and does none of the above, since each acts on an operation's
+/// absence. Called again on each reconciliation iteration until it reads.
+// spec: OPS#unreadable-operation-state
+// spec: OPS#interrupted-operations
+// spec: OPS#initiating-events
+async fn resume_operations(oi_state: &Arc<OiState>) {
+    use seedling_core::runtime::history::read_operation_state;
+    use seedling_protocol::names::AppName;
+
+    let system = AppName::new_unchecked("_system");
+    let cipher = Arc::clone(&oi_state.cipher);
+    let read = oi_state
+        .db
+        .call(move |db| read_operation_state(db, &cipher));
+    let state = match read {
+        Ok(state) => state,
+        Err(why) => {
             tracing::error!(
-                operation_id = %operation_id,
-                "could not list the resources spared for an abandoned replay; \
-                 they remain recorded and will not be reclaimed: {e}"
+                "cannot read the persisted operation state; starting no operation: {why}"
+            );
+            oi_state.scheduler.lock().set_state_unreadable(true);
+            let description = format!("cannot read {why}");
+            oi_state.db.call(move |db| {
+                let key = seedling_core::runtime::faults::FaultKey::new(
+                    &AppName::new_unchecked("_system"),
+                    "operation_state_unreadable",
+                    "",
+                );
+                let meta = seedling_core::runtime::faults::FaultMeta::default();
+                if let Err(e) =
+                    seedling_core::runtime::faults::file_once(db, &key, &meta, &description)
+                {
+                    tracing::warn!("failed to file operation_state_unreadable: {e}");
+                }
+            });
+            return;
+        }
+    };
+    if oi_state.scheduler.lock().is_state_unreadable() {
+        oi_state.scheduler.lock().set_state_unreadable(false);
+    }
+    {
+        let system = system.clone();
+        oi_state.db.call(move |db| {
+            let _ = seedling_core::runtime::faults::clear_faults_by_kind(
+                db,
+                &system,
+                "operation_state_unreadable",
+            );
+        });
+    }
+
+    let persisted_operation = state.current;
+    let cancel_requested = state.cancel_requested;
+    if let Some(op) = &persisted_operation {
+        tracing::info!(
+            app = %op.app,
+            action = %op.action_name,
+            operation_id = %op.operation_id.0,
+            "found interrupted operation; will replay after startup"
+        );
+    }
+
+    // Startup orphan cleanup — remove dynamic resources left by a previous run.
+    // Resources owned by the operation we are about to replay are kept so the
+    // replay picks up where it left off.
+    let replay_op_id: Option<String> = persisted_operation
+        .as_ref()
+        .map(|op| op.operation_id.0.clone());
+    {
+        let records = oi_state
+            .db
+            .call(seedling_core::runtime::desired::list_dynamic_resources);
+        let records: Result<Vec<_>, _> = records.map(|rs| {
+            rs.into_iter()
+                .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
+                .collect()
+        });
+        // spec: SUSP#abandoned-replay
+        // spec: FLT#host-faults
+        let left = match records {
+            Ok(records) => {
+                oi_state
+                    .db
+                    .call(seedling_core::runtime::faults::clear_dynamic_resources_unreadable);
+                if !records.is_empty() {
+                    tracing::warn!(
+                        count = records.len(),
+                        "found orphaned dynamic resources from a previous run; cleaning up"
+                    );
+                }
+                let left = seedling_core::runtime::dynamic_teardown::tear_down(
+                    &oi_state.driver,
+                    &oi_state.db,
+                    records,
+                )
+                .await;
+                // spec: OPS#completion
+                seedling_core::runtime::dynamic_teardown::clear_finished_operations(
+                    &oi_state.db,
+                    &left,
+                    &replay_op_id.iter().cloned().collect(),
+                );
+                Some(left)
+            }
+            Err(e) => {
+                let why = format!("{e}; reading them again in the background");
+                oi_state.db.call(move |db| {
+                    seedling_core::runtime::faults::hold_dynamic_resources_unreadable(db, &why);
+                });
+                None
+            }
+        };
+        keep_tearing_down(oi_state, left);
+    }
+
+    let replayed_app = match persisted_operation {
+        Some(op) => {
+            let app = op.app.clone();
+            replay_interrupted_operation(Arc::clone(oi_state), op, cancel_requested)
+                .await
+                .then_some(app)
+        }
+        None => None,
+    };
+
+    let db = &oi_state.db;
+    // spec: OPS#stuck-install-recovery
+    // Recover apps left in inconsistent state by a previous run:
+    //
+    // 1. `Installing` phase with no matching current_operation. Causes: a
+    //    previous run cancelled an op and cleared current_operation but its
+    //    phase-revert persist was interrupted by crash/restart; or the daemon
+    //    died between persisting the phase and persisting current_operation.
+    //    Without this sweep, the operator can neither cancel nor uninstall
+    //    such an app — both gates check phase.
+    //
+    // 2. `NotInstalled` phase but resource_instances still exist for the
+    //    app. Causes: a previous recovery dropped Installing → NotInstalled
+    //    directly (older code path), or DB-level surgery. The reconciler
+    //    skips NotInstalled apps so the orphaned resources never get torn
+    //    down through normal reconciliation.
+    //
+    // Both stuck apps transition to Uninstalling so the reconciler runs the
+    // teardown loop; it converges to NotInstalled once teardown completes.
+    {
+        use seedling_core::runtime::apps::AppPhase;
+        let stuck: Vec<seedling_protocol::names::AppName> = {
+            let reg = oi_state.registry.read();
+            reg.iter()
+                .filter(|e| {
+                    if replayed_app.as_ref() == Some(&e.name) {
+                        return false;
+                    }
+                    let phase = e.phase.lock();
+                    if matches!(*phase, AppPhase::Installing) {
+                        return true;
+                    }
+                    if matches!(*phase, AppPhase::NotInstalled) {
+                        let app_for_query = e.name.clone();
+                        let counted = db.call(move |db| {
+                            seedling_core::runtime::history::app_resource_instance_count(
+                                db,
+                                &app_for_query,
+                            )
+                        });
+                        // A count that cannot be read is not a count of none:
+                        // an app with recorded instances is left alone this
+                        // start, not declared clean.
+                        return match counted {
+                            Ok(count) => count > 0,
+                            Err(err) => {
+                                tracing::warn!(
+                                    app = %e.name,
+                                    "cannot count the instances recorded for an app; \
+                                     not recovering it: {err}"
+                                );
+                                false
+                            }
+                        };
+                    }
+                    false
+                })
+                .map(|e| e.name.clone())
+                .collect()
+        };
+        for app_name in stuck {
+            tracing::warn!(
+                app = %app_name,
+                "app in stuck state at startup; transitioning to Uninstalling for teardown"
+            );
+            seedling_core::oi::handler::actions::lifecycle::set_phase_and_persist(
+                oi_state,
+                &app_name,
+                AppPhase::Uninstalling,
+                None,
+            );
+        }
+    }
+
+    // spec: OPS#concurrency
+    seedling_core::oi::handler::actions::lifecycle::restore_queue(oi_state, state.queued);
+
+    // spec: OPS#initiating-events
+    // spec: ACN#start-action
+    // Each installed app with no operation being replayed or waiting has its
+    // start action run, with the trigger `boot`; until it ends the app's
+    // desired state is held, so the start action brings it up in its own
+    // order.
+    {
+        use seedling_core::runtime::apps::AppPhase;
+        let installed: Vec<AppName> = {
+            let reg = oi_state.registry.read();
+            reg.iter()
+                .filter(|e| matches!(*e.phase.lock(), AppPhase::Installed))
+                .filter(|e| replayed_app.as_ref() != Some(&e.name))
+                .filter(|e| oi_state.scheduler.lock().blocker_for(&e.name).is_none())
+                .map(|e| e.name.clone())
+                .collect()
+        };
+        for app_name in installed {
+            seedling_core::oi::handler::actions::lifecycle::initiate_start(
+                oi_state, &app_name, "boot", None,
             );
         }
     }
@@ -1345,14 +1392,18 @@ fn abandon_spared_resources(
 /// The decision of whether to replay is [`start_replay`]'s alone; this is the
 /// one place that acts on its answer, so no abort path can reach the world
 /// without settling what it owes.
-fn replay_interrupted_operation(
+async fn replay_interrupted_operation(
     state: Arc<OiState>,
     op: seedling_core::runtime::history::CurrentOperation,
-) {
+    cancel_requested: bool,
+) -> bool {
     let operation_id = op.operation_id.0.clone();
-    if !start_replay(Arc::clone(&state), op) {
-        abandon_spared_resources(&state.driver, &state.db, &operation_id);
+    let replayed = start_replay(Arc::clone(&state), op, cancel_requested);
+    if !replayed {
+        let left = abandon_spared_resources(&state.driver, &state.db, &operation_id).await;
+        keep_tearing_down(&state, left);
     }
+    replayed
 }
 
 /// Decide whether the interrupted operation can be replayed, and start it if
@@ -1360,10 +1411,14 @@ fn replay_interrupted_operation(
 fn start_replay(
     state: Arc<OiState>,
     op: seedling_core::runtime::history::CurrentOperation,
+    cancel_requested: bool,
 ) -> bool {
     use seedling_core::runtime::{
         apps::AppPhase,
-        history::{clear_current_operation, load_current_operation_params},
+        history::{
+            clear_current_operation, load_current_operation_params,
+            load_current_operation_volume_bindings,
+        },
         scheduler::ScheduleResult,
     };
 
@@ -1395,20 +1450,28 @@ fn start_replay(
     // began. Every persisted lifecycle operation has params (empty map for
     // actions that take none), so a None here is an install-specific
     // failure mode that pre-dates the generalised persistence.
-    let params = {
+    // spec: OPS#operation-scoped-volumes
+    // The bindings its `<key>_volume` params name are read with them, and an
+    // operation whose bindings cannot be read is not replayed, as one whose
+    // params cannot be read is not.
+    let (params, volume_bindings) = {
         let cipher = Arc::clone(&state.cipher);
-        let loaded = state
-            .db
-            .call(move |db| load_current_operation_params(db, &cipher));
+        let loaded = state.db.call(move |db| {
+            let params = load_current_operation_params(db, &cipher)?;
+            let bindings = load_current_operation_volume_bindings(db)?;
+            Ok::<_, seedling_core::runtime::history::OperationPersistError>((params, bindings))
+        });
         match loaded {
-            Ok(Some(params)) => params,
-            Ok(None) => {
+            Ok((Some(params), bindings)) => (params, bindings),
+            Ok((None, _)) => {
                 if is_install {
                     tracing::error!(
                         app = %app_name,
                         "interrupted install has no persisted params; reverting to NotInstalled"
                     );
-                    revert_install_and_fault(&state, &app_name);
+                    seedling_core::oi::handler::actions::lifecycle::recover_unreplayable_install(
+                        &state, &app_name,
+                    );
                     return false;
                 }
                 tracing::warn!(
@@ -1416,16 +1479,18 @@ fn start_replay(
                     action = %action_name,
                     "interrupted operation has no persisted params (legacy row); replaying with empty map"
                 );
-                serde_json::Map::new()
+                (serde_json::Map::new(), Default::default())
             }
             Err(e) => {
                 tracing::error!(
                     app = %app_name,
                     action = %action_name,
-                    "failed to decrypt interrupted operation params: {e}"
+                    "failed to read interrupted operation params: {e}"
                 );
                 if is_install {
-                    revert_install_and_fault(&state, &app_name);
+                    seedling_core::oi::handler::actions::lifecycle::recover_unreplayable_install(
+                        &state, &app_name,
+                    );
                 } else {
                     state.db.call(|db| {
                         let _ = clear_current_operation(db);
@@ -1479,6 +1544,7 @@ fn start_replay(
         op.target_generation,
         "replay",
         op.operation_id.clone(),
+        None,
     );
     if !matches!(sched_result, ScheduleResult::Accepted) {
         tracing::error!(
@@ -1493,10 +1559,7 @@ fn start_replay(
     // current_operation.cancel_requested; flip the newly-minted token so
     // the replay unwinds cleanly at the first barrier instead of re-doing
     // the whole operation the operator just cancelled.
-    let cancel_was_requested = state
-        .db
-        .call(|db| seedling_core::runtime::history::load_cancel_requested(db).unwrap_or(false));
-    if cancel_was_requested {
+    if cancel_requested {
         let outcome = state.scheduler.lock().request_cancel(&app_name);
         tracing::info!(
             app = %app_name,
@@ -1518,65 +1581,16 @@ fn start_replay(
         app_name,
         action_name,
         op.operation_id,
-        params,
+        seedling_core::oi::handler::actions::lifecycle::OperationParams::Replayed {
+            params,
+            bindings: volume_bindings,
+        },
         op.source_generation,
         op.target_generation,
         "replay".to_owned(),
         None,
     );
     true
-}
-
-/// Flip a persisted Installing row back to NotInstalled and file a fault
-/// indicating the install was interrupted and could not be replayed.
-// spec: ACI#install-completion
-fn revert_install_and_fault(state: &Arc<OiState>, app_name: &AppName) {
-    use seedling_core::runtime::apps::AppPhase;
-    use seedling_core::runtime::history::clear_current_operation;
-
-    // Only flip if the app is actually in Installing.
-    let was_installing = {
-        let reg = state.registry.read();
-        reg.get(app_name.as_str())
-            .map(|e| matches!(*e.phase.lock(), AppPhase::Installing))
-            .unwrap_or(false)
-    };
-
-    if was_installing {
-        {
-            let mut reg = state.registry.write();
-            if let Some(entry) = reg.get_mut(app_name.as_str()) {
-                *entry.phase.lock() = AppPhase::NotInstalled;
-            }
-        }
-        let app_owned = app_name.clone();
-        state.db.call(move |db| {
-            if let Err(e) = db.conn.execute(
-                "UPDATE registered_apps SET installing = 0, installed = 0, uninstalling = 0 \
-                 WHERE name = ?1",
-                [&app_owned],
-            ) {
-                tracing::warn!(app = %app_owned, "failed to persist revert: {e}");
-            }
-            let _ = clear_current_operation(db);
-            let _ = seedling_core::runtime::faults::file_fault(
-                db,
-                &app_owned,
-                None,
-                None,
-                None,
-                "install_interrupted",
-                "install was interrupted by a runtime restart and could not be replayed",
-            );
-        });
-        state
-            .event_tx
-            .app_phase_changed(app_name, "not_installed", None);
-    } else {
-        state.db.call(|db| {
-            let _ = clear_current_operation(db);
-        });
-    }
 }
 
 // spec: TRN#listen-addresses
@@ -1640,7 +1654,31 @@ mod tests {
 
     use if_addrs::{IfAddr, IfOperStatus, Ifv4Addr, Interface};
 
-    use super::select_oi_addrs;
+    use clap::Parser as _;
+
+    use super::{Args, select_oi_addrs};
+
+    // spec: LIM#limits
+    #[test]
+    fn a_call_depth_of_zero_is_refused() {
+        assert!(Args::try_parse_from(["seedling", "--script-max-call-depth", "0"]).is_err());
+        let args = Args::try_parse_from(["seedling", "--script-max-call-depth", "3"]).unwrap();
+        assert_eq!(args.script_limits.script_max_call_depth, 3);
+    }
+
+    // spec: LIM#limits
+    #[test]
+    fn the_other_limits_accept_zero_to_remove_them() {
+        let args = Args::try_parse_from([
+            "seedling",
+            "--script-max-operations",
+            "0",
+            "--script-max-expr-depth",
+            "0",
+        ])
+        .unwrap();
+        assert_eq!(args.script_limits.script_max_operations, 0);
+    }
 
     fn iface(name: &str, ip: [u8; 4]) -> Interface {
         Interface {
@@ -1679,19 +1717,71 @@ mod tests {
         insert_dynamic_resources(
             &db,
             &[
-                ("inst-a", "op-abandoned"),
-                ("inst-b", "op-abandoned"),
-                ("inst-c", "op-other"),
+                (INST_A, "op-abandoned"),
+                (INST_B, "op-abandoned"),
+                (INST_C, "op-other"),
             ],
         );
 
-        super::abandon_spared_resources(&driver, &db, "op-abandoned");
+        super::abandon_spared_resources(&driver, &db, "op-abandoned").await;
 
         assert_eq!(
             recorded_instances(&db),
-            vec!["inst-c".to_owned()],
+            vec![INST_C.to_owned()],
             "the abandoned operation's resources are forgotten, another operation's are not"
         );
+    }
+
+    // spec: ACTU#deployment-and-job-instances
+    // A resource startup tears down is known by its recorded identity alone,
+    // so the anonymous volumes created for it were left behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_abandoned_replay_removes_the_anonymous_volumes_of_the_resources_it_was_spared() {
+        use seedling_core::runtime::InstanceId;
+        use seedling_core::runtime::anonymous_volumes::{self, AnonymousVolume};
+        use seedling_core::runtime::db::DbHandle;
+        use seedling_core::system::System;
+        use seedling_protocol::names::AppName;
+
+        let data_dir = tempfile::tempdir().expect("temp data dir");
+        let (driver, _caddy_admin) =
+            System::setup_stubbed(data_dir.path(), false).expect("stub system");
+        let db = DbHandle::open_in_memory().expect("in-memory db");
+        insert_dynamic_resources(&db, &[(INST_A, "op-abandoned")]);
+        let volume = AnonymousVolume {
+            name: "seedling-anon-0000000a-vol-0".to_owned(),
+            tmpfs: false,
+        };
+        let instance = seedling_core::runtime::ResourceInstance {
+            id: InstanceId::from_hex(INST_A).unwrap(),
+            app: AppName::new("demo").unwrap(),
+            kind: seedling_core::defs::resource::ResourceKind::Job,
+            name: None,
+            variant: seedling_core::runtime::InstanceVariant::Singleton,
+            display_name: INST_A.to_owned(),
+        };
+        let recorded = volume.clone();
+        db.call(move |db| anonymous_volumes::record(db, &instance, &[recorded]))
+            .expect("record the volume");
+        driver
+            .container
+            .create_volume(&volume.name, false)
+            .await
+            .expect("create the volume");
+
+        super::abandon_spared_resources(&driver, &db, "op-abandoned").await;
+
+        assert!(
+            !driver.container.volume_exists(&volume.name).await.unwrap(),
+            "the volume went with its pod"
+        );
+        let id = InstanceId::from_hex(INST_A).unwrap();
+        assert!(
+            db.call(move |db| anonymous_volumes::recorded_for(db, id))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(recorded_instances(&db).is_empty());
     }
 
     // spec: SUSP#abandoned-replay
@@ -1710,19 +1800,21 @@ mod tests {
             System::setup_unavailable(data_dir.path(), false).expect("unavailable system");
         let db = DbHandle::open_in_memory().expect("in-memory db");
 
-        insert_dynamic_resources(
-            &db,
-            &[("inst-a", "op-abandoned"), ("inst-b", "op-abandoned")],
-        );
+        insert_dynamic_resources(&db, &[(INST_A, "op-abandoned"), (INST_B, "op-abandoned")]);
 
-        super::abandon_spared_resources(&driver, &db, "op-abandoned");
+        super::abandon_spared_resources(&driver, &db, "op-abandoned").await;
 
         assert_eq!(
             recorded_instances(&db),
-            vec!["inst-a".to_owned(), "inst-b".to_owned()],
+            vec![INST_A.to_owned(), INST_B.to_owned()],
             "a teardown that did not happen must not be recorded as one that did"
         );
     }
+
+    /// Instance ids as the runtime records them.
+    const INST_A: &str = "0000000000000000000000000000000a";
+    const INST_B: &str = "0000000000000000000000000000000b";
+    const INST_C: &str = "0000000000000000000000000000000c";
 
     fn insert_dynamic_resources(db: &seedling_core::runtime::db::DbHandle, rows: &[(&str, &str)]) {
         let rows: Vec<(String, String)> = rows
@@ -1817,5 +1909,32 @@ mod tests {
                 "10.0.0.5:7891".parse::<SocketAddr>().unwrap(),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod tmpfs_root_tests {
+    use super::ensure_tmpfs_volumes_root;
+
+    // spec: ACTU#volume-storage
+    #[test]
+    fn a_tmpfs_volumes_root_keeps_its_contents_across_a_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("tmpfs-volumes");
+        std::fs::create_dir_all(root.join("vol")).unwrap();
+        std::fs::write(root.join("vol/data"), b"kept").unwrap();
+
+        ensure_tmpfs_volumes_root(&root);
+
+        assert_eq!(std::fs::read(root.join("vol/data")).unwrap(), b"kept");
+    }
+
+    // spec: ACTU#volume-storage
+    #[test]
+    fn an_absent_tmpfs_volumes_root_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("run/tmpfs-volumes");
+        ensure_tmpfs_volumes_root(&root);
+        assert!(root.is_dir());
     }
 }

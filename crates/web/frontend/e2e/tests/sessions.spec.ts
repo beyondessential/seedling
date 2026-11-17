@@ -24,7 +24,7 @@ test("active sessions shows our browser session with the dev actor", async ({ pa
   // hasn't refetched after that, a one-off reload picks up the populated
   // list.
   await page.goto(stack.baseUrl);
-  const sessionsLink = page.getByRole("link", { name: /\d+ connected clients?/ });
+  const sessionsLink = page.getByRole("link", { name: /\d+ open web sessions?/ });
   await expect(sessionsLink).toBeVisible({ timeout: 15_000 });
 
   if (!(await page.getByRole("heading", { name: /^Active Sessions$/i }).isVisible())) {

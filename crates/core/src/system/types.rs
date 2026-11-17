@@ -170,6 +170,14 @@ pub struct ContainerSpec {
     pub stop_timeout_secs: Option<u32>,
 }
 
+/// What a command run inside a container wrote and how it ended.
+#[derive(Debug, Clone)]
+pub struct ExecOutput {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Mount {
     pub source: MountSource,
@@ -308,6 +316,12 @@ pub enum TransientRestart {
 pub struct UnitState {
     pub active: ActiveState,
     pub sub: String,
+    /// The unit's `Result` property: why it last ended, such as `success`,
+    /// `exit-code` or `start-limit-hit`, where the supervisor reports one.
+    /// `start-limit-hit` is read from here and not from the sub-state, which
+    /// reads `failed` for it as for any other failure.
+    // spec: LINUX#restart-pacing
+    pub result: Option<String>,
     /// The supervisor's own count of how many times it has restarted this
     /// unit. Monotonic while the unit lives, but reset when the unit is
     /// recreated or its failed state is cleared, so a decrease is a reset
@@ -483,6 +497,11 @@ pub struct L4Route {
     pub proto: L4Proto,
     /// Upstream addresses: `"[fd5e:...]:port"` format.
     pub upstreams: Vec<String>,
+    /// The proxy terminates TLS on the connection and forwards the plaintext
+    /// stream inside it.
+    // spec: ING#termination
+    #[serde(default)]
+    pub terminate_tls: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -820,6 +839,9 @@ pub enum ObservationFact {
     },
     ContainerHealthy,
     ContainerUnhealthy,
+    /// A health check is declared and none has passed since the container
+    /// started.
+    ContainerHealthStarting,
     /// The container exists but its state does not correspond to any
     /// lifecycle transition — it is draining, or podman reported a state this
     /// build does not model.
@@ -849,6 +871,11 @@ pub enum ObservationFact {
     /// nothing running under it, and only the latter is broken.
     // spec: AUTO#restart-pacing
     UnitActivating,
+    /// The unit is stopping; the supervisor has not yet given its result.
+    UnitDeactivating,
+    /// The unit is inactive, or gone: with failed units kept loaded until
+    /// their result is recorded, either is the supervisor reporting success.
+    // spec: LINUX#exit-status
     UnitInactive,
     UnitFailed,
     /// The unit reached `failed` state with sub-state `start-limit-hit`:
@@ -902,6 +929,10 @@ impl ObservationFact {
             ObservationFact::ContainerHealthy => vec![("health_check_pass", json!({}))],
             // spec: LCY#containers
             ObservationFact::ContainerUnhealthy => vec![("health_check_fail", json!({}))],
+            // spec: APPS#resources
+            ObservationFact::ContainerHealthStarting => {
+                vec![("health_check_starting", json!({}))]
+            }
             ObservationFact::ContainerMissing => vec![("container_removed", json!({}))],
             // A present volume is both created and ready.
             ObservationFact::VolumePresent => {
@@ -920,6 +951,12 @@ impl ObservationFact {
             // secondary signal from systemd for crashes/OOMs/signals that
             // podman --rm cleans up before we can observe them.
             ObservationFact::UnitFailed => vec![("unit_failed", json!({}))],
+            // spec: RT#termination
+            // The supervisor's success, which decides how a run ended when
+            // its exit status was never captured.
+            ObservationFact::UnitInactive | ObservationFact::UnitGone => {
+                vec![("unit_inactive", json!({}))]
+            }
             // spec: AUTO#restart-pacing
             // Persisted so the per-instance crash_loop fault path can identify
             // the cause distinctly from a one-off unit failure.
@@ -940,8 +977,7 @@ impl ObservationFact {
             | ObservationFact::RouteAbsent { .. }
             | ObservationFact::UnitActive
             | ObservationFact::UnitActivating
-            | ObservationFact::UnitInactive
-            | ObservationFact::UnitGone
+            | ObservationFact::UnitDeactivating
             // Restart counters are reconciled against a stored baseline and
             // written to instance_restarts, not to the observation oracle.
             | ObservationFact::UnitRestartCounter { .. } => vec![],
@@ -986,7 +1022,14 @@ mod observation_fact_tests {
         assert_eq!(kinds[0].0, "health_check_fail");
     }
 
-    // spec: LCY#containers
+    // spec: APPS#resources
+    #[test]
+    fn container_health_starting_maps_to_health_check_starting() {
+        let kinds = ObservationFact::ContainerHealthStarting.to_obs_kinds();
+        assert_eq!(kinds.len(), 1);
+        assert_eq!(kinds[0].0, "health_check_starting");
+    }
+
     #[test]
     fn container_healthy_maps_to_health_check_pass() {
         let kinds = ObservationFact::ContainerHealthy.to_obs_kinds();

@@ -3,21 +3,46 @@ use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::HandlerResult;
+use super::{HandlerResult, RequestCtx};
 use crate::{oi::state::OiState, runtime::faults};
 
 #[derive(Deserialize)]
 pub(crate) struct ListFaultsParams {
-    pub app: Option<AppName>,
+    pub app: Option<String>,
+}
+
+/// The names faults are filed against that are not registered apps.
+const HOST_FAULT_APPS: [&str; 2] = ["_system", "seedling"];
+
+/// The app name a fault request names: a registered app, `_system` or
+/// `seedling`.
+fn fault_app(state: &OiState, raw: &str) -> Result<AppName, OiError> {
+    if HOST_FAULT_APPS.contains(&raw) {
+        return Ok(AppName::new_unchecked(raw));
+    }
+    let name = AppName::new(raw).map_err(|e| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("invalid app name {raw:?}: {e}"),
+        )
+    })?;
+    if !state.registry.read().is_registered(name.as_str()) {
+        return Err(OiError::not_found(format!("app not found: {raw}")));
+    }
+    Ok(name)
 }
 
 // spec: FLTS#listing-faults
 pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerResult {
-    let app = params.app.clone();
+    let app = params
+        .app
+        .as_deref()
+        .map(|raw| fault_app(state, raw))
+        .transpose()?;
     let records = state
         .db
         .call(move |db| faults::list_active_faults(db, app.as_ref()))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db query: {e}")))?;
     let result: Vec<serde_json::Value> = records
         .into_iter()
         .map(|f| {
@@ -38,24 +63,28 @@ pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerR
 
 #[derive(Deserialize)]
 pub(crate) struct ClearAppFaultsParams {
-    pub app: AppName,
+    pub app: String,
 }
 
 // spec: FLTS#clearing-faults
-/// Clear every active fault for the given app. Returns the number of faults
-/// cleared. The runtime never re-files cleared faults that were derived
-/// observationally (e.g. `image_pull_failed`) — they will be re-filed on the
-/// next tick if the underlying condition is still present.
-pub(crate) fn clear_app_faults(state: &OiState, params: ClearAppFaultsParams) -> HandlerResult {
-    let app = params.app.clone();
+/// Clear every active fault filed against the given name: a registered app,
+/// `_system` or `seedling`. Returns the number of faults cleared. A cleared
+/// fault whose condition still holds is filed again by the runtime.
+pub(crate) fn clear_app_faults(
+    state: &OiState,
+    params: ClearAppFaultsParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let app = fault_app(state, &params.app)?;
     let app_name = app.clone();
+    let actor = std::sync::Arc::clone(&ctx.events.actor);
     let cleared = state
         .db
         .call(move |db| -> rusqlite::Result<usize> {
             let active = faults::list_active_faults(db, Some(&app_name))?;
             let mut count = 0;
             for f in active {
-                faults::clear_fault(db, &f.id, &app_name)?;
+                faults::clear_fault_by(db, &f.id, &app_name, Some(std::sync::Arc::clone(&actor)))?;
                 count += 1;
             }
             Ok(count)

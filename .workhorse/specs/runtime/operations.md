@@ -85,6 +85,10 @@ Where a generation bump initiated the operation, the runtime MUST record the ope
 
 When an operation fails, the runtime MUST file an [`operation_failed`](faults.md#app-faults) fault.
 
+The runtime MUST keep tearing down an ended operation's [dynamic resources](../language/app.md#dynamic-resource-lifetime), retrying with a growing delay, until every one of them is gone.
+It MUST forget a dynamic resource's record only once that resource is torn down.
+While they are not all gone a minute after the operation ends, or while their records cannot be read, the runtime MUST hold an [`operation_cleanup_stalled`](faults.md#app-faults) fault.
+
 ## Persistence
 
 Before an operation's action closure first runs, the runtime MUST persist durably the operation's identifier, app, action, source and target generations, and parameters.

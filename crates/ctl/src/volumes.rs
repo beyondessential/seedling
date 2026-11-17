@@ -13,6 +13,13 @@ pub(super) enum VolumesCommand {
     },
     /// List exported volumes, with where each lives on the host
     Exported,
+    /// List every named, non-tmpfs volume the apps declare, with an `exported` flag
+    App,
+    /// External volume mappings (operator wires up `app.external_volume(...)` names)
+    External {
+        #[command(subcommand)]
+        command: ExternalCommand,
+    },
     /// Site volume management
     Site {
         #[command(subcommand)]
@@ -58,6 +65,52 @@ pub(super) enum HeldCommand {
         #[arg(long)]
         name: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+pub(super) enum ExternalCommand {
+    /// Map an app's external volume to a site volume or an app's exported volume
+    ///
+    /// Targets use the `_site/<name>` / `<app>/<volume>` shorthand, e.g.
+    /// `_site/pgdata` or `producer/data`.
+    Map {
+        /// App declaring the external volume
+        app: String,
+        /// External volume name (from `app.external_volume(...)`)
+        external_name: String,
+        /// Target volume
+        target: String,
+        /// Map the volume read-only
+        #[arg(short = 'r', long)]
+        read_only: bool,
+    },
+    /// Retarget an existing mapping, and change its access mode
+    Remap {
+        /// App declaring the external volume
+        app: String,
+        /// External volume name
+        external_name: String,
+        /// New target volume
+        target: String,
+        /// Map the volume read-only
+        #[arg(short = 'r', long)]
+        read_only: bool,
+    },
+    /// Remove a mapping
+    Unmap {
+        /// App declaring the external volume
+        app: String,
+        /// External volume name
+        external_name: String,
+    },
+    /// List mappings
+    List {
+        /// Filter to a single app
+        #[arg(long)]
+        app: Option<String>,
+    },
+    /// List every external volume declared across apps
+    Declared,
 }
 
 #[derive(Subcommand)]
@@ -131,8 +184,27 @@ fn parse_volume_spec(spec: &str) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Parse a mapping target in the `_site/<name>` or `<app>/<volume>` form.
+/// A held volume cannot be a mapping's target.
+fn parse_mapping_target(spec: &str) -> Result<serde_json::Value, String> {
+    if spec.starts_with("held:") {
+        return Err(format!(
+            "invalid target {spec:?}: expected _site/NAME or APP/VOLUME"
+        ));
+    }
+    parse_volume_spec(spec)
+}
+
 pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
     match cmd {
+        VolumesCommand::App => {
+            print_result(
+                client
+                    .request("/volumes/app/list", serde_json::json!({}))
+                    .await,
+            );
+        }
+        VolumesCommand::External { command } => dispatch_external(client, command).await,
         VolumesCommand::Shell { read_only, volumes } => {
             let parsed: Result<Vec<_>, _> = volumes.iter().map(|s| parse_volume_spec(s)).collect();
             let refs = match parsed {
@@ -259,9 +331,76 @@ pub(super) async fn dispatch(client: &OiClient, cmd: VolumesCommand) {
     }
 }
 
+async fn dispatch_external(client: &OiClient, cmd: ExternalCommand) {
+    let target = |spec: &str| {
+        parse_mapping_target(spec).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(2);
+        })
+    };
+    match cmd {
+        ExternalCommand::Map {
+            app,
+            external_name,
+            target: spec,
+            read_only,
+        } => print_result(
+            client
+                .request(
+                    "/volumes/external/map",
+                    serde_json::json!({
+                        "app": app,
+                        "external_name": external_name,
+                        "target": target(&spec),
+                        "read_only": read_only,
+                    }),
+                )
+                .await,
+        ),
+        ExternalCommand::Remap {
+            app,
+            external_name,
+            target: spec,
+            read_only,
+        } => print_result(
+            client
+                .request(
+                    "/volumes/external/remap",
+                    serde_json::json!({
+                        "app": app,
+                        "external_name": external_name,
+                        "target": target(&spec),
+                        "read_only": read_only,
+                    }),
+                )
+                .await,
+        ),
+        ExternalCommand::Unmap { app, external_name } => print_result(
+            client
+                .request(
+                    "/volumes/external/unmap",
+                    serde_json::json!({ "app": app, "external_name": external_name }),
+                )
+                .await,
+        ),
+        ExternalCommand::List { app } => {
+            let params = match app {
+                Some(app) => serde_json::json!({ "app": app }),
+                None => serde_json::json!({}),
+            };
+            print_result(client.request("/volumes/external/list", params).await);
+        }
+        ExternalCommand::Declared => print_result(
+            client
+                .request("/volumes/external/declared", serde_json::json!({}))
+                .await,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_volume_spec;
+    use super::{parse_mapping_target, parse_volume_spec};
     use serde_json::json;
 
     #[test]
@@ -301,5 +440,22 @@ mod tests {
     #[test]
     fn rejects_empty_site_name() {
         assert!(parse_volume_spec("_site/").is_err());
+    }
+
+    #[test]
+    fn a_mapping_target_is_a_site_or_app_volume() {
+        let site = parse_mapping_target("_site/pgdata").unwrap();
+        assert_eq!(site["kind"], "site");
+        assert_eq!(site["name"], "pgdata");
+        let app = parse_mapping_target("producer/data").unwrap();
+        assert_eq!(app["kind"], "app");
+        assert_eq!(app["app"], "producer");
+        assert_eq!(app["volume"], "data");
+    }
+
+    #[test]
+    fn a_held_volume_is_not_a_mapping_target() {
+        assert!(parse_mapping_target("held:0000").is_err());
+        assert!(parse_mapping_target("nothing").is_err());
     }
 }

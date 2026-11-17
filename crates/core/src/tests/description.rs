@@ -165,8 +165,8 @@ fn description_returns_self_for_chaining() {
         .map(|(_, r)| r.clone())
         .unwrap();
     if let Resource::Deployment(d) = &resource {
-        assert_eq!(d.def.lock().scale.start, 2);
-        assert_eq!(d.def.lock().scale.end, 2);
+        assert_eq!(*d.def.lock().scale.start(), 2);
+        assert_eq!(*d.def.lock().scale.end(), 2);
         assert_eq!(d.def.lock().description.as_deref(), Some("a deployment"));
     } else {
         panic!("expected Deployment");
@@ -256,6 +256,8 @@ fn malformed_canopy_types_throw() {
         "tamanu--central",
         "tamanu_central",
         "tamanu central",
+        "tamanu-\\u00e9",
+        "tamanu\\n",
         "",
     ] {
         let err = run_test_script_err(&format!(r#"app.canopy_type("{bad}");"#));
@@ -268,7 +270,15 @@ fn malformed_canopy_types_throw() {
 // spec: APP#canopy-type
 #[test]
 fn well_formed_canopy_types_are_accepted() {
-    for good in ["a", "tamanu", "tamanu-central", "a1", "tamanu2-v3-x"] {
+    for good in [
+        "a",
+        "tamanu",
+        "tamanu-central",
+        "a1",
+        "tamanu2-v3-x",
+        "a-1",
+        "a-1-2",
+    ] {
         let app = run_test_script_app(&format!(r#"app.canopy_type("{good}");"#));
         assert_eq!(app.def.load().canopy_type.as_deref(), Some(good));
     }

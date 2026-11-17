@@ -26,16 +26,76 @@ fn to_row(target: &VolumeRef) -> (&'static str, Option<&AppName>, &str) {
 /// is always present; `target_app` is only populated for the `app` kind.
 /// Historical rows may carry the legacy `"exported"` kind — treat that as
 /// `"app"`.
-fn from_row(kind: &str, target_app: Option<AppName>, target_volume: String) -> VolumeRef {
-    match kind {
-        "app" | "exported" => VolumeRef::App {
-            app: target_app.unwrap_or_default(),
+fn from_row(
+    kind: &str,
+    target_app: Option<AppName>,
+    target_volume: String,
+) -> Result<VolumeRef, String> {
+    match (kind, target_app) {
+        ("app" | "exported", Some(app)) => Ok(VolumeRef::App {
+            app,
             volume: AppVolumeName::new_unchecked(target_volume),
-        },
-        _ => VolumeRef::Site {
+        }),
+        ("app" | "exported", None) => Err("an app target with no app".to_owned()),
+        ("site", _) => Ok(VolumeRef::Site {
             name: SiteVolumeName::new_unchecked(target_volume),
-        },
+        }),
+        (other, _) => Err(format!("unknown target kind {other:?}")),
     }
+}
+
+/// What [`create_unique`] and [`update_existing`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Written {
+    Done,
+    /// The app already has a mapping for the external name.
+    Duplicate,
+    /// The app has no mapping for the external name.
+    Missing,
+    /// The mapping targets a site volume that is not recorded.
+    SiteTargetMissing,
+}
+
+fn site_target_missing(db: &Db, target: &VolumeRef) -> rusqlite::Result<bool> {
+    match target {
+        VolumeRef::Site { name } => Ok(crate::runtime::site_volumes::get(db, name)?.is_none()),
+        VolumeRef::App { .. } => Ok(false),
+    }
+}
+
+/// Create a mapping the app does not already have, to a site target that is
+/// recorded.
+///
+/// The target is looked for and the mapping written as one step, which
+/// [`site_volumes::delete_unmapped`](crate::runtime::site_volumes::delete_unmapped)
+/// relies on.
+// spec: VOLM#mapping-an-external-volume
+pub fn create_unique(db: &Db, mapping: &ExternalVolumeMapping) -> rusqlite::Result<Written> {
+    if site_target_missing(db, &mapping.target)? {
+        return Ok(Written::SiteTargetMissing);
+    }
+    if get(db, &mapping.app, &mapping.external_name)?.is_some() {
+        return Ok(Written::Duplicate);
+    }
+    create(db, mapping)?;
+    Ok(Written::Done)
+}
+
+/// Retarget a mapping the app has, to a site target that is recorded, and give
+/// the mapping it had.
+// spec: VOLM#remapping-an-external-volume
+pub fn update_existing(
+    db: &Db,
+    mapping: &ExternalVolumeMapping,
+) -> rusqlite::Result<(Written, Option<ExternalVolumeMapping>)> {
+    let Some(previous) = get(db, &mapping.app, &mapping.external_name)? else {
+        return Ok((Written::Missing, None));
+    };
+    if site_target_missing(db, &mapping.target)? {
+        return Ok((Written::SiteTargetMissing, Some(previous)));
+    }
+    update(db, mapping)?;
+    Ok((Written::Done, Some(previous)))
 }
 
 pub fn create(db: &Db, mapping: &ExternalVolumeMapping) -> rusqlite::Result<()> {
@@ -131,7 +191,9 @@ fn row_to_mapping(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExternalVolumeMap
     let target_app: Option<AppName> = row.get(3)?;
     let target_volume: String = row.get(4)?;
     let read_only: bool = row.get(5)?;
-    let target = from_row(kind.as_str(), target_app, target_volume);
+    let target = from_row(kind.as_str(), target_app, target_volume).map_err(|why| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, why.into())
+    })?;
     Ok(ExternalVolumeMapping {
         app,
         external_name,

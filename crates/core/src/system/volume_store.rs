@@ -243,7 +243,6 @@ impl VolumeStore {
 
         let id = HeldVolumeId::generate();
         let dest = held_dir.join(id.to_string());
-        tokio::fs::rename(&src, &dest).await?;
 
         let meta = HeldVolumeMeta {
             id,
@@ -252,12 +251,20 @@ impl VolumeStore {
             display_name: display_name.to_owned(),
             reason: reason.to_owned(),
             held_at: jiff::Timestamp::now().to_string(),
-            path: dest,
+            path: dest.clone(),
         };
 
+        // spec: ACTU#held-volumes
+        // The record is committed before the data moves, so data is never
+        // moved aside with nothing to say where it went; if the move then
+        // fails, the record goes again.
         let meta_path = held_dir.join(format!("{id}.meta.json"));
         let json = serde_json::to_string_pretty(&meta).map_err(std::io::Error::other)?;
         tokio::fs::write(&meta_path, json).await?;
+        if let Err(e) = tokio::fs::rename(&src, &dest).await {
+            let _ = tokio::fs::remove_file(&meta_path).await;
+            return Err(e);
+        }
 
         tracing::info!(
             app = app,
@@ -286,6 +293,11 @@ impl VolumeStore {
         Some(data_path)
     }
 
+    /// Every held volume, ordered by app, volume name and then id.
+    ///
+    /// A record that cannot be read or parsed is an error: leaving it out
+    /// would show the operator a host with less held on it than there is.
+    // spec: VOLM#listing-held-volumes
     pub fn list_held(&self) -> std::io::Result<Vec<HeldVolumeMeta>> {
         let held_dir = self.held_dir();
         if !held_dir.exists() {
@@ -297,13 +309,30 @@ impl VolumeStore {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let data = std::fs::read_to_string(&path)?;
-                if let Ok(meta) = serde_json::from_str::<HeldVolumeMeta>(&data) {
-                    results.push(meta);
-                }
+                results.push(read_held_meta(&path)?);
             }
         }
+        results.sort_by(|a, b| {
+            (&a.app, &a.volume_name, a.id.to_string()).cmp(&(
+                &b.app,
+                &b.volume_name,
+                b.id.to_string(),
+            ))
+        });
         Ok(results)
+    }
+
+    /// The held volume with this id, or `None` when no record exists for it.
+    ///
+    /// A record that exists and cannot be read is an error, not `None`.
+    // spec: VOLM#deleting-a-held-volume
+    pub fn held_meta(&self, id: &HeldVolumeId) -> std::io::Result<Option<HeldVolumeMeta>> {
+        let meta_path = self.held_dir().join(format!("{id}.meta.json"));
+        match std::fs::symlink_metadata(&meta_path) {
+            Ok(_) => read_held_meta(&meta_path).map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Move a held volume's data into a fresh managed site volume named
@@ -349,7 +378,19 @@ impl VolumeStore {
             serde_json::from_str(&meta_json).map_err(std::io::Error::other)?;
 
         tokio::fs::rename(&data_path, &dest).await?;
-        tokio::fs::remove_file(&meta_path).await?;
+        // spec: VOLM#requests
+        // A restore that fails leaves the volume held, so the data goes back
+        // where it was rather than standing under a name with no record.
+        if let Err(e) = tokio::fs::remove_file(&meta_path).await {
+            if let Err(undo) = tokio::fs::rename(&dest, &data_path).await {
+                tracing::error!(
+                    held_id = %id,
+                    error = %undo,
+                    "could not move a held volume back after its restore failed"
+                );
+            }
+            return Err(e);
+        }
 
         tracing::info!(
             held_id = %id,
@@ -396,6 +437,16 @@ impl VolumeStore {
         is_subvol == self.use_btrfs
     }
 
+    /// Whether the data directory is on BTRFS, so volumes are subvolumes.
+    pub fn uses_btrfs(&self) -> bool {
+        self.use_btrfs
+    }
+
+    /// Whether `path` is a BTRFS subvolume.
+    pub async fn is_subvolume(&self, path: &Path) -> bool {
+        is_btrfs_subvolume(path).await
+    }
+
     pub fn site_path(&self, name: &str) -> PathBuf {
         self.volumes_dir.join(format!("site-{name}"))
     }
@@ -407,28 +458,6 @@ impl VolumeStore {
     // spec: SITE#site-volume-names
     pub fn site_exists(&self, name: &str) -> bool {
         std::fs::symlink_metadata(self.site_path(name)).is_ok()
-    }
-
-    /// Return the names (without the `site-` prefix) of every site volume
-    /// whose name starts with `prefix`.
-    pub fn list_sites_with_prefix(&self, prefix: &str) -> std::io::Result<Vec<String>> {
-        let mut out = Vec::new();
-        if !self.volumes_dir.exists() {
-            return Ok(out);
-        }
-        for entry in std::fs::read_dir(&self.volumes_dir)? {
-            let entry = entry?;
-            let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            let Some(rest) = file_name.strip_prefix("site-") else {
-                continue;
-            };
-            if rest.starts_with(prefix) {
-                out.push(rest.to_owned());
-            }
-        }
-        Ok(out)
     }
 
     // spec: SITE#site-volumes
@@ -458,17 +487,12 @@ impl VolumeStore {
 
     // spec: SITE#site-volume-snapshots
     /// Create a read-only BTRFS snapshot at `site-{name}` from `source_path`.
-    /// Errors if BTRFS is not in use.
+    /// Errors if `source_path` is not a BTRFS subvolume.
     pub async fn snapshot_site(
         &self,
         name: &str,
         source_path: &std::path::Path,
     ) -> std::io::Result<()> {
-        if !self.use_btrfs {
-            return Err(std::io::Error::other(
-                "snapshotting requires BTRFS; restart without --without-btrfs",
-            ));
-        }
         if !source_path.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -513,6 +537,16 @@ pub struct HeldVolumeMeta {
     pub reason: String,
     pub held_at: String,
     pub path: PathBuf,
+}
+
+fn read_held_meta(path: &Path) -> std::io::Result<HeldVolumeMeta> {
+    let data = std::fs::read_to_string(path)?;
+    serde_json::from_str(&data).map_err(|e| {
+        std::io::Error::other(format!(
+            "held volume record {} cannot be read: {e}",
+            path.display()
+        ))
+    })
 }
 
 async fn is_btrfs_subvolume(path: &Path) -> bool {
@@ -612,6 +646,55 @@ mod tests {
         std::fs::create_dir_all(target).unwrap();
         std::fs::write(target.join("data.db"), b"the volume's contents").unwrap();
         std::os::unix::fs::symlink(target, store.path(name)).unwrap();
+    }
+
+    // spec: ACTU#held-volumes
+    #[tokio::test]
+    async fn holding_a_volume_records_it_with_its_data_beside_the_record() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        std::fs::create_dir_all(store.path(&name)).unwrap();
+        std::fs::write(store.path(&name).join("data.db"), b"contents").unwrap();
+
+        let meta = store
+            .hold(&name, "app", "uninstall")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(store.list_held().unwrap().len(), 1);
+        assert!(meta.path.join("data.db").exists());
+    }
+
+    // spec: ACTU#held-volumes
+    #[tokio::test]
+    async fn a_hold_whose_move_fails_leaves_no_record_and_the_data_where_it_was() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let (data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let volume = store.path(&name);
+        std::fs::create_dir_all(&volume).unwrap();
+        std::fs::write(volume.join("data.db"), b"contents").unwrap();
+        let parent = volume.parent().unwrap().to_owned();
+        if std::fs::metadata(data.path()).unwrap().uid() == 0 {
+            return; // root ignores the permission that makes the move fail
+        }
+        // A directory that cannot be written cannot have the volume moved
+        // out of it, though the record, in a directory of its own, can be.
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let result = store.hold(&name, "app", "uninstall").await;
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            result.is_err(),
+            "the hold fails, so the removal does not go ahead"
+        );
+        assert!(
+            store.list_held().unwrap().is_empty(),
+            "no record is left behind"
+        );
+        assert!(volume.join("data.db").exists(), "the data is where it was");
     }
 
     // spec: ACTU#storage-confinement

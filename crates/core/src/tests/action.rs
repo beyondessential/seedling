@@ -368,7 +368,8 @@ fn on_action_closure_accepts_two_args() {
 #[test]
 fn on_schedule_registers_cron_on_action() {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     crate::defs::app::set_appdef_holder(&app.def);
     super::run_script(
         &engine,
@@ -407,7 +408,8 @@ fn schedule_hash_is_pinned() {
 #[test]
 fn on_schedule_chains_multiple_exprs() {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     crate::defs::app::set_appdef_holder(&app.def);
     super::run_script(
         &engine,
@@ -451,5 +453,157 @@ fn on_schedule_rejects_invalid_cron() {
         r#"
         app.on_action("bad", |rt, _param| {}).on_schedule("not a cron expr");
     "#,
+    );
+}
+
+// spec: ACN#action-declaration
+#[test]
+fn install_is_reserved_as_an_action_name() {
+    let err = run_test_script_err(r#"app.on_action("install", |rt, _p| {});"#);
+    assert!(err.to_string().contains("reserved"), "{err}");
+}
+
+// spec: ACN#action-declaration
+// spec: ACN#start-action
+#[test]
+fn declaring_an_action_twice_throws() {
+    for script in [
+        r#"app.on_action("migrate", |rt, _p| {}); app.on_action("migrate", |rt, _p| {});"#,
+        r#"app.on_start(|rt, _p| {}); app.on_start(|rt, _p| {});"#,
+        r#"app.on_action("start", |rt, _p| {}); app.on_start(|rt, _p| {});"#,
+        r#"app.on_start(|rt, _p| {}); app.on_action("start", |rt, _p| {}, #{});"#,
+    ] {
+        let err = run_test_script_err(script);
+        assert!(
+            err.to_string().contains("already declared"),
+            "{script}: {err}"
+        );
+    }
+}
+
+// spec: ACN#shells
+#[test]
+fn declaring_a_shell_twice_throws() {
+    let err = run_test_script_err(
+        r#"app.on_shell("psql", |rt, sh, _p| {}); app.on_shell("psql", |rt, sh, _p| {}, #{});"#,
+    );
+    assert!(err.to_string().contains("already declared"), "{err}");
+}
+
+// spec: ACN#install-action
+#[test]
+fn a_second_install_action_throws() {
+    let err = run_test_script_err(r#"app.on_install(|rt, _p| {}); app.on_install(|rt, _p| {});"#);
+    assert!(err.to_string().contains("already declared"), "{err}");
+}
+
+// spec: ACN#action-declaration
+// spec: ACN#start-action
+// spec: ACN#shells
+// spec: ACN#install-action
+// spec: ACN#param-schemas
+#[test]
+fn unknown_option_and_param_definition_keys_throw() {
+    for script in [
+        r#"app.on_action("a", |rt, _p| {}, #{ descripton: "typo" });"#,
+        r#"app.on_start(|rt, _p| {}, #{ params: #{} });"#,
+        r#"app.on_action("start", |rt, _p| {}, #{ params: #{} });"#,
+        r#"app.on_shell("s", |rt, sh, _p| {}, #{ param: #{} });"#,
+        r#"app.on_install(|rt, _p| {}, #{ requires: #{} });"#,
+        r#"app.on_action("a", |rt, _p| {}, #{ params: #{ x: #{ kinds: "text" } } });"#,
+        r#"app.on_action("a", |rt, _p| {}, #{ params: "not a map" });"#,
+        r#"app.on_action("a", |rt, _p| {}, #{ params: #{ x: "not a map" } });"#,
+    ] {
+        let err = run_test_script_err(script);
+        assert!(!err.to_string().is_empty(), "{script} must throw");
+    }
+}
+
+// spec: VOL#export
+// spec: SVC#export
+#[test]
+fn unknown_keys_in_exported_options_throw() {
+    for script in [
+        r#"app.volume("data").exported(#{ descriptions: "x" });"#,
+        r#"app.service("api").exported(#{ note: "x" });"#,
+    ] {
+        let err = run_test_script_err(script);
+        assert!(err.to_string().contains("unknown key"), "{script}: {err}");
+    }
+}
+
+// spec: CTR#environment
+#[test]
+fn an_env_entry_with_an_extra_key_throws() {
+    let err = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:1")
+            .env([#{ name: "A", value: "1", extra: "x" }]);"#,
+    );
+    assert!(err.to_string().contains("unknown key"), "{err}");
+}
+
+// spec: ACN#action-declaration
+#[test]
+fn on_action_with_a_named_function_throws() {
+    assert_named_handler_rejected("on_action", r#"app.on_action("migrate", HANDLER);"#);
+    assert_named_handler_rejected(
+        "on_action",
+        r#"app.on_action("migrate", HANDLER, #{ description: "x" });"#,
+    );
+    assert_named_handler_rejected("on_action", r#"app.on_action("start", HANDLER);"#);
+}
+
+// spec: ACN#start-action
+#[test]
+fn on_start_with_a_named_function_throws() {
+    assert_named_handler_rejected("on_start", "app.on_start(HANDLER);");
+    assert_named_handler_rejected(
+        "on_start",
+        r#"app.on_start(HANDLER, #{ description: "x" });"#,
+    );
+}
+
+// spec: ACN#shells
+#[test]
+fn on_shell_with_a_named_function_throws() {
+    assert_named_handler_rejected("on_shell", r#"app.on_shell("bash", HANDLER);"#);
+    assert_named_handler_rejected(
+        "on_shell",
+        r#"app.on_shell("bash", HANDLER, #{ description: "x" });"#,
+    );
+}
+
+// spec: ACN#install-action
+#[test]
+fn on_install_with_a_named_function_throws() {
+    assert_named_handler_rejected("on_install", "app.on_install(HANDLER);");
+    assert_named_handler_rejected("on_install", "app.on_install(HANDLER, #{});");
+}
+
+// spec: ACN#action-declaration
+#[test]
+fn a_closure_wrapping_a_named_function_registers_and_runs() {
+    let (engine, mut scope, app, ast) = run_test_script(
+        r#"
+        fn handler(rt, param) { throw "handler ran"; }
+        app.on_action("migrate", |rt, param| handler(rt, param));
+        "#,
+    );
+    let log = InMemoryActionLog::new();
+    let result = run_operation(
+        action_context(
+            &engine,
+            &ast,
+            &app,
+            "migrate",
+            &log,
+            Arc::new(crate::runtime::TestWorldOracle::new()),
+            ActionHooks::default(),
+        ),
+        &mut scope,
+    );
+    assert!(
+        matches!(&result, OperationResult::Failed(e) if e.to_string().contains("handler ran")),
+        "the wrapped handler should have been called"
     );
 }

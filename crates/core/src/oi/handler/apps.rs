@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
@@ -14,17 +15,16 @@ use crate::{
     runtime::{
         AppPhase,
         apps::{AppRegistry, AppStatus, status as app_status},
-        barrier::oracle::derive_state_with_transition_time,
         definition::{Bundle, Source, version},
         desired::list_dynamic_resources_for_app,
         faults,
-        history::{find_instances_for_group, query_observations},
+        health::{InstanceHealth, declares_healthcheck, read_health},
+        history::{find_instances_for_group, read_lifecycle},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
         priority::{self, AppPriority},
         restart_gens, restarts, scaling,
         scheduler::AppBlocker,
-        stopped::{self, kind_str, parse_kind},
-        transition_phase,
+        stopped, transition_phase,
     },
 };
 
@@ -272,44 +272,7 @@ pub(crate) fn sync_fault_state(
                 }
             }
         }
-        // Sync disallowed_registry fault.
-        {
-            use crate::runtime::{faults, registries as reg_mod};
-            let allowed: std::collections::BTreeSet<String> =
-                reg_mod::list_allowed_registries(db)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect();
-            let disallowed: Vec<&str> = used_registries
-                .iter()
-                .filter(|r| !allowed.contains(*r))
-                .map(String::as_str)
-                .collect();
-            let existing: Vec<_> = faults::list_active_faults(db, Some(&app_name))
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|f| f.kind == "disallowed_registry")
-                .collect();
-            if disallowed.is_empty() {
-                for f in &existing {
-                    if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                        tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear disallowed_registry fault: {e}");
-                    }
-                }
-            } else {
-                let description = format!("image references use disallowed registries: {}", disallowed.join(", "));
-                if !existing.iter().any(|f| f.description == description) {
-                    for f in &existing {
-                        if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                            tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale disallowed_registry fault: {e}");
-                        }
-                    }
-                    if let Err(e) = faults::file_fault(db, &app_name, None, None, None, "disallowed_registry", &description) {
-                        tracing::warn!(app = %app_name, "failed to file disallowed_registry fault: {e}");
-                    }
-                }
-            }
-        }
+        crate::runtime::apps::sync_used_registries(db, &app_name, &used_registries);
     });
 }
 
@@ -343,19 +306,51 @@ fn sync_action_schedules(state: &OiState, app_name: &AppName) {
         {
             tracing::warn!(app = %app_name_owned, "failed to ensure schedules: {e}");
         }
+        if let Err(e) = crate::runtime::schedules::clear_faults_of_unscheduled_actions(
+            db,
+            &app_name_owned,
+            &valid_pairs_owned,
+        ) {
+            tracing::warn!(app = %app_name_owned, "failed to read faults: {e}");
+        }
     });
 }
 
 // spec: APPS#description — fills in `last_fired_at` and `next_fire_at` on each
 // action's `schedules` entries. Schedules whose cronexpr is no longer present
 // in the AppDef are ignored (they will be pruned by `sync_action_schedules`).
-fn enrich_action_schedules(state: &OiState, app: &AppName, actions_json: &mut [Value]) {
+fn enrich_action_schedules(
+    state: &OiState,
+    app: &AppName,
+    actions_json: &mut [Value],
+) -> Result<(), OiError> {
     let app_owned = app.clone();
     let rows = state
         .db
-        .call(move |db| crate::runtime::db::list_schedules(db, &app_owned).unwrap_or_default());
+        .call(move |db| crate::runtime::db::list_schedules(db, &app_owned))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read the app's schedules: {e}"),
+            )
+        })?;
     if rows.is_empty() {
-        return;
+        return Ok(());
+    }
+    // A last fire time that cannot be parsed is state the server cannot read,
+    // not a schedule that never fired.
+    for row in &rows {
+        if let Some(text) = &row.last_fired_at
+            && text.parse::<jiff::Timestamp>().is_err()
+        {
+            return Err(OiError::new(
+                ErrorCode::Internal,
+                format!(
+                    "the last fire time of a schedule of {} cannot be read",
+                    row.action
+                ),
+            ));
+        }
     }
 
     let now = jiff::Timestamp::now();
@@ -402,6 +397,7 @@ fn enrich_action_schedules(state: &OiState, app: &AppName, actions_json: &mut [V
             };
         }
     }
+    Ok(())
 }
 
 fn compute_next_fire(
@@ -489,6 +485,17 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 format!("could not read app priorities: {e}"),
             )
         })?;
+    // spec: CTL#app-priority
+    // A stored priority that is not a level is as unreadable as no read at all.
+    if let Some((app, why)) = priorities
+        .iter()
+        .find_map(|(app, p)| p.as_ref().err().map(|e| (app, e)))
+    {
+        return Err(OiError::new(
+            ErrorCode::Internal,
+            format!("could not read the priority of {app}: {why}"),
+        ));
+    }
     // spec: APP#app-description
     let standings = app_status::standings(&state.registry, &state.scheduler, &state.db, |entry| {
         entry.app.def.load().description.clone()
@@ -507,7 +514,12 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 "status": standing.status.name(),
                 "has_stopped_resources": standing.has_stopped,
                 "fault_count": standing.fault_count,
-                "priority": priorities.get(&name).copied().unwrap_or_default().as_str(),
+                "priority": priorities
+                    .get(&name)
+                    .and_then(|p| p.as_ref().ok())
+                    .copied()
+                    .unwrap_or_default()
+                    .as_str(),
                 "description": description,
             });
             if let AppStatus::Operating { action_name } = &standing.status {
@@ -530,22 +542,46 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
     let generation = entry.current_generation;
 
-    let status = app_status::of(entry, active.as_ref(), &state.db);
+    let status = app_status::of(entry, active.as_ref(), &state.db).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("could not read the app's state to derive its status: {e}"),
+        )
+    })?;
 
-    // Load stored param values from DB (both plaintext and secret tables).
-    // Names come from AppDef; values come from the params/secret_params tables.
-    // Params declared by the script but never set by the operator are shown as null.
+    // Names come from AppDef; values come from the params table. A value in
+    // secret storage is never returned: it is read only to find where else it
+    // shows, and the names of those params are what the listing keeps.
+    // spec: SEC#redaction
     let name_owned = params.app.clone();
-    let cipher = std::sync::Arc::clone(&state.cipher);
-    let stored_params = state
+    let cipher = Arc::clone(&state.cipher);
+    let (plain_params, secret_params) = state
         .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
+        .call(move |db| {
+            Ok::<_, rusqlite::Error>((
+                crate::runtime::apps::load_params_for_app(db, &name_owned)?,
+                crate::runtime::apps::secret_params::load_secret_params_for_app(
+                    db,
+                    &cipher,
+                    &name_owned,
+                )?,
+            ))
+        })
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to read params: {e}")))?;
+    let secret_param_names: std::collections::BTreeSet<String> =
+        secret_params.keys().cloned().collect();
 
     // Fetch all active faults for this app once, then split by level.
     let name_owned = params.app.clone();
     let all_faults_for_app = state
         .db
-        .call(move |db| faults::list_active_faults(db, Some(&name_owned)).unwrap_or_default());
+        .call(move |db| faults::list_active_faults(db, Some(&name_owned)))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read the app's faults: {e}"),
+            )
+        })?;
 
     // spec: APPS#description — app-level faults from the DB.
     let app_faults_json: Vec<Value> = all_faults_for_app
@@ -570,7 +606,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         let name_owned = params.app.clone();
         state
             .db
-            .call(move |db| stopped::load_stopped(db, &name_owned).unwrap_or_default())
+            .call(move |db| stopped::load_stopped(db, &name_owned))
+            .map_err(|e| {
+                OiError::new(
+                    ErrorCode::Internal,
+                    format!("could not read the app's stopped resources: {e}"),
+                )
+            })?
     };
 
     let def = entry.app.def.load();
@@ -582,11 +624,12 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .iter()
         .map(|(k, schema)| {
             let mut obj = param_schema_entry_json(k.as_str(), schema);
-            let is_set = stored_params.contains_key(k.as_str());
+            let is_set =
+                plain_params.contains_key(k.as_str()) || secret_param_names.contains(k.as_str());
             let value = if schema.is_secret() {
                 Value::Null
             } else {
-                stored_params
+                plain_params
                     .get(k.as_str())
                     .map(|v| Value::String(v.clone()))
                     .unwrap_or(Value::Null)
@@ -599,9 +642,14 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // spec: APPS#description — params stored in the DB that the current script does
     // not reference; shown for operator awareness only.
-    let unknown_params_json: Vec<Value> = stored_params
+    // spec: SEC#redaction
+    let unknown_params_json: Vec<Value> = plain_params
         .iter()
+        .map(|(k, v)| (k, Value::String(v.clone())))
+        .chain(secret_param_names.iter().map(|k| (k, Value::Null)))
         .filter(|(k, _)| !def.params.contains_key(k.as_str()))
+        .collect::<BTreeMap<_, _>>()
+        .into_iter()
         .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 
@@ -619,7 +667,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // `last_fired_at` and `next_fire_at` set to null; here we replace those
     // with the values stored in the schedule table and a freshly computed
     // next-fire timestamp.
-    enrich_action_schedules(state, &params.app, &mut actions_json);
+    enrich_action_schedules(state, &params.app, &mut actions_json)?;
 
     // resources — with instance lifecycle state from DB observations.
     // Only query instances for Installed/Uninstalling apps; NotInstalled
@@ -642,6 +690,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         name_str: String,
         base_json: Value,
         scale_bounds: Option<(u16, u16)>,
+        declares_healthcheck: bool,
     }
     let resource_infos: Vec<ResourceInfo> = def
         .resources
@@ -651,116 +700,141 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             name_str: id.name.as_str().to_owned(),
             base_json: resource_static_json(id.kind, id.name.as_str(), resource, &def),
             scale_bounds: scale_bounds_of(resource),
+            declares_healthcheck: declares_healthcheck(resource),
         })
         .collect();
 
     let name_owned = params.app.clone();
     let all_faults_clone = all_faults_for_app.clone();
     let stopped_set_clone = stopped_set.clone();
-    let resources_json: Vec<Value> = state.db.call(move |db| {
-        // spec: APPS#description
-        // Read the rate settings once per describe: every instance summary
-        // reports its recent count over the same window.
-        let restart_settings = restarts::settings(db).ok();
-        resource_infos
-            .into_iter()
-            .map(|info| {
-                let instances_json: Vec<Value> = if query_instances {
-                    find_instances_for_group(db, &name_owned, info.kind, Some(&info.name_str))
-                        .unwrap_or_default()
+    let mut resources_json: Vec<Value> = state
+        .db
+        .call(move |db| {
+            // spec: APPS#description
+            // Read the rate settings once per describe: every instance summary
+            // reports its recent count over the same window.
+            let restart_settings = restarts::settings(db)?;
+            resource_infos
+                .into_iter()
+                .map(|info| {
+                    let instances_json: Vec<Value> = if query_instances {
+                        find_instances_for_group(db, &name_owned, info.kind, Some(&info.name_str))?
+                            .iter()
+                            .map(|inst| {
+                                let (lifecycle, transition_time) = read_lifecycle(db, inst)?;
+                                // spec: APPS#description
+                                // Omitted entirely for an instance with no
+                                // restart history, so a resource that has never
+                                // restarted does not read as one that restarted
+                                // zero times just now.
+                                let restart_summary =
+                                    restarts::summary(db, &inst.id.to_hex(), restart_settings)?;
+                                Ok(json!({
+                                    "id": inst.id.to_hex(),
+                                    "display_name": inst.display_name,
+                                    "lifecycle": format!("{lifecycle:?}"),
+                                    "transition_time": transition_time.and_then(|t| {
+                                        jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
+                                    }),
+                                    "restarts": restart_summary,
+                                    "health": read_health(db, inst, info.declares_healthcheck)?
+                                        .map(InstanceHealth::name),
+                                }))
+                            })
+                            .collect::<rusqlite::Result<_>>()?
+                    } else {
+                        vec![]
+                    };
+
+                    let resource_type_str = info.kind.type_name();
+                    let resource_faults: Vec<Value> = all_faults_clone
                         .iter()
-                        .map(|inst| {
-                            let observations = query_observations(db, inst).unwrap_or_default();
-                            let (lifecycle, transition_time) =
-                                derive_state_with_transition_time(inst, &observations);
-                            // spec: APPS#description
-                            // Omitted entirely for an instance with no
-                            // restart history, so a resource that has never
-                            // restarted does not read as one that restarted
-                            // zero times just now.
-                            let restart_summary = restart_settings.and_then(|s| {
-                                restarts::summary(db, &inst.id.to_hex(), s).ok().flatten()
-                            });
+                        .filter(|f| {
+                            f.resource_type.as_deref() == Some(resource_type_str)
+                                && f.resource_name.as_deref() == Some(&info.name_str)
+                        })
+                        .map(|f| {
                             json!({
-                                "id": inst.id.to_hex(),
-                                "display_name": inst.display_name,
-                                "lifecycle": format!("{lifecycle:?}"),
-                                "transition_time": transition_time.and_then(|t| {
-                                    jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
-                                }),
-                                "restarts": restart_summary,
+                                "id": f.id,
+                                "app": f.app,
+                                "resource_type": f.resource_type,
+                                "resource_name": f.resource_name,
+                                "instance_id": f.instance_id,
+                                "kind": f.kind,
+                                "timestamp": f.timestamp.to_string(),
+                                "description": f.description,
                             })
                         })
-                        .collect()
-                } else {
-                    vec![]
-                };
+                        .collect();
 
-                let resource_type_str = format!("{:?}", info.kind).to_lowercase();
-                let resource_faults: Vec<Value> = all_faults_clone
-                    .iter()
-                    .filter(|f| {
-                        f.resource_type.as_deref() == Some(&resource_type_str)
-                            && f.resource_name.as_deref() == Some(&info.name_str)
-                    })
-                    .map(|f| {
-                        json!({
-                            "id": f.id,
-                            "app": f.app,
-                            "resource_type": f.resource_type,
-                            "resource_name": f.resource_name,
-                            "instance_id": f.instance_id,
-                            "kind": f.kind,
-                            "timestamp": f.timestamp.to_string(),
-                            "description": f.description,
-                        })
-                    })
-                    .collect();
+                    let is_stopped =
+                        stopped_set_clone.contains(&(info.kind, info.name_str.clone()));
 
-                let is_stopped = stopped_set_clone.contains(&(info.kind, info.name_str.clone()));
+                    let mut resource_obj = info.base_json;
+                    resource_obj["instances"] = json!(instances_json);
+                    resource_obj["faults"] = json!(resource_faults);
+                    resource_obj["stopped"] = json!(is_stopped);
 
-                let mut resource_obj = info.base_json;
-                resource_obj["instances"] = json!(instances_json);
-                resource_obj["faults"] = json!(resource_faults);
-                resource_obj["stopped"] = json!(is_stopped);
+                    // spec: CTL#scaling
+                    if let Some((low, high)) = info.scale_bounds {
+                        // spec: AUTO#unreadable-scale
+                        // Null rather than the lower bound. The bounds come from
+                        // the app definition and are known; what the operator
+                        // chose within them is not, and reporting the floor would
+                        // have someone who scaled up read it back as a scale-down
+                        // that never happened.
+                        let current = match scaling::effective_scale(
+                            db,
+                            &name_owned,
+                            &info.name_str,
+                            low,
+                            high,
+                        ) {
+                            Ok(current) => json!(current),
+                            Err(e) => {
+                                tracing::warn!(
+                                    app = %name_owned,
+                                    deployment = %info.name_str,
+                                    "could not read the scaling decision; reporting the current \
+                                     scale as unavailable: {e}"
+                                );
+                                Value::Null
+                            }
+                        };
+                        resource_obj["scale"] = json!({
+                            "low": low,
+                            "high": high,
+                            "current": current,
+                        });
+                    }
 
-                // spec: CTL#scaling
-                if let Some((low, high)) = info.scale_bounds {
-                    // spec: AUTO#unreadable-scale
-                    // Null rather than the lower bound. The bounds come from
-                    // the app definition and are known; what the operator
-                    // chose within them is not, and reporting the floor would
-                    // have someone who scaled up read it back as a scale-down
-                    // that never happened.
-                    let current = match scaling::effective_scale(
-                        db,
-                        &name_owned,
-                        &info.name_str,
-                        low,
-                        high,
-                    ) {
-                        Ok(current) => json!(current),
-                        Err(e) => {
-                            tracing::warn!(
-                                app = %name_owned,
-                                deployment = %info.name_str,
-                                "could not read the scaling decision; reporting the current \
-                                 scale as unavailable: {e}"
-                            );
-                            Value::Null
-                        }
-                    };
-                    resource_obj["scale"] = json!({
-                        "low": low,
-                        "high": high,
-                        "current": current,
-                    });
-                }
+                    Ok(resource_obj)
+                })
+                .collect::<rusqlite::Result<Vec<Value>>>()
+        })
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read the app's resource state: {e}"),
+            )
+        })?;
 
-                resource_obj
-            })
-            .collect()
-    });
+    // spec: APPS#redacted-environment-values
+    // An environment value that contains the stored value of a parameter whose
+    // effective secret flag is true is reported as null.
+    let secret_values: Vec<&str> = def
+        .params
+        .iter()
+        .filter(|(_, schema)| schema.is_secret())
+        .flat_map(|(k, _)| {
+            plain_params
+                .get(k.as_str())
+                .or_else(|| secret_params.get(k.as_str()))
+        })
+        .map(String::as_str)
+        .filter(|v| !v.is_empty())
+        .collect();
+    super::appdef_json::redact_secret_env(&mut resources_json, &secret_values);
 
     // Dynamic resources (created inside action closures, not in AppDef).
     // Returned as a separate top-level field so consumers can choose whether
@@ -770,72 +844,78 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let dynamic_resources_json: Vec<Value> = if query_instances {
         let name_owned = params.app.clone();
         let all_faults_clone2 = all_faults_for_app.clone();
-        state.db.call(move |db| {
-            let dyn_records = list_dynamic_resources_for_app(db, &name_owned).unwrap_or_default();
-            let mut out = Vec::new();
-            for rec in dyn_records {
-                let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
-                    continue;
-                };
-                let Some(kind) = resource_kind_from_debug_str(&rec.kind) else {
-                    continue;
-                };
-                let inst = ResourceInstance {
-                    id,
-                    app: rec.app.clone(),
-                    kind,
-                    name: rec.resource_name.clone(),
-                    variant: InstanceVariant::Singleton,
-                    display_name: rec.display_name.clone(),
-                };
-                let observations = query_observations(db, &inst).unwrap_or_default();
-                let (lifecycle, transition_time) =
-                    derive_state_with_transition_time(&inst, &observations);
-                let kind_str = format!("{:?}", kind).to_lowercase();
-                // Anonymous resources have no `resource_name`; fall back to
-                // the display_name so they have a stable identifier in the
-                // UI (e.g. `tamanu-central--abc12345`).
-                let display_name = rec
-                    .resource_name
-                    .as_deref()
-                    .unwrap_or(&rec.display_name)
-                    .to_owned();
-                let instance_faults: Vec<Value> = all_faults_clone2
-                    .iter()
-                    .filter(|f| f.instance_id.as_deref() == Some(&rec.instance_id))
-                    .map(|f| {
-                        json!({
-                            "id": f.id,
-                            "app": f.app,
-                            "resource_type": f.resource_type,
-                            "resource_name": f.resource_name,
-                            "instance_id": f.instance_id,
-                            "kind": f.kind,
-                            "timestamp": f.timestamp.to_string(),
-                            "description": f.description,
+        state
+            .db
+            .call(move |db| {
+                let dyn_records = list_dynamic_resources_for_app(db, &name_owned)?;
+                let mut out = Vec::new();
+                for rec in dyn_records {
+                    let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
+                        continue;
+                    };
+                    let Some(kind) = resource_kind_from_debug_str(&rec.kind) else {
+                        continue;
+                    };
+                    let inst = ResourceInstance {
+                        id,
+                        app: rec.app.clone(),
+                        kind,
+                        name: rec.resource_name.clone(),
+                        variant: InstanceVariant::Singleton,
+                        display_name: rec.display_name.clone(),
+                    };
+                    let (lifecycle, transition_time) = read_lifecycle(db, &inst)?;
+                    let kind_str = kind.type_name();
+                    // Anonymous resources have no `resource_name`; fall back to
+                    // the display_name so they have a stable identifier in the
+                    // UI (e.g. `tamanu-central--abc12345`).
+                    let display_name = rec
+                        .resource_name
+                        .as_deref()
+                        .unwrap_or(&rec.display_name)
+                        .to_owned();
+                    let instance_faults: Vec<Value> = all_faults_clone2
+                        .iter()
+                        .filter(|f| f.instance_id.as_deref() == Some(&rec.instance_id))
+                        .map(|f| {
+                            json!({
+                                "id": f.id,
+                                "app": f.app,
+                                "resource_type": f.resource_type,
+                                "resource_name": f.resource_name,
+                                "instance_id": f.instance_id,
+                                "kind": f.kind,
+                                "timestamp": f.timestamp.to_string(),
+                                "description": f.description,
+                            })
                         })
-                    })
-                    .collect();
-                out.push(json!({
-                    "name": display_name,
-                    "type": kind_str,
-                    "anonymous": rec.resource_name.is_none(),
-                    "operation_id": rec.operation_id,
-                    // spec: BSL#descriptions
-                    "description": rec.description,
-                    "instances": [{
-                        "id": rec.instance_id,
-                        "display_name": rec.display_name,
-                        "lifecycle": format!("{lifecycle:?}"),
-                        "transition_time": transition_time.and_then(|t| {
-                            jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
-                        }),
-                    }],
-                    "faults": instance_faults,
-                }));
-            }
-            out
-        })
+                        .collect();
+                    out.push(json!({
+                        "name": display_name,
+                        "type": kind_str,
+                        "anonymous": rec.resource_name.is_none(),
+                        "operation_id": rec.operation_id,
+                        // spec: BSL#descriptions
+                        "description": rec.description,
+                        "instances": [{
+                            "id": rec.instance_id,
+                            "display_name": rec.display_name,
+                            "lifecycle": format!("{lifecycle:?}"),
+                            "transition_time": transition_time.and_then(|t| {
+                                jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
+                            }),
+                        }],
+                        "faults": instance_faults,
+                    }));
+                }
+                Ok::<_, rusqlite::Error>(out)
+            })
+            .map_err(|e| {
+                OiError::new(
+                    ErrorCode::Internal,
+                    format!("could not read the app's dynamic resources: {e}"),
+                )
+            })?
     } else {
         Vec::new()
     };
@@ -843,7 +923,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // spec: CTL#resource-stop
     let stopped_resources_json: Vec<Value> = stopped_set
         .iter()
-        .map(|(k, n)| json!({ "kind": kind_str(*k), "name": n }))
+        .map(|(k, n)| json!({ "kind": k.type_name(), "name": n }))
         .collect();
 
     // spec: CTL#app-priority
@@ -899,9 +979,15 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         // alongside its started_at_secs timestamp.
         let barrier_json = {
             let op_id_for_load = op_id.clone();
-            let entries = state.db.call(move |db| {
-                crate::runtime::history::load_action_log(db, &op_id_for_load).unwrap_or_default()
-            });
+            let entries = state
+                .db
+                .call(move |db| crate::runtime::history::load_action_log(db, &op_id_for_load))
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::Internal,
+                        format!("could not read the running operation's log: {e}"),
+                    )
+                })?;
             entries
                 .into_iter()
                 .filter_map(|e| {
@@ -1158,11 +1244,13 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     };
 
     // Empty input → empty diff.
+    // spec: PRM#change-planning
     if proposed_definition.is_empty() && params.proposed_params.is_none() {
         return Ok(json!({
             "diff": Vec::<Value>::new(),
             "on_change_would_fire": Vec::<String>::new(),
             "rejections": Vec::<Value>::new(),
+            "errors": Vec::<String>::new(),
         }));
     }
 
@@ -1181,7 +1269,8 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     let cipher = std::sync::Arc::clone(&state.cipher);
     let current_params = state
         .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned))
+        .map_err(|e| OiError::internal(format!("db params: {e}")))?;
 
     // Build the proposed param map from current with the proposals overlaid.
     let mut proposed_param_map = current_params.clone();
@@ -1225,7 +1314,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     for id in prop_def.resources.keys() {
         if !cur_def.resources.contains_key(id) {
             diff.push(json!({
-                "resource_type": format!("{:?}", id.kind),
+                "resource_type": id.kind.type_name(),
                 "resource_name": id.name.as_str(),
                 "change": "added",
             }));
@@ -1240,7 +1329,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
             let fields = crate::defs::summary::diff_fields(&cur_summary, &prop_summary);
             if !fields.is_empty() {
                 diff.push(json!({
-                    "resource_type": format!("{:?}", id.kind),
+                    "resource_type": id.kind.type_name(),
                     "resource_name": id.name.as_str(),
                     "change": "modified",
                     "fields": fields,
@@ -1248,22 +1337,30 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
             }
         } else {
             diff.push(json!({
-                "resource_type": format!("{:?}", id.kind),
+                "resource_type": id.kind.type_name(),
                 "resource_name": id.name.as_str(),
                 "change": "removed",
             }));
         }
     }
 
-    // Compute on_change_would_fire: for each param with a registered handler
-    // in the proposed AppDef, did its effective value change between current
-    // and proposed maps?
+    // spec: PRM#change-planning
+    // The handlers the change would schedule if committed: the new definition
+    // registers one for a parameter whose stored value would change, and only
+    // while the app is installed.
+    let installed = {
+        let reg = state.registry.read();
+        let entry = reg.get(name).expect("confirmed registered");
+        matches!(*entry.phase.lock(), AppPhase::Installed)
+    };
     let mut on_change_would_fire: Vec<String> = Vec::new();
-    for handler_param in prop_def.param_changes.iter() {
-        let cur = current_params.get(handler_param.as_str());
-        let prop = proposed_param_map.get(handler_param.as_str());
-        if cur != prop {
-            on_change_would_fire.push(handler_param.as_str().to_owned());
+    if installed {
+        for handler_param in prop_def.param_changes.iter() {
+            let cur = current_params.get(handler_param.as_str());
+            let prop = proposed_param_map.get(handler_param.as_str());
+            if cur != prop {
+                on_change_would_fire.push(handler_param.as_str().to_owned());
+            }
         }
     }
     on_change_would_fire.sort();
@@ -1443,65 +1540,43 @@ pub(crate) fn deregister_app(
         }
     }
 
-    // Remove from DB.
+    // spec: TRD#deregistration
+    // Every piece of the app's state goes, or none does: a removal that left
+    // some behind would hand it to the next app registered under this name.
     let name_owned = params.app.clone();
     state
         .db
         .call(move |db| {
-            AppRegistry::remove_app(db, &name_owned)
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db remove: {e}")))?;
-            crate::runtime::apps::delete_app_params(db, &name_owned)
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
-            // spec: GEN#lineage
-            if let Err(e) = crate::runtime::generations::delete_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to delete generation history during deregister: {e}");
-            }
-            if let Err(e) = crate::runtime::faults::clear_all_faults_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clear faults during deregister: {e}");
-            }
-            // spec: CNR#applications
-            if let Err(e) = crate::runtime::canopy::store::delete_app(db, name_owned.as_str()) {
-                tracing::warn!(app = %name_owned, "failed to forget the Canopy type during deregister: {e}");
-            }
-            if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up scaling decisions during deregister: {e}");
-            }
-            // spec: CTL#app-priority
-            if let Err(e) = priority::delete_app_priority_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up app priority during deregister: {e}");
-            }
-            if let Err(e) = restart_gens::delete_restart_gens_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up restart generations during deregister: {e}");
-            }
-            if let Err(e) = stopped::delete_stopped_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up stopped resources during deregister: {e}");
-            }
-            // spec: GC#unscheduled-instances
-            // Once the app leaves the registry, the instance sweep can no
-            // longer tell what it desires, so its rows go now or never.
-            if let Err(e) = crate::runtime::history::delete_instances_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up resource instances during deregister: {e}");
-            }
-            if let Err(e) = crate::runtime::db::delete_schedules_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up schedules during deregister: {e}");
-            }
-            // spec: TRD#deregistration
-            // Left behind, these are inherited by the next app registered
-            // under this name — and a volume mapping carries a target and a
-            // read-only flag, so that app would come up already mounting
-            // data an operator granted to a different one.
-            if let Err(e) =
-                crate::runtime::external_volume_mappings::delete_for_app(db, &name_owned)
-            {
-                tracing::warn!(app = %name_owned, "failed to clean up external volume mappings during deregister: {e}");
-            }
-            if let Err(e) =
-                crate::runtime::external_service_mappings::delete_for_app(db, &name_owned)
-            {
-                tracing::warn!(app = %name_owned, "failed to clean up external service mappings during deregister: {e}");
-            }
-            Ok::<_, OiError>(())
-        })?;
+            db.atomically(|db| {
+                AppRegistry::remove_app(db, &name_owned)?;
+                crate::runtime::apps::delete_app_params(db, &name_owned)?;
+                // spec: GEN#lineage
+                crate::runtime::generations::delete_for_app(db, &name_owned)?;
+                // spec: CNR#applications
+                crate::runtime::canopy::store::delete_app(db, name_owned.as_str())?;
+                scaling::delete_scaling_decisions_for_app(db, &name_owned)?;
+                // spec: CTL#app-priority
+                priority::delete_app_priority_for_app(db, &name_owned)?;
+                restart_gens::delete_restart_gens_for_app(db, &name_owned)?;
+                stopped::delete_stopped_for_app(db, &name_owned)?;
+                // spec: GC#unscheduled-instances
+                // Once the app leaves the registry, the instance sweep can no
+                // longer tell what it desires, so its rows go now or never.
+                crate::runtime::history::delete_instances_for_app(db, &name_owned)?;
+                crate::runtime::db::delete_schedules_for_app(db, &name_owned)?;
+                // Left behind, these are inherited by the next app registered
+                // under this name — and a volume mapping carries a target and
+                // a read-only flag, so that app would come up already
+                // mounting data an operator granted to a different one.
+                crate::runtime::external_volume_mappings::delete_for_app(db, &name_owned)?;
+                crate::runtime::external_service_mappings::delete_for_app(db, &name_owned)?;
+                // Last, because clearing announces itself: nothing after it
+                // can roll back what the events have already said.
+                crate::runtime::faults::clear_all_faults_for_app(db, &name_owned)?;
+                Ok(())
+            })
+        })
+        .map_err(|e| OiError::internal(format!("removing the app's state: {e}")))?;
 
     // Remove from in-memory registry.
     state.registry.write().deregister(name);
@@ -1569,9 +1644,14 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     // Persist the transition before waking the reconciler, and before the
     // scheduler lock goes, so no operation is admitted against the old phase.
     let name_owned = params.app.clone();
-    state.db.call(move |db| {
-        transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned, "");
-    });
+    state
+        .db
+        .call(move |db| transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned))
+        .map_err(|e| OiError::internal(format!("recording the uninstall: {e}")))?;
+    // spec: FWD#forward-lifetime
+    // spec: SHL#session-end
+    // The app has left `Installed`.
+    state.end_sessions_of_app(name);
     // The app now reads `Uninstalling`, so an operation waiting on this lock
     // is refused by the scheduler's own gate.
     drop(scheduled);
@@ -1637,7 +1717,11 @@ pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -
 }
 
 // spec: APPS#update
-pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx) -> HandlerResult {
+pub(crate) fn update_app(
+    state: &Arc<OiState>,
+    params: UpdateParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let name = params.app.as_str();
 
     {
@@ -1676,7 +1760,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     let (current_params, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            let values = crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned);
+            let values = crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)?;
             let stored_secret = match &changing {
                 Some(name) => {
                     crate::runtime::apps::secret_params::is_stored_secret(db, &name_owned, name)?
@@ -1733,6 +1817,13 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     let change_owned = change.clone();
     let cipher = Arc::clone(&state.cipher);
     let app_for_migration = app.clone();
+    let declared: stopped::StoppedSet = app
+        .def
+        .load()
+        .resources
+        .keys()
+        .map(|id| (id.kind, id.name.as_str().to_owned()))
+        .collect();
     let generation = state
         .db
         .call(move |db| -> rusqlite::Result<u64> {
@@ -1765,12 +1856,15 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
                 recorded.as_ref().map(|c| (c, cipher.as_ref())),
             )?;
             // spec: SEC#migration
-            crate::runtime::apps::migrate_newly_secret_params(
+            crate::runtime::apps::migrate_param_storage(
                 db,
                 &cipher,
                 &name_owned,
                 &app_for_migration,
+                true,
             );
+            // spec: CTL#resource-stop
+            stopped::discard_undeclared(db, &name_owned, &declared)?;
             tx.commit()?;
             Ok(generation)
         })
@@ -1824,28 +1918,11 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     }
     // spec: AUTO#clamping
     {
-        let reg = state.registry.read();
-        if let Some(entry) = reg.get(name) {
-            let def = entry.app.def.load();
-            let deployment_bounds: std::collections::BTreeMap<String, (u16, u16)> = def
-                .resources
-                .iter()
-                .filter_map(|(id, resource)| {
-                    if let Resource::Deployment(deployment) = resource {
-                        let dep_def = deployment.def.lock();
-                        Some((
-                            id.name.as_str().to_owned(),
-                            (dep_def.scale.start, dep_def.scale.end),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            drop(def);
+        let running = state.registry.read().get(name).map(|e| e.app.clone());
+        if let Some(running) = running {
             let name_owned = params.app.clone();
             state.db.call(move |db| {
-                if let Err(e) = scaling::clamp_scaling_decisions(db, &name_owned, &deployment_bounds) {
+                if let Err(e) = scaling::clamp_to_definition(db, &name_owned, &running) {
                     tracing::error!(app = %name_owned, error = %e, "failed to clamp scaling decisions");
                 }
             });
@@ -1858,24 +1935,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
 
     // spec: FWD#forward-lifetime — tear down any forward whose target service,
     // or port for its proto, is no longer declared in the new AppDef.
-    {
-        // Collected before the forwards lock is taken: that lock is on the
-        // per-datagram path, and the walk takes a lock per pod that a
-        // concurrent script evaluation may hold.
-        let declared = state
-            .registry
-            .read()
-            .get(name)
-            .map(|e| crate::oi::forwards::target::declared_ports(&e.app.def.load()));
-        let stale = state.forwards.lock().remove_stale_for_app(name, |fwd| {
-            declared.as_ref().is_none_or(|declared| {
-                !declared.contains(&(fwd.service.clone(), fwd.port, fwd.proto.clone()))
-            })
-        });
-        for entry in stale {
-            let _ = entry.stop_tx.send(true);
-        }
-    }
+    crate::oi::forwards::end_undeclared_forwards(state, name);
 
     // spec: SCHED#schedule-records
     sync_action_schedules(state, &params.app);
@@ -1888,9 +1948,14 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     // generation. A definition replaced without a parameter change
     // schedules nothing.
     let schedule = match &change {
-        Some((pname, _, _)) => {
-            super::params::schedule_on_change(state, hold, &params.app, pname, generation)?
-        }
+        Some((pname, _, _)) => super::params::schedule_on_change(
+            state,
+            hold,
+            &params.app,
+            pname,
+            generation,
+            &ctx.events.actor,
+        )?,
         None => "not_scheduled",
     };
 
@@ -2023,21 +2088,28 @@ pub(crate) fn restart_deployment(
         }
     }
 
-    let operation_id = uuid::Uuid::new_v4().to_string();
+    if !matches!(*entry.phase.lock(), AppPhase::Installed) {
+        return Err(OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is not installed: {name}"),
+        ));
+    }
+
+    let restart_id = uuid::Uuid::new_v4().to_string();
 
     let name_owned = params.app.clone();
     let deployment_name_owned = deployment_name.to_owned();
     state
         .db
         .call(move |db| restart_gens::bump_restart_gen(db, &name_owned, &deployment_name_owned))
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     entry.tick_notify.notify_one();
 
     ctx.events
-        .deployment_restarted(&params.app, deployment_name, &operation_id);
+        .deployment_restarted(&params.app, deployment_name, &restart_id);
 
-    Ok(json!({ "operation_id": operation_id }))
+    Ok(json!({ "restart_id": restart_id }))
 }
 
 // spec: CTL#scaling
@@ -2058,7 +2130,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
                 && id.name.as_str() == deployment_name
             {
                 let dep_def = deployment.def.lock();
-                found = Some((dep_def.scale.start, dep_def.scale.end));
+                found = Some((*dep_def.scale.start(), *dep_def.scale.end()));
                 break;
             }
         }
@@ -2071,11 +2143,16 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
     let deployment_name_owned = deployment_name.to_owned();
     let new_scale_clamped = params.scale.clamp(low, high);
     let (previous_scale, new_scale) = state.db.call(move |db| -> Result<_, OiError> {
+        // spec: CTL#scaling — an unreadable earlier scale is reported as unknown
+        // rather than refusing the request.
         let current = scaling::effective_scale(db, &name_owned, &deployment_name_owned, low, high)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .inspect_err(|e| {
+                tracing::warn!(app = %name_owned, deployment = %deployment_name_owned, error = %e, "cannot read the scale before the change");
+            })
+            .ok();
         // spec: CTL#scaling
         scaling::save_scaling_decision(db, &name_owned, &deployment_name_owned, new_scale_clamped)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         Ok((current, new_scale_clamped))
     })?;
 
@@ -2114,10 +2191,10 @@ pub(crate) fn set_priority(
     let name_owned = params.app.clone();
     let previous = state.db.call(move |db| -> Result<_, OiError> {
         let current = priority::effective_app_priority(db, &name_owned)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         // spec: PRIO#priority-setting
         priority::save_app_priority(db, &name_owned, priority)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         Ok(current)
     })?;
 
@@ -2144,6 +2221,25 @@ fn resource_kind_from_debug_str(s: &str) -> Option<ResourceKind> {
 }
 
 // spec: CTL#resource-stop
+fn stoppable_kind(kind: &str) -> Result<ResourceKind, OiError> {
+    ResourceKind::from_type_name(kind)
+        .filter(|k| {
+            matches!(
+                k,
+                ResourceKind::Deployment | ResourceKind::Job | ResourceKind::Ingress
+            )
+        })
+        .ok_or_else(|| {
+            OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "kind {kind:?} cannot be stopped; only deployment, job, or ingress are stoppable"
+                ),
+            )
+        })
+}
+
+// spec: CTL#resource-stop
 pub(crate) fn stop_resource(
     state: &OiState,
     params: ResourceStopParams,
@@ -2152,21 +2248,7 @@ pub(crate) fn stop_resource(
     let app = params.app.as_str();
     let resource_name = params.name.as_str();
 
-    let kind = parse_kind(&params.kind).filter(|k| {
-        matches!(
-            k,
-            ResourceKind::Deployment | ResourceKind::Job | ResourceKind::Ingress
-        )
-    });
-    let kind = kind.ok_or_else(|| {
-        OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!(
-                "kind {:?} cannot be stopped; only deployment, job, or ingress are stoppable",
-                params.kind
-            ),
-        )
-    })?;
+    let kind = stoppable_kind(&params.kind)?;
 
     // spec: CTL#resource-stop
     // Desired-state mutations must not race with a running action, and an
@@ -2191,7 +2273,7 @@ pub(crate) fn stop_resource(
         if !found {
             return Err(OiError::not_found(format!(
                 "resource {}/{resource_name} not found in app {app}",
-                kind_str(kind)
+                kind.type_name()
             )));
         }
     }
@@ -2201,11 +2283,11 @@ pub(crate) fn stop_resource(
     state
         .db
         .call(move |db| stopped::stop_resource(db, &app_owned, kind, &resource_name_owned))
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     entry.tick_notify.notify_one();
 
-    let ks = kind_str(kind);
+    let ks = kind.type_name();
     tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource stopped");
     ctx.events.resource_stopped(&params.app, ks, resource_name);
 
@@ -2221,18 +2303,24 @@ pub(crate) fn unstop_resource(
     let app = params.app.as_str();
     let resource_name = params.name.as_str();
 
-    let kind = parse_kind(&params.kind).ok_or_else(|| {
-        OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!("unknown resource kind: {:?}", params.kind),
-        )
-    })?;
+    let kind = stoppable_kind(&params.kind)?;
 
-    {
-        let reg = state.registry.read();
-        if !reg.is_registered(app) {
-            return Err(OiError::not_found(format!("app not found: {app}")));
-        }
+    let reg = state.registry.read();
+    let entry = reg
+        .get(app)
+        .ok_or_else(|| OiError::not_found(format!("app not found: {app}")))?;
+    let declared = entry
+        .app
+        .def
+        .load()
+        .resources
+        .iter()
+        .any(|(id, _)| id.kind == kind && id.name.as_str() == resource_name);
+    if !declared {
+        return Err(OiError::not_found(format!(
+            "resource {}/{resource_name} not found in app {app}",
+            kind.type_name()
+        )));
     }
 
     // spec: CTL#resource-stop
@@ -2242,18 +2330,16 @@ pub(crate) fn unstop_resource(
 
     let app_owned = params.app.clone();
     let resource_name_owned = resource_name.to_owned();
-    state
+    let removed = state
         .db
         .call(move |db| stopped::unstop_resource(db, &app_owned, kind, &resource_name_owned))
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
-    let ks = kind_str(kind);
-    tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
-    ctx.events
-        .resource_unstopped(&params.app, ks, resource_name);
-
-    let reg = state.registry.read();
-    if let Some(entry) = reg.get(app) {
+    let ks = kind.type_name();
+    if removed {
+        tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
+        ctx.events
+            .resource_unstopped(&params.app, ks, resource_name);
         entry.tick_notify.notify_one();
     }
 
@@ -2283,14 +2369,14 @@ pub(crate) fn unstop_all_resources(
     let app_owned = params.app.clone();
     let stopped_list = state.db.call(move |db| -> Result<_, OiError> {
         let set = stopped::load_stopped(db, &app_owned)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         stopped::unstop_all(db, &app_owned)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         Ok(set)
     })?;
 
     for (kind, name) in &stopped_list {
-        let ks = kind_str(*kind);
+        let ks = kind.type_name();
         tracing::info!(app = %app, kind = %ks, name = %name, "resource unstopped (unstop-all)");
         ctx.events.resource_unstopped(&params.app, ks, name);
     }

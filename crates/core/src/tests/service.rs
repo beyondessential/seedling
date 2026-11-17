@@ -108,6 +108,25 @@ fn http_service_route_rejects_no_slash() {
     );
 }
 
+// spec: HTTP#routes
+#[test]
+fn http_service_route_rejects_a_brace_and_control_characters_but_not_a_tab() {
+    for bad in [
+        "/a{id}",
+        "/{",
+        "/a\\nb",
+        "/a\\u0000b",
+        "/a\\u007fb",
+        "/a\\rb",
+    ] {
+        let err = run_test_script_err(&format!(
+            r#"let h = app.service("web").http(80); h.route("{bad}");"#
+        ));
+        assert!(err.to_string().contains("route prefix"), "{bad:?}: {err}");
+    }
+    run_test_script_app(r#"let h = app.service("web").http(80); h.route("/a\tb");"#);
+}
+
 // spec: SVC#export
 #[test]
 fn service_exported_marks_service() {
@@ -241,6 +260,53 @@ fn balance_rejects_unknown_policy() {
 #[test]
 fn balance_rejects_spinning_interval() {
     let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ interval: 0 });"#);
+}
+
+fn evaluate(script: &str) -> Option<crate::runtime::apps::ScriptError> {
+    crate::runtime::apps::evaluate_script(
+        &seedling_protocol::names::AppName::new_unchecked("demo"),
+        script,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    )
+    .1
+}
+
+// spec: HTTP#balancing
+#[test]
+fn a_route_resolving_to_a_spinning_balance_fails_evaluation_naming_the_route() {
+    for script in [
+        r#"let web = app.service("web").http(80)
+            .balance(#{ try_duration: 0, interval: 0 });
+        web.route("/api").balance(#{ try_duration: 10 });"#,
+        r#"let web = app.service("web").http(80);
+        web.route("/api").balance(#{ interval: 0, try_duration: 0 });
+        web.balance(#{ interval: 0, try_duration: 0 });
+        web.route("/api").balance(#{ try_duration: 3 });"#,
+        r#"let web = app.external_service("web").http(80)
+            .balance(#{ try_duration: 0, interval: 0 });
+        web.route("/v1").balance(#{ try_duration: 10 });"#,
+    ] {
+        let err = evaluate(script).expect("the definition fails to evaluate");
+        assert!(err.0.contains("route `/"), "names the route: {err}");
+        assert!(err.0.contains("'web'"), "names the service: {err}");
+    }
+}
+
+// spec: HTTP#balancing
+#[test]
+fn a_route_resolving_to_a_balance_that_does_not_spin_evaluates() {
+    for script in [
+        r#"let web = app.service("web").http(80)
+            .balance(#{ try_duration: 0, interval: 0 });
+        web.route("/api").balance(#{ try_duration: 10, interval: 1 });"#,
+        r#"let web = app.service("web").http(80)
+            .balance(#{ try_duration: 0, interval: 0 });
+        web.route("/api").compress(false);"#,
+        r#"app.service("web").http(80).balance(#{ try_duration: 7 });"#,
+    ] {
+        assert!(evaluate(script).is_none(), "{script}");
+    }
 }
 
 // spec: APPS#proxy-settings
@@ -1250,6 +1316,43 @@ fn static_ref_names_the_kind_that_holds_the_name() {
     );
 }
 
+// spec: SVC#service-ports
+#[test]
+fn service_port_is_an_instance_method_a_static_service_offers_in_an_action() {
+    // It threw: `port` refused a frozen static service like a builder method.
+    let result = crate::tests::run_action(
+        r#"
+        app.service("database");
+        app.on_action("run-it", |rt, _param| {
+            app.service("database").port(5432);
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        matches!(result, OperationResult::Completed),
+        "port must be callable on a static service in the action context: {result:?}"
+    );
+}
+
+// spec: APP#static-resource-immutability
+#[test]
+fn a_static_external_volume_cannot_be_modified_in_an_action() {
+    let msg = crate::tests::run_action_err(
+        r#"
+        app.external_volume("data");
+        app.on_action("run-it", |rt, _param| {
+            app.external_volume("data").description("changed");
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        msg.contains("cannot modify a static resource"),
+        "got: {msg}"
+    );
+}
+
 // spec: APP#named-resources
 #[test]
 fn static_ref_reports_an_undeclared_name_as_missing() {
@@ -1266,4 +1369,24 @@ fn static_ref_reports_an_undeclared_name_as_missing() {
         "got: {msg}"
     );
     assert!(!msg.contains("it is a"), "got: {msg}");
+}
+
+// spec: POD#port-bindings
+// spec: SVC#external-services
+#[test]
+fn binding_a_pod_to_an_external_service_throws() {
+    for binding in [
+        r#"app.deployment("web").http(8080, ext.http(80).route("/api"))"#,
+        r#"app.deployment("web").http(8080, ext.http(80))"#,
+        r#"app.deployment("web").tcp(5432, ext.port(5432))"#,
+        r#"app.deployment("web").udp(53, ext.port(53))"#,
+    ] {
+        let err = run_test_script_err(&format!(
+            r#"let ext = app.external_service("upstream"); {binding};"#
+        ));
+        assert!(
+            err.to_string().contains("external service"),
+            "{binding}: {err}"
+        );
+    }
 }

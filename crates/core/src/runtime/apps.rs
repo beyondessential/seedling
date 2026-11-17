@@ -15,7 +15,7 @@ use crate::{
         db::{Db, DbHandle},
         definition::{Bundle, Source},
         desired::OperationProgress,
-        generations,
+        generations, scaling,
         secrets::Cipher,
     },
     setup_language,
@@ -26,8 +26,10 @@ mod registry_faults;
 pub mod secret_params;
 pub mod status;
 
-pub use params::{delete_app_params, delete_one_param, sync_script_error_fault, upsert_param};
-pub use registry_faults::sync_registry_faults;
+pub use params::{
+    delete_app_params, delete_one_param, load_params_for_app, sync_script_error_fault, upsert_param,
+};
+pub use registry_faults::{sync_registry_faults, sync_used_registries};
 
 #[derive(Debug)]
 pub struct ScriptError(pub String);
@@ -129,6 +131,15 @@ pub struct AppEntry {
     /// Current app generation (0 if not yet bumped).
     // spec: APPS#generations
     pub current_generation: generations::Generation,
+    /// Where the app's latest completed install stands in the order installs
+    /// completed, lower first; `None` before any install has completed.
+    // spec: ING#claims-across-apps
+    pub install_seq: Option<i64>,
+    /// The app's start action has been initiated and has not yet ended,
+    /// including while it is queued. Until it ends, the app's desired state is
+    /// held as for an app with an operation in progress.
+    // spec: RCN#desired-state
+    pub start_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub struct AppRegistry {
@@ -205,6 +216,8 @@ impl AppRegistry {
                 tick_notify,
                 script_error,
                 current_generation: generation,
+                install_seq: None,
+                start_pending: Arc::default(),
             },
         );
     }
@@ -319,10 +332,11 @@ impl AppRegistry {
     ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
-            "SELECT name, installed, uninstalling, installing, current_generation \
+            "SELECT name, installed, uninstalling, installing, current_generation, install_seq \
              FROM registered_apps ORDER BY name",
         )?;
-        let rows: Vec<(AppName, bool, bool, bool, i64)> = stmt
+        type Row = (AppName, bool, bool, bool, i64, Option<i64>);
+        let rows: Vec<Row> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, AppName>(0)?,
@@ -330,11 +344,12 @@ impl AppRegistry {
                     row.get::<_, bool>(2)?,
                     row.get::<_, bool>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, installed, uninstalling, installing, current_gen) in rows {
+        for (name, installed, uninstalling, installing, current_gen, install_seq) in rows {
             let phase = decode_phase(name.as_str(), installed, uninstalling, installing);
             if current_gen <= 0 {
                 tracing::warn!(app = %name, "skipping app with no current generation");
@@ -356,13 +371,27 @@ impl AppRegistry {
                     continue;
                 }
             };
-            let stored = load_all_params_for_app(db, cipher, &name);
+            let stored = match load_all_params_for_app(db, cipher, &name) {
+                Ok(stored) => stored,
+                Err(e) => {
+                    tracing::warn!(app = %name, "failed to load stored params: {e}");
+                    continue;
+                }
+            };
             // spec: APPS#persistence — reload runs no validators: the stored
             // combination was validated when it was written.
             let (app, raw_error) = evaluate(&name, &bundle, &stored, limits);
             // spec: SEC#migration — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
-            migrate_newly_secret_params(db, cipher, &name, &app);
+            migrate_param_storage(db, cipher, &name, &app, raw_error.is_none());
+            // spec: AUTO#clamping
+            // A definition that threw part-way declares only what ran before
+            // it, so its bounds are not ones to clamp to.
+            if raw_error.is_none()
+                && let Err(e) = scaling::clamp_to_definition(db, &name, &app)
+            {
+                tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
+            }
             let script_error = raw_error.map(|e| {
                 tracing::warn!("failed to reload script for app '{name}': {e}");
                 (e.to_string(), Timestamp::now())
@@ -379,11 +408,27 @@ impl AppRegistry {
                     tick_notify: Arc::clone(&tick_notify),
                     script_error,
                     current_generation,
+                    install_seq,
+                    start_pending: Arc::default(),
                 },
             );
         }
 
         Ok(registry)
+    }
+
+    /// Record that `name`'s install has just completed, placing it after
+    /// every install completed before it, and return its place.
+    // spec: ING#claims-across-apps
+    pub fn record_install_completed(db: &Db, name: &AppName) -> rusqlite::Result<i64> {
+        db.conn.query_row(
+            "UPDATE registered_apps \
+                SET install_seq = (SELECT COALESCE(MAX(install_seq), 0) + 1 FROM registered_apps) \
+              WHERE name = ?1 \
+             RETURNING install_seq",
+            [name],
+            |row| row.get(0),
+        )
     }
 
     // spec: APPS#persistence
@@ -478,17 +523,19 @@ fn decode_phase(app: &str, installed: bool, uninstalling: bool, installing: bool
     }
 }
 
-/// Update the phase both in the shared Arc and in the database.
+/// Update the phase in the database and then in the shared Arc, so the new
+/// phase is observable only once it is durable.
+///
+/// A phase that cannot be persisted is an error and leaves the shared phase as
+/// it was.
 pub fn transition_phase(
     phase_arc: &Mutex<AppPhase>,
     new_phase: AppPhase,
     db: &Db,
     app_name: &AppName,
-    _script: &str,
-) {
-    *phase_arc.lock() = new_phase.clone();
+) -> rusqlite::Result<()> {
     let (installed, uninstalling, installing) = encode_phase(&new_phase);
-    if let Err(e) = db.conn.execute(
+    db.conn.execute(
         "UPDATE registered_apps SET installed = ?1, uninstalling = ?2, installing = ?3 WHERE name = ?4",
         rusqlite::params![
             installed as i64,
@@ -496,24 +543,28 @@ pub fn transition_phase(
             installing as i64,
             app_name,
         ],
-    ) {
-        tracing::error!(app = %app_name, "failed to persist phase transition: {e}");
-    }
+    )?;
+    *phase_arc.lock() = new_phase;
+    Ok(())
 }
 
 /// Load both plaintext and secret params, merging into a single map.
 /// Used before script evaluation, when schema isn't known yet.
+///
+/// Either table failing to read fails the whole call: a map missing the
+/// values that could not be read would evaluate the script as though they
+/// were unset.
+// spec: PARAM#values
 pub fn load_all_params_for_app(
     db: &Db,
     cipher: &Cipher,
     app_name: &AppName,
-) -> BTreeMap<String, String> {
-    let mut merged = params::load_params_for_app(db, app_name).unwrap_or_default();
-    match secret_params::load_secret_params_for_app(db, cipher, app_name) {
-        Ok(secrets) => merged.extend(secrets),
-        Err(e) => tracing::warn!(app = %app_name, "failed to load secret params: {e}"),
-    }
-    merged
+) -> rusqlite::Result<BTreeMap<String, String>> {
+    let mut merged = params::load_params_for_app(db, app_name)?;
+    merged.extend(secret_params::load_secret_params_for_app(
+        db, cipher, app_name,
+    )?);
+    Ok(merged)
 }
 
 /// Store or clear one parameter value, in whichever table its secrecy puts
@@ -549,7 +600,8 @@ pub fn store_param_value(
 }
 
 /// Re-evaluate `name`'s current definition with `params`, and move the stored
-/// value of any param the definition now declares secret into secret storage.
+/// value of any param whose `secret` flag changed to the storage it now calls
+/// for.
 ///
 /// Migration follows only a definition that was applied: a reload that keeps
 /// the previous one changes no param's `secret` flag.
@@ -569,23 +621,53 @@ pub fn reload(
         if let Some(running) = running {
             let name = name.clone();
             let cipher = Arc::clone(cipher);
-            db.call(move |db| migrate_newly_secret_params(db, &cipher, &name, &running));
+            db.call(move |db| {
+                migrate_param_storage(db, &cipher, &name, &running, true);
+                // spec: AUTO#clamping
+                if let Err(e) = scaling::clamp_to_definition(db, &name, &running) {
+                    tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
+                }
+            });
         }
     }
     outcome
 }
 
+/// Move each declared parameter's stored value to the storage its definition
+/// now calls for: secret storage for a secret parameter, plain storage for one
+/// that is not.
+///
+/// `evaluated_in_full` is false for a definition that threw part-way: a
+/// parameter it declared before throwing may have been going to be marked
+/// secret by a call it never reached, so none is moved out of secret storage.
 // spec: SEC#migration
-pub(crate) fn migrate_newly_secret_params(db: &Db, cipher: &Cipher, app_name: &AppName, app: &App) {
+pub(crate) fn migrate_param_storage(
+    db: &Db,
+    cipher: &Cipher,
+    app_name: &AppName,
+    app: &App,
+    evaluated_in_full: bool,
+) {
     let def = app.def.load();
     for (param_name, param_def) in &def.params {
-        if param_def.is_secret()
-            && let Err(e) = secret_params::migrate_to_secret(db, cipher, app_name, param_name)
-        {
+        let (moved, to) = if param_def.is_secret() {
+            (
+                secret_params::migrate_to_secret(db, cipher, app_name, param_name),
+                "secret",
+            )
+        } else if evaluated_in_full {
+            (
+                secret_params::migrate_to_plain(db, cipher, app_name, param_name),
+                "plain",
+            )
+        } else {
+            continue;
+        };
+        if let Err(e) = moved {
             tracing::warn!(
                 app = %app_name,
                 param = %param_name,
-                "failed to migrate param to secret storage: {e}"
+                "failed to migrate param to {to} storage: {e}"
             );
         }
     }
@@ -653,7 +735,15 @@ fn run_definition(
     validate: Option<&BTreeMap<String, String>>,
     limits: &crate::ScriptLimits,
 ) -> (App, Result<Vec<Rejection>, ScriptError>) {
-    let (engine, mut scope, app) = setup_language(limits, Arc::clone(bundle));
+    let (engine, mut scope, app) = match setup_language(limits, Arc::clone(bundle)) {
+        Ok(language) => language,
+        // spec: CONST#host-constants
+        // A host constant the evaluation cannot stand without fails it, so
+        // it declares nothing.
+        Err(e) => {
+            return (App::with_bundle(Arc::clone(bundle)), Err(ScriptError(e)));
+        }
+    };
     let script = match bundle.script() {
         Ok(s) => s,
         // A stored definition that no longer reads as one (only possible
@@ -695,6 +785,10 @@ fn run_definition(
         Ok(ast) => ast,
         Err(e) => return (app, Err(e)),
     };
+    // spec: BSL#evaluation
+    if let Err(e) = crate::defs::check_evaluated(&app.def.load()) {
+        return (app, Err(ScriptError(e)));
+    }
     let (Some(proposed), Some(validators)) = (validate, validators) else {
         return (app, Ok(Vec::new()));
     };

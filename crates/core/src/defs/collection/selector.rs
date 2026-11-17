@@ -72,12 +72,12 @@ impl Selector {
     }
 
     /// Match the only two things a criterion can name: a resource's type and
-    /// its name.
+    /// its name, which an anonymous resource does not have.
     ///
     /// Taken apart from [`ResourceHandle`] so a `Started`, which holds
     /// resolved instances rather than handles into a bag, selects by the
     /// same rules rather than a second copy of them.
-    pub fn matches_resource(&self, kind: ResourceKind, name: &str) -> bool {
+    pub fn matches_resource(&self, kind: ResourceKind, name: Option<&str>) -> bool {
         // spec: COL#selection
         if let Some(types) = &self.types
             && !types.contains(&kind)
@@ -87,14 +87,14 @@ impl Selector {
 
         // spec: COL#selection
         if let Some(names) = &self.names
-            && !names.contains(name)
+            && !name.is_some_and(|name| names.contains(name))
         {
             return false;
         }
 
         // spec: COL#selection
         if let Some(patterns) = &self.name_patterns
-            && !patterns.iter().any(|p| WildMatch::new(p).matches(name))
+            && !name.is_some_and(|name| patterns.iter().any(|p| WildMatch::new(p).matches(name)))
         {
             return false;
         }

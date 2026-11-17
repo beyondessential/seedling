@@ -27,17 +27,13 @@ pub(super) enum TemplatesCommand {
         #[arg(long)]
         description: Option<String>,
     },
-    /// Update an existing template's body and/or description
+    /// Update an existing template's definition and/or description; omit
+    /// the source to leave the definition unchanged
     Update {
         /// Template name
         name: TemplateName,
-        /// A new script file, definition folder, or GitHub folder URL; omit
-        /// to leave the definition unchanged
-        #[arg(long, alias = "script-file", conflicts_with = "reference")]
-        source: Option<String>,
-        /// A new definition, fetched from this OCI reference
-        #[arg(long = "ref", value_name = "REFERENCE")]
-        reference: Option<String>,
+        #[command(flatten)]
+        definition: DefinitionArgs,
         /// Replacement description; use --clear-description to remove instead
         #[arg(long, conflicts_with = "clear_description")]
         description: Option<String>,
@@ -110,14 +106,13 @@ pub(super) async fn dispatch(client: &OiClient, cmd: TemplatesCommand) {
         }
         TemplatesCommand::Update {
             name,
-            source,
-            reference,
+            definition,
             description,
             clear_description,
         } => {
             let mut req = serde_json::Map::new();
             req.insert("name".to_owned(), serde_json::to_value(&name).unwrap());
-            if let Some(definition) = resolve_or_exit(&DefinitionArgs { source, reference }).await {
+            if let Some(definition) = resolve_or_exit(&definition).await {
                 req.extend(definition.fields(DefinitionKeys::TEMPLATE));
             }
             if clear_description {
@@ -207,6 +202,33 @@ mod tests {
         };
         assert_eq!(name, None);
         assert_eq!(file.as_deref(), Some("script.bsl"));
+    }
+
+    // spec: CLI#definition-sources
+    #[test]
+    fn update_takes_an_optional_positional_source() {
+        let cli = TestCli::try_parse_from(["test", "update", "mytpl", "./folder"]).unwrap();
+        let TemplatesCommand::Update { definition, .. } = cli.cmd else {
+            panic!("expected Update");
+        };
+        assert_eq!(definition.source.as_deref(), Some("./folder"));
+        assert_eq!(definition.reference, None);
+
+        let cli = TestCli::try_parse_from(["test", "update", "mytpl"]).unwrap();
+        let TemplatesCommand::Update { definition, .. } = cli.cmd else {
+            panic!("expected Update");
+        };
+        assert_eq!(definition.source, None);
+
+        assert!(TestCli::try_parse_from(["test", "update", "mytpl", "--source", "x"]).is_err());
+        assert!(
+            TestCli::try_parse_from(["test", "update", "mytpl", "./folder", "--ref", "r"]).is_err()
+        );
+        let cli = TestCli::try_parse_from(["test", "update", "mytpl", "--ref", "r"]).unwrap();
+        let TemplatesCommand::Update { definition, .. } = cli.cmd else {
+            panic!("expected Update");
+        };
+        assert_eq!(definition.reference.as_deref(), Some("r"));
     }
 
     #[test]

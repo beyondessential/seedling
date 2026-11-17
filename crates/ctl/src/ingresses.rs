@@ -113,6 +113,8 @@ pub(super) enum SiteCommand {
 pub(super) enum DiscoveryCommand {
     /// Show what each discovery provider has populated
     Status,
+    /// Start a poll of every discovery provider now, without waiting for the next
+    Refresh,
 }
 
 pub(super) async fn dispatch(client: &OiClient, cmd: IngressesCommand) {
@@ -226,7 +228,7 @@ async fn dispatch_site(client: &OiClient, cmd: SiteCommand) {
                             "protocol": protocol,
                             "redirect_url": to,
                             "redirect_code": code,
-                            "preserve_path": !no_preserve_path,
+                            "redirect_preserve_path": !no_preserve_path,
                         }),
                     )
                     .await,
@@ -255,6 +257,13 @@ async fn dispatch_site(client: &OiClient, cmd: SiteCommand) {
                 print_result(
                     client
                         .request("/ingresses/site/discovery/status", json!({}))
+                        .await,
+                );
+            }
+            DiscoveryCommand::Refresh => {
+                print_result(
+                    client
+                        .request("/ingresses/site/discovery/refresh", json!({}))
                         .await,
                 );
             }

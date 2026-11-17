@@ -1,11 +1,9 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::defs::resource::ResourceKind;
-
 use super::Collection;
 use super::bag::ResourceBag;
-use super::handle::ResourceHandle;
+use super::handle::{Member, ResourceHandle};
 use super::selector::Selector;
 
 pub trait Collectable {
@@ -17,9 +15,9 @@ pub(super) struct BagCollection(pub Rc<dyn ResourceBag>);
 impl Collectable for BagCollection {
     fn resolve(&self) -> Vec<ResourceHandle> {
         self.0
-            .ids()
+            .members()
             .into_iter()
-            .map(|id| ResourceHandle(Rc::clone(&self.0), id))
+            .map(|member| ResourceHandle(Rc::clone(&self.0), member))
             .collect()
     }
 }
@@ -46,16 +44,16 @@ pub(super) struct Only {
 
 impl Collectable for Only {
     fn resolve(&self) -> Vec<ResourceHandle> {
-        let right_keys: HashSet<(ResourceKind, String)> = self
+        let right_keys: HashSet<Member> = self
             .right
             .resolve()
             .into_iter()
-            .map(|h| (h.kind(), h.name().to_owned()))
+            .map(|h| h.member().clone())
             .collect();
         self.left
             .resolve()
             .into_iter()
-            .filter(|h| right_keys.contains(&(h.kind(), h.name().to_owned())))
+            .filter(|h| right_keys.contains(h.member()))
             .collect()
     }
 }
@@ -67,16 +65,16 @@ pub(super) struct Except {
 
 impl Collectable for Except {
     fn resolve(&self) -> Vec<ResourceHandle> {
-        let right_keys: HashSet<(ResourceKind, String)> = self
+        let right_keys: HashSet<Member> = self
             .right
             .resolve()
             .into_iter()
-            .map(|h| (h.kind(), h.name().to_owned()))
+            .map(|h| h.member().clone())
             .collect();
         self.left
             .resolve()
             .into_iter()
-            .filter(|h| !right_keys.contains(&(h.kind(), h.name().to_owned())))
+            .filter(|h| !right_keys.contains(h.member()))
             .collect()
     }
 }
@@ -87,7 +85,12 @@ pub(super) struct Union {
 
 impl Collectable for Union {
     fn resolve(&self) -> Vec<ResourceHandle> {
-        self.parts.iter().flat_map(|p| p.resolve()).collect()
+        let mut seen = HashSet::new();
+        self.parts
+            .iter()
+            .flat_map(|p| p.resolve())
+            .filter(|h| seen.insert(h.member().clone()))
+            .collect()
     }
 }
 

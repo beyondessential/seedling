@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use seedling_protocol::{
+    events::EventSenderWithActor,
     names::{AppName, ForwardId},
     relay::{abort_forward_stream, relay_forward_stream},
 };
 use tokio::io::AsyncWriteExt;
 
 use super::{
-    registry::{ForwardEntry, ForwardProto, ForwardStatus, plural},
+    registry::{ForwardEntry, ForwardProto, ForwardStatus, TcpTarget, plural},
     target::declares_port,
 };
 use crate::{
@@ -17,7 +18,6 @@ use crate::{
         AppPhase,
         registry::{DbInstanceRegistry, InstanceRegistry},
     },
-    system::translate::proxy::instance_ipv6,
 };
 
 // spec: FWD#requesting-a-forward
@@ -28,11 +28,10 @@ pub(crate) async fn forward_port_session(
     mut recv: quinn::RecvStream,
     initial_line: Vec<u8>,
     state: Arc<OiState>,
+    events: EventSenderWithActor,
 ) {
     #[derive(serde::Deserialize)]
     struct Request {
-        #[serde(default)]
-        actor: Option<seedling_protocol::actor::Actor>,
         #[serde(default)]
         params: serde_json::Value,
     }
@@ -44,11 +43,14 @@ pub(crate) async fn forward_port_session(
         proto: String,
     }
 
+    // spec: FWD#requesting-a-forward
+    // The response is a line, like the status messages that follow it.
     async fn write_err(send: &mut quinn::SendStream, code: &str, msg: &str) {
-        let resp = serde_json::to_vec(&serde_json::json!({
+        let mut resp = serde_json::to_vec(&serde_json::json!({
             "error": { "code": code, "message": msg }
         }))
         .unwrap_or_default();
+        resp.push(b'\n');
         let _ = send.write_all(&resp).await;
         let _ = send.finish();
     }
@@ -56,11 +58,15 @@ pub(crate) async fn forward_port_session(
     let req: Request = match serde_json::from_slice(&initial_line) {
         Ok(r) => r,
         Err(e) => {
-            write_err(&mut send, "not_found", &format!("invalid request: {e}")).await;
+            write_err(
+                &mut send,
+                "requirements_invalid",
+                &format!("invalid request: {e}"),
+            )
+            .await;
             return;
         }
     };
-    let req_actor = req.actor;
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => {
@@ -135,7 +141,14 @@ pub(crate) async fn forward_port_session(
                 return;
             }
         };
-        instance_ipv6(&state.node_prefix, &instance)
+        // spec: INFRA#service-addresses
+        match registry.service_address(&state.node_prefix, &instance) {
+            Ok(addr) => addr,
+            Err(e) => {
+                write_err(&mut send, "internal", &format!("registry error: {e}")).await;
+                return;
+            }
+        }
     };
 
     let conn_id = conn.stable_id();
@@ -191,7 +204,7 @@ pub(crate) async fn forward_port_session(
             proto,
             target_addr,
             opened_at: jiff::Timestamp::now(),
-            actor: req_actor,
+            actor: Some((*events.actor).clone()),
             stop_tx,
             udp_tx,
             status_tx: status_tx.clone(),
@@ -200,12 +213,7 @@ pub(crate) async fn forward_port_session(
     let forward_key = match registered {
         Ok(k) => k,
         Err(e) => {
-            write_err(
-                &mut send,
-                "internal",
-                &format!("forward key allocation: {e}"),
-            )
-            .await;
+            write_err(&mut send, e.wire_code(), &e.to_string()).await;
             return;
         }
     };
@@ -271,9 +279,7 @@ pub(crate) async fn forward_port_session(
         fwd = %forward_id, "forward started"
     );
     // spec: FWD#forward-events
-    state
-        .event_tx
-        .forward_started(forward_id, &params.app, &params.service, params.port);
+    events.forward_started(forward_id, &params.app, &params.service, params.port);
 
     let mut ctrl_buf = [0u8; 1];
     loop {
@@ -309,7 +315,7 @@ pub(crate) async fn forward_port_session(
         let _ = entry.stop_tx.send(true);
     }
     // spec: FWD#forward-events
-    state.event_tx.forward_stopped(forward_id);
+    events.forward_stopped(forward_id);
 
     let _ = send.finish();
     tracing::info!(
@@ -326,22 +332,41 @@ pub(crate) async fn handle_forward_stream(
     leftover: Vec<u8>,
     state: Arc<OiState>,
 ) {
+    // spec: FWD#tcp-tunnelling
+    // A stream naming no live forward is reset, not dropped: a stream that
+    // is merely finished would read to the other end as a truncated transfer
+    // that completed.
     let forward_id: ForwardId = match forward_id_str.parse() {
         Ok(id) => id,
         Err(_) => {
             tracing::warn!(fwd = %forward_id_str, "invalid forward_id in stream header");
+            abort_forward_stream(&mut send, &mut recv);
             return;
         }
     };
 
-    let Some((target_addr, port, status_tx)) = state.forwards.lock().get_target(&forward_id) else {
+    let Some(TcpTarget {
+        addr: target_addr,
+        port,
+        status_tx,
+        mut stopped,
+    }) = state.forwards.lock().get_target(&forward_id)
+    else {
         tracing::warn!(fwd = %forward_id, "TCP forward stream for unknown forward");
+        abort_forward_stream(&mut send, &mut recv);
         return;
     };
 
     let target = format!("[{target_addr}]:{port}");
     tracing::debug!(fwd = %forward_id, %target, "TCP relay: connecting");
-    let mut tcp = match tokio::net::TcpStream::connect(&target).await {
+    let connected = tokio::select! {
+        connected = tokio::net::TcpStream::connect(&target) => connected,
+        _ = stopped.wait_for(|ended| *ended) => {
+            abort_forward_stream(&mut send, &mut recv);
+            return;
+        }
+    };
+    let mut tcp = match connected {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(fwd = %forward_id, "TCP connect to {target} failed: {e}");
@@ -365,14 +390,23 @@ pub(crate) async fn handle_forward_stream(
         return;
     }
 
-    match relay_forward_stream(
-        (&mut send, &mut recv),
-        (&mut tcp_recv, &mut tcp_send),
-        |_| {},
-        |_| {},
-    )
-    .await
-    {
+    // spec: FWD#forward-lifetime
+    // The relay lasts as long as its forward: when the forward ends, however
+    // it ends, every tunnelled connection is closed with it.
+    let relayed = tokio::select! {
+        relayed = relay_forward_stream(
+            (&mut send, &mut recv),
+            (&mut tcp_recv, &mut tcp_send),
+            |_| {},
+            |_| {},
+        ) => relayed,
+        _ = stopped.wait_for(|ended| *ended) => {
+            tracing::debug!(fwd = %forward_id, "TCP relay: the forward ended");
+            abort_forward_stream(&mut send, &mut recv);
+            return;
+        }
+    };
+    match relayed {
         Ok(()) => tracing::debug!(fwd = %forward_id, "TCP relay: closed"),
         Err(e) => tracing::debug!(fwd = %forward_id, "TCP relay failed: {e}"),
     }
@@ -497,11 +531,8 @@ async fn udp_relay_task(
         }
     }
 
-    // spec: FWD#relay-resilience — nothing else observes this task, so
-    // an unannounced exit left the forward in `/forwards/list` looking
-    // healthy with no relay behind it.
+    // spec: FWD#relay-resilience
+    // The relay ends only with its forward or its connection, neither of which
+    // a status message on the forward's stream could still report.
     tracing::info!(key = forward_key, "UDP relay ended");
-    let _ = status_tx.try_send(ForwardStatus::warn(
-        "UDP relay ended; no further datagrams will be relayed",
-    ));
 }

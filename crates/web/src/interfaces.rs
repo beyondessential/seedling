@@ -36,6 +36,16 @@ pub fn resolve_bind_addrs(
         }
     }
 
+    // spec: WEB#listen-addresses
+    // A configuration that names interfaces and finds none of them is not the
+    // loopback default and not an empty listener: nothing starts on it.
+    if addrs.is_empty() {
+        return Err(InterfaceError(format!(
+            "the configured interfaces ({}) matched no address, so there is nothing to listen on",
+            interface_names.join(", ")
+        )));
+    }
+
     addrs.sort_unstable();
     addrs.dedup();
     Ok(addrs)
@@ -69,6 +79,16 @@ mod tests {
 
     // spec: WEB#listen-addresses
     #[test]
+    fn interfaces_that_match_no_address_leave_nothing_to_listen_on() {
+        let none = vec!["no-such-interface0".to_owned()];
+        assert!(resolve_bind_addrs(&none, &[], 8080).is_err());
+        // An explicit address alongside still gives the listener somewhere.
+        let one: Vec<SocketAddr> = vec!["192.0.2.1:8080".parse().unwrap()];
+        assert!(resolve_bind_addrs(&none, &one, 8080).is_ok());
+    }
+
+    // spec: WEB#listen-addresses
+    #[test]
     fn explicit_addrs_are_passed_through() {
         let explicit: Vec<SocketAddr> = vec![
             "192.0.2.1:8080".parse().unwrap(),
@@ -93,15 +113,11 @@ mod tests {
 
     // spec: WEB#listen-addresses
     #[test]
-    fn unknown_interface_name_is_warned_not_fatal() {
-        // An interface name that does not exist on any system is skipped
-        // (with a warning); if the remaining sources yield no addrs we must
-        // still return an empty list rather than error.
-        let got = resolve_bind_addrs(&["seedling-nonexistent-iface-0".to_owned()], &[], 8080)
-            .expect("unknown interface should not be fatal");
-        // May or may not include loopback depending on implementation — at
-        // minimum the call must succeed.
-        let _ = got;
+    fn an_unknown_interface_contributes_no_address_and_is_not_itself_fatal() {
+        let one: Vec<SocketAddr> = vec!["192.0.2.1:8080".parse().unwrap()];
+        let got = resolve_bind_addrs(&["seedling-nonexistent-iface-0".to_owned()], &one, 8080)
+            .expect("an unknown interface alongside an address is only warned of");
+        assert_eq!(got, one);
     }
 
     #[test]

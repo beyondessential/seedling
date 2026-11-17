@@ -32,7 +32,7 @@ use subtle::ConstantTimeEq;
 use super::{
     TlsCertOrigin, TlsCertState,
     chain::ProxyFrom,
-    issuance::Coordinator,
+    issuance::{Coordinator, ProxyStanding},
     state::{ChainDecision, ProxyHolding},
     store,
 };
@@ -243,8 +243,9 @@ fn normalise_sni(name: &str) -> String {
     name.trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// [`endpoint_gate`] for the hostname, or [`FallThrough::Allow`] when it is on
-/// no chain or the decision could not be made.
+/// [`endpoint_gate`] for a hostname on a chain, [`FallThrough::Withhold`] for
+/// one on no chain that the proxy holds nothing for, and
+/// [`FallThrough::Allow`] when the decision could not be made.
 ///
 /// Allowing is the answer to not knowing, because the other error is a
 /// hostname that serves nothing, and the cost of the first is one certificate
@@ -263,10 +264,12 @@ fn normalise_sni(name: &str) -> String {
 async fn fall_through(coordinator: &Arc<Coordinator>, hostname: &str) -> FallThrough {
     let (coordinator, name) = (Arc::clone(coordinator), hostname.to_owned());
     let decided = tokio::task::spawn_blocking(move || {
-        let gate = coordinator
-            .chain_decisions(Some(&name))
-            .and_then(|decisions| decisions.get(&name).map(endpoint_gate))
-            .unwrap_or(FallThrough::Allow);
+        // spec: CHAIN#proxy-strategies
+        let gate = match coordinator.proxy_standing(&name) {
+            Some(ProxyStanding::Chain(c)) => endpoint_gate(&c),
+            Some(ProxyStanding::NoChain) => FallThrough::Withhold,
+            None => FallThrough::Allow,
+        };
         if gate == FallThrough::Allow {
             return FallThrough::Allow;
         }
@@ -357,8 +360,8 @@ pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
     let mut bytes = [0u8; 32];
     rng().fill_bytes(&mut bytes);
     let token = hex_encode(&bytes);
-    std::fs::write(path, &token)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    // spec: INFRA#file-permissions
+    seedling_protocol::keys::write_new_private_file(path, token.as_bytes())?;
     Ok(token)
 }
 
@@ -612,6 +615,20 @@ mod tests {
         assert_eq!(perms.mode() & 0o777, 0o600);
     }
 
+    // spec: INFRA#file-permissions
+    #[test]
+    fn token_creation_does_not_follow_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert-endpoint-token");
+        let target = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(load_or_create_token(&path).is_err());
+        assert!(
+            !target.exists(),
+            "the token must not be written through the link"
+        );
+    }
+
     #[tokio::test]
     async fn format_response_inserts_separator_when_missing() {
         let bundle = CertBundle {
@@ -681,7 +698,12 @@ mod tests {
     }
 
     async fn status_for(facts: Option<Facts>) -> u16 {
+        status_with(facts, |_| {}).await
+    }
+
+    async fn status_with(facts: Option<Facts>, setup: impl FnOnce(&Db) + Send + 'static) -> u16 {
         let (db, cipher) = fresh().await;
+        db.call(move |db| setup(db));
         let cipher = Arc::new(cipher);
         let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
         if let Some(facts) = facts {
@@ -832,6 +854,64 @@ mod tests {
         let mut untyped = typed(Some(ProxyHolding::Nothing));
         untyped.typed = false;
         assert_eq!(status_for(Some(untyped)).await, 204);
+    }
+
+    // spec: CHAIN#proxy-strategies
+    // spec: CHAIN#default-chain
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_proxy_never_orders_for_a_hostname_on_no_chain() {
+        let untyped = || {
+            let mut facts = typed(Some(ProxyHolding::Nothing));
+            facts.typed = false;
+            facts
+        };
+        assert_eq!(
+            status_for(Some(untyped())).await,
+            204,
+            "on the default chain the proxy is responsible from the start"
+        );
+        assert_eq!(
+            status_with(Some(untyped()), |db| {
+                db.conn
+                    .execute(
+                        "INSERT INTO tls_dns_providers \
+                         (name, kind, config_ciphertext, created_at, updated_at) \
+                         VALUES ('dns', 'route53', x'00', 1, 1)",
+                        [],
+                    )
+                    .unwrap();
+                store::set_policy_acme_dns(db, "shop.example.com", "dns").unwrap();
+            })
+            .await,
+            503,
+            "an ACME DNS-01 policy puts the hostname on no chain"
+        );
+        assert_eq!(
+            status_with(Some(untyped()), |db| {
+                use crate::runtime::site_ingresses::{
+                    self, DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider,
+                };
+                site_ingresses::create(
+                    db,
+                    &SiteIngressDef {
+                        name: seedling_protocol::names::SiteIngressName::new("ts-shop").unwrap(),
+                        hostname: "shop.example.com".to_owned(),
+                        description: None,
+                        source: SiteIngressSource::Discovered {
+                            provider: DiscoveryProvider::Tailscale,
+                            key: "node".to_owned(),
+                        },
+                        tls_provider: TlsProvider::Tailscale,
+                        stale: false,
+                        created_at: "2026-01-01T00:00:00Z".to_owned(),
+                    },
+                )
+                .unwrap();
+            })
+            .await,
+            503,
+            "a hostname that takes a Tailscale certificate is on no chain"
+        );
     }
 
     // spec: CHAIN#proxy-strategies

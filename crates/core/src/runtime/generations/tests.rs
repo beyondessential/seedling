@@ -508,3 +508,31 @@ fn a_value_that_was_secret_stays_protected_when_the_flag_is_dropped() {
     let map = param_map_at(&db, &app(), g, &cipher).unwrap();
     assert_eq!(map.get("api_key").map(String::as_str), Some("now-public"));
 }
+
+// spec: GEN#reconstruction
+#[test]
+fn an_unreadable_secret_value_fails_reconstruction_rather_than_reading_as_unset() {
+    let db = test_db();
+    let cipher = test_cipher();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+    bump_param_set(
+        &db,
+        &app(),
+        &param("api_key"),
+        None,
+        "secret-value",
+        &cipher,
+        true,
+    )
+    .unwrap();
+    let g = current(&db, &app()).unwrap().unwrap();
+    db.conn
+        .execute(
+            "UPDATE generations SET new_value_ciphertext = x'00010203' WHERE generation = ?1",
+            rusqlite::params![g as i64],
+        )
+        .unwrap();
+
+    let err = param_map_at(&db, &app(), g, &cipher).unwrap_err();
+    assert!(matches!(err, Error::UnreadableParam { .. }), "{err}");
+}

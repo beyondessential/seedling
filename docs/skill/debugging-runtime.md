@@ -112,7 +112,10 @@ Start with `seedling-ctl apps list` to see which apps are in unexpected
 states. Then `seedling-ctl apps show <app>` for the detailed view. Note:
 
 - **Status values**: `running`, `degraded`, `faulted`, `operating`,
-  `uninstalling`, `not_installed`
+  `uninstalling`, `not_installed`. An app is `faulted` only while a
+  withholding fault (`external_volume_not_mapped`, `crash_loop` or
+  `health_check_replace_failed`) is active; any other active fault, or a
+  resource away from its desired state, makes it `degraded`.
 - **Lifecycle states** (per instance): `Pending`, `Scheduled`, `Running`,
   `Ready`, `Terminating`, `Terminated`, `Unscheduled`
 
@@ -140,6 +143,8 @@ exactly what happened:
   `stop_sent` → `ingress_removed` → `ingress_cleaned_up`.
 - **Volumes**: `volume_created` → `volume_ready` → (ready). Teardown:
   `stop_sent` → `volume_removed` → `volume_cleaned_up`.
+- **External volumes**: no observations. The lifecycle state is the desired
+  state (`Ready` or `Unscheduled`), held by the reconciler each iteration.
 
 If observations stopped at an intermediate point, the reconciler may be
 failing silently — check logs.
@@ -154,7 +159,24 @@ it. The logic lives in `src/runtime/desired.rs`:
   `ensure_scaled_group` which splits instances into `keep` (desired
   `Ready`) and `excess` (desired `Unscheduled`).
 - **During operations**: desired state comes from `OperationProgress`.
-- **Uninstalling**: all instances desired at `Unscheduled`.
+- **Uninstalling** (`compute_uninstalling`): every instance recorded for
+  the app desired at `Unscheduled`, including those of resources the
+  definition no longer declares (dropped by an update, or created
+  anonymously by an operation). Those undeclared instances are torn down
+  from their recorded identity alone: a pod's unit, container and network
+  by name, with the anonymous volumes recorded against it (table
+  `anonymous_volumes`), and a volume's storage at both its tmpfs path and its
+  volume-store name, holding whichever stands. The uninstall
+  completes, and the recorded instances are forgotten, only once every
+  recorded instance whose kind has a lifecycle is `Unscheduled` and no
+  anonymous volume is still recorded for the app. A recorded anonymous volume
+  whose removal fails is tried again each iteration, with `stop_failed` held
+  on its instance until the removal succeeds. While the
+  recorded identities cannot be read it holds a
+  `teardown_identities_unreadable` fault; with none recorded, a loaded unit
+  under the app's name prefix that exactly matches no other app's recorded
+  identity holds it with `uninstall_unidentifiable_units`, which an operator
+  clears to complete the teardown and leave those units untouched.
 
 If an instance's actual lifecycle matches its desired state, the reconciler
 considers it converged and does nothing. This is the most common reason for

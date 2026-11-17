@@ -443,10 +443,11 @@ describe("Certificates", () => {
   });
 
   // spec: UI#certificates
+  // spec: UI#guarded-controls
   it("clears a policy after confirmation", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
 
     await screen.findByText("*.example.com");
@@ -727,15 +728,17 @@ describe("Certificates", () => {
 
     fireEvent.click(within(row).getByRole("button", { name: "Renew" }));
     expect(await screen.findByText("Renew certificate #20")).toBeTruthy();
-    expect((screen.getByLabelText("Hostnames") as HTMLTextAreaElement).value).toBe(
-      "*.doma.in, doma.in",
+    // Pre-filled, editably, with the SANs and the hostnames it serves.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Hostnames") as HTMLTextAreaElement).value).toBe(
+        "*.doma.in, doma.in, a.doma.in, b.doma.in",
+      ),
     );
-    expect(await screen.findByText("a.doma.in, b.doma.in")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
 
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith("/tls/certificates/csr/begin", {
-        hostnames: ["*.doma.in", "doma.in"],
+        hostnames: ["*.doma.in", "doma.in", "a.doma.in", "b.doma.in"],
         renews: 20,
         key_type: "ecdsa_p256",
       });
@@ -823,10 +826,11 @@ describe("Certificates", () => {
     });
   });
 
+  // spec: UI#guarded-controls
   it("cancels a pending CSR from the row action", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
 
     await screen.findByText("csr.example.com");

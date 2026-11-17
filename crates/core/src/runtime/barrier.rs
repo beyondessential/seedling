@@ -83,6 +83,11 @@ pub enum CallKind {
     // spec: OPS#action-composition
     // spec: HIST#action-calls
     SubAction,
+    /// `rt.restart(deployment)` — restart a deployment's instances. The
+    /// deployment's name is stored in `extra`. The entry is committed before
+    /// the restart is requested, so a replay does not request it again.
+    // spec: RT#deployment-restart
+    Restart,
 }
 
 // spec: HIST#action-calls
@@ -108,6 +113,12 @@ pub struct ActionLogEntry {
     // spec: RT#signal-delivery
     #[serde(default)]
     pub extra: Option<String>,
+    /// The call was begun and its completion has not been recorded: its
+    /// effect on the host may have happened. Only `rt.signal`, `rt.write`
+    /// and `rt.exec` entries are ever begun.
+    // spec: SUSP#side-effecting-calls
+    #[serde(default)]
+    pub begun: bool,
 }
 
 impl ActionLogEntry {
@@ -267,9 +278,6 @@ pub struct ReplayContext {
         crate::runtime::ResourceInstance,
         crate::defs::resource::Resource,
     >,
-    /// Counter for assigning stable operation-scoped IDs to anonymous resources.
-    /// Incremented each time an anonymous resource instance is created.
-    pub anon_counter: u32,
     /// When set, the replay is running in _probe_ mode: all `rt.*` calls that
     /// would normally mutate state or wait on the world are short-circuited,
     /// and image references extracted from `rt.start` / `rt.warm_images`
@@ -292,6 +300,15 @@ pub struct ReplayContext {
     /// test / stub contexts where no real container runtime is present.
     // spec: RT#command-execution
     pub executor: Option<Arc<dyn Executor>>,
+    /// Commits an entry to the action log at once, for the calls that must be
+    /// on record before they act on the host.
+    // spec: SUSP#side-effecting-calls
+    pub early_commit: Option<replay::EarlyCommit>,
+    /// Cipher protecting secret values the action execution log records.
+    /// `None` in test / stub contexts, where a call that would record a
+    /// secret value fails rather than recording it in the clear.
+    // spec: SEC#storage
+    pub cipher: Option<Arc<crate::runtime::secrets::Cipher>>,
 }
 
 /// Synchronous side-effect handle the BSL `rt.signal` call uses to actually
@@ -311,11 +328,17 @@ pub trait ContainerSignaler: Send + Sync {
 // spec: RT#volume-writes
 #[derive(Debug, Clone)]
 pub enum VolumeWriteTarget {
-    /// A named static volume scoped to the current app.
-    NamedVolume { name: String, tmpfs: bool },
+    /// A named static volume scoped to the current app, with its declared
+    /// file writes, which seed its storage if the write has to create it.
+    NamedVolume {
+        name: String,
+        tmpfs: bool,
+        writes: Vec<(String, bytes::Bytes)>,
+    },
     /// An anonymous volume created earlier in the action closure.
     AnonymousVolume { anon_id: String, tmpfs: bool },
-    /// An external volume bound by the operation (`ACN#volume-params`).
+    /// An external volume that resolved to storage, through the operation's
+    /// bindings (`ACN#volume-params`) or the host's mappings.
     ExternalBound { host_path: std::path::PathBuf },
 }
 
@@ -335,6 +358,24 @@ pub trait VolumeWriter: Send + Sync {
         path: &str,
         contents: &[u8],
     ) -> Result<(), String>;
+
+    /// Where the external volume `name` resolves to through the host's external
+    /// volume mappings for `app`: `None` if it resolves to nothing. An error
+    /// is that the mappings could not be read, which is not the same answer.
+    // spec: VOL#external-volumes
+    fn resolve_external(
+        &self,
+        app: &str,
+        name: &str,
+    ) -> Result<Option<ResolvedExternalWrite>, String>;
+}
+
+/// Where an external volume's mapping puts it on the host.
+// spec: RT#volume-writes
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedExternalWrite {
+    pub host_path: std::path::PathBuf,
+    pub read_only: bool,
 }
 
 /// Synchronous side-effect handle the BSL `rt.exec` call uses to run a
@@ -343,12 +384,21 @@ pub trait VolumeWriter: Send + Sync {
 /// language-only tests where no real container runtime is present.
 // spec: RT#command-execution
 pub trait Executor: Send + Sync {
+    /// Whether `target` is a running container right now. Asked before the
+    /// call is put on record, so a target that is not running leaves nothing
+    /// behind to be mistaken, on replay, for a command that may have run.
+    // spec: RT#command-execution
+    fn check_running(&self, target: &ResourceInstance) -> Result<(), String> {
+        let _ = target;
+        Ok(())
+    }
+
     /// Run `argv` inside the running container `name`, layering `extra_env`
     /// on top of the container's environment. Blocks until the command exits
     /// and returns the exit code.
     fn exec(
         &self,
-        name: &str,
+        target: &ResourceInstance,
         argv: &[String],
         extra_env: &[(String, String)],
     ) -> Result<i32, String>;
@@ -366,7 +416,6 @@ impl fmt::Debug for ReplayContext {
                 "dynamic_defs",
                 &self.dynamic_defs.keys().collect::<Vec<_>>(),
             )
-            .field("anon_counter", &self.anon_counter)
             .finish_non_exhaustive()
     }
 }
@@ -394,11 +443,12 @@ impl ReplayContext {
             world,
             cancel_token,
             dynamic_defs: std::collections::HashMap::new(),
-            anon_counter: 0,
             probe_images: None,
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            early_commit: None,
+            cipher: None,
         }
     }
 
@@ -490,6 +540,25 @@ impl ReplayContext {
         }
         self.call_index += 1;
         Ok(Some(entry))
+    }
+
+    /// Commit `entry` at once, with this pass's earlier entries, so that a
+    /// log holding `entry` holds every call before it: a replay reads entries
+    /// by position, and one at a position whose predecessors are missing
+    /// would be read as another call's.
+    ///
+    /// The earlier entries stay pending, so their barriers can still be
+    /// recorded against them. Returns `Ok(false)` when the log cannot commit
+    /// mid-pass.
+    // spec: SUSP#side-effecting-calls
+    pub fn commit_through(&self, entry: &ActionLogEntry) -> Result<bool, String> {
+        let Some(commit) = &self.early_commit else {
+            return Ok(false);
+        };
+        let mut batch = self.pending.clone();
+        batch.push(entry.clone());
+        commit(&batch)?;
+        Ok(true)
     }
 
     pub fn take_pending(&mut self) -> Vec<ActionLogEntry> {

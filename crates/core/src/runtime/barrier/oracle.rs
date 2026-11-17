@@ -7,8 +7,17 @@ use crate::defs::resource::ResourceKind;
 use crate::runtime::history::WorldObservation;
 use crate::runtime::{LifecycleState, ResourceInstance};
 
+/// An instance's lifecycle state could not be derived, because its
+/// observation history could not be read. Not an empty history, and not any
+/// state.
+// spec: LCY#derivation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Undetermined;
+
 pub trait WorldStateOracle: Send + Sync {
-    fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState;
+    /// The instance's lifecycle state, or [`Undetermined`] while it cannot be
+    /// read. A barrier is not decided on an undetermined instance.
+    fn lifecycle_state(&self, resource: &ResourceInstance) -> Result<LifecycleState, Undetermined>;
 
     /// Returns true if a TLS certificate has been observed valid for the given
     /// ingress resource. Used by `rt.warm_certs(...).ready()` to wait on cert
@@ -100,12 +109,13 @@ impl Default for TestWorldOracle {
 }
 
 impl WorldStateOracle for TestWorldOracle {
-    fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState {
-        self.states
+    fn lifecycle_state(&self, resource: &ResourceInstance) -> Result<LifecycleState, Undetermined> {
+        Ok(self
+            .states
             .lock()
             .get(&(resource.kind, resource.name.clone()))
             .copied()
-            .unwrap_or(LifecycleState::Pending)
+            .unwrap_or(LifecycleState::Pending))
     }
 
     fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {
@@ -132,9 +142,10 @@ impl WorldStateOracle for TestWorldOracle {
             | ResourceKind::ExternalVolume => {
                 // Non-container resources: termination itself is success.
                 // Only claim success once the resource is actually terminated.
-                if self.lifecycle_state(resource) == LifecycleState::Terminated
-                    || self.lifecycle_state(resource) == LifecycleState::Unscheduled
-                {
+                if matches!(
+                    self.lifecycle_state(resource),
+                    Ok(LifecycleState::Terminated | LifecycleState::Unscheduled)
+                ) {
                     Some(true)
                 } else {
                     None
@@ -160,15 +171,20 @@ impl DbWorldOracle {
 }
 
 impl WorldStateOracle for DbWorldOracle {
-    fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState {
+    fn lifecycle_state(&self, resource: &ResourceInstance) -> Result<LifecycleState, Undetermined> {
         let resource = resource.clone();
-        self.db.call(move |db| {
-            let observations = match crate::runtime::history::query_observations(db, &resource) {
-                Ok(obs) => obs,
-                Err(_) => return LifecycleState::Pending,
-            };
-            derive_lifecycle_state(&resource, &observations)
-        })
+        self.db.call(
+            move |db| match crate::runtime::history::read_lifecycle(db, &resource) {
+                Ok((state, _)) => Ok(state),
+                Err(e) => {
+                    tracing::warn!(
+                        instance = %resource.display_name,
+                        "cannot read what a lifecycle state derives from; it is undetermined: {e}"
+                    );
+                    Err(Undetermined)
+                }
+            },
+        )
     }
 
     // spec: IMG#image-warming
@@ -189,14 +205,15 @@ impl WorldStateOracle for DbWorldOracle {
                 Ok(obs) => obs,
                 Err(_) => return false,
             };
-            // Most recent cert observation determines current validity.
-            // `cert_valid` overrides any earlier `cert_acquisition_failed` and
-            // vice-versa.
+            // spec: OBS#ingresses
+            // The latest observation of whether a usable certificate is served
+            // decides: a certificate that has since expired or been revoked is
+            // no longer one.
             let mut valid = false;
             for obs in &observations {
                 match obs.obs_kind.as_str() {
                     "cert_valid" => valid = true,
-                    "cert_acquisition_failed" => valid = false,
+                    "cert_not_valid" => valid = false,
                     _ => {}
                 }
             }
@@ -221,17 +238,12 @@ impl WorldStateOracle for DbWorldOracle {
                 // Non-container resources: once terminated, treat as success.
                 let resource_for_state = resource.clone();
                 let state = self.db.call(move |db| {
-                    let observations = match crate::runtime::history::query_observations(
-                        db,
-                        &resource_for_state,
-                    ) {
-                        Ok(obs) => obs,
-                        Err(_) => return LifecycleState::Pending,
-                    };
-                    derive_lifecycle_state(&resource_for_state, &observations)
+                    crate::runtime::history::read_lifecycle(db, &resource_for_state)
+                        .map(|(state, _)| state)
+                        .ok()
                 });
                 match state {
-                    LifecycleState::Terminated | LifecycleState::Unscheduled => Some(true),
+                    Some(LifecycleState::Terminated | LifecycleState::Unscheduled) => Some(true),
                     _ => None,
                 }
             }
@@ -249,25 +261,62 @@ impl WorldStateOracle for DbWorldOracle {
 /// Returns the final `LifecycleState` and the `recorded_at` timestamp (ms) of
 /// the observation that caused the last state transition, or `None` if no
 /// transition ever occurred (i.e. state stayed `Pending`).
+/// Begin a new cycle from `Pending` when an instance at the end of one, in
+/// `Terminated` or `Unscheduled`, is observed being set up or running again:
+/// an observation that would take it to `Scheduled`, `Running` or `Ready`.
+///
+/// Any other observation leaves the ended cycle where it is. A unit observed
+/// inactive after its container was removed, or a stop recorded after the
+/// removal it caused was observed, is not the instance coming back, and
+/// starting a new cycle on it left a torn-down instance `Pending` for good.
+// spec: LCY#transitions
+fn start_new_cycle(
+    state: &mut LifecycleState,
+    transition_ms: &mut Option<i64>,
+    next: LifecycleState,
+) {
+    let ended = matches!(
+        state,
+        LifecycleState::Terminated | LifecycleState::Unscheduled
+    );
+    let setting_up = !next.has_reached(LifecycleState::Terminating);
+    if ended && setting_up {
+        *state = LifecycleState::Pending;
+        *transition_ms = None;
+    }
+}
+
 fn drive_observations(
     observations: &[WorldObservation],
     obs_to_state: impl Fn(&str) -> Option<LifecycleState>,
+) -> (LifecycleState, Option<i64>) {
+    drive_observations_with(observations, obs_to_state, |_| None)
+}
+
+/// As [`drive_observations`], for a kind of resource whose state can also go
+/// back: `regression` names, for an observation kind, the state it takes a
+/// resource out of and the one it returns it to.
+fn drive_observations_with(
+    observations: &[WorldObservation],
+    obs_to_state: impl Fn(&str) -> Option<LifecycleState>,
+    regression: impl Fn(&str) -> Option<(LifecycleState, LifecycleState)>,
 ) -> (LifecycleState, Option<i64>) {
     let mut state = LifecycleState::Pending;
     let mut transition_ms: Option<i64> = None;
 
     for obs in observations {
+        if let Some((from, to)) = regression(&obs.obs_kind)
+            && state == from
+        {
+            state = to;
+            transition_ms = Some(obs.recorded_at);
+            continue;
+        }
         let Some(next) = obs_to_state(&obs.obs_kind) else {
             continue;
         };
 
-        // Terminated and Unscheduled are end-of-cycle states. Reset to
-        // Pending so that subsequent observations (from a container
-        // restart or a reinstall) start a fresh cycle.
-        if state == LifecycleState::Terminated || state == LifecycleState::Unscheduled {
-            state = LifecycleState::Pending;
-            transition_ms = None;
-        }
+        start_new_cycle(&mut state, &mut transition_ms, next);
 
         // Already at or past this state — idempotent, skip.
         if state.has_reached(next) {
@@ -325,17 +374,21 @@ pub fn container_run_succeeded(observations: &[WorldObservation]) -> Option<bool
         return Some(false);
     }
 
-    // Fallback: the container was observed gone (container_removed)
-    // and we have no explicit failure signal. This is the
-    // common --rm-auto-removed case for jobs that exit 0 too
-    // quickly to inspect. Treat as success.
-    let terminal_seen = tail.iter().any(|o| {
+    // Fallback: the exit status was never captured, as for a job removed
+    // before it could be inspected. The run succeeded only if the supervisor
+    // reported it so once it ended; until it reports either way the outcome
+    // is not known.
+    // spec: LINUX#exit-status
+    let ended = tail.iter().rposition(|o| {
         matches!(
             o.obs_kind.as_str(),
             "container_exited" | "container_removed"
         )
-    });
-    if terminal_seen { Some(true) } else { None }
+    })?;
+    tail[ended..]
+        .iter()
+        .any(|o| o.obs_kind == "unit_inactive")
+        .then_some(true)
 }
 
 /// Whether instances of `kind` have a lifecycle state derived from what is
@@ -389,8 +442,9 @@ fn derive_lifecycle_with_ms(
         ResourceKind::Ingress => derive_ingress_lifecycle(observations),
         // spec: LCY#volumes
         ResourceKind::Volume => derive_volume_lifecycle(observations),
+        // An external volume's state is read from the desired state, not
+        // derived from observations.
         // spec: LCY#external-volumes
-        ResourceKind::ExternalVolume => derive_volume_lifecycle(observations),
         _ => (LifecycleState::Pending, None),
     }
 }
@@ -405,11 +459,6 @@ fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleSt
     let mut transition_ms: Option<i64> = None;
 
     for obs in observations {
-        if state == LifecycleState::Terminated || state == LifecycleState::Unscheduled {
-            state = LifecycleState::Pending;
-            transition_ms = None;
-        }
-
         // spec: LCY#containers
         // Health demotion: Ready containers observed as unhealthy drop back to
         // Running, and only to Running — other states are unaffected.
@@ -430,6 +479,7 @@ fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleSt
             "container_removed" => LifecycleState::Unscheduled,
             _ => continue,
         };
+        start_new_cycle(&mut state, &mut transition_ms, next);
 
         if state.has_reached(next) {
             continue;
@@ -445,14 +495,22 @@ fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleSt
 
 // spec: LCY#services
 fn derive_service_lifecycle(observations: &[WorldObservation]) -> (LifecycleState, Option<i64>) {
-    drive_observations(observations, |kind| match kind {
-        "network_created" => Some(LifecycleState::Scheduled),
-        "backend_healthy" => Some(LifecycleState::Ready),
-        "stop_sent" => Some(LifecycleState::Terminating),
-        "network_removed" => Some(LifecycleState::Terminated),
-        "network_cleaned_up" => Some(LifecycleState::Unscheduled),
-        _ => None,
-    })
+    drive_observations_with(
+        observations,
+        |kind| match kind {
+            "network_created" => Some(LifecycleState::Scheduled),
+            "backend_healthy" => Some(LifecycleState::Ready),
+            "stop_sent" => Some(LifecycleState::Terminating),
+            "network_removed" => Some(LifecycleState::Terminated),
+            "network_cleaned_up" => Some(LifecycleState::Unscheduled),
+            _ => None,
+        },
+        // A pool that has emptied takes a Ready service back to Scheduled.
+        |kind| match kind {
+            "backend_lost" => Some((LifecycleState::Ready, LifecycleState::Scheduled)),
+            _ => None,
+        },
+    )
 }
 
 // spec: LCY#ingresses

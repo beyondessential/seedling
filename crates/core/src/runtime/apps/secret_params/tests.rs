@@ -162,3 +162,48 @@ fn migrate_to_secret_is_a_noop_when_no_plaintext_exists() {
             .is_empty()
     );
 }
+
+// spec: SEC#migration
+#[test]
+fn migrate_to_plain_moves_the_secret_value_back_to_plain_storage() {
+    let db = Db::open_in_memory().expect("open");
+    let cipher = Cipher::for_tests();
+    upsert_secret_param(
+        &db,
+        &cipher,
+        &app("myapp"),
+        &param("apikey"),
+        &secret("was-secret"),
+    )
+    .expect("upsert");
+
+    migrate_to_plain(&db, &cipher, &app("myapp"), &param("apikey")).expect("migrate");
+
+    assert!(
+        load_secret_params_for_app(&db, &cipher, &app("myapp"))
+            .expect("load")
+            .is_empty(),
+        "the secret row must be deleted"
+    );
+    let plain = crate::runtime::apps::load_params_for_app(&db, &app("myapp")).expect("load");
+    assert_eq!(plain.get("apikey").map(String::as_str), Some("was-secret"));
+}
+
+// spec: SEC#migration
+#[test]
+fn migrate_to_plain_leaves_a_value_it_cannot_decrypt_in_place() {
+    let db = Db::open_in_memory().expect("open");
+    db.conn
+        .execute(
+            "INSERT INTO secret_params (app_name, param_name, ciphertext) VALUES ('myapp', 'apikey', x'00')",
+            [],
+        )
+        .expect("insert");
+
+    assert!(migrate_to_plain(&db, &Cipher::for_tests(), &app("myapp"), &param("apikey")).is_err());
+
+    assert!(
+        is_stored_secret(&db, &app("myapp"), &param("apikey")).expect("lookup"),
+        "an unreadable value is not discarded"
+    );
+}

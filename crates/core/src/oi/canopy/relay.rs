@@ -55,7 +55,7 @@ pub async fn relay_request(
     headers: Headers,
     body: &[u8],
 ) -> Result<RelayedResponse, RelayFailure> {
-    let (mut send, recv) = offer.peer.open().await.map_err(RelayFailure::Peer)?;
+    let mut stream = offer.peer.open().await.map_err(RelayFailure::Peer)?;
 
     let header = RelayRequest {
         canopy: offer.offer_id.to_string(),
@@ -63,25 +63,38 @@ pub async fn relay_request(
         path: path.to_owned(),
         headers,
     };
-    write_frame(&mut send, &header, body)
-        .await
-        .map_err(RelayFailure::Frame)?;
+    if let Err(e) = write_frame(&mut stream.send, &header, body).await {
+        stream.reset();
+        return Err(RelayFailure::Frame(e));
+    }
     // Half-close so the client sees the end of the request body. Without this
     // the client would wait for bytes that are never coming.
-    send.shutdown()
-        .await
-        .map_err(|e| RelayFailure::Peer(format!("cannot half-close the relay stream: {e}")))?;
-    drop(send);
+    if let Err(e) = stream.send.shutdown().await {
+        stream.reset();
+        return Err(RelayFailure::Peer(format!(
+            "cannot half-close the relay stream: {e}"
+        )));
+    }
 
     // spec: RLY#relay-limits
-    // On a timeout the read future is dropped, which drops the stream's read
-    // half, which is how the peer is told to stop sending: an answer arriving
-    // later has nowhere to go.
-    let read = read_frame::<_, RelayResponse>(recv, MAX_RELAY_BODY);
-    let (response, body) = tokio::time::timeout(RELAY_TIMEOUT, read)
-        .await
-        .map_err(|_| RelayFailure::Timeout)?
-        .map_err(RelayFailure::Frame)?;
+    // A response that is too large, malformed or late is abandoned by
+    // resetting the stream, so the client stops sending an answer nobody will
+    // read.
+    let read = read_frame::<_, RelayResponse>(&mut stream.recv, MAX_RELAY_BODY);
+    let read = match tokio::time::timeout(RELAY_TIMEOUT, read).await {
+        Ok(read) => read,
+        Err(_) => {
+            stream.reset();
+            return Err(RelayFailure::Timeout);
+        }
+    };
+    let (response, body) = match read {
+        Ok(read) => read,
+        Err(e) => {
+            stream.reset();
+            return Err(RelayFailure::Frame(e));
+        }
+    };
 
     match response {
         RelayResponse::Response { status, headers } => Ok(RelayedResponse {
@@ -109,15 +122,26 @@ mod tests {
     fn offer_answering(
         respond: impl Fn(DuplexStream) + Send + Sync + 'static,
     ) -> (CanopyState, Offer) {
+        let (state, offer, _peer) = offer_with_peer(respond);
+        (state, offer)
+    }
+
+    /// As [`offer_answering`], also returning the peer so its reset streams
+    /// can be counted.
+    fn offer_with_peer(
+        respond: impl Fn(DuplexStream) + Send + Sync + 'static,
+    ) -> (CanopyState, Offer, Arc<DuplexPeer>) {
         let state = CanopyState::new();
+        let peer = DuplexPeer::new(respond);
         let offer = state.offer(
             0,
             "test".into(),
             "https://example.invalid".into(),
             None,
-            DuplexPeer::new(respond),
+            None,
+            peer.clone(),
         );
-        (state, offer)
+        (state, offer, peer)
     }
 
     /// Read a whole relayed request off the client end of a stream.
@@ -132,7 +156,7 @@ mod tests {
     // spec: RLY#relay-streams
     #[tokio::test]
     async fn a_request_reaches_the_client_intact_and_its_response_comes_back() {
-        let (_state, offer) = offer_answering(|mut stream| {
+        let (_state, offer, peer) = offer_with_peer(|mut stream| {
             tokio::spawn(async move {
                 let (req, body) = read_request(&mut stream).await;
                 assert_eq!(req.method, "POST");
@@ -167,6 +191,7 @@ mod tests {
             response.headers.get("content-type").unwrap(),
             "application/json"
         );
+        assert_eq!(peer.resets(), 0, "a completed exchange is not reset");
     }
 
     // spec: RLY#relay-streams
@@ -267,6 +292,7 @@ mod tests {
             "test".into(),
             "https://example.invalid".into(),
             None,
+            None,
             DuplexPeer::failing(),
         );
 
@@ -280,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_that_never_answers_times_out() {
         tokio::time::pause();
-        let (_state, offer) = offer_answering(|stream| {
+        let (_state, offer, peer) = offer_with_peer(|stream| {
             // Hold the stream open and say nothing.
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
@@ -296,12 +322,13 @@ mod tests {
 
         let err = call.await.unwrap().expect_err("silence is a timeout");
         assert!(matches!(err, RelayFailure::Timeout), "{err}");
+        assert_eq!(peer.resets(), 1, "the stream is reset, not left open");
     }
 
     // spec: RLY#relay-limits
     #[tokio::test]
     async fn a_response_body_past_the_ceiling_is_refused() {
-        let (_state, offer) = offer_answering(|mut stream| {
+        let (_state, offer, peer) = offer_with_peer(|mut stream| {
             tokio::spawn(async move {
                 read_request(&mut stream).await;
                 write_frame(
@@ -325,6 +352,7 @@ mod tests {
             matches!(err, RelayFailure::Frame(FrameError::TooLarge)),
             "{err}"
         );
+        assert_eq!(peer.resets(), 1, "the stream is reset, not left open");
     }
 
     // spec: WIRE#canopy-relay-streams

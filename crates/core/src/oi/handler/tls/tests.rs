@@ -62,6 +62,49 @@ fn settings_get_set_roundtrip() {
     assert_eq!(settings["cert_profile"], json!(null));
 }
 
+// spec: TLSM#settings
+#[test]
+fn settings_refuse_a_contact_email_that_is_not_one_and_read_an_empty_profile_as_none() {
+    let oi = TestOi::new();
+    for bad in ["no-at-sign", "@example.com", "ops@", "a@b@c.example", "@"] {
+        let (code, _) = oi
+            .call("/tls/settings/set", json!({ "contact_email": bad }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{bad}");
+    }
+    assert_eq!(
+        oi.call("/tls/settings/get", json!({})).unwrap()["contact_email"],
+        "",
+        "a refused email leaves the setting alone"
+    );
+
+    // An invalid email refuses the whole request, profile included.
+    let (code, _) = oi
+        .call(
+            "/tls/settings/set",
+            json!({ "contact_email": "bad", "cert_profile": "shortlived" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert_eq!(
+        oi.call("/tls/settings/get", json!({})).unwrap()["cert_profile"],
+        json!(null)
+    );
+
+    oi.call(
+        "/tls/settings/set",
+        json!({ "contact_email": "ops@example.com", "cert_profile": "shortlived" }),
+    )
+    .unwrap();
+    oi.call("/tls/settings/set", json!({ "contact_email": "" }))
+        .unwrap();
+    oi.call("/tls/settings/set", json!({ "cert_profile": "" }))
+        .unwrap();
+    let settings = oi.call("/tls/settings/get", json!({})).unwrap();
+    assert_eq!(settings["contact_email"], "");
+    assert_eq!(settings["cert_profile"], json!(null));
+}
+
 // spec: TLSM#dns-providers
 #[test]
 fn dns_provider_upsert_list_delete_roundtrip() {
@@ -76,7 +119,7 @@ fn dns_provider_upsert_list_delete_roundtrip() {
     let outcome = oi
         .call(
             "/tls/dns-providers/upsert",
-            json!({ "name": "aws-prod", "kind": "route53", "config": { "region": "us-east-1" } }),
+            json!({ "name": "aws-prod", "kind": "route53", "config": { "access_key_id": "AKIA-TEST", "secret_access_key": "secret", "region": "us-east-1" } }),
         )
         .unwrap();
     assert_eq!(outcome["auto_policy_created"], true);
@@ -90,7 +133,7 @@ fn dns_provider_upsert_list_delete_roundtrip() {
     let outcome = oi
         .call(
             "/tls/dns-providers/upsert",
-            json!({ "name": "aws-prod", "kind": "route53", "config": { "region": "eu-west-1" } }),
+            json!({ "name": "aws-prod", "kind": "route53", "config": { "access_key_id": "AKIA-TEST", "secret_access_key": "secret", "region": "eu-west-1" } }),
         )
         .unwrap();
     assert_eq!(outcome["auto_policy_created"], false);
@@ -120,6 +163,23 @@ fn dns_provider_upsert_list_delete_roundtrip() {
         )
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
+
+    // spec: TLSM#dns-providers
+    for config in [
+        json!({ "region": "us-east-1" }),
+        json!({ "access_key_id": "AKIA", "secret_access_key": 7 }),
+        json!({ "access_key_id": "AKIA", "secret_access_key": "s", "region": true }),
+        json!({ "access_key_id": "AKIA", "secret_access_key": "s", "zone": "x" }),
+        json!("not an object"),
+    ] {
+        let (code, _) = oi
+            .call(
+                "/tls/dns-providers/upsert",
+                json!({ "name": "shapes", "kind": "route53", "config": config }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{config}");
+    }
 
     assert_eq!(
         oi.call("/tls/dns-providers/delete", json!({ "name": "aws-prod" }))
@@ -262,6 +322,33 @@ fn warnings(response: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+// spec: TLSM#certificates
+#[test]
+fn a_manual_upload_records_the_algorithm_of_the_uploaded_key() {
+    let oi = TestOi::new();
+    for (alg, expected) in [
+        (&rcgen::PKCS_ECDSA_P256_SHA256, "ecdsa_p256"),
+        (&rcgen::PKCS_ECDSA_P384_SHA384, "ecdsa_p384"),
+        (&rcgen::PKCS_ECDSA_P521_SHA512, "ecdsa_p521"),
+        (&rcgen::PKCS_ED25519, "ed25519"),
+        (&rcgen::PKCS_RSA_SHA256, "rsa"),
+    ] {
+        let key = KeyPair::generate_for(alg).expect("keypair");
+        let host = format!("{expected}.example.com").replace('_', "-");
+        let mut params = CertificateParams::new(vec![host]).expect("params");
+        params.distinguished_name = DistinguishedName::new();
+        let cert = params.self_signed(&key).expect("self-sign");
+        let uploaded = oi
+            .call(
+                "/tls/certificates/upload-manual",
+                json!({ "cert_pem": cert.pem(), "key_pem": key.serialize_pem() }),
+            )
+            .unwrap_or_else(|e| panic!("{expected} upload: {e:?}"));
+        let row = cert_row(&oi, uploaded["id"].as_i64().unwrap());
+        assert_eq!(row["key_type"], expected);
+    }
+}
+
 // spec: TLSM#certificate-signing-requests
 // spec: TLSM#certificates
 // spec: TLS#coverage
@@ -401,6 +488,25 @@ fn csr_upload_accepts_a_wildcard_that_covers_the_request() {
         "a wildcard covering the requested name meets the request: {uploaded}"
     );
     assert_eq!(cert_row(&oi, id)["hostname"], "*.example.com");
+}
+
+// spec: TLS#operator-supplied-certificates
+#[test]
+fn csr_upload_takes_the_leaf_from_the_certificate_the_stored_key_matches() {
+    let oi = TestOi::new();
+
+    let (id, csr_pem) = begin_csr(&oi, "foo.example.com");
+    let signed = ca_signed_for_csr(&csr_pem, &["foo.example.com"], |_| {});
+    let unrelated = crate::runtime::tls::test_support::self_signed_pem(&["ca.example.net"]);
+    let uploaded = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": id, "cert_pem": format!("{unrelated}{signed}") }),
+        )
+        .unwrap();
+
+    assert_eq!(uploaded["primary_san"], "foo.example.com");
+    assert_eq!(cert_row(&oi, id)["hostname"], "foo.example.com");
 }
 
 // spec: TLS#coverage
@@ -924,8 +1030,28 @@ fn issue_acme_dns_fails_without_policy() {
             json!({ "hostname": "nopolicy.example.com" }),
         )
         .unwrap_err();
-    assert_eq!(code, "internal");
+    assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("issuance failed"), "{msg}");
+}
+
+// spec: TLS#issuance
+// spec: TLSM#operator-driven-issuance
+#[test]
+fn issue_acme_dns_is_refused_while_an_issuance_for_the_hostname_is_running() {
+    let oi = TestOi::new();
+    let _running = oi
+        .state
+        .tls_coordinator
+        .hold_running_for_tests("busy.example.com")
+        .expect("the hostname is idle");
+    let (code, msg) = oi
+        .call(
+            "/tls/certificates/issue-acme-dns",
+            json!({ "hostname": "busy.example.com" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(msg.contains("busy.example.com"), "{msg}");
 }
 
 // spec: TLSM#retry-blocks
@@ -979,6 +1105,22 @@ fn hostname_and_attempt_rollups_start_empty() {
             .unwrap()["attempts"],
         json!([])
     );
+}
+
+// spec: TLSM#issuance-attempts
+#[test]
+fn an_attempts_limit_outside_1_to_500_is_refused() {
+    let oi = TestOi::new();
+    for limit in [0, -1, 501] {
+        let (code, _) = oi
+            .call("/tls/certificates/attempts/list", json!({ "limit": limit }))
+            .expect_err("out-of-range limit");
+        assert_eq!(code, "requirements_invalid", "limit {limit}");
+    }
+    for limit in [1, 500] {
+        oi.call("/tls/certificates/attempts/list", json!({ "limit": limit }))
+            .unwrap();
+    }
 }
 
 // spec: TLSM#policies
@@ -1463,6 +1605,7 @@ fn the_last_issuance_is_kinded_by_the_certificate_it_produced() {
         super::project_hostname_state(
             "node.tail1234.ts.net",
             &std::collections::BTreeSet::new(),
+            &snapshot,
             &st,
             None,
         )
@@ -1493,7 +1636,7 @@ fn a_hostname_on_a_chain_is_not_driven_through_an_acme_dns_flow() {
             json!({ "hostname": "shop.example.com" }),
         )
         .unwrap_err();
-    assert_eq!(code, "internal");
+    assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("has no policy"), "{msg}");
 }
 
@@ -1516,7 +1659,7 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
                 crate::runtime::tls::state::ProxyCert {
                     not_before: Some(1),
                     not_after: Some(i64::MAX / 2),
-                    issuer_kind: "local".to_owned(),
+                    issuer_kind: "acme-staging-v02.api.letsencrypt.org-directory".to_owned(),
                     issuer: Some("CN=Caddy Local Authority".to_owned()),
                     self_signed: true,
                 },
@@ -1532,6 +1675,7 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
     let view = super::project_hostname_state(
         "shop.example.com",
         &std::collections::BTreeSet::from(["shop".to_owned()]),
+        &snapshot,
         &st,
         match snapshot.env.proxy.get("shop.example.com") {
             Some(crate::runtime::tls::state::ProxyHolding::Holds(c)) => Some(c),
@@ -1539,8 +1683,12 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
         },
     );
 
-    assert_eq!(view["active_cert"]["origin"], "caddy");
-    assert_eq!(view["active_cert"]["caddy_issuer"], "local");
+    assert_eq!(view["active_cert"]["origin"], "proxy");
+    assert_eq!(
+        view["active_cert"]["proxy_issuer"],
+        "acme-staging-v02.api.letsencrypt.org"
+    );
+    assert!(view["active_cert"].get("caddy_issuer").is_none());
     assert_eq!(view["active_cert"]["issuer"], "CN=Caddy Local Authority");
     assert_eq!(view["active_cert"]["self_signed"], true);
     assert_eq!(view["status"], "active");
@@ -1548,7 +1696,11 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
         view["chain"]["responsible"], "acme_http01",
         "a public name's chain is HTTP-01, whatever the proxy happens to have served it with"
     );
-    assert_eq!(view["last_issuance"]["kind"], "caddy");
+    assert_eq!(view["last_issuance"]["kind"], "proxy");
+    assert_eq!(
+        view["last_issuance"]["provider"],
+        "acme-staging-v02.api.letsencrypt.org"
+    );
 }
 
 // spec: TLSM#policies
@@ -1639,4 +1791,219 @@ fn the_rollup_does_not_walk_the_proxys_cache_itself() {
 
     // And the rollup still answers.
     assert_eq!(shop_hostname(&oi)["hostname"], "shop.example.com");
+}
+
+// spec: TLS#certificate-status
+#[test]
+fn the_certificate_status_is_the_first_meaning_that_holds() {
+    use crate::runtime::tls::state::{
+        CertStatus, ChainEnv, ProxyCert, ProxyHolding, certificate_status, compute_state,
+    };
+
+    let oi = TestOi::new();
+    let load = |oi: &TestOi, proxy: Option<ProxyHolding>| {
+        let env = ChainEnv {
+            known: true,
+            offer_live: false,
+            canopy_types: Default::default(),
+            proxy: proxy
+                .map(|p| std::collections::BTreeMap::from([("shop.example.com".to_owned(), p)]))
+                .unwrap_or_default(),
+        };
+        oi.state
+            .db
+            .call(move |db| crate::runtime::tls::state::Snapshot::load(db, env))
+            .unwrap()
+    };
+    let status = |oi: &TestOi, proxy: Option<ProxyHolding>| {
+        let snapshot = load(oi, proxy);
+        let st = compute_state(&snapshot, "shop.example.com");
+        certificate_status(&snapshot, &st)
+    };
+    let now = jiff::Timestamp::now().as_second();
+    let proxy_cert = |not_before, not_after| {
+        ProxyHolding::Holds(ProxyCert {
+            not_before: Some(not_before),
+            not_after: Some(not_after),
+            issuer_kind: "local".to_owned(),
+            issuer: None,
+            self_signed: true,
+        })
+    };
+
+    assert_eq!(
+        status(&oi, Some(ProxyHolding::Nothing)),
+        Some(CertStatus::Pending),
+        "a public name with no certificate has the proxy ordering one"
+    );
+    // A usable certificate the proxy holds is `active`, and one outside its
+    // window is not usable, whatever else is true of it.
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 100, now + 100))),
+        Some(CertStatus::Active)
+    );
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 200, now - 100))),
+        Some(CertStatus::Expired),
+        "expired comes before the proxy ordering a replacement"
+    );
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now + 100, now + 200))),
+        Some(CertStatus::None),
+        "a certificate that has not begun is not usable, and nothing is being acquired"
+    );
+
+    // Facts that cannot be read make the status undetermined, never a value.
+    assert_eq!(status(&oi, Some(ProxyHolding::Unreadable)), None);
+    assert_eq!(status(&oi, None), None);
+
+    // An issuance running, or an operator retry not yet consumed, is an
+    // acquisition in progress even where a usable certificate is served.
+    let attempt = oi
+        .state
+        .db
+        .call(|db| {
+            crate::runtime::tls::store::insert_attempt(
+                db,
+                "shop.example.com",
+                crate::runtime::tls::AttemptTrigger::OnDemand,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 100, now + 100))),
+        Some(CertStatus::Pending)
+    );
+    oi.state
+        .db
+        .call(move |db| {
+            crate::runtime::tls::store::finalize_attempt(
+                db,
+                attempt,
+                crate::runtime::tls::AttemptOutcome::Success,
+                None,
+                None,
+            )
+        })
+        .unwrap();
+    oi.state
+        .db
+        .call(|db| crate::runtime::tls::store::set_force_retry(db, "shop.example.com"))
+        .unwrap();
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 100, now + 100))),
+        Some(CertStatus::Pending)
+    );
+    oi.state
+        .db
+        .call(|db| crate::runtime::tls::store::take_force_retry(db, "shop.example.com"))
+        .unwrap();
+
+    // A hostname with a retry block is `blocked` before anything else.
+    oi.state
+        .db
+        .call(|db| {
+            crate::runtime::tls::store::set_retry_block(
+                db,
+                "shop.example.com",
+                crate::runtime::tls::RetryBlockSource::Operator,
+                None,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 200, now - 100))),
+        Some(CertStatus::Blocked)
+    );
+}
+
+// spec: TLSM#conventions
+#[test]
+fn a_hostname_that_is_not_one_is_refused() {
+    let oi = TestOi::new();
+    for (method, params) in [
+        (
+            "/tls/certificates/issue-acme-dns",
+            json!({ "hostname": "not a host" }),
+        ),
+        (
+            "/tls/certificates/retry",
+            json!({ "hostname": "-bad.example" }),
+        ),
+        ("/tls/retry-blocks/set", json!({ "hostname": "" })),
+        ("/tls/retry-blocks/clear", json!({ "hostname": "1.2.3.4" })),
+    ] {
+        let (code, _) = oi.call(method, params).unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{method}");
+    }
+}
+
+// spec: TLSM#conventions
+// spec: TLSM#retry-blocks
+#[test]
+fn a_retry_block_names_the_managed_hostname_whatever_its_case() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    oi.call(
+        "/tls/retry-blocks/set",
+        json!({ "hostname": "Shop.Example.COM", "reason": "held" }),
+    )
+    .unwrap();
+    let listed = oi.call("/tls/retry-blocks/list", json!({})).unwrap();
+    assert_eq!(listed["blocks"][0]["hostname"], "shop.example.com");
+    assert_eq!(shop_hostname(&oi)["retry_block"]["reason"], "held");
+
+    let cleared = oi
+        .call(
+            "/tls/retry-blocks/clear",
+            json!({ "hostname": "SHOP.example.com" }),
+        )
+        .unwrap();
+    assert_eq!(cleared["cleared"], true);
+}
+
+// spec: TLSM#operator-driven-issuance
+#[test]
+fn issue_acme_dns_is_refused_for_a_hostname_that_takes_a_tailscale_certificate() {
+    use crate::runtime::site_ingresses::{
+        self, DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider,
+    };
+
+    let oi = TestOi::new();
+    oi.state.db.call(|db| {
+        site_ingresses::create(
+            db,
+            &SiteIngressDef {
+                name: seedling_protocol::names::SiteIngressName::new("ts-node").unwrap(),
+                hostname: "node.tailnet.ts.net".to_owned(),
+                description: None,
+                source: SiteIngressSource::Discovered {
+                    provider: DiscoveryProvider::Tailscale,
+                    key: "node".to_owned(),
+                },
+                tls_provider: TlsProvider::Tailscale,
+                stale: false,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .unwrap()
+    });
+    let (code, msg) = oi
+        .call(
+            "/tls/certificates/issue-acme-dns",
+            json!({ "hostname": "node.tailnet.ts.net" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("Tailscale"), "{msg}");
+}
+
+// spec: TLSM#hostname-view
+#[test]
+fn the_hostname_view_of_an_unregistered_app_is_not_found() {
+    let oi = TestOi::new();
+    let (code, _) = oi
+        .call("/tls/hostnames/list", json!({ "app": "ghost" }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
 }

@@ -95,6 +95,69 @@ fn describe_returns_resources_and_status() {
     assert!(desc["params"].as_array().unwrap().is_empty());
 }
 
+// spec: WIRE#resource-type-names
+// The type names were the Rust names lowercased, which wrote an external
+// volume as `externalvolume`.
+#[test]
+fn describe_and_plan_name_resource_types_as_the_wire_does() {
+    let oi = TestOi::new();
+    let script = r#"
+        app.external_volume("shared");
+        app.external_service("upstream");
+        app.deployment("web");
+        app.job("migrate");
+        app.service("front");
+        app.volume("data");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let mut types: Vec<&str> = desc["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["type"].as_str().unwrap())
+        .collect();
+    types.sort_unstable();
+    assert_eq!(
+        types,
+        [
+            "deployment",
+            "external_service",
+            "external_volume",
+            "job",
+            "service",
+            "volume"
+        ]
+    );
+
+    let plan = oi
+        .call(
+            "/apps/plan",
+            json!({ "app": "demo", "proposed_script": MINIMAL_SCRIPT }),
+        )
+        .unwrap();
+    let mut removed: Vec<&str> = plan["diff"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["change"] == "removed")
+        .map(|d| d["resource_type"].as_str().unwrap())
+        .collect();
+    removed.sort_unstable();
+    assert_eq!(
+        removed,
+        [
+            "external_service",
+            "external_volume",
+            "job",
+            "service",
+            "volume"
+        ]
+    );
+}
+
 // spec: APPS#description
 #[test]
 fn describe_unknown_app_is_not_found() {
@@ -189,6 +252,80 @@ fn uninstall_requires_installed_phase() {
     assert_eq!(code, "not_found");
 }
 
+// spec: SHL#session-end
+#[test]
+fn uninstalling_an_app_ends_its_shell_sessions() {
+    use crate::oi::shells::{ShellSession, StopSignal};
+    use seedling_protocol::names::SessionId;
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    let stop = StopSignal::new();
+    oi.state.shells.insert(ShellSession::starting(
+        SessionId::generate(),
+        seedling_protocol::names::AppName::new("demo").unwrap(),
+        "shell".to_owned(),
+        None,
+        (24, 80),
+        stop.clone(),
+    ));
+
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+
+    assert!(stop.is_requested(), "the session outlived the install");
+    assert!(oi.state.shells.list(Some("demo")).is_empty());
+}
+
+// spec: ACI#uninstall
+#[test]
+fn uninstall_answers_each_phase_as_the_spec_says() {
+    use crate::runtime::apps::AppPhase;
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    let mut events = oi.state.event_tx.subscribe();
+
+    let result = oi
+        .call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+    assert_eq!(result, json!({}));
+
+    // The app is already `Uninstalling` when the answer arrives.
+    assert!(matches!(
+        *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+        AppPhase::Uninstalling
+    ));
+    let phase_event = loop {
+        if let OiEvent::AppPhaseChanged { app, phase, .. } =
+            events.try_recv().expect("an AppPhaseChanged event")
+        {
+            break (app.to_string(), phase);
+        }
+    };
+    assert_eq!(phase_event, ("demo".to_owned(), "uninstalling".to_owned()));
+
+    let (code, _) = oi
+        .call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "not_installed", "while Uninstalling");
+
+    let installing = TestOi::with_app("fresh");
+    *installing
+        .state
+        .registry
+        .read()
+        .get("fresh")
+        .unwrap()
+        .phase
+        .lock() = AppPhase::Installing;
+    let (code, _) = installing
+        .call("/apps/uninstall", json!({ "app": "fresh" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress", "while Installing");
+}
+
 // spec: TRD#uninstall-admission
 // The app stays in `Installed` for the whole of an action, so the phase gate
 // let an uninstall through mid-action and the reconciler began tearing down
@@ -210,6 +347,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        None,
     );
 
     let (code, message) = oi
@@ -260,6 +398,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
         1,
         "test",
         &installed(),
+        None,
     );
     let queued = sched.admit(
         &demo,
@@ -269,6 +408,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
         1,
         "test",
         &installed(),
+        None,
     );
     assert_eq!(queued, crate::runtime::scheduler::ScheduleResult::Queued);
     drop(sched);
@@ -354,6 +494,7 @@ fn plan_with_no_proposals_returns_empty_diff() {
     let plan = oi.call("/apps/plan", json!({ "app": "demo" })).unwrap();
     assert!(plan["diff"].as_array().unwrap().is_empty());
     assert!(plan["on_change_would_fire"].as_array().unwrap().is_empty());
+    assert_eq!(plan["errors"], json!([]));
 }
 
 // spec: PRM#change-planning
@@ -363,7 +504,7 @@ fn plan_reports_added_removed_and_modified_resources() {
     let proposed = r#"
         app.deployment("web")
             .image("docker.io/library/nginx:1.30")
-            .scale(1..4);
+            .scale(1..=4);
         app.volume("data");
     "#;
     let plan = oi
@@ -377,7 +518,7 @@ fn plan_reports_added_removed_and_modified_resources() {
         .iter()
         .find(|d| d["change"] == "added")
         .expect("added entry");
-    assert_eq!(added["resource_type"], "Volume");
+    assert_eq!(added["resource_type"], "volume");
     assert_eq!(added["resource_name"], "data");
     let modified = diff
         .iter()
@@ -431,6 +572,43 @@ fn scale_persists_decision_within_bounds() {
 }
 
 // spec: CTL#scaling
+// spec: EVT#app-events
+#[test]
+fn an_unreadable_earlier_scale_is_reported_as_null() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    oi.state.db.call(|db| {
+        db.conn
+            .execute(
+                "INSERT INTO scaling_decisions (app, deployment, scale, updated_at) \
+                 VALUES ('demo', 'web', 'many', '')",
+                [],
+            )
+            .unwrap()
+    });
+    let mut events = oi.state.event_tx.subscribe();
+    let result = oi
+        .call(
+            "/apps/scale",
+            json!({ "app": "demo", "deployment": "web", "scale": 2 }),
+        )
+        .unwrap();
+    assert_eq!(result["scale"], 2);
+
+    let previous = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|ev| match ev {
+            OiEvent::ScaleChanged { previous_scale, .. } => Some(previous_scale),
+            _ => None,
+        })
+        .expect("a ScaleChanged event");
+    assert_eq!(previous, None);
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["resources"][0]["scale"]["current"], 2);
+}
+
+// spec: CTL#scaling
 #[test]
 fn scale_clamps_to_bounds_and_validates_targets() {
     let oi = TestOi::with_app("demo");
@@ -461,15 +639,17 @@ fn scale_clamps_to_bounds_and_validates_targets() {
 
 // spec: CTL#deployment-restart
 #[test]
-fn restart_returns_operation_id_for_known_deployment() {
+fn restart_returns_restart_id_for_known_deployment() {
     let oi = TestOi::with_app("demo");
+    oi.install("demo");
     let result = oi
         .call(
             "/apps/restart",
             json!({ "app": "demo", "deployment": "web" }),
         )
         .unwrap();
-    assert!(!result["operation_id"].as_str().unwrap().is_empty());
+    assert!(!result["restart_id"].as_str().unwrap().is_empty());
+    assert!(result.get("operation_id").is_none());
 
     let (code, _) = oi
         .call(
@@ -478,6 +658,19 @@ fn restart_returns_operation_id_for_known_deployment() {
         )
         .unwrap_err();
     assert_eq!(code, "not_found");
+}
+
+// spec: CTL#deployment-restart
+#[test]
+fn restart_of_an_app_that_is_not_installed_is_refused() {
+    let oi = TestOi::with_app("demo");
+    let (code, _) = oi
+        .call(
+            "/apps/restart",
+            json!({ "app": "demo", "deployment": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "not_installed");
 }
 
 // spec: CTL#resource-stop
@@ -559,6 +752,116 @@ fn unstop_resource_clears_stopped_flag() {
         )
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
+
+    let (code, _) = oi
+        .call(
+            "/apps/resource/unstop",
+            json!({ "app": "demo", "kind": "service", "name": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+}
+
+// spec: CTL#resource-stop
+#[test]
+fn unstop_resource_names_only_declared_resources() {
+    let oi = TestOi::with_app("demo");
+    let (code, _) = oi
+        .call(
+            "/apps/resource/unstop",
+            json!({ "app": "demo", "kind": "deployment", "name": "ghost" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+
+    let (code, _) = oi
+        .call(
+            "/apps/resource/unstop",
+            json!({ "app": "ghost", "kind": "deployment", "name": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+}
+
+// spec: CTL#resource-stop
+#[test]
+fn unstopping_a_resource_that_is_not_stopped_emits_no_event() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    let mut events = oi.state.event_tx.subscribe();
+    oi.call(
+        "/apps/resource/unstop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|ev| matches!(ev, OiEvent::ResourceUnstopped { .. })),
+        "a no-op unstop emitted an event"
+    );
+
+    oi.call(
+        "/apps/resource/stop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/resource/unstop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|ev| matches!(ev, OiEvent::ResourceUnstopped { .. })),
+        "reversing a stop emitted no event"
+    );
+}
+
+// spec: CTL#resource-stop
+#[test]
+fn an_update_discards_stops_of_resources_it_no_longer_declares() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": r#"
+            app.deployment("web").image("docker.io/library/nginx:1.29");
+            app.deployment("worker").image("docker.io/library/nginx:1.29");
+        "# }),
+    )
+    .unwrap();
+    for name in ["web", "worker"] {
+        oi.call(
+            "/apps/resource/stop",
+            json!({ "app": "demo", "kind": "deployment", "name": name }),
+        )
+        .unwrap();
+    }
+
+    oi.call(
+        "/apps/update",
+        json!({ "app": "demo", "script": r#"
+            app.deployment("web").image("docker.io/library/nginx:1.29");
+        "# }),
+    )
+    .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let stopped = desc["stopped_resources"].as_array().unwrap();
+    assert_eq!(stopped.len(), 1, "{stopped:?}");
+    assert_eq!(stopped[0]["name"], "web");
+
+    // Declaring it again does not bring the old stop back.
+    oi.call(
+        "/apps/update",
+        json!({ "app": "demo", "script": r#"
+            app.deployment("web").image("docker.io/library/nginx:1.29");
+            app.deployment("worker").image("docker.io/library/nginx:1.29");
+        "# }),
+    )
+    .unwrap();
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["stopped_resources"].as_array().unwrap().len(), 1);
 }
 
 // spec: CTL#resource-stop
@@ -612,7 +915,7 @@ const DERIVED_STATE_SCRIPT: &str = r#"
     app.volume("data");
     app.deployment("web")
         .image("docker.io/library/nginx:1.29")
-        .scale(1..4);
+        .scale(1..=4);
     app.on_action("vacuum", |rt, _p| {
         rt.start(app.job().image("docker.io/library/busybox:1.37").command("true"))
             .terminated();
@@ -1082,6 +1385,7 @@ fn admit(oi: &TestOi, app: &str, action: &str) {
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        None,
     );
 }
 
@@ -1101,6 +1405,16 @@ fn an_operating_app_is_reported_with_the_action_it_runs() {
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
     assert_eq!(desc["status"], "operating");
     assert_eq!(desc["current_operation"]["action_name"], "backup");
+}
+
+// spec: APPS#status-derivation
+#[test]
+fn an_operation_outranks_the_app_not_being_installed() {
+    let oi = TestOi::with_app("demo");
+    admit(&oi, "demo", "backup");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "operating", "{desc}");
 }
 
 // spec: APPS#description
@@ -1166,6 +1480,56 @@ fn a_stopped_resource_does_not_degrade_the_app() {
     assert_eq!(status(&oi), "running");
 }
 
+// spec: APPS#status-derivation, FLT#withholding-faults
+// Any active fault faulted the app, though only a withholding fault stops the
+// runtime acting; the rest are conditions the app runs on through.
+#[test]
+fn only_a_withholding_fault_faults_the_app() {
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    oi.call(
+        "/apps/resource/stop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    let status =
+        |oi: &TestOi| oi.call("/apps/show", json!({ "app": "demo" })).unwrap()["status"].clone();
+    assert_eq!(status(&oi), "running");
+
+    let file = |kind: &'static str| {
+        oi.state.db.call(move |db| {
+            crate::runtime::faults::file_fault(
+                db,
+                &AppName::new_unchecked("demo"),
+                None,
+                None,
+                None,
+                kind,
+                "filed by the test",
+            )
+            .unwrap()
+        })
+    };
+    let clear = |id: String| {
+        oi.state.db.call(move |db| {
+            crate::runtime::faults::clear_fault(db, &id, &AppName::new_unchecked("demo")).unwrap()
+        })
+    };
+
+    let other = file("image_pull_failed");
+    assert_eq!(status(&oi), "degraded", "an ordinary fault degrades");
+    for kind in crate::runtime::faults::WITHHOLDING_KINDS {
+        let held = file(kind);
+        assert_eq!(status(&oi), "faulted", "{kind}");
+        clear(held);
+        assert_eq!(status(&oi), "degraded", "{kind} cleared, the other remains");
+    }
+    clear(other);
+    assert_eq!(status(&oi), "running");
+}
+
 // spec: APPS#status-derivation
 // A deployment scaled to zero wants nothing Ready, and an external service is
 // never observed, so neither can hold the app back from running.
@@ -1179,7 +1543,7 @@ fn resources_meant_to_have_nothing_ready_do_not_degrade_the_app() {
             "script": r#"
                 app.deployment("web")
                     .image("docker.io/library/nginx:1.29")
-                    .scale(0..4);
+                    .scale(0..=4);
                 app.external_service("api");
             "#,
         }),
@@ -1242,4 +1606,180 @@ fn a_static_job_is_judged_by_how_its_run_ended() {
 
     assert_eq!(run(0), "running");
     assert_eq!(run(1), "degraded");
+}
+
+// spec: APPS#description
+#[test]
+fn describing_an_app_whose_state_cannot_be_read_is_internal() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    oi.state
+        .db
+        .call(|db| db.conn.execute_batch("DROP TABLE faults;").unwrap());
+
+    let (code, _) = oi.call("/apps/show", json!({ "app": "demo" })).unwrap_err();
+    assert_eq!(code, "internal");
+}
+
+// spec: APPS#actions
+#[test]
+fn an_unreadable_schedule_record_makes_the_description_internal() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                app.on_action("tick", |rt, p| {}).on_schedule("* * * * *");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.state.db.call(|db| {
+        db.conn
+            .execute("UPDATE action_schedules SET last_fired_at = 'garbage'", [])
+            .unwrap()
+    });
+
+    let (code, _) = oi.call("/apps/show", json!({ "app": "demo" })).unwrap_err();
+    assert_eq!(code, "internal");
+}
+
+// spec: APPS#redacted-environment-values
+#[test]
+fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_values() {
+    let oi = TestOi::new();
+    let script = |tag: &str| {
+        format!(
+            r#"
+            let key = app.param("api-key").kind("password").required(false);
+            let web = app.deployment("web").image("docker.io/library/nginx:{tag}");
+            if key.is_set() {{
+                web.env("TOKEN", "Bearer " + key.value());
+            }}
+            web.env("PLAIN", "visible");
+        "#
+        )
+    };
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": script("1.29") }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "name": "api-key", "value": "hunter2hunter2" }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let env = &shown["resources"][0]["def"]["container"]["env"];
+    assert_eq!(env["TOKEN"], json!(null), "{env}");
+    assert_eq!(env["PLAIN"], json!("visible"));
+
+    let plan = oi
+        .call(
+            "/apps/plan",
+            json!({ "app": "demo", "proposed_script": script("1.30") }),
+        )
+        .unwrap();
+    assert!(
+        !plan.to_string().contains("hunter2"),
+        "a plan names fields, never values: {plan}"
+    );
+}
+
+// spec: APPS#resources
+#[test]
+fn an_instance_reports_the_state_of_its_health_check() {
+    use crate::{
+        defs::resource::ResourceKind,
+        runtime::{history::insert_observation, identity::ResourceInstance},
+    };
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("checked")
+                    .image("docker.io/library/nginx:1.30")
+                    .healthcheck(#{ kind: "command", cmd: ["true"] });
+                app.deployment("unchecked").image("docker.io/library/nginx:1.30");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+
+    let health_of = |name: &str| {
+        let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+        desc["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap()["instances"][0]["health"]
+            .clone()
+    };
+    let instances: std::collections::HashMap<&str, ResourceInstance> = ["checked", "unchecked"]
+        .into_iter()
+        .map(|name| {
+            let instance = ResourceInstance::new_singleton(
+                AppName::new_unchecked("demo"),
+                ResourceKind::Deployment,
+                name,
+            );
+            (name, instance)
+        })
+        .collect();
+    let observe = |name: &str, kinds: &[&str]| {
+        let kinds: Vec<String> = kinds.iter().map(|k| (*k).to_owned()).collect();
+        let instance = instances[name].clone();
+        oi.state.db.call(move |db| {
+            for kind in kinds {
+                insert_observation(db, &instance, &kind, &json!({})).unwrap();
+            }
+        });
+    };
+    let start = ["container_created", "container_running"];
+
+    observe("checked", &["container_created"]);
+    observe("unchecked", &start);
+    assert_eq!(health_of("checked"), json!(null), "no running container");
+
+    observe("checked", &["container_running"]);
+    assert_eq!(
+        health_of("checked"),
+        json!(null),
+        "no check has been observed"
+    );
+
+    observe("checked", &["health_check_starting"]);
+    assert_eq!(health_of("checked"), "starting");
+    observe("checked", &["health_check_pass"]);
+    assert_eq!(health_of("checked"), "passing");
+    observe("checked", &["health_check_fail"]);
+    assert_eq!(health_of("checked"), "failing");
+    observe("checked", &["health_check_pass"]);
+    assert_eq!(health_of("checked"), "passing");
+
+    observe("unchecked", &["health_check_pass"]);
+    assert_eq!(
+        health_of("unchecked"),
+        json!(null),
+        "a Deployment with no health check has no health"
+    );
+
+    observe("checked", &["container_exited", "container_removed"]);
+    assert_eq!(health_of("checked"), json!(null), "no running container");
+    observe("checked", &["container_created", "container_running"]);
+    assert_eq!(
+        health_of("checked"),
+        json!(null),
+        "an earlier container's check is not this one's"
+    );
 }

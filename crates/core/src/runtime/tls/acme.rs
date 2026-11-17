@@ -79,6 +79,20 @@ pub enum AcmeError {
 
     #[snafu(display("DNS provider {name} not configured"))]
     ProviderNotFound { name: String },
+
+    #[snafu(display("ACME account {account_id} is no longer stored"))]
+    AccountGone { account_id: i64 },
+
+    #[snafu(display("certificate carries no authority key identifier to name it by"))]
+    NoIdentifier,
+}
+
+/// A certificate an issuance replaces.
+pub struct PreviousCert<'a> {
+    pub chain_pem: &'a str,
+    /// The ACME account that issued it; `None` for a certificate obtained
+    /// any other way.
+    pub acme_account_id: Option<i64>,
 }
 
 /// Parameters to drive a single issuance.
@@ -87,12 +101,9 @@ pub struct IssueParams<'a> {
     pub contact_email: &'a str,
     pub directory_url: &'a str,
     pub dns_provider_name: &'a str,
-    /// PEM chain of the previous certificate for this hostname, when this
-    /// is a renewal. Used to populate the order's `replaces` field per
-    /// RFC 9773 § 5 so the CA can skip rate-limiting on the renewal and
-    /// invalidate any pending ARI advice for the old cert.
+    /// The certificate this issuance replaces, when it is a renewal.
     // spec: TLS#renewal
-    pub previous_cert_pem: Option<&'a str>,
+    pub previous: Option<PreviousCert<'a>>,
     /// ACME profile name forwarded to the CA via the profiles
     /// extension. `None` means "let the CA pick its default". Let's
     /// Encrypt's `shortlived` profile yields ~6-day certs; absent a
@@ -151,25 +162,26 @@ pub async fn issue(
         load_or_create_account(db, cipher, params.directory_url, params.contact_email).await?;
 
     let identifiers = vec![Identifier::Dns(params.hostname.to_owned())];
-    let mut new_order = NewOrder::new(&identifiers);
-    // spec: TLS#renewal
-    // If we know the previous cert, hand its CertificateIdentifier
-    // to the CA via the order's `replaces` field. Saves us a rate-limit
-    // round-trip on Let's Encrypt and lets ARI advice for the old cert
-    // be invalidated cleanly. Failure to extract the identifier is not
-    // fatal — we just issue without the hint.
-    let replaces_owned = params
-        .previous_cert_pem
-        .and_then(|pem| extract_cert_identifier(pem).ok())
-        .flatten();
-    if let Some(ref ident) = replaces_owned {
-        new_order = new_order.replaces(ident.clone());
-    }
-    // spec: TLS#acme-accounts-and-settings
-    if let Some(profile) = params.cert_profile {
-        new_order = new_order.profile(profile);
-    }
-    let mut order = account.new_order(&new_order).await.context(AcmeSnafu)?;
+    let new_order = || {
+        let order = NewOrder::new(&identifiers);
+        // spec: TLS#acme-accounts-and-settings
+        match params.cert_profile {
+            Some(profile) => order.profile(profile),
+            None => order,
+        }
+    };
+    let replaces = replaces_field(params.previous.as_ref(), account_id);
+    let mut order = match replaces {
+        Some(ident) => match account.new_order(&new_order().replaces(ident)).await {
+            // A directory without renewal information takes no `replaces`,
+            // and the order is refused before it is sent.
+            Err(instant_acme::Error::Unsupported(_)) => {
+                account.new_order(&new_order()).await.context(AcmeSnafu)?
+            }
+            other => other.context(AcmeSnafu)?,
+        },
+        None => account.new_order(&new_order()).await.context(AcmeSnafu)?,
+    };
 
     let challenge_name = challenge_record_name(params.hostname);
     let mut planted: Vec<String> = Vec::new();
@@ -227,12 +239,13 @@ pub async fn issue(
     // guidance and the renewal task falls back.
     if let Some(new_ident) = build_cert_identifier(&parsed) {
         match account.renewal_info(&new_ident).await {
-            Ok((info, _retry_after)) => {
+            Ok((info, retry_after)) => {
                 let start = info.suggested_window.start.unix_timestamp();
                 let end = info.suggested_window.end.unix_timestamp();
                 let polled = jiff::Timestamp::now().as_second();
+                let next = next_ari_poll(polled, Some(retry_after));
                 let _ = db.call(move |db_inner| {
-                    store::update_ari_window(db_inner, cert_id, start, end, polled)
+                    store::update_ari_window(db_inner, cert_id, start, end, polled, next)
                 });
                 tracing::debug!(
                     %cert_id,
@@ -252,6 +265,78 @@ pub async fn issue(
     }
 
     Ok(Issued { cert_id, not_after })
+}
+
+/// The fewest seconds until the next renewal-information fetch, whatever the
+/// CA's Retry-After asks: RFC 9773 §4.3.2 has the client set limits.
+const ARI_MIN_INTERVAL_SECS: i64 = 60;
+/// The most seconds until the next fetch, whatever the CA asks.
+const ARI_MAX_INTERVAL_SECS: i64 = 86_400;
+/// How long after a failed fetch the next is made, RFC 9773 §4.3.3.
+const ARI_AFTER_FAILURE_SECS: i64 = 6 * 3600;
+
+/// When renewal information fetched at `now` is next fetched: after the CA's
+/// Retry-After, held within limits, or six hours after a failed fetch.
+// spec: TLS#renewal
+pub fn next_ari_poll(now: i64, retry_after: Option<Duration>) -> i64 {
+    match retry_after {
+        Some(after) => {
+            let secs = i64::try_from(after.as_secs()).unwrap_or(i64::MAX);
+            now + secs.clamp(ARI_MIN_INTERVAL_SECS, ARI_MAX_INTERVAL_SECS)
+        }
+        None => now + ARI_AFTER_FAILURE_SECS,
+    }
+}
+
+/// Fetch a certificate's renewal information again and record it, or, when
+/// the fetch fails, keep the window it holds and try again later.
+// spec: TLS#renewal
+pub async fn refresh_renewal_info(db: &DbHandle, cipher: &Cipher, poll: &store::AriPoll) {
+    let cert_id = poll.cert_id;
+    let fetched = fetch_renewal_info(db, cipher, poll).await;
+    let now = jiff::Timestamp::now().as_second();
+    let recorded = match fetched {
+        Ok((start, end, retry_after)) => {
+            let next = next_ari_poll(now, Some(retry_after));
+            db.call(move |db| store::update_ari_window(db, cert_id, start, end, now, next))
+        }
+        Err(e) => {
+            tracing::warn!(%cert_id, error = %e, "ACME renewal info re-fetch failed; keeping the stored window");
+            let next = next_ari_poll(now, None);
+            db.call(move |db| store::defer_ari_poll(db, cert_id, next))
+        }
+    };
+    if let Err(e) = recorded {
+        tracing::error!(%cert_id, error = %e, "could not record ACME renewal info");
+    }
+}
+
+async fn fetch_renewal_info(
+    db: &DbHandle,
+    cipher: &Cipher,
+    poll: &store::AriPoll,
+) -> Result<(i64, i64, Duration), AcmeError> {
+    let account_id = poll.acme_account_id;
+    let row = db
+        .call(move |db| store::get_acme_account_by_id(db, account_id))
+        .context(StorageSnafu)?
+        .ok_or_else(|| AccountGoneSnafu { account_id }.build())?;
+    let plaintext = store::decrypt_acme_account_key(cipher, &row).context(CipherSnafu)?;
+    let creds: instant_acme::AccountCredentials =
+        serde_json::from_str(plaintext.expose_secret()).context(AccountSerdeSnafu)?;
+    let account = Account::builder()
+        .context(AcmeSnafu)?
+        .from_credentials(creds)
+        .await
+        .context(AcmeSnafu)?;
+    let parsed = parse::parse_chain(&poll.chain_pem).context(ParseSnafu)?;
+    let ident = build_cert_identifier(&parsed).ok_or_else(|| NoIdentifierSnafu.build())?;
+    let (info, retry_after) = account.renewal_info(&ident).await.context(AcmeSnafu)?;
+    Ok((
+        info.suggested_window.start.unix_timestamp(),
+        info.suggested_window.end.unix_timestamp(),
+        retry_after,
+    ))
 }
 
 /// The part of an order during which the CA needs the DNS-01 challenge
@@ -320,6 +405,22 @@ async fn obtain_chain(
         .await
         .context(AcmeSnafu)?;
     Ok((cert_chain_pem, key))
+}
+
+/// What an order placed through `account_id` names in its `replaces` field.
+///
+/// Only a certificate this account issued: the CA knows no other by its
+/// identifier, as RFC 9773 §5 asks. Failure to extract the identifier is not
+/// fatal — the order is placed without the hint.
+// spec: TLS#renewal
+fn replaces_field(
+    previous: Option<&PreviousCert<'_>>,
+    account_id: i64,
+) -> Option<CertificateIdentifier<'static>> {
+    previous
+        .filter(|p| p.acme_account_id == Some(account_id))
+        .and_then(|p| extract_cert_identifier(p.chain_pem).ok())
+        .flatten()
 }
 
 /// Try to extract a [`CertificateIdentifier`] from a PEM chain. Returns
@@ -449,5 +550,114 @@ async fn cleanup_txt(provider: &dyn DnsProvider, name: &str, values: &[String]) 
         if let Err(e) = provider.clear_txt(name, v).await {
             tracing::warn!(name = %name, error = %e, "best-effort TXT cleanup failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rcgen::{CertificateParams, DistinguishedName, Issuer, KeyPair, PKCS_ECDSA_P256_SHA256};
+
+    use super::*;
+
+    /// A leaf signed by a CA, so it carries the authority key identifier
+    /// RFC 9773 identifies a certificate by.
+    fn ca_signed_leaf() -> String {
+        let mut ca = CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca.distinguished_name = DistinguishedName::new();
+        ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        ca.use_authority_key_identifier_extension = true;
+        let issuer = Issuer::new(ca, KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap());
+        let mut leaf = CertificateParams::new(vec!["a.example.com".to_owned()]).unwrap();
+        leaf.use_authority_key_identifier_extension = true;
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        leaf.signed_by(&key, &issuer).unwrap().pem()
+    }
+
+    // spec: TLS#renewal
+    #[test]
+    fn renewal_info_is_fetched_again_after_retry_after_within_limits() {
+        let now = 1_000_000;
+        assert_eq!(
+            next_ari_poll(now, Some(Duration::from_secs(21_600))),
+            now + 21_600
+        );
+        assert_eq!(next_ari_poll(now, Some(Duration::from_secs(1))), now + 60);
+        assert_eq!(
+            next_ari_poll(now, Some(Duration::from_secs(7 * 86_400))),
+            now + 86_400
+        );
+        assert_eq!(next_ari_poll(now, None), now + 6 * 3600);
+    }
+
+    // spec: TLS#renewal
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_re_fetch_keeps_the_stored_window_and_tries_again_later() {
+        let cipher = Cipher::for_tests();
+        let db = crate::runtime::db::Db::open_in_memory().unwrap();
+        let now = jiff::Timestamp::now().as_second();
+        let pem = ca_signed_leaf();
+        let account_id = store::insert_acme_account(
+            &db,
+            &cipher,
+            "https://acme.invalid/directory",
+            "ops@example.com",
+            "https://acme.invalid/acct/1",
+            &SecretString::new("not credentials".into()),
+        )
+        .unwrap();
+        let cert_id = store::insert_certificate(
+            &db,
+            store::NewCertificate {
+                hostname: "a.example.com",
+                requested_hostnames: None,
+                state: TlsCertState::Active,
+                origin: TlsCertOrigin::AcmeDns,
+                cert_pem: Some(&pem),
+                csr_pem: None,
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: store::CertMetadata {
+                    not_after: Some(now + 30 * 86_400),
+                    ..Default::default()
+                },
+                note: None,
+                acme_account_id: Some(account_id),
+                renews: None,
+            },
+        )
+        .unwrap();
+        store::update_ari_window(&db, cert_id, now + 100, now + 200, now - 10, now - 1).unwrap();
+        let db = DbHandle::from_db(db);
+
+        let polls = db.call(move |db| store::ari_polls(db, now)).unwrap();
+        assert_eq!(
+            polls.len(),
+            1,
+            "an active ACME certificate in ARI use is polled"
+        );
+        refresh_renewal_info(&db, &cipher, &polls[0]).await;
+
+        let row = db
+            .call(move |db| store::get_certificate(db, cert_id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.ari_window_start, Some(now + 100));
+        assert_eq!(row.ari_window_end, Some(now + 200));
+        let polls = db.call(move |db| store::ari_polls(db, now)).unwrap();
+        assert!(polls[0].next_poll_at >= now + 6 * 3600 - 5);
+    }
+
+    // spec: TLS#renewal
+    #[test]
+    fn replaces_names_only_a_certificate_the_same_account_issued() {
+        let pem = ca_signed_leaf();
+        let previous = |acme_account_id| PreviousCert {
+            chain_pem: &pem,
+            acme_account_id,
+        };
+        assert!(replaces_field(Some(&previous(Some(7))), 7).is_some());
+        assert!(replaces_field(Some(&previous(Some(8))), 7).is_none());
+        assert!(replaces_field(Some(&previous(None)), 7).is_none());
+        assert!(replaces_field(None, 7).is_none());
     }
 }

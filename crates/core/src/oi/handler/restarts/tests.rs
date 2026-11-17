@@ -17,7 +17,7 @@ fn seed(oi: &TestOi, app: &str, instance: &str, cause: Cause, exit: Option<ExitS
     let at = jiff::Timestamp::now().as_millisecond();
     oi.state
         .db
-        .call(move |db| record(db, &subject, cause, exit, at))
+        .call(move |db| record(db, &subject, cause, exit, at, 50))
         .expect("record");
 }
 
@@ -126,4 +126,16 @@ fn settings_round_trip_and_reject_out_of_bounds() {
     let s = oi.call("/restarts/settings/get", json!({})).unwrap();
     assert_eq!(s["threshold"], 3);
     assert_eq!(s["window_secs"], 600);
+}
+
+// spec: FLTS#crash-loop-settings
+#[test]
+fn settings_set_with_neither_member_is_refused() {
+    let oi = TestOi::new();
+    for params in [json!({}), json!({ "threshold": null, "window_secs": null })] {
+        let (code, _) = oi
+            .call("/restarts/settings/set", params.clone())
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{params}");
+    }
 }

@@ -71,11 +71,23 @@ fn invalid_termination_combo_throws() {
         app.service("web").ingress("example.com", 443).tls(Terminate.Https, Output.Tcp);
     "#,
     );
+    let message = err.to_string();
     assert!(
-        err.to_string()
-            .contains("invalid termination/output combination"),
+        message.contains("invalid termination/output combination"),
         "expected combo error, got: {err}"
     );
+    assert!(
+        message.contains("Terminate.Https + Output.Tcp"),
+        "pairing supplied: {message}"
+    );
+    for valid in [
+        "Terminate.Tls + Output.Tcp",
+        "Terminate.Dtls + Output.Udp",
+        "Terminate.Https + Output.Http1",
+        "Terminate.Https + Output.Http2",
+    ] {
+        assert!(message.contains(valid), "valid pairing {valid}: {message}");
+    }
 }
 
 // spec: ING#redirect-to-https
@@ -98,13 +110,42 @@ fn ingress_redirect_custom_port_and_code() {
     );
 }
 
+fn evaluate(script: &str) -> Option<crate::runtime::apps::ScriptError> {
+    crate::runtime::apps::evaluate_script(
+        &seedling_protocol::names::AppName::new_unchecked("demo"),
+        script,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    )
+    .1
+}
+
 // spec: ING#redirect-to-https
 #[test]
-fn ingress_redirect_without_https_throws() {
-    let _ = run_test_script_err(
-        r#"
-        app.service("web").ingress("example.com", 443).tls(Terminate.Tls, Output.Tcp).redirect();
-    "#,
+fn a_redirect_on_an_ingress_whose_final_termination_is_not_https_fails_evaluation() {
+    for script in [
+        r#"app.service("web").ingress("example.com", 443).tls(Terminate.Tls, Output.Tcp).redirect();"#,
+        r#"app.service("web").ingress("example.com", 443).redirect().tls(Terminate.Tls, Output.Tcp);"#,
+        r#"app.service("web").ingress("example.com", 443)
+            .tls(Terminate.Https, Output.Http1).redirect().tls(Terminate.Tls, Output.Tcp);"#,
+        r#"app.service("web").ingress("example.com", 443).redirect();"#,
+    ] {
+        let err = evaluate(script).expect("the definition fails to evaluate");
+        assert!(
+            err.0.contains("example.com:443"),
+            "names the ingress: {err}"
+        );
+    }
+}
+
+// spec: ING#redirect-to-https
+#[test]
+fn a_redirect_declared_before_the_https_termination_is_accepted() {
+    assert!(
+        evaluate(
+            r#"app.service("web").ingress("example.com", 443).redirect().tls(Terminate.Https, Output.Http1);"#
+        )
+        .is_none()
     );
 }
 
@@ -352,22 +393,35 @@ fn ingress_same_hostname_different_port_does_not_conflict() {
     assert_eq!(count, 2);
 }
 
-// spec: BSL#arguments
 // spec: ING#redirect-to-https
-// The unchecked `as u16` wrapped, so 65843 became 307 — a redirect to a
-// status code that is not a redirect at all.
+// The unchecked `as u16` wrapped, so 65843 became 307, and the 3xx range check
+// let 303 and 300 through: only 301, 302, 307 and 308 are the codes a redirect
+// may carry.
 #[test]
-fn redirect_code_must_be_a_redirection_status() {
-    let err = run_test_script_err(
-        r#"
-        app.service("web").ingress("example.com", 443)
-            .tls(Terminate.Https, Output.Http1)
-            .redirect(80, 200);
-    "#,
-    );
-    let message = err.to_string();
-    assert!(message.contains("`redirect code`"), "{message}");
-    assert!(message.contains("300"), "{message}");
+fn redirect_code_must_be_one_of_the_four_redirects() {
+    for bad in [200, 300, 303, 304, 305, 399, 65843, -307] {
+        let err = run_test_script_err(&format!(
+            r#"
+            app.service("web").ingress("example.com", 443)
+                .tls(Terminate.Https, Output.Http1)
+                .redirect(80, {bad});
+        "#
+        ));
+        let message = err.to_string();
+        assert!(
+            message.contains("301, 302, 307, or 308"),
+            "{bad}: {message}"
+        );
+    }
+    for good in [301, 302, 307, 308] {
+        run_test_script_app(&format!(
+            r#"
+            app.service("web").ingress("example.com", 443)
+                .tls(Terminate.Https, Output.Http1)
+                .redirect(80, {good});
+        "#
+        ));
+    }
 }
 
 // spec: ING#declaration

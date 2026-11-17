@@ -106,6 +106,25 @@ fn template_update_body_and_description() {
     assert_eq!(code, "not_found");
 }
 
+// spec: TPL#update
+#[test]
+fn an_update_with_origin_but_no_definition_is_refused() {
+    let oi = TestOi::new();
+    oi.call("/templates/create", json!({ "name": "demo", "body": "1;" }))
+        .unwrap();
+    let (code, _) = oi
+        .call(
+            "/templates/update",
+            json!({ "name": "demo", "origin": { "url": "u", "revision": "r" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    let shown = oi
+        .call("/templates/show", json!({ "name": "demo" }))
+        .unwrap();
+    assert_eq!(shown["body"], "1;");
+}
+
 // spec: TPL#removal
 #[test]
 fn template_remove_deletes_once() {

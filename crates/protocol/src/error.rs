@@ -23,16 +23,15 @@ pub enum ErrorCode {
     UnsupportedSeedling,
     // spec: DEFN#fetching
     FetchFailed,
+    // spec: IMGM#removing-an-image
+    ImageInUse,
     // spec: DEFN#registry-access
     RegistryNotAllowed,
-    Deregistering,
     ServerBusy,
     Internal,
     // spec: RLY#disabled-access
     // spec: RLY#unavailability
     CanopyDisabled,
-    // spec: RLY#unavailability
-    CanopyUnavailable,
 }
 
 #[derive(Debug)]
@@ -55,6 +54,13 @@ impl OiError {
 
     pub fn script_error(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::ScriptError, message)
+    }
+
+    /// A failure inside the server, such as a failed database read: never
+    /// an answer about what was asked for.
+    // spec: WIRE#error-codes
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Internal, message)
     }
 }
 
@@ -82,8 +88,8 @@ mod tests {
             (ErrorCode::BundleInvalid, "bundle_invalid"),
             (ErrorCode::UnsupportedSeedling, "unsupported_seedling"),
             (ErrorCode::FetchFailed, "fetch_failed"),
+            (ErrorCode::ImageInUse, "image_in_use"),
             (ErrorCode::RegistryNotAllowed, "registry_not_allowed"),
-            (ErrorCode::Deregistering, "deregistering"),
             (ErrorCode::ServerBusy, "server_busy"),
             (ErrorCode::Internal, "internal"),
         ];

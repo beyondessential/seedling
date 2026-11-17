@@ -209,8 +209,6 @@ pub fn list_policies(db: &Db) -> rusqlite::Result<Vec<TlsPolicyRow>> {
                 "acme_dns" => TlsPolicy::AcmeDns {
                     dns_provider: dns_provider.ok_or_else(|| rusqlite::Error::InvalidQuery)?,
                 },
-                // spec: SITE#tailscale-discovery
-                "tailscale" => TlsPolicy::Tailscale,
                 // spec: TCAN#canopy-only-policy
                 "canopy" => TlsPolicy::Canopy,
                 "manual" => return Ok(None),
@@ -998,17 +996,65 @@ pub fn update_ari_window(
     window_start: i64,
     window_end: i64,
     polled_at: i64,
+    next_poll_at: i64,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
         "UPDATE tls_certificates SET
             ari_window_start = ?1,
             ari_window_end   = ?2,
             ari_polled_at    = ?3,
+            ari_next_poll_at = ?4,
             updated_at       = ?3
-         WHERE id = ?4",
-        params![window_start, window_end, polled_at, id],
+         WHERE id = ?5",
+        params![window_start, window_end, polled_at, next_poll_at, id],
     )?;
     Ok(())
+}
+
+/// Put off a certificate's next renewal-information fetch to `next_poll_at`,
+/// keeping the window it holds.
+// spec: TLS#renewal
+pub fn defer_ari_poll(db: &Db, id: i64, next_poll_at: i64) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE tls_certificates SET ari_next_poll_at = ?1 WHERE id = ?2",
+        params![next_poll_at, id],
+    )?;
+    Ok(())
+}
+
+/// A certificate whose renewal information is in use, with what fetching it
+/// again needs.
+#[derive(Debug, Clone)]
+pub struct AriPoll {
+    pub cert_id: i64,
+    pub chain_pem: String,
+    pub acme_account_id: i64,
+    pub next_poll_at: i64,
+}
+
+/// Every certificate whose renewal information is in use: an active ACME
+/// certificate, not yet expired, whose information has been fetched once.
+/// Ordered by when each is next due.
+// spec: TLS#renewal
+pub fn ari_polls(db: &Db, now: i64) -> rusqlite::Result<Vec<AriPoll>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT id, cert_pem, acme_account_id, ari_next_poll_at
+           FROM tls_certificates
+          WHERE state = 'active' AND origin = 'acme_dns'
+            AND ari_polled_at IS NOT NULL AND ari_next_poll_at IS NOT NULL
+            AND acme_account_id IS NOT NULL AND cert_pem IS NOT NULL
+            AND not_after > ?1
+          ORDER BY ari_next_poll_at",
+    )?;
+    stmt.query_map([now], |row| {
+        Ok(AriPoll {
+            cert_id: row.get(0)?,
+            chain_pem: row.get(1)?,
+            acme_account_id: row.get(2)?,
+            next_poll_at: row.get(3)?,
+        })
+    })?
+    .collect()
 }
 
 /// Find the most-specific [`TlsPolicy`] that matches `hostname`. Patterns
@@ -1253,6 +1299,33 @@ pub fn finalize_attempt(
     Ok(())
 }
 
+/// Close as `failure` every attempt left `pending` by a runtime that stopped,
+/// other than one recording an open Canopy order, which the order's own answer
+/// closes. Returns how many were closed.
+///
+/// For a hostname with an order open, the newest pending attempt is that
+/// order's; any earlier one belonged to an issuance that cannot still be
+/// running.
+// spec: TLS#attempt-log
+pub fn close_interrupted_attempts(db: &Db) -> rusqlite::Result<usize> {
+    let now = now_secs();
+    db.conn.execute(
+        "UPDATE tls_cert_attempts SET
+            outcome     = 'failure',
+            error       = 'interrupted by a runtime restart',
+            finished_at = ?1
+         WHERE outcome = 'pending'
+           AND NOT (
+               hostname IN (SELECT hostname FROM tls_chain_state
+                            WHERE open_order_since IS NOT NULL)
+               AND id = (SELECT MAX(later.id) FROM tls_cert_attempts later
+                         WHERE later.hostname = tls_cert_attempts.hostname
+                           AND later.outcome = 'pending')
+           )",
+        [now],
+    )
+}
+
 /// The newest attempt for `hostname` that has not finished.
 pub fn latest_pending_attempt(db: &Db, hostname: &str) -> rusqlite::Result<Option<i64>> {
     db.conn
@@ -1424,7 +1497,7 @@ pub fn list_force_retries(db: &Db) -> rusqlite::Result<Vec<TlsCertForceRetry>> {
 // ---------------------------------------------------------------------------
 
 const CHAIN_COLUMNS: &str = "hostname, replacing_cert_id, replacing_not_after, step, step_since, \
-     open_order_since, last_error, updated_at, retry_not_before";
+     open_order_since, last_error, updated_at, retry_not_before, csr_rejected";
 
 /// Reads the columns of [`CHAIN_COLUMNS`], positionally and in that order.
 fn row_to_chain(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsChainRow> {
@@ -1444,6 +1517,7 @@ fn row_to_chain(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsChainRow> {
             retry_not_before: row.get(8)?,
         },
         last_error: row.get(6)?,
+        csr_rejected: row.get(9)?,
         updated_at: row.get(7)?,
     })
 }
@@ -1468,7 +1542,9 @@ pub fn get_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsChai
         .optional()
 }
 
-/// Record a hostname's chain position, replacing whatever was recorded.
+/// Record a hostname's chain position, replacing whatever was recorded. The
+/// position is recorded as not holding a rejected signing request, which
+/// [`set_csr_rejected`] records after it.
 // spec: CHAIN#fall-through
 pub fn put_chain_row(
     db: &Db,
@@ -1479,8 +1555,8 @@ pub fn put_chain_row(
     db.conn.execute(
         "INSERT INTO tls_chain_state
             (hostname, replacing_cert_id, replacing_not_after, step, step_since,
-             open_order_since, last_error, updated_at, retry_not_before)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             open_order_since, last_error, updated_at, retry_not_before, csr_rejected)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)
          ON CONFLICT(hostname) DO UPDATE SET
              replacing_cert_id = excluded.replacing_cert_id,
              replacing_not_after = excluded.replacing_not_after,
@@ -1489,7 +1565,8 @@ pub fn put_chain_row(
              open_order_since = excluded.open_order_since,
              last_error = excluded.last_error,
              updated_at = excluded.updated_at,
-             retry_not_before = excluded.retry_not_before",
+             retry_not_before = excluded.retry_not_before,
+             csr_rejected = 0",
         params![
             hostname,
             row.identity.cert_id,
@@ -1501,6 +1578,18 @@ pub fn put_chain_row(
             now_secs(),
             row.retry_not_before,
         ],
+    )?;
+    Ok(())
+}
+
+/// Record that the last answer Canopy gave for the hostname rejected the
+/// runtime's signing request, against the position [`put_chain_row`] just
+/// recorded.
+// spec: TCAN#faults
+pub fn set_csr_rejected(db: &Db, hostname: &str) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE tls_chain_state SET csr_rejected = 1 WHERE hostname = ?1",
+        [hostname],
     )?;
     Ok(())
 }
@@ -1698,6 +1787,7 @@ pub fn activate_canopy_chain(
                 ari_window_start = NULL,
                 ari_window_end = NULL,
                 ari_polled_at = NULL,
+                ari_next_poll_at = NULL,
                 created_at = ?7,
                 updated_at = ?7
              WHERE id = ?8 AND origin = 'canopy' AND state IN ('csr_pending', 'active')",
@@ -2821,6 +2911,43 @@ mod tests {
 
     // spec: TLS#attempt-log
     #[test]
+    fn a_restart_closes_every_pending_attempt_but_an_open_canopy_order() {
+        let (db, _) = fresh_db();
+        let stale = insert_attempt(&db, "stale.example.com", AttemptTrigger::OnDemand).unwrap();
+        let earlier =
+            insert_attempt(&db, "ordering.example.com", AttemptTrigger::OnDemand).unwrap();
+        let order = insert_attempt(&db, "ordering.example.com", AttemptTrigger::Renewal).unwrap();
+        put_chain_row(
+            &db,
+            "ordering.example.com",
+            &chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 1,
+                open_order_since: Some(1),
+                retry_not_before: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(close_interrupted_attempts(&db).unwrap(), 2);
+
+        let outcome = |id| {
+            list_attempts(&db, None, 10)
+                .unwrap()
+                .into_iter()
+                .find(|a| a.id == id)
+                .unwrap()
+        };
+        assert_eq!(outcome(stale).outcome, AttemptOutcome::Failure);
+        assert!(outcome(stale).finished_at.is_some());
+        assert_eq!(outcome(earlier).outcome, AttemptOutcome::Failure);
+        assert_eq!(outcome(order).outcome, AttemptOutcome::Pending);
+    }
+
+    // spec: TLS#attempt-log
+    #[test]
     fn attempt_lifecycle_round_trips() {
         let (db, _) = fresh_db();
         let id = insert_attempt(&db, "host.example.com", AttemptTrigger::OnDemand).unwrap();
@@ -2869,7 +2996,7 @@ mod tests {
         set_retry_block(
             &db,
             "host.example.com",
-            RetryBlockSource::Auto,
+            RetryBlockSource::Operator,
             Some("dns 5xx"),
         )
         .unwrap();
@@ -2877,10 +3004,10 @@ mod tests {
 
         let rows = list_retry_blocks(&db).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].set_by, RetryBlockSource::Auto);
+        assert_eq!(rows[0].set_by, RetryBlockSource::Operator);
         assert_eq!(rows[0].reason.as_deref(), Some("dns 5xx"));
 
-        // Setting again with the operator source replaces in place.
+        // Setting again replaces in place.
         set_retry_block(
             &db,
             "host.example.com",

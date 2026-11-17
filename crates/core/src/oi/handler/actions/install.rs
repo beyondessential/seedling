@@ -40,6 +40,9 @@ fn validate_install_params(
     app_name: &AppName,
     submitted: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, OiError> {
+    // spec: ACN#param-delivery
+    crate::runtime::action_params::reject_reserved(submitted.keys())
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     let reg = state.registry.read();
     let entry = reg.get(app_name.as_str()).expect("caller confirmed exists");
     let def = entry.app.def.load();
@@ -108,6 +111,8 @@ pub(crate) fn invoke_install(
     let filled = validate_install_params(state, app_name, &submitted)?;
 
     if !has_install_action {
+        crate::oi::handler::actions::lifecycle::record_install_completed(state, app_name);
+        crate::oi::handler::actions::lifecycle::clear_install_interrupted(state, app_name);
         {
             let mut reg = state.registry.write();
             if let Some(entry) = reg.get_mut(app_name.as_str()) {
@@ -132,13 +137,24 @@ pub(crate) fn invoke_install(
                             installing,
                         )
                     })
-                    .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
+                    .map_err(|e| OiError::internal(format!("db persist: {e}")))?;
             }
         }
         // spec: EVT#event-types
-        state
-            .event_tx
-            .app_phase_changed(app_name, "installed", None);
+        state.event_tx.app_phase_changed(
+            app_name,
+            "installed",
+            Some(Arc::clone(&ctx.events.actor)),
+        );
+        // spec: ACN#start-action
+        // An app with no install action moves to Installed without an install
+        // operation, and its start action runs as it does after one.
+        crate::oi::handler::actions::lifecycle::initiate_start(
+            state,
+            app_name,
+            "install",
+            Some(Arc::clone(&ctx.events.actor)),
+        );
         state.tick_notify.notify_one();
         tracing::info!(app = %app_name, schedule = "accepted", "invoke_install (immediate)");
         return Ok(json!({ "schedule": "accepted" }));
@@ -172,6 +188,7 @@ pub(crate) fn invoke_install(
             current_generation,
             "operator",
             &phase_handle,
+            Some(Arc::clone(&ctx.events.actor)),
         );
         let op_id = match &result {
             ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
@@ -192,7 +209,7 @@ pub(crate) fn invoke_install(
                 app_name.clone(),
                 install_action,
                 op_id,
-                op_params,
+                super::lifecycle::OperationParams::Requested(op_params),
                 current_generation,
                 current_generation,
                 "operator".to_owned(),
@@ -202,6 +219,13 @@ pub(crate) fn invoke_install(
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))
         }
         ScheduleResult::Queued => {
+            // spec: OPS#concurrency
+            // Installing is entered when the install starts, so a queued
+            // install leaves no phase behind if it is refused here.
+            super::lifecycle::persist_queued(
+                state,
+                &crate::runtime::barrier::OperationId(op_id_str.clone()),
+            )?;
             tracing::info!(app = %app_name, schedule = "queued", "invoke_install");
             Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))
         }
@@ -221,6 +245,10 @@ pub(crate) fn invoke_install(
         ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is being uninstalled: {app_name}"),
+        )),
+        // spec: OPS#unreadable-operation-state
+        ScheduleResult::Rejected(RejectReason::OperationStateUnreadable) => Err(OiError::internal(
+            "the persisted operation state cannot be read, so no operation can start",
         )),
     }
 }

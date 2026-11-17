@@ -4,25 +4,48 @@ use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
 use super::super::install::{InstallDef, ParamDef, ParamKind};
-use super::super::take::{take_bool, take_map, take_string};
+use super::super::take::{reject_unknown_keys, take_bool, take_closure, take_map, take_string};
 use super::App;
+
+/// Declare the app's install action.
+// spec: ACN#install-action
+fn declare_install(
+    this: &mut App,
+    closure: FnPtr,
+    requirements: BTreeMap<ParamName, ParamDef>,
+) -> Result<(), Box<EvalAltResult>> {
+    // spec: BSL#arguments
+    let closure = take_closure("on_install", "fn", closure)?;
+    super::ensure_not_validating()?;
+    super::ensure_not_in_action_closure("on_install")?;
+    if this.def.load().install.is_some() {
+        return Err("the install action is already declared".into());
+    }
+    this.def.rcu(|d| {
+        let mut d = (**d).clone();
+        d.install = Some(InstallDef {
+            requirements: requirements.clone(),
+        });
+        d
+    });
+    super::capture_install(closure);
+    Ok(())
+}
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     // spec: ACN#install-action
     builder
-        .with_fn("on_install", |this: &mut App, closure: FnPtr| {
-            this.def.rcu(|d| {
-                let mut d = (**d).clone();
-                d.install = Some(InstallDef {
-                    requirements: BTreeMap::new(),
-                });
-                d
-            });
-            super::capture_install(closure);
-        })
+        .with_fn(
+            "on_install",
+            |this: &mut App, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
+                declare_install(this, closure, BTreeMap::new())
+            },
+        )
         .with_fn(
             "on_install",
             |this: &mut App, closure: FnPtr, config: Map| -> Result<(), Box<EvalAltResult>> {
+                // spec: ACN#install-action
+                reject_unknown_keys("on_install config", &config, &["params"])?;
                 // spec: ACN#param-schemas
                 let params_map = config
                     .get("params")
@@ -31,15 +54,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     .transpose()?
                     .unwrap_or_default();
                 let reqs = parse_param_defs(&params_map, false)?;
-                this.def.rcu(|d| {
-                    let mut d = (**d).clone();
-                    d.install = Some(InstallDef {
-                        requirements: reqs.clone(),
-                    });
-                    d
-                });
-                super::capture_install(closure);
-                Ok(())
+                declare_install(this, closure, reqs)
             },
         );
 }
@@ -57,6 +72,11 @@ pub(super) fn parse_param_defs(
         // did not exist — and a non-string `kind` fell back to the default,
         // quietly installing a `password` param as plain text.
         let req_map = take_map(&format!("param `{key}`"), value.clone())?;
+        reject_unknown_keys(
+            &format!("param `{key}`"),
+            &req_map,
+            &["kind", "required", "default_value", "description", "secret"],
+        )?;
 
         let kind = match req_map.get("kind").cloned() {
             Some(v) => {

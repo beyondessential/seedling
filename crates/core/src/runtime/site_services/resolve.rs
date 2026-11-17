@@ -109,7 +109,10 @@ pub enum UnresolvedReason {
 // spec: SITE#endpoint-addressing
 pub fn resolve_endpoint(host: &str, ctx: &ResolveCtx<'_>) -> ResolveOutcome {
     match HostKind::classify(host) {
-        HostKind::Ipv6(v6) => ResolveOutcome::Routable(vec![v6]),
+        HostKind::Ipv6(v6) if ctx.has_ipv6_egress => ResolveOutcome::Routable(vec![v6]),
+        HostKind::Ipv6(_) => ResolveOutcome::Unroutable {
+            reason: UnroutableReason::NoIpv6Egress,
+        },
         HostKind::Ipv4(v4) => {
             if ctx.nat64_active {
                 ResolveOutcome::Routable(vec![synth_v4(v4)])
@@ -228,17 +231,31 @@ mod tests {
         }
     }
 
+    // spec: SITE#endpoint-addressing
     #[test]
-    fn ipv6_literal_routes_natively_regardless_of_nat64_state() {
+    fn ipv6_literal_routes_natively_with_ipv6_egress_whatever_nat64_state() {
         let r = StaticHostnameLookup::new();
         for nat64 in [true, false] {
-            for v6 in [true, false] {
-                let outcome = resolve_endpoint("2001:db8::1", &ctx(nat64, v6, &r));
-                assert_eq!(
-                    outcome,
-                    ResolveOutcome::Routable(vec!["2001:db8::1".parse().unwrap()])
-                );
-            }
+            let outcome = resolve_endpoint("2001:db8::1", &ctx(nat64, true, &r));
+            assert_eq!(
+                outcome,
+                ResolveOutcome::Routable(vec!["2001:db8::1".parse().unwrap()])
+            );
+        }
+    }
+
+    // spec: SITE#endpoint-addressing
+    #[test]
+    fn ipv6_literal_is_unroutable_without_ipv6_egress() {
+        let r = StaticHostnameLookup::new();
+        for nat64 in [true, false] {
+            let outcome = resolve_endpoint("2001:db8::1", &ctx(nat64, false, &r));
+            assert_eq!(
+                outcome,
+                ResolveOutcome::Unroutable {
+                    reason: UnroutableReason::NoIpv6Egress
+                }
+            );
         }
     }
 

@@ -4,8 +4,55 @@ use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, ParamName};
 
 use super::super::action::{Action, ActionDef};
+use super::super::take::{reject_unknown_keys, take_closure, take_map};
 use super::App;
 use crate::runtime::barrier::runtime::is_in_action_closure;
+
+/// Declare `action_name` on the app and return its handle.
+// spec: ACN#action-declaration
+fn declare_action(
+    this: &mut App,
+    method: &str,
+    action_name: ActionName,
+    closure: FnPtr,
+    description: Option<String>,
+    params: BTreeMap<ParamName, super::super::install::ParamDef>,
+) -> Result<Action, Box<EvalAltResult>> {
+    // spec: BSL#arguments
+    let closure = take_closure(method, "fn", closure)?;
+    super::ensure_not_validating()?;
+    super::ensure_not_in_action_closure(method)?;
+    if action_name == "install" {
+        return Err(
+            "the action name \"install\" is reserved for the install action; declare it with \
+             app.on_install"
+                .into(),
+        );
+    }
+    if this.def.load().actions.contains_key(&action_name) {
+        return Err(format!(
+            "an action named {:?} is already declared",
+            action_name.as_str()
+        )
+        .into());
+    }
+    let app_name = this.def.load().name.clone();
+    this.def.rcu(|d| {
+        let mut d = (**d).clone();
+        d.actions.insert(
+            action_name.clone(),
+            ActionDef {
+                name: action_name.clone(),
+                description: description.clone(),
+                schedules: Vec::new(),
+                params: params.clone(),
+            },
+        );
+        d
+    });
+    super::capture_action(action_name.clone(), closure);
+    Ok(Action::new(action_name, app_name))
+}
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     // spec: ACN#action-declaration
@@ -15,23 +62,14 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             |this: &mut App, name: &str, closure: FnPtr| -> Result<Action, Box<EvalAltResult>> {
                 let action_name: ActionName = ActionName::new(name)
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
-                let app_name = this.def.load().name.clone();
-                let name_for_insert = action_name.clone();
-                this.def.rcu(|d| {
-                    let mut d = (**d).clone();
-                    d.actions.insert(
-                        name_for_insert.clone(),
-                        ActionDef {
-                            name: name_for_insert.clone(),
-                            description: None,
-                            schedules: Vec::new(),
-                            params: BTreeMap::new(),
-                        },
-                    );
-                    d
-                });
-                super::capture_action(action_name.clone(), closure);
-                Ok(Action::new(action_name, app_name))
+                declare_action(
+                    this,
+                    "on_action",
+                    action_name,
+                    closure,
+                    None,
+                    BTreeMap::new(),
+                )
             },
         )
         .with_fn(
@@ -43,26 +81,16 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
              -> Result<Action, Box<EvalAltResult>> {
                 let action_name: ActionName = ActionName::new(name)
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
-                let app_name = this.def.load().name.clone();
+                // spec: ACN#action-declaration
+                reject_unknown_keys("on_action options", &options, &["description", "params"])?;
+                // spec: ACN#start-action
+                if action_name == "start" && options.contains_key("params") {
+                    return Err("the start action takes no params".into());
+                }
                 let desc = super::extract_description(&options)?;
                 // spec: ACN#param-schemas
                 let params = parse_action_params(&options)?;
-                let name_for_insert = action_name.clone();
-                this.def.rcu(|d| {
-                    let mut d = (**d).clone();
-                    d.actions.insert(
-                        name_for_insert.clone(),
-                        ActionDef {
-                            name: name_for_insert.clone(),
-                            description: desc.clone(),
-                            schedules: Vec::new(),
-                            params: params.clone(),
-                        },
-                    );
-                    d
-                });
-                super::capture_action(action_name.clone(), closure);
-                Ok(Action::new(action_name, app_name))
+                declare_action(this, "on_action", action_name, closure, desc, params)
             },
         );
 
@@ -89,60 +117,31 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 
     // spec: ACN#start-action
     builder
-        .with_fn("on_start", |this: &mut App, closure: FnPtr| -> Action {
-            let app_name = this.def.load().name.clone();
-            let start_name = ActionName::new_unchecked("start");
-            let name_for_insert = start_name.clone();
-            this.def.rcu(|d| {
-                let mut d = (**d).clone();
-                d.actions.insert(
-                    name_for_insert.clone(),
-                    ActionDef {
-                        name: name_for_insert.clone(),
-                        description: None,
-                        schedules: Vec::new(),
-                        params: BTreeMap::new(),
-                    },
-                );
-                d
-            });
-            super::capture_action(start_name.clone(), closure);
-            Action::new(start_name, app_name)
-        })
+        .with_fn(
+            "on_start",
+            |this: &mut App, closure: FnPtr| -> Result<Action, Box<EvalAltResult>> {
+                let start_name = ActionName::new_unchecked("start");
+                declare_action(this, "on_start", start_name, closure, None, BTreeMap::new())
+            },
+        )
         .with_fn(
             "on_start",
             |this: &mut App, closure: FnPtr, options: Map| -> Result<Action, Box<EvalAltResult>> {
-                let app_name = this.def.load().name.clone();
+                // spec: ACN#start-action
+                reject_unknown_keys("on_start options", &options, &["description"])?;
                 let desc = super::extract_description(&options)?;
                 let start_name = ActionName::new_unchecked("start");
-                let name_for_insert = start_name.clone();
-                this.def.rcu(|d| {
-                    let mut d = (**d).clone();
-                    d.actions.insert(
-                        name_for_insert.clone(),
-                        ActionDef {
-                            name: name_for_insert.clone(),
-                            description: desc.clone(),
-                            schedules: Vec::new(),
-                            params: BTreeMap::new(),
-                        },
-                    );
-                    d
-                });
-                super::capture_action(start_name.clone(), closure);
-                Ok(Action::new(start_name, app_name))
+                declare_action(this, "on_start", start_name, closure, desc, BTreeMap::new())
             },
         );
 }
 
-fn parse_action_params(
+// spec: ACN#param-schemas
+pub(super) fn parse_action_params(
     options: &Map,
 ) -> Result<BTreeMap<ParamName, super::super::install::ParamDef>, Box<rhai::EvalAltResult>> {
-    match options
-        .get("params")
-        .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))
-    {
-        Some(params_map) => super::install::parse_param_defs(&params_map, true),
+    match options.get("params").cloned() {
+        Some(params) => super::install::parse_param_defs(&take_map("params", params)?, true),
         None => Ok(BTreeMap::new()),
     }
 }

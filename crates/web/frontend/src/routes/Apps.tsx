@@ -35,7 +35,7 @@ import type { Actor, AppSummary, ConnectedClients, SeedlingEvent } from "../lib/
 
 const APP_LIST_EVENTS: Set<string> = new Set([
   "AppRegistered", "AppDeregistered", "AppUpdated", "AppPhaseChanged",
-  "OperationStarted", "OperationCompleted", "OperationFailed",
+  "OperationStarted", "OperationCompleted", "OperationFailed", "OperationCancelled",
   "FaultFiled", "FaultCleared", "ResourceStopped", "ResourceUnstopped",
   "AppPriorityChanged",
 ]);

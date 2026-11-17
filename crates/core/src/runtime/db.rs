@@ -147,6 +147,24 @@ const SQL_V64: &str = include_str!("db/migrations/v64.sql");
 const SQL_V65: &str = include_str!("db/migrations/v65.sql");
 const SQL_V66: &str = include_str!("db/migrations/v66.sql");
 const SQL_V67: &str = migrations::v67::SQL;
+const SQL_V68: &str = include_str!("db/migrations/v68.sql");
+const SQL_V69: &str = include_str!("db/migrations/v69.sql");
+const SQL_V70: &str = include_str!("db/migrations/v70.sql");
+const SQL_V71: &str = include_str!("db/migrations/v71.sql");
+const SQL_V72: &str = include_str!("db/migrations/v72.sql");
+const SQL_V73: &str = include_str!("db/migrations/v73.sql");
+const SQL_V74: &str = include_str!("db/migrations/v74.sql");
+const SQL_V75: &str = include_str!("db/migrations/v75.sql");
+// spec: CNR#server-identity
+const SQL_V76: &str = include_str!("db/migrations/v76.sql");
+// spec: TCAN#faults
+const SQL_V77: &str = include_str!("db/migrations/v77.sql");
+// spec: OPS#operation-scoped-volumes
+const SQL_V78: &str = include_str!("db/migrations/v78.sql");
+// spec: INFRA#service-addresses
+const SQL_V79: &str = include_str!("db/migrations/v79.sql");
+// spec: ACTU#deployment-and-job-instances
+const SQL_V80: &str = include_str!("db/migrations/v80.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -479,6 +497,71 @@ const MIGRATIONS: &[Migration] = &[
         sql: SQL_V67,
         custom_run: Some(migrations::v67::run),
     },
+    Migration {
+        version: 68,
+        sql: SQL_V68,
+        custom_run: None,
+    },
+    Migration {
+        version: 69,
+        sql: SQL_V69,
+        custom_run: None,
+    },
+    Migration {
+        version: 70,
+        sql: SQL_V70,
+        custom_run: None,
+    },
+    Migration {
+        version: 71,
+        sql: SQL_V71,
+        custom_run: None,
+    },
+    Migration {
+        version: 72,
+        sql: SQL_V72,
+        custom_run: None,
+    },
+    Migration {
+        version: 73,
+        sql: SQL_V73,
+        custom_run: None,
+    },
+    Migration {
+        version: 74,
+        sql: SQL_V74,
+        custom_run: None,
+    },
+    Migration {
+        version: 75,
+        sql: SQL_V75,
+        custom_run: None,
+    },
+    Migration {
+        version: 76,
+        sql: SQL_V76,
+        custom_run: None,
+    },
+    Migration {
+        version: 77,
+        sql: SQL_V77,
+        custom_run: None,
+    },
+    Migration {
+        version: 78,
+        sql: SQL_V78,
+        custom_run: None,
+    },
+    Migration {
+        version: 79,
+        sql: SQL_V79,
+        custom_run: None,
+    },
+    Migration {
+        version: 80,
+        sql: SQL_V80,
+        custom_run: None,
+    },
 ];
 
 fn migration_hash(sql: &str) -> String {
@@ -509,18 +592,17 @@ impl Db {
                 )
                 .into());
             }
+        } else {
+            // SQLite creates the journal, WAL and shared-memory files with
+            // the database file's own mode, so creating it owner-only here
+            // makes them owner-only from creation too.
+            seedling_protocol::keys::write_new_private_file(path, &[])?;
         }
 
         let conn = Connection::open(path)?;
 
         // spec: INFRA#database
         conn.busy_timeout(Duration::from_secs(5))?;
-
-        if let Ok(meta) = path.metadata()
-            && meta.permissions().mode() & 0o777 != 0o600
-        {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
 
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         // Foreign keys are a connection-scoped pragma in SQLite and are off

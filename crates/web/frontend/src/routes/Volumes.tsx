@@ -58,6 +58,7 @@ import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery, type OiQueryError } from "../hooks/useOi";
+import { volumeDisplayName } from "../lib/volumeShell";
 import type {
   AppVolume,
   DeclaredExternalVolume,
@@ -493,30 +494,28 @@ function MultiVolumeShellDialog({
     for (const v of siteVols) {
       const key = `site:${v.name}`;
       if (selected.has(key)) {
-        refs.push({ kind: "site", name: v.name });
-        labels.push(v.name);
+        const ref: VolumeRef = { kind: "site", name: v.name };
+        refs.push(ref);
+        labels.push(volumeDisplayName(ref));
       }
     }
     for (const v of appVols) {
       const key = `app:${v.app}/${v.volume_name}`;
       if (selected.has(key)) {
-        refs.push({ kind: "app", app: v.app, volume: v.volume_name });
-        labels.push(`${v.app}/${v.volume_name}`);
+        const ref: VolumeRef = { kind: "app", app: v.app, volume: v.volume_name };
+        refs.push(ref);
+        labels.push(volumeDisplayName(ref));
       }
     }
     for (const h of heldVols) {
       const key = `held:${h.id}`;
       if (selected.has(key)) {
-        refs.push({ kind: "held", id: h.id });
-        labels.push(`held:${h.app}/${h.display_name}`);
+        const ref: VolumeRef = { kind: "held", id: h.id };
+        refs.push(ref);
+        labels.push(volumeDisplayName(ref, h));
       }
     }
-    const label =
-      labels.length === 0
-        ? ""
-        : labels.length === 1
-          ? labels[0]
-          : `${labels.length} volumes`;
+    const label = labels.join(", ");
     return { refs, label };
   }, [selected, siteVols, appVols, heldVols]);
 
@@ -687,6 +686,7 @@ export default function Volumes() {
   } = useOiQuery<ExportedVolume[]>("/volumes/exported/list", {});
   const {
     data: appVols,
+    error: appVolsError,
     refetch: refetchAppVols,
   } = useOiQuery<AppVolume[]>("/volumes/app/list", {});
   const {
@@ -876,7 +876,7 @@ export default function Volumes() {
                             onClick={() =>
                               openVolumeShell(
                                 [{ kind: "site", name: v.name }],
-                                v.name,
+                                volumeDisplayName({ kind: "site", name: v.name }),
                                 { readOnly: shellReadOnly },
                               )
                             }
@@ -928,6 +928,7 @@ export default function Volumes() {
             App Exports
           </Typography>
           {exportedError && <OiErrorAlert error={exportedError} />}
+          {appVolsError && <OiErrorAlert error={appVolsError} />}
           {exportedLoading && !exportedVols && <CircularProgress size={20} />}
           {exportedVols &&
             (exportedVols.length === 0 ? (
@@ -968,7 +969,7 @@ export default function Volumes() {
                             onClick={() =>
                               openVolumeShell(
                                 [{ kind: "app", app: v.app, volume: v.volume_name }],
-                                `${v.app}/${v.volume_name}`,
+                                volumeDisplayName({ kind: "app", app: v.app, volume: v.volume_name }),
                                 { readOnly: shellReadOnly },
                               )
                             }
@@ -1072,7 +1073,7 @@ export default function Volumes() {
                                   <EditIcon sx={{ fontSize: 16 }} />
                                 </IconActionButton>
                                 <IconActionButton
-                                  safety="write"
+                                  safety="dangerous"
                                   tooltip="Unmap"
                                   onClick={() => void unmapVolume(d.app, d.name)}
                                 >
@@ -1155,7 +1156,7 @@ export default function Volumes() {
                             onClick={() =>
                               openVolumeShell(
                                 [{ kind: "held", id: h.id }],
-                                `held: ${h.app}/${h.display_name}`,
+                                volumeDisplayName({ kind: "held", id: h.id }, h),
                                 { readOnly: shellReadOnly },
                               )
                             }

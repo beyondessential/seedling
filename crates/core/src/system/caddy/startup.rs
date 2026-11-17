@@ -22,7 +22,7 @@ pub(crate) const CADDY_GREEN: &str = "seedling-caddy-green";
 // version plus a build serial; keep it in sync with TAG in that workflow.
 // What the image must provide is declared in docker/caddy/required-modules.txt
 // and checked against the built image before it is published.
-pub(crate) const CADDY_IMAGE: &str = "ghcr.io/beyondessential/seedling-caddy:2.11.4-2";
+pub(crate) const CADDY_IMAGE: &str = "ghcr.io/beyondessential/seedling-caddy:2.11.9-1";
 pub(crate) const CADDY_DATA_VOLUME: &str = "seedling-caddy-data";
 pub(crate) const PROXY_NETWORK: &str = "seedling-proxy";
 
@@ -100,16 +100,19 @@ pub(crate) enum CaddyStartupError {
         backtrace: snafu::Backtrace,
     },
     // spec: PRX#proxy-upgrades
-    #[snafu(display("upgraded Caddy rejected the replayed proxy config: {source}"))]
-    ConfigRejected {
-        #[snafu(source(from(super::proxy::CaddyError, Box::new)))]
-        source: Box<super::proxy::CaddyError>,
+    #[snafu(display("{message}; the running proxy has no address to serve from"))]
+    UpgradeRejected {
+        message: String,
         backtrace: snafu::Backtrace,
     },
 }
 
 fn caddy_db_open(data_dir: &std::path::Path) -> Result<rusqlite::Connection, rusqlite::Error> {
     let conn = rusqlite::Connection::open(data_dir.join("seedling.db"))?;
+    // spec: INFRA#database
+    // Another connection holds the write lock for moments at a time; waiting
+    // for it is not a failure.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     Ok(conn)
 }
@@ -437,6 +440,26 @@ async fn poll_until_healthy(
     }
 }
 
+/// What [`ensure_caddy_running`] did about the proxy's image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProxyImageOutcome {
+    /// The running proxy already ran the desired image.
+    Current,
+    /// A proxy of the desired image now runs, started fresh or by upgrade.
+    Replaced,
+    /// The replacement rejected the persisted configuration and the upgrade
+    /// was aborted; the previous proxy stays active and serving. Carries the
+    /// rejection.
+    UpgradeRejected(String),
+}
+
+/// A running, healthy proxy.
+pub(crate) struct EnsuredCaddy {
+    /// The proxy that serves.
+    pub addrs: CaddyAddrs,
+    pub image: ProxyImageOutcome,
+}
+
 // spec: PRX#proxy-lifecycle
 /// Ensure the Caddy proxy container is running and healthy.
 ///
@@ -462,7 +485,7 @@ pub(crate) async fn ensure_caddy_running(
     process: &dyn ProcessManager,
     node_prefix: &Ipv6Net,
     data_dir: &Path,
-) -> Result<CaddyAddrs, CaddyStartupError> {
+) -> Result<EnsuredCaddy, CaddyStartupError> {
     // 1. Ensure the proxy network exists.
     let proxy_prefix = proxy_network_prefix(node_prefix);
     if !container
@@ -571,10 +594,13 @@ pub(crate) async fn ensure_caddy_running(
                         Err(_) => false,
                     };
                     if healthy {
-                        return Ok(CaddyAddrs {
-                            v6: ip,
-                            v4: state.pod_addr_v4,
-                            admin_socket: socket_path,
+                        return Ok(EnsuredCaddy {
+                            addrs: CaddyAddrs {
+                                v6: ip,
+                                v4: state.pod_addr_v4,
+                                admin_socket: socket_path,
+                            },
+                            image: ProxyImageOutcome::Current,
                         });
                     }
                     tracing::warn!(
@@ -619,7 +645,24 @@ pub(crate) async fn ensure_caddy_running(
                             "upgraded Caddy rejected replayed config; rolling back"
                         );
                         stop_slot(other, process, container).await;
-                        return Err(e).context(ConfigRejectedSnafu);
+                        // The running proxy stays active and serving, so it is
+                        // reported as the proxy to use along with the rejection.
+                        let rejection =
+                            format!("upgraded Caddy rejected the replayed proxy config: {e}");
+                        return match state.pod_addr {
+                            Some(ip) => Ok(EnsuredCaddy {
+                                addrs: CaddyAddrs {
+                                    v6: ip,
+                                    v4: state.pod_addr_v4,
+                                    admin_socket: admin_socket_path(data_dir, &active),
+                                },
+                                image: ProxyImageOutcome::UpgradeRejected(rejection),
+                            }),
+                            None => Err(CaddyStartupError::UpgradeRejected {
+                                message: rejection,
+                                backtrace: snafu::Backtrace::capture(),
+                            }),
+                        };
                     }
                 }
 
@@ -627,7 +670,10 @@ pub(crate) async fn ensure_caddy_running(
                 let conn = caddy_db_open(data_dir).context(DbSnafu)?;
                 write_active_container(&conn, other).context(DbSnafu)?;
 
-                return Ok(new_addrs);
+                return Ok(EnsuredCaddy {
+                    addrs: new_addrs,
+                    image: ProxyImageOutcome::Replaced,
+                });
             }
         }
         Some(state) => {
@@ -669,5 +715,22 @@ pub(crate) async fn ensure_caddy_running(
     let conn = caddy_db_open(data_dir).context(DbSnafu)?;
     write_active_container(&conn, &active).context(DbSnafu)?;
 
-    Ok(addrs)
+    Ok(EnsuredCaddy {
+        addrs,
+        image: ProxyImageOutcome::Replaced,
+    })
+}
+
+#[cfg(test)]
+mod db_tests {
+    // spec: INFRA#database
+    #[test]
+    fn the_proxys_database_connection_waits_for_a_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = super::caddy_db_open(dir.path()).unwrap();
+        let ms: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert!(ms > 0);
+    }
 }

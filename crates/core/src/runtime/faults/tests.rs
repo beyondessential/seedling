@@ -217,16 +217,49 @@ fn clear_all_faults_for_app_clears_only_that_app() {
 }
 
 #[test]
-fn has_active_faults_reflects_state() {
+fn fault_standing_counts_active_faults_and_spots_withholding_ones() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
-    assert!(!has_active_faults(&db, &app("myapp")).expect("check"));
+    let standing = |db: &Db| fault_standing(db, &app("myapp")).expect("standing");
+    assert_eq!(
+        standing(&db),
+        FaultStanding {
+            active: 0,
+            withholding: false
+        }
+    );
 
-    let id = file_fault(&db, &app("myapp"), None, None, None, "script_error", "err").expect("file");
-    assert!(has_active_faults(&db, &app("myapp")).expect("check"));
+    let script =
+        file_fault(&db, &app("myapp"), None, None, None, "script_error", "err").expect("file");
+    assert_eq!(
+        standing(&db),
+        FaultStanding {
+            active: 1,
+            withholding: false
+        }
+    );
 
-    clear_fault(&db, &id, &app("myapp")).expect("clear");
-    assert!(!has_active_faults(&db, &app("myapp")).expect("check"));
+    for kind in WITHHOLDING_KINDS {
+        let id = file_fault(&db, &app("myapp"), None, None, None, kind, "held").expect("file");
+        assert_eq!(
+            standing(&db),
+            FaultStanding {
+                active: 2,
+                withholding: true
+            },
+            "{kind}"
+        );
+        clear_fault(&db, &id, &app("myapp")).expect("clear");
+    }
+
+    clear_fault(&db, &script, &app("myapp")).expect("clear");
+    assert_eq!(
+        standing(&db),
+        FaultStanding {
+            active: 0,
+            withholding: false
+        }
+    );
 }
 
 #[test]
@@ -524,4 +557,45 @@ fn sync_never_touches_kinds_outside_its_scope() {
     let active = list_active_faults(&db, None).unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].kind, "resolver_failed");
+}
+
+// spec: GC#instance-retirement
+#[test]
+fn retiring_an_instance_clears_its_active_faults_with_their_events() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    let mut rx = EVENT_TX.get().unwrap().subscribe();
+    let instance = crate::runtime::identity::ResourceInstance::new_singleton(
+        app("retired"),
+        crate::defs::resource::ResourceKind::Deployment,
+        "web",
+    );
+    crate::runtime::history::insert_instance(&db, &instance).unwrap();
+    let hex = instance.id.to_hex();
+    let id = file_fault(
+        &db,
+        &app("retired"),
+        Some("deployment"),
+        Some("web"),
+        Some(&hex),
+        "health_check_failed",
+        "boom",
+    )
+    .expect("file");
+
+    crate::runtime::history::delete_instance(&db, instance.id).expect("retire");
+
+    let mut found = false;
+    while let Ok(event) = rx.try_recv() {
+        if let seedling_protocol::events::OiEvent::FaultCleared { id: eid, .. } = event
+            && eid == id
+        {
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "expected a FaultCleared event for the retired instance's fault"
+    );
 }

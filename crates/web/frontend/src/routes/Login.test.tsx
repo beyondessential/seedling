@@ -8,8 +8,10 @@ import Login from "./Login";
 
 vi.mock("../lib/session", () => {
   class AuthRequired extends Error {
-    constructor() {
+    readonly credential: string;
+    constructor(credential = "password") {
       super("authentication required");
+      this.credential = credential;
     }
   }
   class BackendUnreachable extends Error {
@@ -62,5 +64,18 @@ describe("Login", () => {
     expect(
       await screen.findByText("backend unreachable: fetch failed"),
     ).toBeTruthy();
+  });
+
+  // spec: UI#signing-in
+  it("shows that sign-in is unavailable, without a password prompt, when no credential would authenticate", async () => {
+    (connect as Mock).mockRejectedValue(new AuthRequired("none"));
+    renderLogin();
+    fireEvent.change(screen.getByLabelText(/Password/), {
+      target: { value: "anything" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText(/Sign-in is unavailable/)).toBeTruthy();
+    expect(screen.queryByLabelText(/Password/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 });

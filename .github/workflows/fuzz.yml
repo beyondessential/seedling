@@ -15,14 +15,19 @@ jobs:
     name: Fuzz wire decoders
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - name: Configure toolchain
         run: |
           rustup toolchain install --profile minimal --no-self-update nightly
           rustup default nightly
-      - uses: taiki-e/install-action@v2.82.2
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-fuzz
+      - name: Seed the lockfile from the workspace
+        # The fuzz crate's own lockfile is not committed, so without this it
+        # resolves afresh, and the registry's minimum publish age can then
+        # refuse a version the workspace already requires.
+        run: cp Cargo.lock crates/protocol/fuzz/Cargo.lock
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/protocol/fuzz

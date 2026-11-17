@@ -7,12 +7,27 @@
 
 use std::sync::Arc;
 
-use bestool_canopy::{CanopyRequest, CanopyResponse, CanopyTransport, async_trait};
+use bestool_canopy::{CanopyRequest, CanopyResponse, CanopyTransport, Error, async_trait};
 use bytes::Bytes;
-use miette::{IntoDiagnostic as _, Result, WrapErr as _, miette};
 use seedling_protocol::canopy::Headers;
 
 use super::{CanopyState, RelayFailure, relay_request};
+
+/// Why a call could not be carried, as the client reports it.
+#[derive(Debug)]
+struct Unreachable(String);
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
+fn unreachable(message: impl Into<String>) -> Error {
+    Error::transport(Unreachable(message.into()))
+}
 
 /// A [`CanopyTransport`] that carries each call over the operator interface to
 /// a client that has offered to issue it.
@@ -29,19 +44,22 @@ impl OiCanopyTransport {
 #[async_trait]
 impl CanopyTransport for OiCanopyTransport {
     // spec: RLY#unavailability
-    async fn call(&self, request: CanopyRequest) -> Result<CanopyResponse> {
+    async fn call(&self, request: CanopyRequest) -> Result<CanopyResponse, Error> {
         if !self.canopy.is_enabled() {
-            return Err(miette!("Canopy access is turned off for this instance"));
+            return Err(unreachable("Canopy access is turned off for this instance"));
         }
-        // Nothing is queued for a provider that might turn up later: a caller
-        // that wants to retry is better placed to decide when than the relay is.
+        // spec: RLY#relay-limits
+        let _slot = self.canopy.acquire_slot().await;
+
+        // spec: RLY#offer-selection
+        // Chosen only once the request holds a slot, so an offer that ended
+        // while it waited is never the one it is sent to. Nothing is queued
+        // for a provider that might turn up later: a caller that wants to
+        // retry is better placed to decide when than the relay is.
         let offer = self
             .canopy
             .current()
-            .ok_or_else(|| miette!("no client is currently offering to reach Canopy"))?;
-
-        // spec: RLY#relay-limits
-        let _slot = self.canopy.acquire_slot().await;
+            .ok_or_else(|| unreachable("no client is currently offering to reach Canopy"))?;
 
         let (parts, body) = request.into_parts();
         let path = parts
@@ -49,16 +67,19 @@ impl CanopyTransport for OiCanopyTransport {
             .path_and_query()
             .map(|pq| pq.as_str().to_owned())
             .unwrap_or_else(|| parts.uri.path().to_owned());
-        let headers = to_headers(&parts.headers)
-            .wrap_err("preparing the request headers for the Canopy relay")?;
+        let headers = to_headers(&parts.headers).map_err(|e| {
+            unreachable(format!(
+                "preparing the request headers for the Canopy relay: {e}"
+            ))
+        })?;
 
         let response = relay_request(&offer, parts.method.as_str(), &path, headers, &body)
             .await
             .map_err(|e| match e {
                 // A client error already names Canopy; the others describe the
                 // relay itself, so say which of the two failed.
-                RelayFailure::Client(_) => miette!("{e}"),
-                other => miette!("relaying {} {path} failed: {other}", parts.method),
+                RelayFailure::Client(_) => unreachable(e.to_string()),
+                other => unreachable(format!("relaying {} {path} failed: {other}", parts.method)),
             })?;
 
         let mut built = http::Response::builder().status(response.status);
@@ -67,8 +88,7 @@ impl CanopyTransport for OiCanopyTransport {
         }
         built
             .body(Bytes::from(response.body))
-            .into_diagnostic()
-            .wrap_err("building the Canopy response")
+            .map_err(|e| unreachable(format!("building the Canopy response: {e}")))
     }
 }
 
@@ -78,13 +98,13 @@ impl CanopyTransport for OiCanopyTransport {
 /// separated by a comma and a space, per RFC 9110's field-line combination
 /// rules. `Set-Cookie` is exempt from those rules and so is not faithfully
 /// represented; the relay is not intended to carry it.
-fn to_headers(map: &http::HeaderMap) -> Result<Headers> {
+fn to_headers(map: &http::HeaderMap) -> Result<Headers, String> {
     let mut out = Headers::new();
     for (name, value) in map {
         // A header value may hold bytes that are not text. Rather than dropping
         // it or mangling it into something that is not what the peer sent, say
         // so: a Canopy call has no business carrying one.
-        let value = value.to_str().into_diagnostic().wrap_err_with(|| {
+        let value = value.to_str().map_err(|_| {
             format!("header {name} holds a value that is not text and cannot be relayed")
         })?;
         out.entry(name.as_str().to_ascii_lowercase())
@@ -120,10 +140,24 @@ mod tests {
     ) {
         let (tx, rx) = std::sync::mpsc::channel();
         let state = Arc::new(CanopyState::new());
+        offer_answering(&state, 0, tx, status, body);
+        (OiCanopyTransport::new(Arc::clone(&state)), state, rx)
+    }
+
+    /// Register an offer on `conn_id` that answers every relayed request with
+    /// `status` and `body`, sending the request it received down `tx`.
+    fn offer_answering(
+        state: &CanopyState,
+        conn_id: usize,
+        tx: std::sync::mpsc::Sender<SentRequest>,
+        status: u16,
+        body: &'static [u8],
+    ) {
         state.offer(
-            0,
+            conn_id,
             "test".into(),
             "https://example.invalid".into(),
+            None,
             None,
             DuplexPeer::new(move |mut stream: DuplexStream| {
                 let tx = tx.clone();
@@ -151,7 +185,39 @@ mod tests {
                 });
             }),
         );
-        (OiCanopyTransport::new(Arc::clone(&state)), state, rx)
+    }
+
+    // spec: RLY#offer-selection
+    #[tokio::test]
+    async fn the_offer_is_chosen_once_a_slot_is_held() {
+        let (old_tx, old_rx) = std::sync::mpsc::channel();
+        let (new_tx, new_rx) = std::sync::mpsc::channel();
+        let state = Arc::new(CanopyState::new());
+        offer_answering(&state, 0, old_tx, 200, b"old");
+
+        let mut held = Vec::new();
+        for _ in 0..8 {
+            held.push(state.acquire_slot().await);
+        }
+        let transport = OiCanopyTransport::new(Arc::clone(&state));
+        let call = tokio::spawn(async move {
+            let request = http::Request::builder()
+                .uri("/servers/self")
+                .body(Bytes::new())
+                .unwrap();
+            transport.call(request).await
+        });
+        tokio::task::yield_now().await;
+
+        // The offer live when the request arrived ends while it waits.
+        state.remove_by_conn(0);
+        offer_answering(&state, 1, new_tx, 200, b"new");
+        drop(held);
+
+        let response = call.await.unwrap().expect("a response");
+        assert_eq!(response.body().as_ref(), b"new");
+        assert!(new_rx.try_recv().is_ok());
+        assert!(old_rx.try_recv().is_err());
     }
 
     // spec: RLY#relay-streams

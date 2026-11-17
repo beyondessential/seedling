@@ -67,9 +67,56 @@ pub const DEFAULT_READY_DEADLINE_SECS: u64 = 30;
 // spec: RT#barriers
 pub const DEFAULT_TERMINATED_DEADLINE_SECS: u64 = 6 * 3600;
 
-/// Default deadline for `rt.stop()` — stops should settle quickly.
+/// What `rt.stop()`'s default deadline allows beyond the longest stop timeout
+/// among the containers it stops, and the whole of it when it stops none.
 // spec: RT#barriers
-pub const DEFAULT_STOP_DEADLINE_SECS: u64 = 30;
+pub const STOP_DEADLINE_MARGIN_SECS: u64 = 30;
+
+/// The stop timeout of a container that sets none: the host's process
+/// supervisor's own default, which the runtime leaves in place.
+// spec: CTR#stopping
+const SUPERVISOR_STOP_TIMEOUT_SECS: u64 = 90;
+
+/// The default deadline of an `rt.stop` over `resources`: the longest stop
+/// timeout among their containers, plus a margin.
+// spec: RT#barriers
+fn default_stop_deadline(
+    resources: &[(ResourceInstance, Option<crate::defs::resource::Resource>)],
+) -> u64 {
+    use crate::defs::resource::{Resource, ResourceKind};
+    let container_timeout = |pod: &crate::defs::pod::PodDef| {
+        pod.container
+            .lock()
+            .stop_timeout_secs
+            .map_or(SUPERVISOR_STOP_TIMEOUT_SECS, u64::from)
+    };
+    let static_def = |instance: &ResourceInstance| -> Option<Resource> {
+        let name = instance.name.as_ref()?;
+        action_def()?
+            .load()
+            .resources
+            .get(&crate::defs::resource::ResourceId {
+                kind: instance.kind,
+                name: Arc::new(name.clone()),
+            })
+            .cloned()
+    };
+    resources
+        .iter()
+        .filter_map(|(instance, def)| {
+            match def.clone().or_else(|| static_def(instance)) {
+                Some(Resource::Deployment(d)) => Some(container_timeout(&d.def.lock().pod.lock())),
+                Some(Resource::Job(j)) => Some(container_timeout(&j.def.lock().pod.lock())),
+                Some(_) => None,
+                // A container whose declaration cannot be found is held to
+                // the timeout it most likely has rather than to none.
+                None => matches!(instance.kind, ResourceKind::Deployment | ResourceKind::Job)
+                    .then_some(SUPERVISOR_STOP_TIMEOUT_SECS),
+            }
+        })
+        .max()
+        .map_or(STOP_DEADLINE_MARGIN_SECS, |t| t + STOP_DEADLINE_MARGIN_SECS)
+}
 
 // ---------------------------------------------------------------------------
 // Thread-local flag: set when a BarrierHit is thrown so that subsequent
@@ -244,23 +291,56 @@ fn clear_operation_volume_bindings() {
 thread_local! {
     static ANON_VOL_OP_ID: RefCell<Option<String>> = const { RefCell::new(None) };
     static ANON_VOL_COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static ANON_RESOURCE_COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// Generate a stable anonymous volume name for the current operation.
-/// Returns `None` if not in an action context.
-pub fn next_anon_vol_id() -> Option<String> {
-    ANON_VOL_OP_ID.with(|cell| {
-        let op_id = cell.borrow();
-        op_id.as_ref().map(|id| {
-            let counter = ANON_VOL_COUNTER.with(|c| {
+/// The identity a new anonymous Deployment, Job or Service holds for its
+/// lifetime.
+///
+/// Derived from the operation and the order anonymous resources are created
+/// in, so a replay pass creates the same resources with the same identities.
+/// Outside an action closure, where nothing replays, it is random.
+// spec: IDN#anonymous-instances
+pub fn next_anon_instance_id(kind: &str) -> crate::runtime::identity::InstanceId {
+    use crate::runtime::identity::InstanceId;
+    ANON_VOL_OP_ID.with(|cell| match cell.borrow().as_deref() {
+        Some(op_id) => {
+            let counter = ANON_RESOURCE_COUNTER.with(|c| {
                 let n = c.get();
                 c.set(n + 1);
                 n
             });
-            let short = &id[..8.min(id.len())];
-            format!("seedling-anon-{short}-vol-{counter}")
-        })
+            let ns = uuid::Uuid::parse_str(op_id).unwrap_or(uuid::Uuid::nil());
+            let key = format!("anon-{kind}:{counter}");
+            InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()))
+        }
+        None => InstanceId(uuid::Uuid::new_v4()),
     })
+}
+
+/// The name of the next anonymous volume the current operation creates.
+///
+/// The operation's whole ID and the order its anonymous volumes are created
+/// in make the name, so a replay pass names each volume as the first pass
+/// did, and no two operations ever name one alike. Returns `None` outside an
+/// action closure, or where the operation has no ID to name volumes after.
+// spec: ACTU#deployment-and-job-instances
+// spec: APP#anonymous-resources
+pub fn next_anon_vol_id() -> Option<String> {
+    ANON_VOL_OP_ID.with(|cell| {
+        let op_id = cell.borrow();
+        let operation = uuid::Uuid::parse_str(op_id.as_deref()?).ok()?;
+        let counter = ANON_VOL_COUNTER.with(|c| {
+            let n = c.get();
+            c.set(n + 1);
+            n
+        });
+        Some(anon_vol_name(operation, counter))
+    })
+}
+
+fn anon_vol_name(operation: uuid::Uuid, counter: u32) -> String {
+    format!("seedling-anon-{}-vol-{counter}", operation.simple())
 }
 
 /// RAII guard that sets the in-action-closure flag on construction and clears
@@ -277,6 +357,7 @@ impl ActionClosureGuard {
         set_action_def(action_def);
         ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = Some(op_id));
         ANON_VOL_COUNTER.with(|c| c.set(0));
+        ANON_RESOURCE_COUNTER.with(|c| c.set(0));
         set_operation_volume_bindings(bindings);
         Self
     }
@@ -306,6 +387,7 @@ impl Drop for ActionClosureGuard {
         clear_action_def();
         ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = None);
         ANON_VOL_COUNTER.with(|c| c.set(0));
+        ANON_RESOURCE_COUNTER.with(|c| c.set(0));
         clear_operation_volume_bindings();
         clear_active_rt();
     }
@@ -407,6 +489,7 @@ fn claim_log_position(
         resources: resources.to_vec(),
         barriers: Vec::new(),
         extra: None,
+        begun: false,
     });
     g.call_index += 1;
     drop(g);
@@ -464,16 +547,21 @@ fn record_at_anchor(ctx: &mut ReplayContext, call_index: usize, record: BarrierR
     true
 }
 
-// spec: COL#query-methods
-/// How a `Started`'s resources are matched against another collection: by
-/// type and name, which is all a
-/// [`ResourceId`](crate::defs::resource::ResourceId) carries. Two instances
-/// of one scaled deployment share a key, so naming the deployment selects
-/// every replica of it, which is what naming a deployment means.
+// spec: COL#membership
+/// How a `Started`'s resources are matched against another collection: a
+/// named resource by type and name, which is all a
+/// [`ResourceId`](crate::defs::resource::ResourceId) carries, and an
+/// anonymous one by the identity it holds. Two instances of one scaled
+/// deployment share a key, so naming the deployment selects every replica of
+/// it, which is what naming a deployment means.
 ///
-/// Held as names under their type so an instance can be looked up from the
+/// Names are held under their type so an instance can be looked up from the
 /// name it borrows, without building an owned key per resource tested.
-type ResourceKeys = HashMap<crate::defs::resource::ResourceKind, HashSet<String>>;
+#[derive(Default)]
+struct ResourceKeys {
+    named: HashMap<crate::defs::resource::ResourceKind, HashSet<String>>,
+    anonymous: HashSet<crate::runtime::identity::InstanceId>,
+}
 
 /// The keys of whatever a collection method was given: another `Started`, a
 /// Collection, or a bare resource.
@@ -482,26 +570,46 @@ type ResourceKeys = HashMap<crate::defs::resource::ResourceKind, HashSet<String>
 /// `Dynamic`, which would clone every resource it holds, and the warm pairs
 /// besides, only to read the names off them and drop the copy.
 fn resource_keys(other: Dynamic) -> ResourceKeys {
-    let mut keys = ResourceKeys::new();
+    use crate::defs::collection::Member;
+
+    let mut keys = ResourceKeys::default();
     if let Some(started) = other.read_lock::<Started>() {
         for r in &started.resources {
-            keys.entry(r.kind)
-                .or_default()
-                .insert(r.name.clone().unwrap_or_default());
+            match &r.name {
+                Some(name) => {
+                    keys.named.entry(r.kind).or_default().insert(name.clone());
+                }
+                None => {
+                    keys.anonymous.insert(r.id);
+                }
+            }
         }
         return keys;
     }
     for handle in crate::defs::collection::col(other).resolve() {
-        keys.entry(handle.kind())
-            .or_default()
-            .insert(handle.name().to_owned());
+        match handle.member() {
+            Member::Named(id) => {
+                keys.named
+                    .entry(id.kind)
+                    .or_default()
+                    .insert(id.name.to_string());
+            }
+            Member::Anonymous { id, .. } => {
+                keys.anonymous.insert(*id);
+            }
+        }
     }
     keys
 }
 
 fn keys_hold(keys: &ResourceKeys, instance: &ResourceInstance) -> bool {
-    keys.get(&instance.kind)
-        .is_some_and(|names| names.contains(instance.name.as_deref().unwrap_or("")))
+    match instance.name.as_deref() {
+        Some(name) => keys
+            .named
+            .get(&instance.kind)
+            .is_some_and(|names| names.contains(name)),
+        None => keys.anonymous.contains(&instance.id),
+    }
 }
 
 /// The distinct image references in a resource-to-image pairing, in the
@@ -623,21 +731,18 @@ impl RuntimeInstance {
     /// Without a database there are no stored decisions to read, so the
     /// lower bound is the answer rather than a failure.
     ///
-    /// The floor of one holds whatever the bounds say, as it did before
-    /// effective scale was consulted here. It is not what keeps a barrier
-    /// from waiting on nothing — a group holding no resources now returns
-    /// at once — so it stands only to leave `scale(0..n)` resolving as it
-    /// always has.
+    /// An effective scale of zero resolves to no instances, as reconciliation
+    /// holds the deployment at none.
+    // spec: AUTO#scale
     fn effective_scale(&self, deployment: &str, low: u16, high: u16) -> Result<u16, RegistryError> {
         let Some(db) = &self.db else {
-            return Ok(low.max(1));
+            return Ok(low);
         };
         let app = self.app_name.clone();
         let deployment = deployment.to_owned();
-        let effective = db.call(move |db| {
+        Ok(db.call(move |db| {
             crate::runtime::scaling::effective_scale(db, &app, &deployment, low, high)
-        })?;
-        Ok(effective.max(1))
+        })?)
     }
 
     /// Extract ResourceInstance values from a Rhai Dynamic argument.
@@ -668,17 +773,7 @@ impl RuntimeInstance {
         use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
         if let Some(dep) = resources.clone().try_cast::<Deployment>() {
-            if dep.name.is_empty()
-                && let Some(ctx) = &self.ctx
-            {
-                let mut g = ctx.lock();
-                let op_id = g.operation_id.0.clone();
-                let counter = g.anon_counter;
-                g.anon_counter += 1;
-                drop(g);
-                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
-                let key = format!("anon-deployment:{counter}");
-                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+            if let Some(id) = dep.anon_id {
                 let display = format!("{}-anon-dep-{}", self.app_name, id.display_suffix());
                 let instance = ResourceInstance {
                     id,
@@ -707,7 +802,7 @@ impl RuntimeInstance {
             // on serving.
             let scale = {
                 let def = dep.def.lock();
-                (def.scale.start, def.scale.end)
+                (*def.scale.start(), *def.scale.end())
             };
             let scale = self.effective_scale(&dep.name, scale.0, scale.1)?;
             // spec: GC#instances-started-by-actions
@@ -722,17 +817,7 @@ impl RuntimeInstance {
         }
 
         if let Some(job) = resources.clone().try_cast::<Job>() {
-            if job.name.is_empty()
-                && let Some(ctx) = &self.ctx
-            {
-                let mut g = ctx.lock();
-                let op_id = g.operation_id.0.clone();
-                let counter = g.anon_counter;
-                g.anon_counter += 1;
-                drop(g);
-                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
-                let key = format!("anon-job:{counter}");
-                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+            if let Some(id) = job.anon_id {
                 let display = format!("{}-anon-job-{}", self.app_name, id.display_suffix());
                 let instance = ResourceInstance {
                     id,
@@ -784,17 +869,7 @@ impl RuntimeInstance {
         }
 
         if let Some(svc) = resources.clone().try_cast::<Service>() {
-            if svc.name.is_empty()
-                && let Some(ctx) = &self.ctx
-            {
-                let mut g = ctx.lock();
-                let op_id = g.operation_id.0.clone();
-                let counter = g.anon_counter;
-                g.anon_counter += 1;
-                drop(g);
-                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
-                let key = format!("anon-service:{counter}");
-                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+            if let Some(id) = svc.anon_id {
                 let display = format!("{}-anon-svc-{}", self.app_name, id.display_suffix());
                 let instance = ResourceInstance {
                     id,
@@ -882,17 +957,33 @@ impl RuntimeInstance {
             }
         }
 
-        // Anything else is a non-instance-bearing value: Volumes,
-        // ExternalVolumes, ExternalServices, and other items that
-        // legitimately appear in a Collection (e.g. via `col(app)`)
-        // but contribute nothing to the action log. Silently skipping
-        // them lets `rt.start(app)`, `rt.warm_certs(app)`, etc. accept
-        // the App's full Collection without each caller filtering.
-        // Direct misuse (`rt.start(some_volume)`) is also accepted as
-        // a no-op for symmetry with the pre-Action-call behaviour;
-        // the Action arm above catches the one case where silent
-        // dropping would mask a real script bug.
-        Ok(vec![])
+        // spec: RT#selections
+        // An array is a selection of every resource of every element, each
+        // of which must itself be a selection.
+        if resources.is_array() {
+            let mut out = Vec::new();
+            for element in resources.cast::<rhai::Array>() {
+                out.extend(self.extract_instances(element, reuse)?);
+            }
+            return Ok(out);
+        }
+
+        // spec: RT#selections
+        // The other resource handles — volumes, external volumes and
+        // external services — are selections whose resources a runtime
+        // handle method ignores, so `rt.start(app)` and the like take an
+        // app's whole collection. Any other value is no selection at all.
+        let ignored_resource = resources.is::<crate::defs::volume::Volume>()
+            || resources.is::<crate::defs::volume::ExternalVolume>()
+            || resources.is::<crate::defs::service::ExternalService>();
+        if ignored_resource {
+            return Ok(vec![]);
+        }
+        Err(RegistryError::message(format!(
+            "a {} is not a selection: pass an app, a collection, a Started, a resource or an \
+             array of these",
+            resources.type_name()
+        )))
     }
 
     // spec: RCN#desired-state
@@ -917,22 +1008,36 @@ impl RuntimeInstance {
     /// implemented as a wrapper that forwarded into `do_start` —
     /// which mislabelled both records as `Start`. Take the kind as a
     /// parameter so each call surface emits its own label.
+    /// End the operation here if it has been cancelled: a cancelled operation
+    /// stops at the next barrier or `rt.*` call it reaches.
+    // spec: OPS#cancellation
+    fn stop_if_cancelled(&self) -> Result<(), Box<EvalAltResult>> {
+        match &self.ctx {
+            Some(ctx) if ctx.lock().cancel_token.is_cancelled() => Err(make_cancel_error()),
+            _ => Ok(()),
+        }
+    }
+
     fn do_start_or_query(
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
         call_kind: CallKind,
     ) -> Result<Started, Box<EvalAltResult>> {
+        self.stop_if_cancelled()?;
         let resources: Vec<ResourceInstance> =
             resources_with_defs.iter().map(|(r, _)| r.clone()).collect();
 
         // spec: IMG#image-discovery
-        // Probe mode: capture images that would be pulled and return an
-        // already-satisfied Started. No log entries, no DB writes.
+        // Probe mode: `rt.start` captures the images that would be pulled and
+        // `rt.query` does nothing; both return an already-satisfied Started.
+        // No log entries, no DB writes.
         if let Some(ctx) = &self.ctx
             && let Some(probe) = ctx.lock().probe_images.clone()
         {
-            for (_, img) in extract_container_images(&resources_with_defs) {
-                probe.lock().insert(img);
+            if matches!(call_kind, CallKind::Start) {
+                for (_, img) in extract_container_images(&resources_with_defs) {
+                    probe.lock().insert(img);
+                }
             }
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
@@ -942,33 +1047,46 @@ impl RuntimeInstance {
             });
         }
 
-        if let Some(ctx) = &self.ctx {
-            let mut g = ctx.lock();
-            for (instance, maybe_def) in &resources_with_defs {
-                if let Some(def) = maybe_def {
-                    g.dynamic_defs.insert(instance.clone(), def.clone());
-                }
-            }
-        }
-
+        // spec: APP#dynamic-resource-lifetime
+        // spec: SUSP#abandoned-replay
+        // Each dynamic resource is recorded before it is placed in the desired
+        // state: the record is all that finds it again after a restart, so a
+        // resource whose record cannot be written is not started.
         if let (Some(db), Some(ctx)) = (&self.db, &self.ctx) {
             let op_id = ctx.lock().operation_id.0.clone();
             for (instance, maybe_def) in &resources_with_defs {
                 if let Some(resource) = maybe_def {
-                    let instance = instance.clone();
+                    let recorded = instance.clone();
                     let op_id = op_id.clone();
                     // spec: BSL#descriptions
                     let description = resource.description();
                     if let Err(e) = db.call(move |db| {
                         crate::runtime::desired::insert_dynamic_resource(
                             db,
-                            &instance,
+                            &recorded,
                             &op_id,
                             description.as_deref(),
                         )
                     }) {
-                        tracing::warn!("failed to persist dynamic resource: {e}");
+                        tracing::error!(
+                            instance = %instance.display_name,
+                            "could not record a dynamic resource; not starting it: {e}"
+                        );
+                        return Err(format!(
+                            "could not record {} before starting it: {e}",
+                            instance.display_name
+                        )
+                        .into());
                     }
+                }
+            }
+        }
+
+        if let Some(ctx) = &self.ctx {
+            let mut g = ctx.lock();
+            for (instance, maybe_def) in &resources_with_defs {
+                if let Some(def) = maybe_def {
+                    g.dynamic_defs.insert(instance.clone(), def.clone());
                 }
             }
         }
@@ -1021,6 +1139,7 @@ impl RuntimeInstance {
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
+        self.stop_if_cancelled()?;
         // Filter to TLS-terminating ingresses; ignore everything else
         // (per the language spec rule RT#certificate-warming).
         let resources: Vec<ResourceInstance> = resources_with_defs
@@ -1096,6 +1215,7 @@ impl RuntimeInstance {
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
+        self.stop_if_cancelled()?;
         let pairs = extract_container_images(&resources_with_defs);
         let refs: Vec<String> = dedup_image_refs(&pairs)
             .into_iter()
@@ -1181,16 +1301,24 @@ impl RuntimeInstance {
         signal: &str,
     ) -> Result<(), Box<EvalAltResult>> {
         use crate::defs::resource::ResourceKind;
+        self.stop_if_cancelled()?;
         let canonical = canonicalise_signal_name(signal).ok_or_else(|| {
             Box::<EvalAltResult>::from(format!(
                 "rt.signal: unknown signal {signal:?}; expected something like \"SIGHUP\" or \"HUP\""
             ))
         })?;
 
-        if resources.is_empty() {
-            return Err(
-                format!("rt.signal: target resolved to no instances (signal={canonical})").into(),
-            );
+        // spec: RT#signal-delivery
+        // A selection holding only services or ingresses has nothing a signal
+        // can reach, which is the same mistake as an empty one.
+        if !resources
+            .iter()
+            .any(|r| matches!(r.kind, ResourceKind::Deployment | ResourceKind::Job))
+        {
+            return Err(format!(
+                "rt.signal: the selection holds no deployment or job (signal={canonical})"
+            )
+            .into());
         }
 
         // Expand each named container target to all of its currently-existing
@@ -1260,6 +1388,17 @@ impl RuntimeInstance {
             // The signal name is a literal in the script, so unlike the
             // resolved instance set it must match the log.
             match g.replay_step(CallKind::Signal, Some(canonical.as_str())) {
+                // spec: SUSP#side-effecting-calls
+                // Begun and never completed: the signal may have been
+                // delivered, and a second one can have consequences the first
+                // did not, so it is not sent again.
+                Ok(Some(entry)) if entry.begun => {
+                    return Err(format!(
+                        "rt.signal: replay reached a call begun but not completed; the signal \
+                         {canonical} may already have been delivered, so it is not sent again"
+                    )
+                    .into());
+                }
                 Ok(Some(_)) => return Ok(()),
                 Ok(None) => {}
                 Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
@@ -1273,6 +1412,26 @@ impl RuntimeInstance {
             });
         }
 
+        // spec: SUSP#side-effecting-calls
+        // The entry is on record, as begun, before any signal is sent.
+        let call_index = ctx.lock().call_index;
+        let mut entry = ActionLogEntry {
+            call_index,
+            call_kind: CallKind::Signal,
+            resources: expanded.clone(),
+            barriers: Vec::new(),
+            extra: Some(canonical.clone()),
+            begun: true,
+        };
+        ctx.lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.signal: cannot record the call before making it: {e}").into()
+            })?;
+
+        // spec: RT#signal-delivery
+        // A failed delivery fails the call, and the entry stays begun: the
+        // runtime cannot say the signal was not delivered.
         let signaler = ctx.lock().container_signaler.clone();
         if let Some(signaler) = signaler {
             for r in &expanded {
@@ -1282,22 +1441,28 @@ impl RuntimeInstance {
                         signal = %canonical,
                         "rt.signal: signal delivery failed: {e}",
                     );
+                    return Err(format!(
+                        "rt.signal: delivering {canonical} to {} failed: {e}",
+                        r.display_name
+                    )
+                    .into());
                 }
             }
         }
 
-        {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Signal,
-                resources: expanded.clone(),
-                barriers: Vec::new(),
-                extra: Some(canonical.clone()),
-            });
-            g.call_index += 1;
+        // spec: SUSP#side-effecting-calls
+        // Completed, and on record, before the closure continues.
+        entry.begun = false;
+        let on_record = ctx
+            .lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.signal: cannot record the call's completion: {e}").into()
+            })?;
+        if !on_record {
+            ctx.lock().pending.push(entry);
         }
+        ctx.lock().call_index += 1;
 
         Ok(())
     }
@@ -1403,6 +1568,17 @@ impl RuntimeInstance {
                     )
                     .into());
                 }
+                // spec: SUSP#side-effecting-calls
+                // Begun and never completed: the command may have run, and a
+                // second run can have consequences the first did not.
+                if entry.begun {
+                    return Err(format!(
+                        "rt.exec: replay reached a call begun but not completed; the command \
+                         may already have run in {}, so it is not run again",
+                        target.display_name
+                    )
+                    .into());
+                }
                 let recovered = entry.extra.as_deref().and_then(|s| s.parse::<i32>().ok());
                 if let Some(exit_code) = recovered {
                     // Recover the target name from the committed entry so
@@ -1433,28 +1609,56 @@ impl RuntimeInstance {
             argv: &argv,
         });
 
+        // spec: RT#command-execution
+        // The target is a running container, or the call throws before it is
+        // on record.
+        if let Some(executor) = ctx.lock().executor.clone() {
+            executor
+                .check_running(&target)
+                .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?;
+        }
+
+        // spec: SUSP#side-effecting-calls
+        let call_index = ctx.lock().call_index;
+        let mut entry = ActionLogEntry {
+            call_index,
+            call_kind: CallKind::Exec,
+            resources: vec![target.clone()],
+            barriers: Vec::new(),
+            extra: None,
+            begun: true,
+        };
+        ctx.lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.exec: cannot record the call before making it: {e}").into()
+            })?;
+
         let executor = ctx.lock().executor.clone();
         let exit_code = if let Some(executor) = executor {
             executor
-                .exec(&target.display_name, &argv, &env)
+                .exec(&target, &argv, &env)
                 .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?
         } else {
             0
         };
 
         let target_display = target.display_name.clone();
-        {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Exec,
-                resources: vec![target],
-                barriers: Vec::new(),
-                extra: Some(exit_code.to_string()),
-            });
-            g.call_index += 1;
+        // spec: SUSP#side-effecting-calls
+        // Completed, with its exit code, and on record before the closure
+        // continues.
+        entry.begun = false;
+        entry.extra = Some(exit_code.to_string());
+        let on_record = ctx
+            .lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.exec: cannot record the call's completion: {e}").into()
+            })?;
+        if !on_record {
+            ctx.lock().pending.push(entry);
         }
+        ctx.lock().call_index += 1;
 
         Ok(Executed {
             exit_code,
@@ -1512,13 +1716,33 @@ impl RuntimeInstance {
         // evidence this write had been done, and skip it. The path is not
         // checked, only the kind, because a path built from the action's
         // params is as much this call's path as a literal one is.
-        {
+        // spec: SUSP#side-effecting-calls
+        // A write begun and never completed is performed again, which leaves
+        // the volume as one write would.
+        let redo = {
             let mut g = ctx.lock();
             match g.replay_step(CallKind::Write, None) {
+                Ok(Some(entry)) if entry.begun => Some(entry.call_index),
                 Ok(Some(_)) => return Ok(()),
-                Ok(None) => {}
+                Ok(None) => None,
                 Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
             }
+        };
+        let call_index = redo.unwrap_or_else(|| ctx.lock().call_index);
+        let mut entry = ActionLogEntry {
+            call_index,
+            call_kind: CallKind::Write,
+            resources: vec![target_resource],
+            barriers: Vec::new(),
+            extra: Some(path.to_owned()),
+            begun: true,
+        };
+        if redo.is_none() {
+            ctx.lock()
+                .commit_through(&entry)
+                .map_err(|e| -> Box<EvalAltResult> {
+                    format!("rt.write: cannot record the call before making it: {e}").into()
+                })?;
         }
 
         emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Write {
@@ -1535,17 +1759,19 @@ impl RuntimeInstance {
                 .map_err(|e| -> Box<EvalAltResult> { format!("rt.write: {e}").into() })?;
         }
 
-        {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Write,
-                resources: vec![target_resource],
-                barriers: Vec::new(),
-                extra: Some(path.to_owned()),
-            });
-            g.call_index += 1;
+        // spec: SUSP#side-effecting-calls
+        entry.begun = false;
+        let on_record = ctx
+            .lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.write: cannot record the call's completion: {e}").into()
+            })?;
+        if !on_record {
+            ctx.lock().pending.push(entry);
+        }
+        if redo.is_none() {
+            ctx.lock().call_index += 1;
         }
 
         Ok(())
@@ -1628,13 +1854,21 @@ impl RuntimeInstance {
         // says these resources are already terminated, the call must succeed
         // even when more than `deadline_secs` have elapsed. See the matching
         // comment in check_barrier — the committed log can lag the world.
-        let all_terminated = resources.iter().all(|r| {
-            g.world
-                .lifecycle_state(r)
-                .has_reached(LifecycleState::Terminated)
-        });
+        let mut undetermined = false;
+        let all_terminated =
+            resources
+                .iter()
+                .fold(true, |all, r| match g.world.lifecycle_state(r) {
+                    Ok(state) => all && state.has_reached(LifecycleState::Terminated),
+                    Err(_) => {
+                        undetermined = true;
+                        false
+                    }
+                });
 
-        if !all_terminated {
+        // An instance whose state cannot be read neither satisfies the stop
+        // nor runs its deadline out.
+        if !all_terminated && !undetermined {
             // spec: SUSP#deadlines
             // spec: SUSP#rtstop
             // Enforce the stop deadline against the earliest unsatisfied record
@@ -1644,17 +1878,18 @@ impl RuntimeInstance {
             let started_at = g
                 .committed
                 .iter()
-                .chain(g.pending.iter())
-                .find(|e| {
-                    e.resources == resources
-                        && e.barrier(STOP_BARRIER_SEQ).is_some_and(|b| {
-                            b.required_state == LifecycleState::Terminated && !b.satisfied
-                        })
-                })
-                .and_then(|e| e.barrier(STOP_BARRIER_SEQ)?.started_at_secs);
+                .find(|e| e.call_index == g.call_index)
+                .filter(|e| e.call_kind == CallKind::Stop)
+                .and_then(|e| e.barrier(STOP_BARRIER_SEQ))
+                .filter(|b| b.required_state == LifecycleState::Terminated && !b.satisfied)
+                .and_then(|b| b.started_at_secs);
             if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
                 && now.saturating_sub(started_at) >= d
             {
+                // The call keeps its slot, so a script that catches the
+                // failure goes on to the next call at the next position
+                // rather than reading this call's record as its own.
+                g.call_index += 1;
                 return Err(Box::new(EvalAltResult::ErrorRuntime(
                     format!("Barrier deadline of {d}s exceeded waiting for Terminated (rt.stop)")
                         .into(),
@@ -1695,6 +1930,7 @@ impl RuntimeInstance {
                 started_at_secs,
             }],
             extra: None,
+            begun: false,
         });
         // Drop the lock before the breadcrumb's journald send so we
         // don't hold it across an arbitrarily slow syscall. Skip if
@@ -1746,6 +1982,41 @@ impl CustomType for RuntimeInstance {
                     {
                         return Ok(());
                     }
+                    this.stop_if_cancelled()?;
+                    // spec: RT#deployment-restart
+                    // Each call restarts the deployment at most once, replays
+                    // included: the call is on record before it is made, so a
+                    // replay that finds it skips it.
+                    if let Some(ctx) = &this.ctx {
+                        let mut g = ctx.lock();
+                        match g.replay_step(CallKind::Restart, Some(dep_name.as_str())) {
+                            Ok(Some(_)) => return Ok(()),
+                            Ok(None) => {}
+                            Err(mismatch) => {
+                                return Err(Box::<EvalAltResult>::from(mismatch.to_string()));
+                            }
+                        }
+                        let entry = ActionLogEntry {
+                            call_index: g.call_index,
+                            call_kind: CallKind::Restart,
+                            resources: Vec::new(),
+                            barriers: Vec::new(),
+                            extra: Some(dep_name.clone()),
+                            begun: false,
+                        };
+                        let on_record =
+                            g.commit_through(&entry)
+                                .map_err(|e| -> Box<EvalAltResult> {
+                                    format!(
+                                        "rt.restart: cannot record the call before making it: {e}"
+                                    )
+                                    .into()
+                                })?;
+                        if !on_record {
+                            g.pending.push(entry);
+                        }
+                        g.call_index += 1;
+                    }
                     emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Restart {
                         deployment: &dep_name,
                     });
@@ -1784,18 +2055,17 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "stop",
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
-                    let instances = this
+                    let extracted = this
                         .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
                             Box::new(EvalAltResult::ErrorRuntime(
                                 e.to_string().into(),
                                 rhai::Position::NONE,
                             ))
-                        })?
-                        .into_iter()
-                        .map(|(r, _)| r)
-                        .collect();
-                    this.do_stop(instances, Some(DEFAULT_STOP_DEADLINE_SECS))
+                        })?;
+                    let deadline = default_stop_deadline(&extracted);
+                    let instances = extracted.into_iter().map(|(r, _)| r).collect();
+                    this.do_stop(instances, Some(deadline))
                 },
             )
             .with_fn(
@@ -1804,21 +2074,17 @@ impl CustomType for RuntimeInstance {
                  resources: Dynamic,
                  deadline: i64|
                  -> Result<(), Box<EvalAltResult>> {
-                    let instances = this
+                    let extracted = this
                         .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
                             Box::new(EvalAltResult::ErrorRuntime(
                                 e.to_string().into(),
                                 rhai::Position::NONE,
                             ))
-                        })?
-                        .into_iter()
-                        .map(|(r, _)| r)
-                        .collect();
-                    this.do_stop(
-                        instances,
-                        Some(resolve_deadline(deadline, DEFAULT_STOP_DEADLINE_SECS)?),
-                    )
+                        })?;
+                    let deadline = resolve_deadline(deadline, default_stop_deadline(&extracted))?;
+                    let instances = extracted.into_iter().map(|(r, _)| r).collect();
+                    this.do_stop(instances, Some(deadline))
                 },
             )
             // spec: RT#querying-resources
@@ -1978,16 +2244,15 @@ fn parse_exec_options(options: Map) -> Result<Vec<(String, String)>, Box<EvalAlt
                     })?;
                 for (k, v) in env_map {
                     let k_str = k.to_string();
-                    if !is_valid_env_var_name(&k_str) {
-                        return Err(format!(
-                            "rt.exec: invalid env var name '{k_str}'; must match [A-Za-z_][A-Za-z0-9_]*"
-                        )
-                        .into());
-                    }
                     let v_str = v.into_string().map_err(|t| -> Box<EvalAltResult> {
                         format!("rt.exec: env value for '{k_str}' must be a string, got {t}").into()
                     })?;
-                    env.push((k_str, v_str));
+                    // The rules a container's environment meets: the name's
+                    // form, the names that cannot be set, and a value with no NUL.
+                    let var = seedling_protocol::env::EnvVar::new(&k_str, v_str).map_err(
+                        |e| -> Box<EvalAltResult> { format!("rt.exec: env '{k_str}': {e}").into() },
+                    )?;
+                    env.push((var.name.as_str().to_owned(), var.value));
                 }
             }
             other => {
@@ -1996,12 +2261,6 @@ fn parse_exec_options(options: Map) -> Result<Vec<(String, String)>, Box<EvalAlt
         }
     }
     Ok(env)
-}
-
-fn is_valid_env_var_name(s: &str) -> bool {
-    let mut chars = s.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 // spec: RT#command-execution
@@ -2042,10 +2301,10 @@ fn resolve_exec_target(
             return Err("rt.exec: anonymous deployments must be passed via the Started returned by rt.start, not directly".into());
         }
         let scale = dep.def.lock().scale.clone();
-        if scale.end > 1 {
+        if *scale.end() > 1 {
             return Err(format!(
                 "rt.exec: deployment '{}' has scale upper bound {}; rt.exec requires scale 1 (so the target is unambiguous)",
-                dep.name, scale.end
+                dep.name, *scale.end()
             )
             .into());
         }
@@ -2093,16 +2352,22 @@ fn resolve_volume_write_target(
     use crate::runtime::identity::{InstanceId, InstanceVariant};
 
     if let Some(vol) = target.clone().try_cast::<Volume>() {
-        let tmpfs = vol.def.lock().tmpfs;
+        let (tmpfs, read_only, writes) = {
+            let def = vol.def.lock();
+            (def.tmpfs, def.read_only, def.writes.clone())
+        };
+        // spec: RT#volume-writes
+        if read_only {
+            return Err("rt.write: the volume is declared read-only".into());
+        }
         if let Some(name) = vol.name.as_deref() {
-            let display = crate::runtime::identity::VolumeName::for_app(rt.app_name.as_str(), name);
             let instance =
                 ResourceInstance::new_singleton(rt.app_name.clone(), ResourceKind::Volume, name);
-            let _ = display;
             return Ok((
                 VolumeWriteTarget::NamedVolume {
                     name: name.to_owned(),
                     tmpfs,
+                    writes,
                 },
                 instance,
             ));
@@ -2132,20 +2397,53 @@ fn resolve_volume_write_target(
     }
 
     if let Some(ext) = target.try_cast::<ExternalVolume>() {
-        let binding = ext.operation_binding.ok_or_else(|| -> Box<EvalAltResult> {
-            "rt.write: external volume has no operation-scoped binding; rt.write is only supported for operation-bound external volumes".into()
-        })?;
         let instance = ResourceInstance::new_singleton(
             rt.app_name.clone(),
             ResourceKind::ExternalVolume,
             ext.name.as_str(),
         );
-        return Ok((
-            VolumeWriteTarget::ExternalBound {
-                host_path: binding.host_path,
-            },
-            instance,
-        ));
+        // spec: VOL#external-volumes
+        // The operation's binding comes first, then the host's mappings.
+        let (host_path, read_only) = if let Some(binding) = ext.operation_binding {
+            (binding.host_path, binding.read_only)
+        } else if rt.ctx.as_ref().is_some_and(|ctx| ctx.lock().probe_mode()) {
+            // Image discovery never writes.
+            (std::path::PathBuf::new(), false)
+        } else {
+            let writer = rt
+                .ctx
+                .as_ref()
+                .and_then(|ctx| ctx.lock().volume_writer.clone());
+            let resolved = writer
+                .ok_or_else(|| -> Box<EvalAltResult> {
+                    "rt.write: there is nowhere to write external volume files in this context"
+                        .into()
+                })?
+                .resolve_external(rt.app_name.as_str(), ext.name.as_str())
+                .map_err(|e| -> Box<EvalAltResult> {
+                    format!(
+                        "rt.write: cannot tell where external volume {} resolves to: {e}",
+                        ext.name
+                    )
+                    .into()
+                })?
+                .ok_or_else(|| -> Box<EvalAltResult> {
+                    format!(
+                        "rt.write: external volume {} resolves to nothing: it is not bound by \
+                         the operation and not mapped on the host",
+                        ext.name
+                    )
+                    .into()
+                })?;
+            (resolved.host_path, resolved.read_only)
+        };
+        // spec: RT#volume-writes
+        if read_only {
+            return Err(
+                format!("rt.write: external volume {} is mapped read-only", ext.name).into(),
+            );
+        }
+        return Ok((VolumeWriteTarget::ExternalBound { host_path }, instance));
     }
 
     Err("rt.write: target must be a Volume or ExternalVolume".into())
@@ -2197,6 +2495,23 @@ pub struct Started {
 }
 
 impl Started {
+    /// Refuse a barrier other than `ready()` and `ready_eventually()` on a
+    /// `Started` that a warm call returned: it waits on a certificate or an
+    /// image, which has no lifecycle state for the barrier to name.
+    // spec: RT#certificate-warming
+    // spec: RT#image-warming
+    fn refuse_on_warm(&self, barrier: &str) -> Result<(), Box<EvalAltResult>> {
+        let call = match self.warm {
+            WarmMode::None => return Ok(()),
+            WarmMode::Certs => "rt.warm_certs",
+            WarmMode::Images(_) => "rt.warm_images",
+        };
+        Err(format!(
+            "{barrier}() cannot be called on what {call} returned; use ready() or ready_eventually()"
+        )
+        .into())
+    }
+
     // spec: RT#started
     /// This `Started` over `kept` alone.
     ///
@@ -2302,6 +2617,7 @@ impl Started {
         // - `rt.warm_images` checks that each recorded image reference is
         //   present in local container storage; the resources it holds are
         //   only for audit (and may be empty for anonymous references).
+        let mut undetermined = false;
         let all_reached = match (&self.warm, required) {
             // spec: RT#certificate-warming
             // An empty resource list here means every element was filtered
@@ -2325,7 +2641,13 @@ impl Started {
             _ => self
                 .resources
                 .iter()
-                .all(|r| g.world.lifecycle_state(r).has_reached(required)),
+                .fold(true, |all, r| match g.world.lifecycle_state(r) {
+                    Ok(state) => all && state.has_reached(required),
+                    Err(_) => {
+                        undetermined = true;
+                        false
+                    }
+                }),
         };
 
         // spec: SUSP#barriers
@@ -2378,7 +2700,12 @@ impl Started {
             .and_then(|b| b.started_at_secs);
 
         // spec: SUSP#deadlines
-        if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
+        // spec: LCY#derivation
+        // A barrier on an instance whose state cannot be read is not decided
+        // either way: it stays suspended, and its deadline is not run out
+        // against a state nobody could see.
+        if !undetermined
+            && let (Some(d), Some(started_at)) = (deadline_secs, started_at)
             && now.saturating_sub(started_at) >= d
         {
             return Err(Box::new(EvalAltResult::ErrorRuntime(
@@ -2425,6 +2752,7 @@ impl Started {
                     started_at_secs: Some(now),
                 }],
                 extra: None,
+                begun: false,
             });
         }
         g.pending_barrier = Some(condition.clone());
@@ -2483,6 +2811,7 @@ impl CustomType for Started {
             .with_fn(
                 "scheduled",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
+                    this.refuse_on_warm("scheduled")?;
                     this.check_barrier(
                         LifecycleState::Scheduled,
                         Some(DEFAULT_SCHEDULED_DEADLINE_SECS),
@@ -2492,6 +2821,7 @@ impl CustomType for Started {
             .with_fn(
                 "scheduled",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
+                    this.refuse_on_warm("scheduled")?;
                     this.check_barrier(
                         LifecycleState::Scheduled,
                         Some(resolve_deadline(d, DEFAULT_SCHEDULED_DEADLINE_SECS)?),
@@ -2501,12 +2831,14 @@ impl CustomType for Started {
             .with_fn(
                 "running",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
+                    this.refuse_on_warm("running")?;
                     this.check_barrier(LifecycleState::Running, Some(DEFAULT_RUNNING_DEADLINE_SECS))
                 },
             )
             .with_fn(
                 "running",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
+                    this.refuse_on_warm("running")?;
                     this.check_barrier(
                         LifecycleState::Running,
                         Some(resolve_deadline(d, DEFAULT_RUNNING_DEADLINE_SECS)?),
@@ -2539,6 +2871,7 @@ impl CustomType for Started {
             .with_fn(
                 "terminated",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
+                    this.refuse_on_warm("terminated")?;
                     this.check_barrier(
                         LifecycleState::Terminated,
                         Some(DEFAULT_TERMINATED_DEADLINE_SECS),
@@ -2549,6 +2882,7 @@ impl CustomType for Started {
             .with_fn(
                 "terminated",
                 |this: &mut Self, d: i64| -> Result<Termination, Box<EvalAltResult>> {
+                    this.refuse_on_warm("terminated")?;
                     this.check_barrier(
                         LifecycleState::Terminated,
                         Some(resolve_deadline(d, DEFAULT_TERMINATED_DEADLINE_SECS)?),
@@ -2560,6 +2894,7 @@ impl CustomType for Started {
             .with_fn(
                 "terminated_eventually",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
+                    this.refuse_on_warm("terminated_eventually")?;
                     this.check_barrier(LifecycleState::Terminated, None)?;
                     Ok(this.compute_termination())
                 },
@@ -2595,9 +2930,7 @@ impl CustomType for Started {
                 "select",
                 |this: &mut Self, criterion: Map| -> Result<Self, Box<EvalAltResult>> {
                     let selector = Selector::from_map(&criterion)?;
-                    Ok(this.narrowed_to(|r| {
-                        selector.matches_resource(r.kind, r.name.as_deref().unwrap_or(""))
-                    }))
+                    Ok(this.narrowed_to(|r| selector.matches_resource(r.kind, r.name.as_deref())))
                 },
             );
     }
@@ -2696,7 +3029,7 @@ fn exit_code_name(code: i32) -> Option<String> {
 }
 
 /// Format an exit code as `<code>` or `<code>/<NAME>` when known.
-fn format_exit_code(code: i32) -> String {
+pub(super) fn format_exit_code(code: i32) -> String {
     match exit_code_name(code) {
         Some(name) => format!("{code}/{name}"),
         None => code.to_string(),
@@ -2763,7 +3096,65 @@ mod exit_code_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_READY_DEADLINE_SECS, DEFAULT_TERMINATED_DEADLINE_SECS, resolve_deadline};
+    use super::{
+        DEFAULT_READY_DEADLINE_SECS, DEFAULT_RUNNING_DEADLINE_SECS,
+        DEFAULT_SCHEDULED_DEADLINE_SECS, DEFAULT_TERMINATED_DEADLINE_SECS,
+        STOP_DEADLINE_MARGIN_SECS, resolve_deadline,
+    };
+
+    fn anon_vol_names(op_id: &str, count: usize) -> Vec<Option<String>> {
+        let _guard = super::ActionClosureGuard::new(
+            std::sync::Arc::new(arc_swap::ArcSwap::new(Default::default())),
+            op_id.to_owned(),
+            Default::default(),
+        );
+        (0..count).map(|_| super::next_anon_vol_id()).collect()
+    }
+
+    // spec: ACTU#deployment-and-job-instances
+    // The first eight characters of the operation ID used to make the name,
+    // so two operations whose IDs began alike shared their anonymous volumes.
+    #[test]
+    fn operations_whose_ids_share_a_prefix_name_their_anonymous_volumes_apart() {
+        let first = anon_vol_names("abcdef12-0000-4000-8000-000000000001", 2);
+        let second = anon_vol_names("abcdef12-0000-4000-8000-000000000002", 2);
+        for name in first.iter().chain(&second) {
+            assert!(name.is_some(), "{first:?} {second:?}");
+        }
+        assert_ne!(first[0], first[1]);
+        for name in &first {
+            assert!(!second.contains(name), "{first:?} {second:?}");
+        }
+    }
+
+    // spec: APP#anonymous-resources
+    #[test]
+    fn a_replay_pass_names_the_anonymous_volumes_as_the_first_pass_did() {
+        let op = "abcdef12-0000-4000-8000-000000000001";
+        assert_eq!(anon_vol_names(op, 3), anon_vol_names(op, 3));
+    }
+
+    #[test]
+    fn an_operation_without_an_id_names_no_anonymous_volume() {
+        assert_eq!(anon_vol_names("", 1), vec![None]);
+    }
+
+    // spec: RT#barriers
+    #[test]
+    fn default_deadlines_are_tens_of_seconds_and_hours() {
+        for short in [
+            DEFAULT_SCHEDULED_DEADLINE_SECS,
+            DEFAULT_RUNNING_DEADLINE_SECS,
+            DEFAULT_READY_DEADLINE_SECS,
+        ] {
+            assert!((10..100).contains(&short), "{short}");
+        }
+        assert!(
+            (3_600..=24 * 3_600).contains(&DEFAULT_TERMINATED_DEADLINE_SECS),
+            "{DEFAULT_TERMINATED_DEADLINE_SECS}"
+        );
+        const { assert!(STOP_DEADLINE_MARGIN_SECS > 0) };
+    }
 
     // spec: RT#barriers
     // Zero used to become `Some(0)`, which the `elapsed >= d` check trips on

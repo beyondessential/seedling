@@ -205,7 +205,7 @@ describe("Volumes", () => {
     fireEvent.click(iconButton(row("uploads"), "Open shell"));
     expect(openVolumeShell).toHaveBeenCalledWith(
       [{ kind: "app", app: "shop", volume: "uploads" }],
-      "shop/uploads",
+      "shop.uploads",
       { readOnly: false },
     );
   });
@@ -270,6 +270,18 @@ describe("Volumes", () => {
     expect(callsTo(request, "/volumes/site/delete")).toHaveLength(0);
   });
 
+  // spec: UI#shells
+  it("labels a held volume shell with its display name", async () => {
+    const { openVolumeShell } = renderWithSession(<Volumes />, { fixtures: populated });
+    await screen.findByText("Held Volumes");
+    fireEvent.click(iconButton(row("olddata"), "Open shell (read-only)"));
+    expect(openVolumeShell).toHaveBeenCalledWith(
+      [{ kind: "held", id: "h-1" }],
+      "held-shop-olddata",
+      { readOnly: true },
+    );
+  });
+
   // spec: UI#volumes
   it("confirms held volume deletion and issues the delete", async () => {
     const { request } = renderWithSession(<Volumes />, {
@@ -314,10 +326,11 @@ describe("Volumes", () => {
     );
   });
 
+  // spec: UI#guarded-controls
   it("unmaps an external volume from its row", async () => {
     const { request } = renderWithSession(<Volumes />, {
       fixtures: populated,
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
     await screen.findByText("shared");
     fireEvent.click(iconButton(row("shared"), "Unmap"));
@@ -469,7 +482,7 @@ describe("Volumes", () => {
         { kind: "site", name: "data" },
         { kind: "app", app: "shop", volume: "uploads" },
       ],
-      "2 volumes",
+      "data, shop.uploads",
       { readOnly: true },
     );
   });

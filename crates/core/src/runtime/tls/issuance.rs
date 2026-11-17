@@ -68,6 +68,14 @@ pub enum CoordinatorError {
     ))]
     Debounced { hostname: String, remaining_s: i64 },
 
+    #[snafu(display("an issuance for {hostname} is already running"))]
+    IssuanceRunning { hostname: String },
+
+    #[snafu(display(
+        "{hostname} takes a Tailscale certificate, which is not issued over ACME DNS-01"
+    ))]
+    TakesTailscale { hostname: String },
+
     #[snafu(display("encryption error: {source}"))]
     Cipher {
         source: crate::runtime::secrets::Error,
@@ -76,12 +84,10 @@ pub enum CoordinatorError {
 
 pub type Result<T, E = CoordinatorError> = std::result::Result<T, E>;
 
-/// How many issuances are running for each hostname.
+/// The hostnames an issuance is running for.
 ///
-/// A count rather than a set, and released only through the [`InFlightClaim`]
-/// that took it: with a set, whichever of two overlapping issuances finished
-/// first cleared the marker the other still relied on, and the reconciler went
-/// on to start a duplicate flow against the CA.
+/// Released only through the [`InFlightClaim`] that took it, so an issuance that
+/// errors, panics or is cancelled still gives its hostname back.
 #[derive(Default)]
 struct InFlight(Mutex<HashMap<String, usize>>);
 
@@ -97,15 +103,6 @@ impl InFlight {
             in_flight: Arc::clone(self),
             hostname: hostname.to_owned(),
         })
-    }
-
-    /// Claim `hostname` whether or not an issuance for it is already running.
-    fn claim(self: &Arc<Self>, hostname: &str) -> InFlightClaim {
-        *self.0.lock().entry(hostname.to_owned()).or_default() += 1;
-        InFlightClaim {
-            in_flight: Arc::clone(self),
-            hostname: hostname.to_owned(),
-        }
     }
 
     #[cfg(test)]
@@ -163,10 +160,53 @@ pub struct Coordinator {
 /// [`Coordinator::forget_chain_state`].
 const CHAIN_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// What is known of a hostname's certificate acquisition, each fact `None`
+/// where it could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostnameFacts {
+    pub status: Option<state::CertStatus>,
+    pub in_progress: Option<bool>,
+}
+
 /// Everything a chain decision is made from, for every hostname at once.
 struct ChainState {
     managed: Vec<state::ManagedIngress>,
     snapshot: state::Snapshot,
+    /// The hostnames that take a Tailscale certificate.
+    tailscale: std::collections::BTreeSet<String>,
+}
+
+/// Where a hostname stands as to the proxy's own ordering.
+// spec: CHAIN#proxy-strategies
+#[derive(Debug, Clone)]
+pub enum ProxyStanding {
+    /// On a strategy chain, decided as the decision says.
+    Chain(Box<ChainDecision>),
+    /// On no chain: an ACME DNS-01 policy matches it, or it takes a Tailscale
+    /// certificate.
+    NoChain,
+}
+
+/// The hostnames of the site ingresses whose certificates come from Tailscale.
+// spec: TLS#tailscale-certificates
+fn tailscale_hostnames(
+    db: &crate::runtime::db::Db,
+) -> rusqlite::Result<std::collections::BTreeSet<String>> {
+    Ok(site_ingresses::list(db)?
+        .into_iter()
+        .filter(|ing| {
+            !ing.stale
+                && matches!(
+                    &ing.source,
+                    SiteIngressSource::Discovered {
+                        provider: DiscoveryProvider::Tailscale,
+                        ..
+                    }
+                )
+                && matches!(ing.tls_provider, SiteTlsProvider::Tailscale)
+        })
+        .map(|ing| ing.hostname)
+        .collect())
 }
 
 impl Coordinator {
@@ -179,6 +219,15 @@ impl Coordinator {
             environment: std::sync::OnceLock::new(),
             chain_state: Mutex::new(None),
         })
+    }
+
+    /// Hold `hostname` as having an issuance running, until the returned value
+    /// is dropped.
+    #[cfg(test)]
+    pub(crate) fn hold_running_for_tests(&self, hostname: &str) -> Option<Box<dyn std::any::Any>> {
+        self.in_flight
+            .claim_if_idle(hostname)
+            .map(|claim| Box::new(claim) as Box<dyn std::any::Any>)
     }
 
     /// Say where the facts a chain depends on come from. Takes effect once.
@@ -235,6 +284,34 @@ impl Coordinator {
             Err(e) => {
                 tracing::warn!(%hostname, error = %e, "cannot start the cycle an operator retry asked for");
             }
+        }
+    }
+
+    /// Whether `hostname` is on a chain, with its decision, or on no chain.
+    ///
+    /// `None` when that cannot be said: the state could not be read, the facts
+    /// a chain rests on were not gathered, or the hostname is not one the
+    /// runtime manages.
+    // spec: CHAIN#default-chain
+    // spec: CHAIN#proxy-strategies
+    pub fn proxy_standing(&self, hostname: &str) -> Option<ProxyStanding> {
+        let state = self.chain_state()?;
+        if state.tailscale.contains(hostname) {
+            return Some(ProxyStanding::NoChain);
+        }
+        let st = state::compute_state(&state.snapshot, hostname);
+        if st
+            .policy
+            .is_some_and(|p| matches!(p.policy, TlsPolicy::AcmeDns { .. }))
+        {
+            return Some(ProxyStanding::NoChain);
+        }
+        if !state.managed.iter().any(|m| m.hostname == hostname) {
+            return None;
+        }
+        match st.decision {
+            Decision::Chain(c) => Some(ProxyStanding::Chain(c)),
+            _ => None,
         }
     }
 
@@ -305,6 +382,31 @@ impl Coordinator {
         Some(out)
     }
 
+    /// What the certificate-status observation records for each TLS-terminating
+    /// hostname, from the one state every chain decision is made against.
+    ///
+    /// `None` when the decisions could not be made, which says nothing about any
+    /// hostname.
+    // spec: OBS#ingresses
+    pub fn hostname_facts(&self) -> Option<BTreeMap<String, HostnameFacts>> {
+        let state = self.chain_state()?;
+        let mut out = BTreeMap::new();
+        for ingress in &state.managed {
+            if out.contains_key(&ingress.hostname) {
+                continue;
+            }
+            let st = state::compute_state(&state.snapshot, &ingress.hostname);
+            out.insert(
+                ingress.hostname.clone(),
+                HostnameFacts {
+                    status: state::certificate_status(&state.snapshot, &st),
+                    in_progress: state::acquisition_in_progress(&state.snapshot, &st),
+                },
+            );
+        }
+        Some(out)
+    }
+
     /// The state every chain decision is made against, built at most once per
     /// [`CHAIN_STATE_TTL`].
     ///
@@ -329,14 +431,21 @@ impl Coordinator {
             return Some(Arc::clone(state));
         }
         let (managed, env) = self.environment.get()?.gather()?;
-        let snapshot = match self.db.call(move |db| state::Snapshot::load(db, env)) {
-            Ok(snapshot) => snapshot,
+        let loaded = self.db.call(move |db| {
+            Ok::<_, rusqlite::Error>((state::Snapshot::load(db, env)?, tailscale_hostnames(db)?))
+        });
+        let (snapshot, tailscale) = match loaded {
+            Ok(loaded) => loaded,
             Err(e) => {
                 tracing::warn!(error = %e, "cannot read the TLS state to decide a chain");
                 return None;
             }
         };
-        let state = Arc::new(ChainState { managed, snapshot });
+        let state = Arc::new(ChainState {
+            managed,
+            snapshot,
+            tailscale,
+        });
         *cached = Some((std::time::Instant::now(), Arc::clone(&state)));
         Some(state)
     }
@@ -398,31 +507,9 @@ impl Coordinator {
     // spec: TLS#tailscale-certificates
     fn dispatch_to_tailscale(&self, hostname: &str) -> Result<bool> {
         let host = hostname.to_owned();
-        let matched = self
-            .db
-            .call(move |db| -> rusqlite::Result<bool> {
-                for ing in site_ingresses::list(db)? {
-                    if ing.hostname != host {
-                        continue;
-                    }
-                    if ing.stale {
-                        continue;
-                    }
-                    let is_tailscale = matches!(
-                        &ing.source,
-                        SiteIngressSource::Discovered {
-                            provider: DiscoveryProvider::Tailscale,
-                            ..
-                        }
-                    ) && matches!(ing.tls_provider, SiteTlsProvider::Tailscale);
-                    if is_tailscale {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            })
-            .map_err(|source| CoordinatorError::Storage { source })?;
-        Ok(matched)
+        self.db
+            .call(move |db| Ok(tailscale_hostnames(db)?.contains(&host)))
+            .map_err(|source| CoordinatorError::Storage { source })
     }
 
     /// Tailscale-side counterpart to the ACME flow: open an attempt row,
@@ -434,6 +521,7 @@ impl Coordinator {
         self: &Arc<Self>,
         hostname: &str,
         trigger: AttemptTrigger,
+        recorded: AttemptTrigger,
     ) -> Result<Issued> {
         // Per-tick `coord.ensure(hostname)` calls would fetch a fresh
         // cert from tailscaled every ten seconds without this guard.
@@ -469,10 +557,10 @@ impl Coordinator {
         let host_for_open = hostname.to_owned();
         let attempt_id = self
             .db
-            .call(move |db| store::insert_attempt(db, &host_for_open, trigger))
+            .call(move |db| store::insert_attempt(db, &host_for_open, recorded))
             .map_err(|source| CoordinatorError::Storage { source })?;
 
-        tracing::info!(%hostname, ?trigger, "Tailscale issuance starting");
+        tracing::info!(%hostname, ?recorded, "Tailscale issuance starting");
         let result = tailscale_issuer::issue(&self.db, &self.cipher, hostname, None).await;
         match result {
             Ok(issued) => {
@@ -523,12 +611,20 @@ impl Coordinator {
     /// (`manual` vs `on_demand` in the attempt log) and that errors flow
     /// to the caller instead of being swallowed.
     pub async fn issue_now(self: &Arc<Self>, hostname: &str) -> Result<Issued> {
-        // Joins rather than skips a background issuance already running: the
-        // operator asked for this one and waits on its result. The two are
-        // serialised by the issue lock, and the hostname stays in flight until
-        // both have finished.
+        // spec: TLSM#operator-driven-issuance
+        if self.dispatch_to_tailscale(hostname)? {
+            return Err(CoordinatorError::TakesTailscale {
+                hostname: hostname.to_owned(),
+            });
+        }
         // spec: TLS#issuance
-        let _claim = self.in_flight.claim(hostname);
+        // An issuance already running for the hostname, whoever started it, is
+        // not joined or queued behind: the operator is told.
+        let Some(_claim) = self.in_flight.claim_if_idle(hostname) else {
+            return Err(CoordinatorError::IssuanceRunning {
+                hostname: hostname.to_owned(),
+            });
+        };
         self.run(hostname, AttemptTrigger::Manual).await
     }
 
@@ -584,7 +680,9 @@ impl Coordinator {
         // central decision function admits no dispatch before the decision.
         if self.dispatch_to_tailscale(hostname)? {
             check_retry_gate(hostname, trigger, &owned)?;
-            return self.run_tailscale(hostname, trigger).await;
+            return self
+                .run_tailscale(hostname, trigger, attempt_trigger(trigger, &owned))
+                .await;
         }
 
         let dns_provider_name = match handle_non_issuing(hostname, trigger, &owned)? {
@@ -602,16 +700,17 @@ impl Coordinator {
 
         // Open the attempt row before running so a panic mid-flight still
         // leaves a trace.
+        let recorded = attempt_trigger(trigger, &owned);
         let host_for_open = hostname.to_owned();
         let attempt_id = self
             .db
-            .call(move |db| store::insert_attempt(db, &host_for_open, trigger))
+            .call(move |db| store::insert_attempt(db, &host_for_open, recorded))
             .map_err(|source| CoordinatorError::Storage { source })?;
 
         tracing::info!(
             %hostname,
             provider = %dns_provider_name,
-            ?trigger,
+            ?recorded,
             "ACME-DNS issuance starting"
         );
         let result = acme::issue(
@@ -622,7 +721,10 @@ impl Coordinator {
                 contact_email: &owned.contact_email,
                 directory_url: &acme::default_directory_url(),
                 dns_provider_name: &dns_provider_name,
-                previous_cert_pem: owned.previous_cert_pem.as_deref(),
+                previous: owned.previous.as_ref().map(|p| acme::PreviousCert {
+                    chain_pem: &p.0,
+                    acme_account_id: p.1,
+                }),
                 cert_profile: owned.cert_profile.as_deref(),
             },
         )
@@ -679,7 +781,9 @@ struct OwnedState {
     cert_profile: Option<String>,
     active_cert_id: Option<i64>,
     active_cert_not_after: Option<i64>,
-    previous_cert_pem: Option<String>,
+    /// The certificate serving the hostname, as its chain and, when it
+    /// was issued through ACME, the account that issued it.
+    previous: Option<(String, Option<i64>)>,
     retry_block_reason: Option<String>,
 }
 
@@ -687,9 +791,6 @@ impl OwnedState {
     fn from_snapshot(snap: &state::Snapshot, s: &state::HostnameState<'_>) -> Self {
         let dns_provider_name = s.policy.and_then(|p| match &p.policy {
             TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
-            // Tailscale issuance doesn't use a DNS provider; the cert
-            // comes from the local tailscaled API.
-            TlsPolicy::Tailscale => None,
             // Canopy requests go through the relay, not through this
             // coordinator.
             TlsPolicy::Canopy => None,
@@ -701,9 +802,35 @@ impl OwnedState {
             cert_profile: snap.settings.cert_profile.clone(),
             active_cert_id: s.active_cert.map(|c| c.id),
             active_cert_not_after: s.active_cert.and_then(|c| c.not_after),
-            previous_cert_pem: s.active_cert.and_then(|c| c.cert_pem.clone()),
+            previous: s.active_cert.and_then(|c| {
+                let account = (c.origin == super::TlsCertOrigin::AcmeDns)
+                    .then_some(c.acme_account_id)
+                    .flatten();
+                c.cert_pem.clone().map(|pem| (pem, account))
+            }),
             retry_block_reason: s.retry_block.and_then(|b| b.reason.clone()),
         }
+    }
+}
+
+/// The trigger an attempt is logged under, by the rule every strategy shares:
+/// `manual` where an operator asked for it, directly or by a retry; otherwise
+/// `renewal` where the hostname has a certificate to replace, and `on_demand`
+/// where it has none.
+// spec: TLS#attempt-log
+fn attempt_trigger(asked: AttemptTrigger, owned: &OwnedState) -> AttemptTrigger {
+    let retried = matches!(
+        owned.decision,
+        Decision::IssueNow {
+            reason: state::IssueReason::ForceRetry
+        }
+    );
+    if asked == AttemptTrigger::Manual || retried {
+        AttemptTrigger::Manual
+    } else if owned.active_cert_id.is_some() {
+        AttemptTrigger::Renewal
+    } else {
+        AttemptTrigger::OnDemand
     }
 }
 
@@ -806,51 +933,22 @@ fn proceed(owned: &OwnedState) -> Result<ProceedKind> {
 /// per (kind, hostname): if the same fault is already filed we don't
 /// duplicate it.
 fn file_cert_fault(db: &DbHandle, hostname: &str, kind: &str, description: &str) {
-    let kind_owned = kind.to_owned();
-    let desc_owned = description.to_owned();
-    let host_owned = hostname.to_owned();
-    db.call(move |db_inner| {
-        let app = AppName::new_unchecked("_system");
-        let already = faults::list_active_faults(db_inner, Some(&app))
-            .unwrap_or_default()
-            .into_iter()
-            .any(|f| {
-                f.kind == kind_owned && f.resource_name.as_deref() == Some(host_owned.as_str())
-            });
-        if already {
-            return;
-        }
-        if let Err(e) = faults::file_fault(
-            db_inner,
-            &app,
-            Some("hostname"),
-            Some(&host_owned),
-            None,
-            &kind_owned,
-            &desc_owned,
-        ) {
+    let key = faults::FaultKey::new(&AppName::new_unchecked("_system"), kind, hostname);
+    let meta = faults::FaultMeta::resource("hostname", hostname);
+    let description = description.to_owned();
+    db.call(move |db| {
+        if let Err(e) = faults::file_once(db, &key, &meta, &description) {
             tracing::warn!(error = %e, "failed to file cert fault");
         }
     });
 }
 
+/// Clear the hostname's own fault of `kind`, and no other hostname's.
 fn clear_cert_fault(db: &DbHandle, hostname: &str, kind: &str) {
-    let kind_owned = kind.to_owned();
-    let host_owned = hostname.to_owned();
-    db.call(move |db_inner| {
-        let app = AppName::new_unchecked("_system");
-        let to_clear: Vec<String> = faults::list_active_faults(db_inner, Some(&app))
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|f| {
-                f.kind == kind_owned && f.resource_name.as_deref() == Some(host_owned.as_str())
-            })
-            .map(|f| f.id)
-            .collect();
-        for id in to_clear {
-            if let Err(e) = faults::clear_fault(db_inner, &id, &app) {
-                tracing::warn!(error = %e, "failed to clear cert fault");
-            }
+    let key = faults::FaultKey::new(&AppName::new_unchecked("_system"), kind, hostname);
+    db.call(move |db| {
+        if let Err(e) = faults::clear_fault_by_key(db, &key) {
+            tracing::warn!(error = %e, "failed to clear cert fault");
         }
     });
 }
@@ -859,27 +957,85 @@ fn clear_cert_fault(db: &DbHandle, hostname: &str, kind: &str) {
 mod tests {
     use super::*;
 
-    /// An operator issuance overlapping a background one, finishing first or
-    /// last, must leave the hostname in flight until both are done.
+    fn owned(decision: Decision, active_cert_id: Option<i64>) -> OwnedState {
+        OwnedState {
+            decision,
+            dns_provider_name: None,
+            contact_email: String::new(),
+            cert_profile: None,
+            active_cert_id,
+            active_cert_not_after: None,
+            previous: None,
+            retry_block_reason: None,
+        }
+    }
+
+    // spec: TLS#attempt-log
+    #[test]
+    fn an_attempt_is_logged_as_manual_renewal_or_on_demand() {
+        let first = state::IssueReason::First;
+        // An operator's request, by direct issuance or by a retry, is manual
+        // whether or not the hostname has a certificate.
+        assert_eq!(
+            attempt_trigger(
+                AttemptTrigger::Manual,
+                &owned(
+                    Decision::IssueNow {
+                        reason: first.clone()
+                    },
+                    Some(1)
+                )
+            ),
+            AttemptTrigger::Manual
+        );
+        assert_eq!(
+            attempt_trigger(
+                AttemptTrigger::OnDemand,
+                &owned(
+                    Decision::IssueNow {
+                        reason: state::IssueReason::ForceRetry
+                    },
+                    None
+                )
+            ),
+            AttemptTrigger::Manual
+        );
+        // Otherwise it depends on whether there is a certificate to replace.
+        assert_eq!(
+            attempt_trigger(
+                AttemptTrigger::OnDemand,
+                &owned(
+                    Decision::IssueNow {
+                        reason: first.clone()
+                    },
+                    Some(1)
+                )
+            ),
+            AttemptTrigger::Renewal
+        );
+        assert_eq!(
+            attempt_trigger(
+                AttemptTrigger::OnDemand,
+                &owned(Decision::IssueNow { reason: first }, None)
+            ),
+            AttemptTrigger::OnDemand
+        );
+    }
+
+    /// A hostname is in flight for as long as an issuance holds it, and it is
+    /// given back however that issuance ends.
     // spec: TLS#issuance
     #[test]
-    fn a_hostname_stays_in_flight_until_every_issuance_for_it_finishes() {
+    fn a_hostname_is_in_flight_until_the_issuance_holding_it_finishes() {
         let in_flight = Arc::<InFlight>::default();
 
-        let background = in_flight.claim_if_idle("foo.example.com").unwrap();
-        assert!(in_flight.claim_if_idle("foo.example.com").is_none());
-
-        let operator = in_flight.claim("foo.example.com");
-        drop(operator);
+        let running = in_flight.claim_if_idle("foo.example.com").unwrap();
+        assert!(in_flight.is_running("foo.example.com"));
         assert!(
             in_flight.claim_if_idle("foo.example.com").is_none(),
-            "the operator's issuance finishing must not release the background one's claim"
+            "a second issuance for the hostname is not started"
         );
-
-        let operator = in_flight.claim("foo.example.com");
-        drop(background);
-        assert!(in_flight.claim_if_idle("foo.example.com").is_none());
-        drop(operator);
+        drop(running);
         assert!(!in_flight.is_running("foo.example.com"));
         assert!(in_flight.claim_if_idle("foo.example.com").is_some());
     }

@@ -43,13 +43,20 @@ pub(super) enum AppCommand {
 
 #[derive(Subcommand)]
 pub(super) enum SiteCommand {
-    /// Create a site service (no endpoints yet; use `add-port` after)
+    /// Create a site service, with the endpoints given or none
+    ///
+    /// Each `--endpoint` is `<service_port>/<protocol>=<remote>`, with the
+    /// remote in the shapes `add-port` takes, e.g. `5432/tcp=10.0.0.1:5432`.
+    /// More endpoints can be added afterwards with `add-port`.
     Create {
         /// Site service name
         name: String,
         /// Operator-facing description
         #[arg(long)]
         description: Option<String>,
+        /// An endpoint, `<service_port>/<protocol>=<remote>`; repeat for more
+        #[arg(long = "endpoint", value_name = "ENDPOINT")]
+        endpoints: Vec<String>,
     },
     /// List site services with their endpoints
     List,
@@ -160,8 +167,21 @@ pub(super) async fn dispatch(client: &OiClient, cmd: ServicesCommand) {
 
 async fn dispatch_site(client: &OiClient, cmd: SiteCommand) {
     match cmd {
-        SiteCommand::Create { name, description } => {
-            let mut body = serde_json::json!({ "name": name });
+        SiteCommand::Create {
+            name,
+            description,
+            endpoints,
+        } => {
+            let endpoints: Vec<serde_json::Value> = endpoints
+                .iter()
+                .map(|e| {
+                    parse_endpoint(e).unwrap_or_else(|msg| {
+                        eprintln!("error: {msg}");
+                        std::process::exit(1);
+                    })
+                })
+                .collect();
+            let mut body = serde_json::json!({ "name": name, "endpoints": endpoints });
             if let Some(desc) = description {
                 body["description"] = serde_json::Value::String(desc);
             }
@@ -370,6 +390,27 @@ fn parse_remote(s: &str) -> Result<(String, u16), String> {
     Ok((host.to_owned(), port))
 }
 
+/// Parse `<service_port>/<protocol>=<remote>` into an endpoint object.
+fn parse_endpoint(s: &str) -> Result<serde_json::Value, String> {
+    let invalid = || {
+        format!(
+            "invalid endpoint {s:?}: expected <service_port>/<protocol>=<remote>, e.g. 5432/tcp=10.0.0.1:5432"
+        )
+    };
+    let (front, remote) = s.split_once('=').ok_or_else(invalid)?;
+    let (port, protocol) = front.split_once('/').ok_or_else(invalid)?;
+    let service_port: u16 = port
+        .parse()
+        .map_err(|e| format!("invalid endpoint {s:?}: bad service port: {e}"))?;
+    let (remote_host, remote_port) = parse_remote(remote)?;
+    Ok(serde_json::json!({
+        "service_port": service_port,
+        "protocol": protocol,
+        "remote_host": remote_host,
+        "remote_port": remote_port,
+    }))
+}
+
 /// Parse an external-service target in the `_site/<name>` or `<app>/<service>`
 /// form into the JSON shape the OI expects for `ServiceRef`.
 fn parse_target(s: &str) -> Result<serde_json::Value, String> {
@@ -428,6 +469,24 @@ mod tests {
     #[test]
     fn parse_remote_rejects_empty_host() {
         assert!(parse_remote(":80").is_err());
+    }
+
+    #[test]
+    fn parse_endpoint_reads_port_protocol_and_remote() {
+        let v = parse_endpoint("5432/tcp=[2001:db8::1]:15432").unwrap();
+        assert_eq!(v["service_port"], 5432);
+        assert_eq!(v["protocol"], "tcp");
+        assert_eq!(v["remote_host"], "2001:db8::1");
+        assert_eq!(v["remote_port"], 15432);
+    }
+
+    #[test]
+    fn parse_endpoint_rejects_malformed_input() {
+        assert!(parse_endpoint("5432").is_err());
+        assert!(parse_endpoint("5432/tcp").is_err());
+        assert!(parse_endpoint("tcp=10.0.0.1:80").is_err());
+        assert!(parse_endpoint("x/tcp=10.0.0.1:80").is_err());
+        assert!(parse_endpoint("80/tcp=nohostport").is_err());
     }
 
     #[test]

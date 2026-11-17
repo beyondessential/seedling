@@ -262,16 +262,24 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
                 .map(|u| json!({ "dial": [u] }))
                 .collect();
 
+            // spec: ING#termination
+            // The proxy's TLS handler takes its certificate from the proxy's
+            // own TLS app, by SNI, as an HTTPS ingress's does: the hostname is
+            // among those the TLS app automates.
+            let mut handle = Vec::with_capacity(2);
+            if route.terminate_tls {
+                handle.push(json!({ "handler": "tls" }));
+            }
+            handle.push(json!({
+                "handler": "proxy",
+                "upstreams": upstreams,
+            }));
+
             l4_servers.insert(
                 server_name,
                 json!({
                     "listen": [listen],
-                    "routes": [{
-                        "handle": [{
-                            "handler": "proxy",
-                            "upstreams": upstreams,
-                        }]
-                    }]
+                    "routes": [{ "handle": handle }]
                 }),
             );
         }
@@ -359,6 +367,20 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     // — as well as on one an upstream returned.
                     if !proxy.headers.is_empty() {
                         chain.push(headers_handler(&proxy.headers));
+                    }
+                    // spec: PRX#route-selection
+                    // Answered at once rather than left to the proxy, which
+                    // would hold the request for its retry window first.
+                    if upstreams.is_empty() {
+                        chain.push(json!({
+                            "handler": "static_response",
+                            "status_code": 503,
+                        }));
+                        return json!({
+                            "match": [match_expr],
+                            "handle": chain,
+                            "terminal": true,
+                        });
                     }
                     // spec: PRX#rate-limiting
                     // Ahead of compression and the proxy: an over-limit

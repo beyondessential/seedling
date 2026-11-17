@@ -35,6 +35,20 @@ pub fn load_secret_params_for_app(
     Ok(map)
 }
 
+/// The names of this app's parameters held in secret storage, read without
+/// decrypting their values.
+// spec: SEC#redaction
+pub fn secret_param_names(
+    db: &Db,
+    app_name: &AppName,
+) -> rusqlite::Result<std::collections::BTreeSet<String>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT param_name FROM secret_params WHERE app_name = ?1")?;
+    stmt.query_map([app_name], |row| row.get::<_, String>(0))?
+        .collect()
+}
+
 /// Whether this app's parameter is currently held in secret storage.
 ///
 /// A definition can stop marking a parameter secret without the value it
@@ -109,6 +123,36 @@ pub fn migrate_to_secret(
             "DELETE FROM params WHERE app_name = ?1 AND param_name = ?2",
             rusqlite::params![app_name, param_name],
         )?;
+    }
+    Ok(())
+}
+
+/// Move a parameter's stored value from secret storage back to plain storage,
+/// writing the plain value before removing the secret one.
+///
+/// A value that cannot be decrypted stays where it is: moving it would lose it.
+// spec: SEC#migration
+pub fn migrate_to_plain(
+    db: &Db,
+    cipher: &Cipher,
+    app_name: &AppName,
+    param_name: &ParamName,
+) -> rusqlite::Result<()> {
+    let ciphertext: Option<Vec<u8>> = db
+        .conn
+        .query_row(
+            "SELECT ciphertext FROM secret_params WHERE app_name = ?1 AND param_name = ?2",
+            rusqlite::params![app_name, param_name],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?;
+
+    if let Some(ct) = ciphertext {
+        let value = cipher.decrypt(&ct).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(e))
+        })?;
+        crate::runtime::apps::upsert_param(db, app_name, param_name, value.expose_secret())?;
+        delete_one_secret_param(db, app_name, param_name)?;
     }
     Ok(())
 }

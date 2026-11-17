@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 67);
+    assert_eq!(version, 80);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 67);
+    assert_eq!(version, 80);
 }
 
 // spec: APPS#persistence
@@ -101,6 +101,31 @@ fn open_creates_database_with_owner_only_permissions() {
     let _db = Db::open(&path).expect("open db");
     let mode = path.metadata().unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "db file should be 0600, got 0{mode:o}");
+    for side in ["seedling.db-wal", "seedling.db-shm"] {
+        let mode = dir
+            .path()
+            .join(side)
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "{side} should be 0600, got 0{mode:o}");
+    }
+}
+
+// spec: INFRA#file-permissions
+#[test]
+fn open_does_not_create_the_database_through_a_planted_symlink() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("seedling.db");
+    let target = dir.path().join("elsewhere.db");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    assert!(Db::open(&path).is_err());
+    assert!(
+        !target.exists(),
+        "the database must not be created through the link"
+    );
 }
 
 // spec: INFRA#file-permissions
@@ -407,4 +432,58 @@ fn san_index_migration_indexes_every_stored_certificate() {
             (1, "example.com".to_owned()),
         ]
     );
+}
+
+// spec: WIRE#resource-type-names
+// Records written before the wire named resource types by their wire names
+// hold the Rust names lowercased.
+#[test]
+fn resource_type_records_are_renamed_to_the_wire_names() {
+    let db = Db::open_in_memory().expect("open");
+    db.conn
+        .execute_batch(
+            "INSERT INTO stopped_resources (app, kind, name) VALUES ('a', 'externalvolume', 'v');
+             INSERT INTO stopped_resources (app, kind, name) VALUES ('a', 'deployment', 'd');
+             INSERT INTO faults (id, app, resource_type, resource_name, kind, timestamp, description)
+                VALUES ('f1', 'a', 'externalservice', 's', 'k', 0, 'd');",
+        )
+        .expect("insert old records");
+    db.conn
+        .execute_batch(SQL_V75)
+        .expect("the migration applies to old records");
+    let kinds: Vec<String> = db
+        .conn
+        .prepare("SELECT kind FROM stopped_resources ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(kinds, ["deployment", "external_volume"]);
+    let fault_type: String = db
+        .conn
+        .query_row("SELECT resource_type FROM faults", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fault_type, "external_service");
+}
+
+// spec: CNR#server-identity
+#[test]
+fn a_cached_canopy_server_id_with_no_recorded_key_is_dropped() {
+    let db = Db::open_in_memory_through(75).expect("open");
+    db.conn
+        .execute("UPDATE canopy_settings SET server_id = 'cached'", [])
+        .expect("cache an identifier before keys were recorded");
+
+    db.finish_migrations().expect("the later migrations apply");
+
+    let (id, key): (Option<String>, Option<String>) = db
+        .conn
+        .query_row(
+            "SELECT server_id, server_id_key FROM canopy_settings",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("row");
+    assert_eq!((id, key), (None, None));
 }

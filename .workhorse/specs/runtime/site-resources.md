@@ -171,6 +171,16 @@ An endpoint event MUST identify the site service and the endpoint's `(service_po
 
 After each endpoint is added or removed, the runtime SHOULD begin a reconciliation loop iteration without waiting for the next one to fall due.
 
+### Unreadable site services
+
+While the runtime cannot read the site services or the external service mappings, it MUST hold a [`site_services_unreadable`](faults.md#host-faults) fault.
+In an iteration that cannot read them, the runtime MUST NOT apply the routes or the packet-filtering rules, as for an app whose contribution it cannot compute when [applying absolute state](reconciliation.md#applying-absolute-state).
+In such an iteration, the runtime MUST NOT file or clear a [`site_service_endpoint_unresolvable`](faults.md#ingress-and-service-faults) or `site_service_endpoint_unroutable` fault.
+In such an iteration, the runtime MUST NOT change the [lifecycle state](lifecycle.md#services) of an external service.
+
+> [!NOTE]
+> A site service or mapping that cannot be read and one that has been deleted look the same once applied, so the routes and the packet-filtering rules stay as last applied until they can be read again.
+
 ## Site ingresses
 
 A site ingress has a name, a hostname, an optional description, a TLS provisioning mode, a source, and zero or more attachments.
@@ -220,7 +230,8 @@ An attachment's protocol is one of:
 
 The runtime MUST serve a redirect target only on an `http` or `http2` attachment.
 
-A forward target's traffic reaches one service port of the target service, its forwarded port.
+An `http` or `http2` forward target's requests are routed to the target service as for any HTTP-terminating ingress, as [route emission](proxy.md#route-emission) specifies.
+A `tcp` or `udp` forward target's traffic reaches one service port of the target service, its forwarded port.
 The forwarded port MUST be the service port of the first binding of the target service that a pod of the target app makes.
 The runtime MUST look for that binding in the app's Deployments and then its Jobs, each in ascending byte order of name.
 Within a pod, the runtime MUST take the pod's [port bindings](../language/pod.md#port-bindings) of the attachment's transport, in the order the script made them, before the pod's HTTP route bindings.
@@ -258,3 +269,15 @@ The runtime MUST raise the `ingress_conflict` fault for the site ingress whose a
 Once the served attachment no longer claims the hostname and port, the runtime MUST serve the other.
 
 A conflict on one port MUST NOT affect the serving of other ports on the same hostname.
+
+In an iteration that cannot compute the ingresses of every contributing app, the runtime MUST NOT file or clear an `ingress_conflict` fault, as for an apply it withholds when [applying absolute state](reconciliation.md#applying-absolute-state).
+
+### Unreadable site ingresses
+
+While the runtime cannot read the site ingresses or their attachments, it MUST hold a [`site_ingresses_unreadable`](faults.md#host-faults) fault.
+In an iteration that cannot read them, the runtime MUST NOT apply the proxy configuration or the packet-filtering rules, as for an app whose contribution it cannot compute when [applying absolute state](reconciliation.md#applying-absolute-state).
+In such an iteration, the runtime MUST NOT file or clear an [`ingress_conflict`](faults.md#ingress-and-service-faults) or `site_ingress_target_missing` fault.
+In such an iteration, the runtime MUST NOT clear a [`cert_issue_failed`](faults.md#certificate-faults) fault on the ground that no ingress needs a certificate for its hostname.
+
+> [!NOTE]
+> A site ingress that cannot be read and one that has been deleted look the same once applied, so the proxy and the redirected ports stay as last applied until the site ingresses can be read again.

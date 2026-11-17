@@ -27,16 +27,72 @@ fn to_row(target: &ServiceRef) -> (&'static str, Option<&AppName>, &str) {
 
 /// Reassemble a [`ServiceRef`] from the DB columns. The `target_kind` column
 /// is always present; `target_app` is only populated for the `app` kind.
-fn from_row(kind: &str, target_app: Option<AppName>, target_service: String) -> ServiceRef {
-    match kind {
-        "app" => ServiceRef::App {
-            app: target_app.unwrap_or_default(),
+fn from_row(
+    kind: &str,
+    target_app: Option<AppName>,
+    target_service: String,
+) -> Result<ServiceRef, String> {
+    match (kind, target_app) {
+        ("app", Some(app)) => Ok(ServiceRef::App {
+            app,
             service: AppServiceName::new_unchecked(target_service),
-        },
-        _ => ServiceRef::Site {
+        }),
+        ("app", None) => Err("an app target with no app".to_owned()),
+        ("site", _) => Ok(ServiceRef::Site {
             name: SiteServiceName::new_unchecked(target_service),
-        },
+        }),
+        (other, _) => Err(format!("unknown target kind {other:?}")),
     }
+}
+
+/// What [`create_unique`] and [`update_existing`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Written {
+    Done,
+    /// The app's external service already has a mapping.
+    Duplicate,
+    /// The app's external service has no mapping.
+    Missing,
+    /// The mapping targets a site service that does not exist.
+    SiteTargetMissing,
+}
+
+fn site_target_missing(db: &Db, target: &ServiceRef) -> rusqlite::Result<bool> {
+    match target {
+        ServiceRef::Site { name } => Ok(site_services::get(db, name)?.is_none()),
+        ServiceRef::App { .. } => Ok(false),
+    }
+}
+
+/// Create a mapping the external service does not already have, to a site
+/// target that exists, as one step.
+// spec: SVCM#mapping-creation
+pub fn create_unique(db: &Db, mapping: &ExternalServiceMapping) -> rusqlite::Result<Written> {
+    if site_target_missing(db, &mapping.target)? {
+        return Ok(Written::SiteTargetMissing);
+    }
+    if get(db, &mapping.app, &mapping.external_name)?.is_some() {
+        return Ok(Written::Duplicate);
+    }
+    create(db, mapping)?;
+    Ok(Written::Done)
+}
+
+/// Retarget a mapping that exists, to a site target that exists, giving the
+/// mapping it had; reading it and storing the new one are one step.
+// spec: SVCM#remapping
+pub fn update_existing(
+    db: &Db,
+    mapping: &ExternalServiceMapping,
+) -> rusqlite::Result<(Written, Option<ExternalServiceMapping>)> {
+    let Some(previous) = get(db, &mapping.app, &mapping.external_name)? else {
+        return Ok((Written::Missing, None));
+    };
+    if site_target_missing(db, &mapping.target)? {
+        return Ok((Written::SiteTargetMissing, Some(previous)));
+    }
+    update(db, mapping)?;
+    Ok((Written::Done, Some(previous)))
 }
 
 pub fn create(db: &Db, mapping: &ExternalServiceMapping) -> rusqlite::Result<()> {
@@ -174,7 +230,9 @@ fn row_to_mapping(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExternalServiceMa
     let kind: String = row.get(2)?;
     let target_app: Option<AppName> = row.get(3)?;
     let target_service: String = row.get(4)?;
-    let target = from_row(kind.as_str(), target_app, target_service);
+    let target = from_row(kind.as_str(), target_app, target_service).map_err(|why| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, why.into())
+    })?;
     Ok(ExternalServiceMapping {
         app,
         external_name,

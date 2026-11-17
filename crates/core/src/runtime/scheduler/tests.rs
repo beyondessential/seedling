@@ -64,6 +64,7 @@ fn an_app_being_uninstalled_is_refused() {
             1,
             "operator",
             &phase(AppPhase::Uninstalling),
+            None,
         ),
         ScheduleResult::Rejected(RejectReason::AppUninstalling)
     );
@@ -86,9 +87,51 @@ fn an_installed_app_is_admitted() {
             1,
             "operator",
             &phase(AppPhase::Installed),
+            None,
         ),
         ScheduleResult::Accepted
     );
+}
+
+// spec: WIRE#actor-attribution
+// A request that has to wait is on the queue from the moment it is admitted,
+// already carrying who made it: a completion between the two steps of
+// recording it afterwards would start it with no actor.
+#[test]
+fn a_queued_operation_carries_the_actor_it_was_admitted_with() {
+    let actor = Arc::new(seedling_protocol::actor::Actor {
+        kind: Some("test".into()),
+        id: Some("someone".into()),
+        display: None,
+        session: None,
+    });
+    let mut s = Scheduler::new();
+    s.admit(
+        &app("app1"),
+        &act("backup"),
+        serde_json::Map::new(),
+        1,
+        1,
+        "operator",
+        &phase(AppPhase::Installed),
+        None,
+    );
+    assert_eq!(
+        s.admit(
+            &app("app2"),
+            &act("backup"),
+            serde_json::Map::new(),
+            1,
+            1,
+            "operator",
+            &phase(AppPhase::Installed),
+            Some(Arc::clone(&actor)),
+        ),
+        ScheduleResult::Queued
+    );
+
+    let dequeued = s.complete_current().expect("the queued request starts");
+    assert_eq!(dequeued.actor, Some(actor));
 }
 
 // -----------------------------------------------------------------------
@@ -106,7 +149,8 @@ fn empty_scheduler_accepts_first_request() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Accepted
     );
@@ -126,6 +170,7 @@ fn same_app_second_request_rejected() {
         1,
         1,
         "operator",
+        None,
     );
     assert_eq!(
         s.request(
@@ -134,7 +179,8 @@ fn same_app_second_request_rejected() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
     );
@@ -151,6 +197,7 @@ fn same_app_different_action_still_rejected() {
         1,
         1,
         "operator",
+        None,
     );
     assert_eq!(
         s.request(
@@ -159,7 +206,8 @@ fn same_app_different_action_still_rejected() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
     );
@@ -180,6 +228,7 @@ fn different_app_request_is_queued() {
         1,
         1,
         "operator",
+        None,
     );
     assert_eq!(
         s.request(
@@ -188,7 +237,8 @@ fn different_app_request_is_queued() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Queued
     );
@@ -209,6 +259,7 @@ fn already_queued_app_is_rejected() {
         1,
         1,
         "operator",
+        None,
     );
     s.request(
         &app("app2"),
@@ -217,6 +268,7 @@ fn already_queued_app_is_rejected() {
         1,
         1,
         "operator",
+        None,
     ); // queued
     assert_eq!(
         s.request(
@@ -225,7 +277,8 @@ fn already_queued_app_is_rejected() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued)
     );
@@ -242,6 +295,7 @@ fn two_different_apps_can_both_queue() {
         1,
         1,
         "operator",
+        None,
     );
     assert_eq!(
         s.request(
@@ -250,7 +304,8 @@ fn two_different_apps_can_both_queue() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Queued
     );
@@ -261,7 +316,8 @@ fn two_different_apps_can_both_queue() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Queued
     );
@@ -279,6 +335,7 @@ fn queued_app_rejected_regardless_of_action_name() {
         1,
         1,
         "operator",
+        None,
     );
     s.request(
         &app("app2"),
@@ -287,6 +344,7 @@ fn queued_app_rejected_regardless_of_action_name() {
         1,
         1,
         "operator",
+        None,
     );
     assert_eq!(
         s.request(
@@ -295,7 +353,8 @@ fn queued_app_rejected_regardless_of_action_name() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued)
     );
@@ -316,6 +375,7 @@ fn complete_current_with_empty_queue_clears_active() {
         1,
         1,
         "operator",
+        None,
     );
     let next = s.complete_current();
     assert!(next.is_none());
@@ -334,6 +394,7 @@ fn complete_current_dequeues_next_and_makes_it_active() {
         1,
         1,
         "operator",
+        None,
     );
     s.request(
         &app("app2"),
@@ -342,6 +403,7 @@ fn complete_current_dequeues_next_and_makes_it_active() {
         1,
         1,
         "operator",
+        None,
     );
 
     let next = s.complete_current().expect("should dequeue app2");
@@ -365,6 +427,7 @@ fn queue_is_drained_in_fifo_order() {
         1,
         1,
         "operator",
+        None,
     );
     s.request(
         &app("app2"),
@@ -373,6 +436,7 @@ fn queue_is_drained_in_fifo_order() {
         1,
         1,
         "operator",
+        None,
     );
     s.request(
         &app("app3"),
@@ -381,6 +445,7 @@ fn queue_is_drained_in_fifo_order() {
         1,
         1,
         "operator",
+        None,
     );
 
     let first = s.complete_current().expect("app2");
@@ -405,6 +470,7 @@ fn after_complete_same_app_can_be_requested_again() {
         1,
         1,
         "operator",
+        None,
     );
     s.complete_current();
     // No active operation; app1 should be accepted again.
@@ -415,7 +481,8 @@ fn after_complete_same_app_can_be_requested_again() {
             serde_json::Map::new(),
             1,
             1,
-            "operator"
+            "operator",
+            None
         ),
         ScheduleResult::Accepted
     );
@@ -436,6 +503,7 @@ fn push_call_with_no_cycle_succeeds() {
         1,
         1,
         "operator",
+        None,
     );
     assert!(s.push_call(&act("start")).is_ok());
     assert!(s.push_call(&act("setup")).is_ok());
@@ -453,6 +521,7 @@ fn push_call_detects_direct_cycle() {
         1,
         1,
         "operator",
+        None,
     );
     s.push_call(&act("start")).unwrap();
     let err = s.push_call(&act("start")).unwrap_err();
@@ -471,6 +540,7 @@ fn push_call_detects_transitive_cycle() {
         1,
         1,
         "operator",
+        None,
     );
     s.push_call(&act("start")).unwrap();
     s.push_call(&act("setup")).unwrap();
@@ -491,6 +561,7 @@ fn pop_call_allows_reuse_of_action_name() {
         1,
         1,
         "operator",
+        None,
     );
     s.push_call(&act("setup")).unwrap();
     s.pop_call();
@@ -509,6 +580,7 @@ fn complete_current_clears_call_stack() {
         1,
         1,
         "operator",
+        None,
     );
     s.request(
         &app("app2"),
@@ -517,6 +589,7 @@ fn complete_current_clears_call_stack() {
         1,
         1,
         "operator",
+        None,
     );
     s.push_call(&act("start")).unwrap();
     s.push_call(&act("setup")).unwrap();
@@ -536,6 +609,7 @@ fn call_stack_is_empty_at_start_of_new_operation() {
         1,
         1,
         "operator",
+        None,
     );
     // Immediately after the very first request, stack is empty.
     assert!(s.call_stack().is_empty());
@@ -694,6 +768,7 @@ fn fire(s: &Arc<Mutex<Scheduler>>, name: &str) -> ScheduleResult {
         1,
         "schedule",
         &phase(AppPhase::Installed),
+        None,
     )
 }
 
@@ -723,6 +798,7 @@ fn a_held_app_admits_nothing_until_its_handler_takes_the_hold_s_place() {
         2,
         "param_change",
         &phase(AppPhase::Installed),
+        None,
     );
     assert_eq!(result, ScheduleResult::Accepted);
     assert_eq!(op, s.lock().active().map(|a| a.operation_id.clone()));
@@ -741,6 +817,7 @@ fn a_handler_queued_in_the_hold_s_place_reports_its_id() {
         2,
         "param_change",
         &phase(AppPhase::Installed),
+        None,
     );
     assert_eq!(result, ScheduleResult::Queued);
     assert_eq!(
@@ -792,6 +869,7 @@ fn a_refused_handler_frees_the_app() {
         2,
         "param_change",
         &phase(AppPhase::Uninstalling),
+        None,
     );
     assert_eq!(
         result,

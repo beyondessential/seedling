@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, net::Ipv6Addr};
 
+use ipnet::Ipv6Net;
 use parking_lot::Mutex;
 use seedling_protocol::names::AppName;
 
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::DbHandle;
-use crate::runtime::gc::UNSCHEDULED_OBS_KINDS;
 use crate::runtime::history;
 use crate::runtime::identity::{InstanceVariant, ResourceInstance};
 use crate::runtime::lifecycle::LifecycleState;
@@ -114,6 +114,20 @@ pub trait InstanceRegistry: Send + Sync {
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<Vec<ResourceInstance>, RegistryError>;
+
+    /// Every instance recorded for `app`, of every resource, declared or not.
+    /// Does not create anything.
+    // spec: TRD#teardown
+    fn instances_of_app(&self, app: &AppName) -> Result<Vec<ResourceInstance>, RegistryError>;
+
+    /// The address a service instance is reached at, allocating it one no
+    /// other service holds if it has none.
+    // spec: INFRA#service-addresses
+    fn service_address(
+        &self,
+        node_prefix: &Ipv6Net,
+        instance: &ResourceInstance,
+    ) -> Result<Ipv6Addr, RegistryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +148,7 @@ type InstanceRegistryKey = (AppName, ResourceKind, Option<String>);
 pub struct EphemeralInstanceRegistry {
     cache: Mutex<HashMap<InstanceRegistryKey, ResourceInstance>>,
     scaled_cache: Mutex<HashMap<InstanceRegistryKey, Vec<ResourceInstance>>>,
+    service_addresses: Mutex<crate::runtime::service_addresses::InMemory>,
 }
 
 impl EphemeralInstanceRegistry {
@@ -141,6 +156,7 @@ impl EphemeralInstanceRegistry {
         Self {
             cache: Mutex::new(HashMap::new()),
             scaled_cache: Mutex::new(HashMap::new()),
+            service_addresses: Mutex::default(),
         }
     }
 }
@@ -227,6 +243,35 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
 
         Ok(result)
     }
+
+    fn instances_of_app(&self, app: &AppName) -> Result<Vec<ResourceInstance>, RegistryError> {
+        let mut result: Vec<ResourceInstance> = self
+            .cache
+            .lock()
+            .iter()
+            .filter(|((owner, _, _), _)| owner == app)
+            .map(|(_, instance)| instance.clone())
+            .collect();
+        result.extend(
+            self.scaled_cache
+                .lock()
+                .iter()
+                .filter(|((owner, _, _), _)| owner == app)
+                .flat_map(|(_, instances)| instances.iter().cloned()),
+        );
+        Ok(result)
+    }
+
+    fn service_address(
+        &self,
+        node_prefix: &Ipv6Net,
+        instance: &ResourceInstance,
+    ) -> Result<Ipv6Addr, RegistryError> {
+        Ok(self
+            .service_addresses
+            .lock()
+            .address_of(node_prefix, instance))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -301,23 +346,11 @@ impl InstanceRegistry for DbInstanceRegistry {
             for inst in scaled {
                 let obs = observations.get(&inst.id).map_or(&[][..], Vec::as_slice);
                 let state = crate::runtime::barrier::oracle::derive_lifecycle_state(&inst, obs);
-                // Latest wins, because that is what the retirement sweep
-                // this mirrors does: it selects on the most recent
-                // observation being a terminal kind. Asking whether a
-                // terminal observation appears anywhere in the history
-                // instead would mark an instance torn down for the rest of
-                // its life the first time its container was removed, so a
-                // replica that had since been brought back would be dropped
-                // from the keep set while it was still running — and a
-                // `rt.stop` would leave it serving, which is the split
-                // AUTO#scale exists to prevent.
-                //
-                // The observations are ordered by recorded_at then id, so
-                // the last is the most recent.
-                let latest_is_terminal = obs
-                    .last()
-                    .is_some_and(|o| UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str()));
-                let torn_down = state == LifecycleState::Unscheduled || latest_is_terminal;
+                // Only the most recent observation counts: a terminal one
+                // earlier in the history belongs to a cycle the instance has
+                // since started again, and asking whether one appears anywhere
+                // would drop a running replica from the keep set.
+                let torn_down = crate::runtime::gc::is_torn_down(state, obs);
                 observed.push((inst, state, torn_down));
             }
 
@@ -382,5 +415,24 @@ impl InstanceRegistry for DbInstanceRegistry {
         Ok(self
             .db
             .call(move |db| history::find_instances_for_group(db, &app, kind, name.as_deref()))?)
+    }
+
+    fn instances_of_app(&self, app: &AppName) -> Result<Vec<ResourceInstance>, RegistryError> {
+        let app = app.clone();
+        Ok(self
+            .db
+            .call(move |db| history::instances_for_app(db, &app))?)
+    }
+
+    fn service_address(
+        &self,
+        node_prefix: &Ipv6Net,
+        instance: &ResourceInstance,
+    ) -> Result<Ipv6Addr, RegistryError> {
+        let node_prefix = *node_prefix;
+        let instance = instance.clone();
+        Ok(self.db.call(move |db| {
+            crate::runtime::service_addresses::address_of(db, &node_prefix, &instance)
+        })?)
     }
 }

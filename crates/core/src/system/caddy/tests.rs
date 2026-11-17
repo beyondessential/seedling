@@ -475,6 +475,30 @@ fn cert_endpoint_url_without_subjects_emits_no_tls_app() {
     assert!(json["apps"]["tls"].is_null());
 }
 
+// spec: ING#termination
+#[test]
+fn an_l4_route_terminating_tls_runs_the_tls_handler_before_the_proxy() {
+    use crate::system::types::{L4Proto, L4Route};
+
+    let config = ProxyConfig {
+        listeners: vec![],
+        virtual_hosts: vec![],
+        l4_routes: vec![L4Route {
+            port: 5432,
+            proto: L4Proto::Tcp,
+            upstreams: vec!["[fd5e::1]:5432".to_string()],
+            terminate_tls: true,
+        }],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
+    };
+    let json = build_caddy_config(&config);
+    let handle = &json["apps"]["layer4"]["servers"]["l4_tcp_5432"]["routes"][0]["handle"];
+    assert_eq!(handle[0]["handler"], "tls");
+    assert_eq!(handle[1]["handler"], "proxy");
+}
+
 #[test]
 fn l4_routes_emit_layer4_servers_per_port_and_proto() {
     use crate::system::types::{L4Proto, L4Route};
@@ -487,11 +511,13 @@ fn l4_routes_emit_layer4_servers_per_port_and_proto() {
                 port: 5432,
                 proto: L4Proto::Tcp,
                 upstreams: vec!["[fd5e::1]:5432".to_string()],
+                terminate_tls: false,
             },
             L4Route {
                 port: 514,
                 proto: L4Proto::Udp,
                 upstreams: vec!["[fd5e::2]:514".to_string(), "[fd5e::3]:514".to_string()],
+                terminate_tls: false,
             },
         ],
         warm_cert_hostnames: Default::default(),
@@ -509,6 +535,12 @@ fn l4_routes_emit_layer4_servers_per_port_and_proto() {
     assert_eq!(
         tcp["routes"][0]["handle"][0]["upstreams"][0]["dial"][0],
         "[fd5e::1]:5432"
+    );
+
+    assert_eq!(
+        tcp["routes"][0]["handle"].as_array().unwrap().len(),
+        1,
+        "a route that terminates nothing passes the stream through"
     );
 
     let udp = &json["apps"]["layer4"]["servers"]["l4_udp_514"];
@@ -2243,4 +2275,38 @@ fn tls_servers_keep_automatic_https() {
     };
     let json = build_caddy_config(&config);
     assert!(json["apps"]["http"]["servers"]["seedling_https_8443"]["automatic_https"].is_null());
+}
+
+// spec: PRX#route-selection
+#[test]
+fn a_proxied_route_with_no_upstreams_answers_503() {
+    let mut vhost = http_vhost("example.com", "[fd5e::1]:3000");
+    vhost.routes[0].handler = ProxyRouteHandler::ReverseProxy {
+        upstreams: vec![],
+        proxy: Box::new(default_proxy()),
+    };
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![vhost],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
+    };
+    let json = build_caddy_config(&config);
+    let routes = json["apps"]["http"]["servers"]["seedling_http_80"]["routes"]
+        .as_array()
+        .unwrap();
+    let route = routes
+        .iter()
+        .find(|r| r["match"][0]["host"][0] == "example.com")
+        .expect("the route is still emitted");
+    let handlers: Vec<&serde_json::Value> = route["handle"].as_array().unwrap().iter().collect();
+    assert!(handlers.iter().all(|h| h["handler"] != "reverse_proxy"));
+    let last = handlers.last().unwrap();
+    assert_eq!(last["handler"], "static_response");
+    assert_eq!(last["status_code"], 503);
 }

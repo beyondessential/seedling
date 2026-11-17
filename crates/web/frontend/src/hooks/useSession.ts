@@ -5,6 +5,7 @@ import { AuthRequired, connect } from "../lib/session";
 export type SessionState =
   | { status: "unauthenticated" }
   | { status: "connecting" }
+  | { status: "unavailable" }
   | { status: "authenticated"; actor: import("../lib/types").Actor }
   | { status: "error"; message: string };
 
@@ -25,7 +26,11 @@ export function useLogin() {
         setState({ status: "authenticated", actor: session.actor });
       } catch (e) {
         if (e instanceof AuthRequired) {
-          setState({ status: "error", message: "Invalid password." });
+          setState(
+            e.credential === "none"
+              ? { status: "unavailable" }
+              : { status: "error", message: "Invalid password." },
+          );
         } else {
           setState({
             status: "error",

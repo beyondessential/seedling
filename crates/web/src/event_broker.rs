@@ -88,23 +88,50 @@ fn gap_marker(skipped: Option<u64>) -> Arc<str> {
         .into()
 }
 
+/// The wait before the next subscription attempt.
+struct Backoff {
+    wait: std::time::Duration,
+}
+
+impl Backoff {
+    const INITIAL: std::time::Duration = std::time::Duration::from_secs(1);
+    const CAP: std::time::Duration = std::time::Duration::from_secs(30);
+
+    fn new() -> Self {
+        Self {
+            wait: Self::INITIAL,
+        }
+    }
+
+    /// A subscription was established: the next wait is the initial one.
+    fn established(&mut self) {
+        self.wait = Self::INITIAL;
+    }
+
+    /// The wait to take now, doubling the one after it.
+    fn take(&mut self) -> std::time::Duration {
+        let wait = self.wait;
+        self.wait = (self.wait * 2).min(Self::CAP);
+        wait
+    }
+}
+
 /// Runs forever: subscribes to the daemon event stream and forwards to the broker.
 /// Reconnects automatically on transport errors.
+// spec: WEB#event-relay
 pub async fn run_event_broker(broker: Arc<EventBroker>, daemon: Arc<DaemonConn>) {
-    let mut backoff = std::time::Duration::from_secs(1);
+    let mut backoff = Backoff::new();
     let mut resumed = false;
     loop {
-        match stream_events(&broker, &daemon, &mut resumed).await {
+        match stream_events(&broker, &daemon, &mut resumed, &mut backoff).await {
             Ok(()) => {
                 tracing::info!("event broker: daemon stream ended, reconnecting");
-                backoff = std::time::Duration::from_secs(1);
             }
             Err(e) => {
                 tracing::warn!(error = %e, "event broker: stream error, reconnecting");
             }
         }
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
+        tokio::time::sleep(backoff.take()).await;
     }
 }
 
@@ -115,9 +142,11 @@ async fn stream_events(
     broker: &EventBroker,
     daemon: &DaemonConn,
     resumed: &mut bool,
+    backoff: &mut Backoff,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = daemon.new_events_client().await?;
     let uni = client.subscribe_events().await?;
+    backoff.established();
     if *resumed {
         // spec: WEB#event-relay
         broker.publish(gap_marker(None)).await;
@@ -142,7 +171,21 @@ async fn stream_events(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+
+    // spec: WEB#event-relay
+    #[test]
+    fn the_wait_doubles_to_a_cap_and_is_one_second_after_an_established_subscription() {
+        let mut backoff = Backoff::new();
+        let waits: Vec<_> = (0..7).map(|_| backoff.take().as_secs()).collect();
+        assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30]);
+
+        backoff.established();
+        assert_eq!(backoff.take(), Duration::from_secs(1));
+        assert_eq!(backoff.take(), Duration::from_secs(2));
+    }
 
     fn broker() -> Arc<EventBroker> {
         EventBroker::new(Arc::new(ActorActivityRegistry::new()))

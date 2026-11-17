@@ -1,8 +1,9 @@
 use rhai::{CustomType, EvalAltResult, FnPtr, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
-use super::app::App;
+use super::app::{App, ensure_not_validating};
 use super::install::ParamKind;
+use super::take::take_closure;
 
 // spec: PARAM#declaration
 #[derive(Debug, Clone)]
@@ -46,6 +47,9 @@ impl CustomType for Param {
         builder.with_fn(
             "on_change",
             |this: &mut Self, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
+                // spec: BSL#arguments
+                let closure = take_closure("on_change", "fn", closure)?;
+                ensure_not_validating()?;
                 if crate::runtime::barrier::runtime::is_in_action_closure() {
                     return Err(format!(
                         "on_change for parameter '{}' cannot be called from within an action closure",
@@ -78,6 +82,9 @@ impl CustomType for Param {
         builder.with_fn(
             "validate",
             |this: &mut Self, closure: FnPtr| -> Result<Self, Box<EvalAltResult>> {
+                // spec: BSL#arguments
+                let closure = take_closure("validate", "fn", closure)?;
+                ensure_not_validating()?;
                 if crate::runtime::barrier::runtime::is_in_action_closure() {
                     return Err(format!(
                         "validate for parameter '{}' cannot be called from within an action closure",
@@ -107,6 +114,8 @@ impl CustomType for Param {
         builder.with_fn(
             "kind",
             |this: &mut Self, kind_str: &str| -> Result<Self, Box<EvalAltResult>> {
+                ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("kind")?;
                 let kind = kind_str
                     .parse::<ParamKind>()
                     .map_err(|_| -> Box<EvalAltResult> {
@@ -139,57 +148,77 @@ impl CustomType for Param {
         );
 
         // spec: PARAM#schema
-        builder.with_fn("required", |this: &mut Self, required: bool| -> Self {
-            let name_clone = this.name.clone();
-            this.app.def.rcu(|d| {
-                let mut d = (**d).clone();
-                d.params
-                    .entry(name_clone.clone())
-                    .and_modify(|def| def.required = required);
-                d
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "required",
+            |this: &mut Self, required: bool| -> Result<Self, Box<EvalAltResult>> {
+                ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("required")?;
+                let name_clone = this.name.clone();
+                this.app.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.params
+                        .entry(name_clone.clone())
+                        .and_modify(|def| def.required = required);
+                    d
+                });
+                Ok(this.clone())
+            },
+        );
 
         // spec: PARAM#schema
-        builder.with_fn("default_value", |this: &mut Self, value: &str| -> Self {
-            let name_clone = this.name.clone();
-            let value_owned = value.to_owned();
-            this.app.def.rcu(|d| {
-                let mut d = (**d).clone();
-                d.params
-                    .entry(name_clone.clone())
-                    .and_modify(|def| def.default_value = Some(value_owned.clone()));
-                d
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "default_value",
+            |this: &mut Self, value: &str| -> Result<Self, Box<EvalAltResult>> {
+                ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("default_value")?;
+                let name_clone = this.name.clone();
+                let value_owned = value.to_owned();
+                this.app.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.params
+                        .entry(name_clone.clone())
+                        .and_modify(|def| def.default_value = Some(value_owned.clone()));
+                    d
+                });
+                Ok(this.clone())
+            },
+        );
 
         // spec: PARAM#schema
-        builder.with_fn("description", |this: &mut Self, desc: &str| -> Self {
-            let name_clone = this.name.clone();
-            let desc_owned = desc.to_owned();
-            this.app.def.rcu(|d| {
-                let mut d = (**d).clone();
-                d.params
-                    .entry(name_clone.clone())
-                    .and_modify(|def| def.description = Some(desc_owned.clone()));
-                d
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "description",
+            |this: &mut Self, desc: &str| -> Result<Self, Box<EvalAltResult>> {
+                ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("description")?;
+                let name_clone = this.name.clone();
+                let desc_owned = desc.to_owned();
+                this.app.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.params
+                        .entry(name_clone.clone())
+                        .and_modify(|def| def.description = Some(desc_owned.clone()));
+                    d
+                });
+                Ok(this.clone())
+            },
+        );
 
         // spec: PARAM#secret-parameters
-        builder.with_fn("secret", |this: &mut Self, secret: bool| -> Self {
-            let name_clone = this.name.clone();
-            this.app.def.rcu(|d| {
-                let mut d = (**d).clone();
-                d.params
-                    .entry(name_clone.clone())
-                    .and_modify(|def| def.secret = Some(secret));
-                d
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "secret",
+            |this: &mut Self, secret: bool| -> Result<Self, Box<EvalAltResult>> {
+                ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("secret")?;
+                let name_clone = this.name.clone();
+                this.app.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.params
+                        .entry(name_clone.clone())
+                        .and_modify(|def| def.secret = Some(secret));
+                    d
+                });
+                Ok(this.clone())
+            },
+        );
     }
 }

@@ -13,6 +13,27 @@ use crate::{
     },
 };
 
+/// Whether any generation of `app` was made after `since`.
+///
+/// Read from the history's own record of when each generation was made, so
+/// the answer is the same after a restart as before one.
+pub fn changed_since(db: &Db, app: &AppName, since: jiff::Timestamp) -> rusqlite::Result<bool> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT created_at FROM generations WHERE app = ?1")?;
+    let rows = stmt.query_map([app], |row| row.get::<_, String>(0))?;
+    for created in rows {
+        let created = created?;
+        let made: jiff::Timestamp = created.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        if made > since {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 // spec: GEN#generation-numbers
 pub type Generation = u64;
 
@@ -50,6 +71,7 @@ pub enum Outcome {
     Pending,
     Succeeded,
     Failed,
+    Cancelled,
 }
 
 impl Outcome {
@@ -58,6 +80,7 @@ impl Outcome {
             Self::Pending => "pending",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -66,6 +89,7 @@ impl Outcome {
             "pending" => Some(Self::Pending),
             "succeeded" => Some(Self::Succeeded),
             "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
             _ => None,
         }
     }
@@ -104,6 +128,12 @@ pub enum Error {
     },
     MissingBundle(String),
     CorruptBundle(String),
+    /// A recorded parameter value could not be read back, so the parameter
+    /// map at the generation cannot be built.
+    UnreadableParam {
+        param: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -117,6 +147,12 @@ impl std::fmt::Display for Error {
             }
             Self::MissingBundle(hash) => write!(f, "definition bundle not found for hash {hash}"),
             Self::CorruptBundle(msg) => write!(f, "stored definition bundle is unreadable: {msg}"),
+            Self::UnreadableParam { param, reason } => {
+                write!(
+                    f,
+                    "recorded value of parameter {param:?} is unreadable: {reason}"
+                )
+            }
         }
     }
 }
@@ -471,6 +507,25 @@ pub fn record_outcome(
     Ok(())
 }
 
+/// Record how the operation `operation_id` ended against the generation it
+/// was attached to, if it was attached to one.
+// spec: GEN#generation-numbers
+pub fn record_operation_outcome(
+    db: &Db,
+    operation_id: &str,
+    outcome: Outcome,
+    error: Option<&str>,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE generations
+            SET outcome       = ?1,
+                outcome_error = ?2
+          WHERE operation_id = ?3",
+        rusqlite::params![outcome.as_str(), error, operation_id],
+    )?;
+    Ok(())
+}
+
 /// List generation history entries for an app, newest first.
 /// `before`, when provided, restricts results to `generation < before`.
 pub fn list(
@@ -561,7 +616,7 @@ pub fn param_map_at(
     app: &AppName,
     generation: Generation,
     cipher: &Cipher,
-) -> rusqlite::Result<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, String>, Error> {
     let mut stmt = db.conn.prepare(
         "SELECT param_name, kind, new_value, new_value_ciphertext
          FROM generations
@@ -594,7 +649,10 @@ pub fn param_map_at(
                     Ok(s) => Some(s.expose_secret().to_owned()),
                     Err(e) => {
                         tracing::error!(app = %app, param = %name, "failed to decrypt param history for reconstruction: {e}");
-                        None
+                        return Err(Error::UnreadableParam {
+                            param: name,
+                            reason: e.to_string(),
+                        });
                     }
                 }
             } else {

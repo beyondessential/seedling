@@ -44,24 +44,21 @@ pub fn load_or_generate(path: &Path) -> io::Result<SigningKey> {
         }
         let key = SigningKey::generate(&mut ThreadRng::default());
         let doc = key.to_pkcs8_der().map_err(io::Error::other)?;
-        {
-            use std::io::Write;
-            #[cfg(unix)]
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)?
-                .write_all(doc.as_bytes())?;
-            #[cfg(not(unix))]
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)?
-                .write_all(doc.as_bytes())?;
-        }
+        write_new_private_file(path, doc.as_bytes())?;
         Ok(key)
     }
+}
+
+/// Create `path`, which must not exist, readable and writable by its owner
+/// alone from the moment it exists, and write `contents` to it.
+// spec: INFRA#file-permissions
+pub fn write_new_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path)?.write_all(contents)
 }
 
 /// Build the SubjectPublicKeyInfo (SPKI) DER encoding for an Ed25519 key.

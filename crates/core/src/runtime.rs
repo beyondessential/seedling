@@ -3,6 +3,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod action_params;
+pub mod anonymous_volumes;
 pub mod apps;
 pub mod audit;
 pub mod autonomous_ops;
@@ -11,16 +12,19 @@ pub mod canopy;
 pub mod db;
 pub mod definition;
 pub mod desired;
+pub mod dynamic_teardown;
 pub mod external_service_mappings;
 pub mod external_volume_mappings;
 pub mod faults;
 pub mod gc;
 pub mod generations;
+pub mod health;
 pub mod history;
 pub mod identity;
 pub mod images;
 pub mod lifecycle;
 pub mod nat64_prefix;
+pub mod pod_networks;
 pub mod priority;
 pub mod probe;
 pub mod registries;
@@ -32,6 +36,7 @@ pub mod scaling;
 pub mod scheduler;
 pub mod schedules;
 pub mod secrets;
+pub mod service_addresses;
 pub mod site_ingress_attachments;
 pub mod site_ingresses;
 pub mod site_services;

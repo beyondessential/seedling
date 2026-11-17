@@ -8,8 +8,7 @@ use super::{
     Freezable, Holder, Port,
     enums::{Output, Terminate},
     resource::ResourceName,
-    service::Service,
-    take::take_int_in_range,
+    service::{Service, redirect_code},
 };
 
 #[derive(Debug, Clone)]
@@ -98,12 +97,23 @@ pub fn ingress_resource_name(hostname: &str, port: Port) -> String {
     format!("{hostname}:{}", port.get())
 }
 
-fn require_https(def: &IngressDef) -> Result<(), Box<EvalAltResult>> {
-    if def.http_terminate.is_none() {
-        return Err(
-            "redirect() requires an HTTPS termination, e.g. tls(Terminate.Https, Output.Http1)"
-                .into(),
-        );
+/// Refuse a definition in which an ingress declares a redirect and its
+/// final termination is not HTTPS. Checked once the definition has evaluated,
+/// so the order of the `tls()` and `redirect` calls does not matter.
+// spec: ING#redirect-to-https
+pub(crate) fn check_redirect_terminations(def: &super::app::AppDef) -> Result<(), String> {
+    for resource in def.resources.values() {
+        let super::resource::Resource::Ingress(ingress) = resource else {
+            continue;
+        };
+        let ingress_def = ingress.def.lock();
+        if ingress_def.redirect.is_some() && ingress_def.http_terminate.is_none() {
+            return Err(format!(
+                "ingress '{}' declares redirect(), which requires an HTTPS termination, \
+                 e.g. tls(Terminate.Https, Output.Http1)",
+                ingress.name
+            ));
+        }
     }
     Ok(())
 }
@@ -178,7 +188,6 @@ impl CustomType for Ingress {
                 "redirect",
                 |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    require_https(&this.def.lock())?;
                     this.def.lock().redirect = Some(RedirectDef {
                         port: Port::from_u16(80),
                         code: 307,
@@ -191,7 +200,6 @@ impl CustomType for Ingress {
                 |this: &mut Self, port: i64| -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
-                    require_https(&this.def.lock())?;
                     this.def.lock().redirect = Some(RedirectDef { port, code: 307 });
                     Ok(this.clone())
                 },
@@ -201,11 +209,8 @@ impl CustomType for Ingress {
                 |this: &mut Self, port: i64, code: i64| -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
-                    require_https(&this.def.lock())?;
-                    // spec: ING#redirect-to-https — a redirect to a non-3xx code
-                    // is not a redirect, and the unchecked cast turned 65843
-                    // into a 307 rather than an error.
-                    let code = take_int_in_range::<u16>("redirect code", code, 300..=399)?;
+                    // spec: ING#redirect-to-https
+                    let code = redirect_code(code)?;
                     this.def.lock().redirect = Some(RedirectDef { port, code });
                     Ok(this.clone())
                 },

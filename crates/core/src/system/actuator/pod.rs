@@ -9,25 +9,28 @@ use crate::{
         volume::VolumeDef,
     },
     runtime::{
-        identity::{ResourceInstance, VolumeName},
+        anonymous_volumes::{self, AnonymousVolume},
+        db::DbHandle,
+        identity::{InstanceId, ResourceInstance, VolumeName},
         registry::RegistryError,
     },
     system::{
         System,
         priority::WorkloadStanding,
-        translate::proxy::{instance_ipv6, pod_network_prefix},
         types::{ActiveState, TransientRestart, TransientUnitSpec},
     },
 };
 
-use super::{ActuateError, Actuator, ContainerSnafu, ProcessSnafu, RegistrySnafu};
+use super::{
+    ActuateError, Actuator, AnonymousVolumeRecordSnafu, ContainerSnafu, ProcessSnafu, RegistrySnafu,
+};
 
 fn pod_network_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
 }
 
 // spec: LINUX#supervised-units
-fn unit_name(instance: &ResourceInstance) -> String {
+pub(crate) fn unit_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}.service", instance.display_name)
 }
 
@@ -59,6 +62,24 @@ pub(crate) struct ContainerVolume {
     /// Host path for bind-mounted volumes (named non-tmpfs volumes managed
     /// by the VolumeStore). None for podman-managed volumes.
     pub(super) host_path: Option<std::path::PathBuf>,
+}
+
+impl ContainerVolume {
+    /// Where the volume's storage is, for an anonymous volume.
+    fn anonymous(&self) -> Option<AnonymousVolume> {
+        self.remove_on_stop.then(|| AnonymousVolume {
+            name: self.name.clone(),
+            tmpfs: self.def.tmpfs,
+        })
+    }
+}
+
+/// The anonymous volumes among `volumes`.
+pub(super) fn anonymous_volumes(volumes: &[ContainerVolume]) -> Vec<AnonymousVolume> {
+    volumes
+        .iter()
+        .filter_map(ContainerVolume::anonymous)
+        .collect()
 }
 
 /// Host path under which tmpfs volumes are bind-mounted. /run is tmpfs-backed
@@ -268,7 +289,9 @@ impl Actuator {
                     ResourceKind::Service,
                     Some(sp.service.name().as_str()),
                 )?;
-                let service_ip = instance_ipv6(&self.node_prefix, &svc_instance);
+                let service_ip = self
+                    .registry
+                    .service_address(&self.node_prefix, &svc_instance)?;
                 Ok((sp.port.get(), service_ip, sp.port.get()))
             })
             .collect::<Result<Vec<_>, _>>()
@@ -294,9 +317,21 @@ impl Actuator {
     ) -> Result<Option<String>, ActuateError> {
         self.ensure_image_available(image).await?;
 
+        // spec: ACTU#deployment-and-job-instances
+        // Each anonymous volume is recorded against the instance before its
+        // storage exists, so a stop from the instance's recorded identity
+        // alone still finds it.
+        let anonymous = anonymous_volumes(volumes);
+        if !anonymous.is_empty() {
+            let recorded = instance.clone();
+            self.db
+                .call(move |db| anonymous_volumes::record(db, &recorded, &anonymous))
+                .context(AnonymousVolumeRecordSnafu)?;
+        }
+
         // Set up volumes and network concurrently — neither depends on the other.
         let net_name = pod_network_name(instance);
-        let net_prefix = pod_network_prefix(&self.node_prefix, instance);
+        let net_prefix = self.allocate_pod_prefix(instance)?;
 
         let ((), bridge_name) = tokio::try_join!(
             ensure_volumes(&self.driver, volumes),
@@ -339,19 +374,7 @@ impl Actuator {
             .context(RegistrySnafu)?;
         let argv = build_argv(net_name, net_prefix, &mounts);
 
-        let resource_kind_str = match instance.kind {
-            ResourceKind::Parameter => "parameter",
-            ResourceKind::Service => "service",
-            ResourceKind::Ingress => "ingress",
-            ResourceKind::Deployment => "deployment",
-            ResourceKind::Job => "job",
-            ResourceKind::Volume => "volume",
-            ResourceKind::ExternalVolume => "external_volume",
-            ResourceKind::ExternalService => "external_service",
-            ResourceKind::Action => "action",
-        };
-        let resource_name = instance.name.as_deref().unwrap_or(&instance.display_name);
-
+        let resource_kind_str = instance.kind.type_name();
         let unit_for_breadcrumb = unit.clone();
         self.driver
             .process
@@ -381,18 +404,7 @@ impl Actuator {
                 restart_sec: Some(5),
                 start_limit_interval_sec: Some(600),
                 start_limit_burst: Some(10),
-                log_extra_fields: vec![
-                    ("SEEDLING_APP".to_owned(), instance.app.as_str().to_owned()),
-                    (
-                        "SEEDLING_RESOURCE_KIND".to_owned(),
-                        resource_kind_str.to_owned(),
-                    ),
-                    ("SEEDLING_RESOURCE".to_owned(), resource_name.to_owned()),
-                    (
-                        "SEEDLING_INSTANCE".to_owned(),
-                        instance.display_name.clone(),
-                    ),
-                ],
+                log_extra_fields: crate::system::journal::instance_log_fields(instance),
             })
             .await
             .context(ProcessSnafu)?;
@@ -422,10 +434,15 @@ impl Actuator {
     }
 
     // spec: RCN#reconciliation-loop
+    /// Stop a pod instance and remove what it was set up with: its unit, its
+    /// container, the anonymous volumes created for it, and its network.
+    ///
+    /// `declared` are the anonymous volumes its definition mounts, if it has
+    /// one; those recorded against its identity are removed as well.
     pub(crate) async fn stop_pod_instance(
         &self,
         instance: &ResourceInstance,
-        anon_volumes: &[ContainerVolume],
+        declared: &[AnonymousVolume],
     ) -> Result<(), ActuateError> {
         let unit = unit_name(instance);
 
@@ -462,6 +479,11 @@ impl Actuator {
             .remove_container(&instance.display_name, true)
             .await;
 
+        // spec: ACTU#deployment-and-job-instances
+        // Before the network: an instance whose network stands is stopped
+        // again, so a removal that fails here is retried rather than left.
+        remove_anonymous_volumes(&self.driver, &self.db, instance.id, declared).await?;
+
         let net_name = pod_network_name(instance);
         if self
             .driver
@@ -476,35 +498,76 @@ impl Actuator {
                 .await
                 .context(ContainerSnafu)?;
         }
+        // The network is gone, so its prefix is free for another.
+        self.release_pod_prefix(instance);
 
-        for vol in anon_volumes {
-            if let Some(host_path) = &vol.host_path {
-                // Tmpfs anonymous volume: bind-mounted from /run. Remove the
-                // host directory; the tmpfs backing under /run is reclaimed
-                // automatically when the directory empties.
-                if host_path.exists()
-                    && let Err(e) = tokio::fs::remove_dir_all(host_path).await
-                {
-                    tracing::warn!(
-                        path = %host_path.display(),
-                        "failed to remove tmpfs volume directory: {e}"
-                    );
-                }
-            } else if self
-                .driver
-                .container
-                .volume_exists(&vol.name)
-                .await
-                .context(ContainerSnafu)?
-            {
-                self.driver
-                    .container
-                    .remove_volume(&vol.name)
-                    .await
-                    .context(ContainerSnafu)?;
-            }
+        Ok(())
+    }
+}
+
+/// Remove the storage of every anonymous volume created for the pod instance
+/// `instance`: those recorded against it, and `declared`, the ones its
+/// definition mounts where it has one. The container using them must already
+/// be gone.
+///
+/// A volume another pod instance is also recorded with is still that
+/// instance's, so its storage is left for that instance's own stop. Each
+/// record is dropped once its storage is gone, so a removal that fails keeps
+/// the record for the next attempt.
+// spec: ACTU#deployment-and-job-instances
+pub async fn remove_anonymous_volumes(
+    driver: &System,
+    db: &DbHandle,
+    instance: InstanceId,
+    declared: &[AnonymousVolume],
+) -> Result<(), ActuateError> {
+    let mut volumes = db
+        .call(move |db| anonymous_volumes::recorded_for(db, instance))
+        .context(AnonymousVolumeRecordSnafu)?;
+    for volume in declared {
+        if !volumes.contains(volume) {
+            volumes.push(volume.clone());
         }
+    }
+    for volume in volumes {
+        let shared = {
+            let volume = volume.clone();
+            db.call(move |db| anonymous_volumes::held_by_another(db, instance, &volume))
+                .context(AnonymousVolumeRecordSnafu)?
+        };
+        if !shared {
+            remove_anonymous_storage(driver, &volume).await?;
+        }
+        let forgotten = volume.clone();
+        db.call(move |db| anonymous_volumes::forget(db, instance, &forgotten))
+            .context(AnonymousVolumeRecordSnafu)?;
+    }
+    Ok(())
+}
 
+/// Remove one anonymous volume's storage. Storage that is not there is not
+/// an error.
+async fn remove_anonymous_storage(
+    driver: &System,
+    volume: &AnonymousVolume,
+) -> Result<(), ActuateError> {
+    if volume.tmpfs {
+        // spec: ACTU#volume-storage
+        // Bind-mounted from /run: remove the host directory, and the tmpfs
+        // backing under /run is reclaimed with it.
+        super::remove_tmpfs_dir(&tmpfs_volume_path(&volume.name)).await
+    } else if driver
+        .container
+        .volume_exists(&volume.name)
+        .await
+        .context(ContainerSnafu)?
+    {
+        driver
+            .container
+            .remove_volume(&volume.name)
+            .await
+            .context(ContainerSnafu)
+    } else {
         Ok(())
     }
 }

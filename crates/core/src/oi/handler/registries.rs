@@ -40,7 +40,7 @@ pub(crate) fn list_registries(state: &OiState) -> HandlerResult {
     let registries = state
         .db
         .call(registries::list_allowed_registries)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     Ok(json!({ "registries": registries }))
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn add_registry(state: &OiState, params: RegistryParams) -> HandlerRe
     state
         .db
         .call(move |db| registries::add_allowed_registry(db, &registry))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     // spec: FLT#filing-and-clearing — `disallowed_registry` is a condition fault:
     // true exactly while an app's images reference a registry outside the
@@ -69,7 +69,7 @@ pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> Handle
     let removed = state
         .db
         .call(move |db| registries::remove_allowed_registry(db, &registry))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     if !removed {
         return Err(OiError::not_found(format!(
             "registry not in allowlist: {}",
@@ -82,7 +82,9 @@ pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> Handle
     Ok(json!({ "ok": true }))
 }
 
-fn re_evaluate_all_apps(state: &OiState) {
+/// Evaluate every installed app's definition again, for a change that moves
+/// what its scripts read (a registry's settings, a host constant).
+pub fn re_evaluate_all_apps(state: &OiState) {
     let app_names: Vec<AppName> = {
         let reg = state.registry.read();
         reg.names()
@@ -90,9 +92,16 @@ fn re_evaluate_all_apps(state: &OiState) {
     for name in &app_names {
         let name_clone = name.clone();
         let cipher = std::sync::Arc::clone(&state.cipher);
-        let loaded_params = state
+        let loaded_params = match state
             .db
-            .call(move |db| apps::load_all_params_for_app(db, &cipher, &name_clone));
+            .call(move |db| apps::load_all_params_for_app(db, &cipher, &name_clone))
+        {
+            Ok(params) => params,
+            Err(e) => {
+                tracing::warn!(app = %name, "not re-evaluating: could not read the stored params: {e}");
+                continue;
+            }
+        };
         // Re-evaluating each app's existing script after an allowlist change:
         // nothing downstream diffs the definition, so either outcome is fine.
         let _ = crate::runtime::apps::reload(
@@ -167,44 +176,7 @@ fn re_evaluate_all_apps(state: &OiState) {
                             }
                         }
                     }
-                    // Inline sync_registry_faults logic.
-                    {
-                        use crate::runtime::{faults, registries as reg_mod};
-                        let allowed: std::collections::BTreeSet<String> =
-                            reg_mod::list_allowed_registries(db)
-                                .unwrap_or_default()
-                                .into_iter()
-                                .collect();
-                        let disallowed: Vec<&str> = used_registries
-                            .iter()
-                            .filter(|r| !allowed.contains(*r))
-                            .map(String::as_str)
-                            .collect();
-                        let existing: Vec<_> = faults::list_active_faults(db, Some(&app_name))
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|f| f.kind == "disallowed_registry")
-                            .collect();
-                        if disallowed.is_empty() {
-                            for f in &existing {
-                                if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                                    tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear disallowed_registry fault: {e}");
-                                }
-                            }
-                        } else {
-                            let description = format!("image references use disallowed registries: {}", disallowed.join(", "));
-                            if !existing.iter().any(|f| f.description == description) {
-                                for f in &existing {
-                                    if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                                        tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale disallowed_registry fault: {e}");
-                                    }
-                                }
-                                if let Err(e) = faults::file_fault(db, &app_name, None, None, None, "disallowed_registry", &description) {
-                                    tracing::warn!(app = %app_name, "failed to file disallowed_registry fault: {e}");
-                                }
-                            }
-                        }
-                    }
+                    crate::runtime::apps::sync_used_registries(db, &app_name, &used_registries);
                 });
             }
         }

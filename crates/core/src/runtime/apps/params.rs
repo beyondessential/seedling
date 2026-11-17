@@ -9,7 +9,7 @@ use crate::runtime::db::Db;
 /// in any reload path — secret params live in a separate table and this
 /// function silently ignores them.
 // spec: PRM#parameter-storage
-pub(super) fn load_params_for_app(
+pub fn load_params_for_app(
     db: &Db,
     app_name: &AppName,
 ) -> rusqlite::Result<BTreeMap<String, String>> {

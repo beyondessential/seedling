@@ -38,7 +38,7 @@ const resolverStatus: SiteServiceResolverStatus = {
       aaaa: ["2001:db8::1"],
       a: [],
       last_attempt_failed: false,
-      degraded_family: null,
+      failed_families: [],
       age_seconds: 5,
       ttl_remaining_seconds: 55,
     },
@@ -75,7 +75,7 @@ const degradedResolverStatus: SiteServiceResolverStatus = {
       aaaa: [],
       a: ["10.0.0.4"],
       last_attempt_failed: false,
-      degraded_family: "AAAA",
+      failed_families: ["AAAA"],
       age_seconds: 5,
       ttl_remaining_seconds: 5,
     },
@@ -327,10 +327,11 @@ describe("Services", () => {
     });
   });
 
+  // spec: UI#guarded-controls
   it("unmaps an external service slot", async () => {
     const { request } = renderWithSession(<Services />, {
       fixtures: populated,
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
     const row = (await screen.findByText("_site/db")).closest("tr");
     expect(row).not.toBeNull();

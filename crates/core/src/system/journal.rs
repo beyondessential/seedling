@@ -2,6 +2,73 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use crate::runtime::identity::ResourceInstance;
+
+/// The journal fields that tie an entry to a workload instance, which is how
+/// its logs are found. The unit of the instance's container carries them, and
+/// so does anything else recorded with that container's logs.
+// spec: LINUX#logs
+pub(crate) fn instance_log_fields(instance: &ResourceInstance) -> Vec<(String, String)> {
+    let kind = instance.kind.type_name();
+    let resource = instance.name.as_deref().unwrap_or(&instance.display_name);
+    vec![
+        ("SEEDLING_APP".to_owned(), instance.app.as_str().to_owned()),
+        ("SEEDLING_RESOURCE_KIND".to_owned(), kind.to_owned()),
+        ("SEEDLING_RESOURCE".to_owned(), resource.to_owned()),
+        (
+            "SEEDLING_INSTANCE".to_owned(),
+            instance.display_name.clone(),
+        ),
+    ]
+}
+
+/// The journal entries that record what a command run in `instance`'s
+/// container wrote: one per line, on the stream it was written to.
+///
+/// Stderr is recorded at error priority, which is how a reader tells the two
+/// apart.
+// spec: RT#command-execution
+pub(crate) fn exec_output_entries(
+    instance: &ResourceInstance,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Vec<Vec<String>> {
+    let fields = instance_log_fields(instance);
+    let mut entries = Vec::new();
+    for (priority, bytes) in [(6, stdout), (3, stderr)] {
+        for line in String::from_utf8_lossy(bytes).lines() {
+            let mut entry: Vec<String> = fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            entry.push(format!("PRIORITY={priority}"));
+            entry.push(format!("MESSAGE={line}"));
+            entries.push(entry);
+        }
+    }
+    entries
+}
+
+/// Record what a command run in `instance`'s container wrote with that
+/// container's logs.
+// spec: RT#command-execution
+pub(crate) fn record_exec_output(instance: &ResourceInstance, stdout: &[u8], stderr: &[u8]) {
+    let mut failed = 0_usize;
+    let mut first_error = None;
+    for entry in exec_output_entries(instance, stdout, stderr) {
+        let refs: Vec<&str> = entry.iter().map(String::as_str).collect();
+        if let Err(e) = systemd::journal::send(&refs) {
+            failed += 1;
+            first_error.get_or_insert(e);
+        }
+    }
+    if let Some(e) = first_error {
+        tracing::error!(
+            app = %instance.app,
+            instance = %instance.display_name,
+            failed,
+            "command output could not be recorded with the container's logs: {e}"
+        );
+    }
+}
+
 /// Specifies which journal entries to read.
 #[derive(Debug, Clone)]
 pub enum LogTarget {
@@ -71,22 +138,31 @@ pub fn spawn_log_reader(
     opts: LogStreamOptions,
 ) -> Result<tokio::sync::mpsc::Receiver<LogEntry>, Box<dyn std::error::Error + Send + Sync>> {
     let (tx, rx) = tokio::sync::mpsc::channel(256);
+    // spec: LOG#log-stream-request
+    // The journal is opened on the reader thread, which owns it, so whether it
+    // opened is handed back before the caller answers the request.
+    let (opened_tx, opened_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
 
     std::thread::Builder::new()
         .name("journal-reader".into())
         .spawn(move || {
-            if let Err(e) = journal_reader_thread(opts, tx) {
+            if let Err(e) = journal_reader_thread(opts, tx, opened_tx) {
                 tracing::error!("journal reader thread failed: {e}");
             }
         })?;
 
-    Ok(rx)
+    match opened_rx.recv() {
+        Ok(Ok(())) => Ok(rx),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => Err("the journal reader ended before opening the journal".into()),
+    }
 }
 
-fn journal_reader_thread(
-    opts: LogStreamOptions,
-    tx: tokio::sync::mpsc::Sender<LogEntry>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// Open the system journal, narrowed to the entries `opts` asks for and
+/// positioned at the start of its tail window.
+fn open_journal(
+    opts: &LogStreamOptions,
+) -> Result<systemd::journal::Journal, Box<dyn std::error::Error + Send + Sync>> {
     use systemd::journal::OpenOptions;
 
     let mut journal = OpenOptions::default().system(true).open()?;
@@ -117,6 +193,24 @@ fn journal_reader_thread(
     // spec: LOG#entry-selection
     // spec: LINUX#logs
     seek_tail_window(&mut journal, opts.tail)?;
+    Ok(journal)
+}
+
+fn journal_reader_thread(
+    opts: LogStreamOptions,
+    tx: tokio::sync::mpsc::Sender<LogEntry>,
+    opened: std::sync::mpsc::SyncSender<Result<(), String>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut journal = match open_journal(&opts) {
+        Ok(journal) => {
+            let _ = opened.send(Ok(()));
+            journal
+        }
+        Err(e) => {
+            let _ = opened.send(Err(e.to_string()));
+            return Err(e);
+        }
+    };
 
     loop {
         match journal.next_entry()? {
@@ -214,6 +308,35 @@ fn record_to_entry(timestamp_us: u64, fields: &BTreeMap<String, String>) -> LogE
         infra: fields.get("SEEDLING_INFRA").cloned(),
         rt_call: fields.get("SEEDLING_RT_CALL").cloned(),
         script_pos: fields.get("SEEDLING_SCRIPT_POS").cloned(),
+    }
+}
+
+#[cfg(test)]
+mod exec_output_tests {
+    use super::*;
+    use crate::defs::resource::ResourceKind;
+
+    // spec: RT#command-execution
+    #[test]
+    fn exec_output_is_recorded_under_the_containers_own_fields_by_line_and_stream() {
+        let instance = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("demo").unwrap(),
+            ResourceKind::Deployment,
+            "api",
+        );
+        let entries = exec_output_entries(&instance, b"one\ntwo\n", b"oops\n");
+        assert_eq!(entries.len(), 3);
+        let has = |entry: &[String], field: &str| entry.iter().any(|f| f == field);
+        for entry in &entries {
+            for (k, v) in instance_log_fields(&instance) {
+                assert!(
+                    has(entry, &format!("{k}={v}")),
+                    "{k} missing from {entry:?}"
+                );
+            }
+        }
+        assert!(has(&entries[0], "MESSAGE=one") && has(&entries[0], "PRIORITY=6"));
+        assert!(has(&entries[2], "MESSAGE=oops") && has(&entries[2], "PRIORITY=3"));
     }
 }
 
@@ -338,7 +461,8 @@ mod tests {
             systemd::journal::send(&[
                 &format!("MESSAGE=entry {i}"),
                 &format!("{MARKER_FIELD}={marker}"),
-            ]);
+            ])
+            .expect("the journal accepts an entry");
         }
         let deadline = Instant::now() + Duration::from_secs(10);
         while count_marked(&marker) < 3 {
@@ -354,5 +478,64 @@ mod tests {
         assert_eq!(read_window(&marker, 2), ["entry 1", "entry 2"]);
         assert_eq!(read_window(&marker, 3), ["entry 0", "entry 1", "entry 2"]);
         assert_eq!(read_window(&marker, 10), ["entry 0", "entry 1", "entry 2"]);
+    }
+
+    // spec: RT#command-execution
+    #[test]
+    #[ignore = "needs a running journald"]
+    fn exec_output_is_read_back_as_the_containers_own_log_entries() {
+        let unique = format!(
+            "exec{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let instance = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("demo").unwrap(),
+            crate::defs::resource::ResourceKind::Deployment,
+            &unique,
+        );
+        record_exec_output(&instance, b"out line\n", b"err line\n");
+
+        let read = || {
+            let mut journal = OpenOptions::default()
+                .current_user(true)
+                .open()
+                .expect("open journal");
+            journal
+                .match_add("SEEDLING_RESOURCE", unique.as_bytes())
+                .expect("match");
+            let mut entries = Vec::new();
+            while let Some(fields) = journal.next_entry().expect("read") {
+                let at = journal.timestamp_usec().unwrap_or(0);
+                entries.push(record_to_entry(at, &fields));
+            }
+            entries
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut entries = read();
+        while entries.len() < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "entries never reached the journal"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            entries = read();
+        }
+
+        let out = entries.iter().find(|e| e.message == "out line").unwrap();
+        let err = entries.iter().find(|e| e.message == "err line").unwrap();
+        assert_eq!(out.stream, "stdout");
+        assert_eq!(err.stream, "stderr");
+        for entry in [out, err] {
+            assert_eq!(entry.app.as_deref(), Some("demo"));
+            assert_eq!(entry.resource.as_deref(), Some(unique.as_str()));
+            assert_eq!(
+                entry.instance.as_deref(),
+                Some(instance.display_name.as_str())
+            );
+            assert!(entry.rt_call.is_none(), "not a breadcrumb");
+        }
     }
 }

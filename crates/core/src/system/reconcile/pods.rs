@@ -1,7 +1,6 @@
 use std::{collections::HashMap, collections::HashSet, sync::Arc};
 
 use futures_util::future::join_all;
-use ipnet::Ipv6Net;
 use serde_json::json;
 use tracing::{debug, error};
 
@@ -10,19 +9,17 @@ use crate::{
     runtime::{
         autonomous_ops,
         db::DbHandle,
-        desired::{DesiredResource, DesiredState},
+        desired::{DesiredResource, DesiredState, undeclared_pod},
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
         priority::AppPriority,
     },
-    system::{
-        System, actuator::Actuator, observer::Observer, translate::proxy::pod_network_prefix,
-        types::ObservationFact,
-    },
+    system::{System, actuator::Actuator, observer::Observer, types::ObservationFact},
 };
 
 use super::RunningPod;
 
+#[derive(Default)]
 pub(super) struct PodActuationUpdate {
     pub running: Vec<RunningPod>,
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
@@ -34,6 +31,10 @@ pub(super) struct PodActuationUpdate {
     pub unit_failures: Vec<ResourceInstance>,
     /// Instances whose backing unit was observed active/activating (clears prior failures).
     pub unit_healthy: Vec<ResourceInstance>,
+    /// Instances whose unit was observed failed, whatever their desired
+    /// state. Each is discarded once its failure is recorded.
+    // spec: LINUX#supervised-units
+    pub failed_units: Vec<ResourceInstance>,
     /// Instances whose backing unit reached `failed/start-limit-hit` —
     /// systemd has given up restarting and the runtime treats this as a
     /// hard fault rather than auto-recovering. The rate-derived crash loops
@@ -48,6 +49,9 @@ pub(super) struct PodActuationUpdate {
     pub health_check_failures: Vec<ResourceInstance>,
     /// Instances whose healthcheck was observed as passing this tick.
     pub health_check_passes: Vec<ResourceInstance>,
+    /// Instances whose container was observed removed this tick, so they are
+    /// unscheduled and can no longer be unhealthy.
+    pub unscheduled: Vec<ResourceInstance>,
     /// Instances whose registry lookup failed during start.
     pub registry_failures: Vec<ResourceInstance>,
     /// Instances blocked from starting because a required external volume has no mapping.
@@ -64,6 +68,13 @@ pub(super) struct PodActuationUpdate {
     /// Instances successfully started this tick; their written_obs entries must
     /// be cleared so the new lifecycle observations can be recorded.
     pub started_instances: Vec<ResourceInstance>,
+    /// The part of `started_instances` that replaced a run which ended in
+    /// failure.
+    // spec: AUTO#recovery-restart
+    pub recovery_starts: Vec<ResourceInstance>,
+    /// Instances observed successfully this tick.
+    // spec: OBS#failed-observation
+    pub observed: Vec<ResourceInstance>,
     // spec: AUTO#job-completion
     /// Job instances detected as complete this tick, for the reconciler's
     /// completed-jobs set.
@@ -99,6 +110,7 @@ pub(super) struct RestartCounter {
     pub exit: Option<crate::system::types::UnitExit>,
 }
 
+#[derive(Default)]
 struct PodInstanceResult {
     running: Option<RunningPod>,
     observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
@@ -106,18 +118,24 @@ struct PodInstanceResult {
     image_pull_success: Option<(ResourceInstance, String)>,
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
+    // spec: LINUX#supervised-units
+    failed_unit: Option<ResourceInstance>,
     // spec: AUTO#restart-pacing
     crash_loop: Option<CrashLoop>,
     // spec: AUTO#restart-record
     restart_counter: Option<(ResourceInstance, RestartCounter)>,
     health_check_failure: Option<ResourceInstance>,
     health_check_pass: Option<ResourceInstance>,
+    unscheduled: Option<ResourceInstance>,
     registry_failure: Option<ResourceInstance>,
     external_volume_failure: Option<(ResourceInstance, String)>,
     start_failure: Option<(ResourceInstance, String)>,
     stop_failure: Option<(ResourceInstance, String)>,
     observe_failure: Option<(ResourceInstance, String)>,
     started_instance: Option<ResourceInstance>,
+    // spec: AUTO#recovery-restart
+    replaced_failed_run: bool,
+    observed: Option<ResourceInstance>,
     // spec: AUTO#job-completion
     completed_job: Option<InstanceId>,
 }
@@ -138,6 +156,9 @@ struct ObservedInstance<'a> {
     container_exists: bool,
     /// Container has exited but not yet been removed (ContainerExited fact present).
     has_exited: bool,
+    /// No container was found (ContainerMissing fact present): the instance is
+    /// unscheduled.
+    container_missing: bool,
     /// The pod's dedicated podman network is present. A network can outlive its
     /// container (e.g. when `podman --rm` removes the container but the network
     /// was left behind), so the Unscheduled stop path must key on this instead
@@ -185,7 +206,6 @@ async fn observe_one_pod<'a>(
     actuator: &Actuator,
     driver: &Arc<System>,
     dr: &'a DesiredResource,
-    node_prefix: &Ipv6Net,
 ) -> PodObservation<'a> {
     let mut result = PodInstanceResult {
         running: None,
@@ -194,16 +214,20 @@ async fn observe_one_pod<'a>(
         image_pull_success: None,
         unit_failure: None,
         unit_healthy: None,
+        failed_unit: None,
         crash_loop: None,
         restart_counter: None,
         health_check_failure: None,
         health_check_pass: None,
+        unscheduled: None,
         registry_failure: None,
         external_volume_failure: None,
         start_failure: None,
         stop_failure: None,
         observe_failure: None,
         started_instance: None,
+        replaced_failed_run: false,
+        observed: None,
         completed_job: None,
     };
 
@@ -227,6 +251,7 @@ async fn observe_one_pod<'a>(
         }
     };
 
+    result.observed = Some(dr.instance.clone());
     for (fact, _ts) in &facts {
         for (kind, payload) in fact.to_obs_kinds() {
             result
@@ -277,6 +302,10 @@ async fn observe_one_pod<'a>(
     let unit_start_limit_hit = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitStartLimitHit));
+    // spec: LINUX#supervised-units
+    if unit_failed || unit_start_limit_hit {
+        result.failed_unit = Some(dr.instance.clone());
+    }
     // spec: FLT#workload-faults
     // `ContainerUnhealthy` is only ever emitted when podman's own healthcheck
     // state machine reports `Unhealthy`, i.e. after the container's configured
@@ -299,6 +328,9 @@ async fn observe_one_pod<'a>(
                 | ObservationFact::ContainerPresentIndeterminate
         )
     });
+    let container_missing = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::ContainerMissing));
     let has_exited = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::ContainerExited { .. }));
@@ -329,20 +361,28 @@ async fn observe_one_pod<'a>(
         match driver.container.inspect(&dr.instance.display_name).await {
             Ok(Some(state)) => {
                 if let Some(pod_ip) = state.pod_addr {
-                    let pod_prefix = pod_network_prefix(node_prefix, &dr.instance);
-                    // spec: LCY#routing-pool
-                    // observed_unhealthy + observed_healthy are derived above
-                    // from this tick's facts. A pod that's running but in
-                    // start-period (no health fact yet) is reported as
-                    // not-healthy here so the routing layer can keep it out of
-                    // the pool until podman confirms.
-                    result.running = Some(RunningPod {
-                        instance: dr.instance.clone(),
-                        pod_prefix,
-                        pod_ip,
-                        resource: dr.definition.clone(),
-                        observed_healthy: observed_healthy && !observed_unhealthy,
-                    });
+                    // A pod running without a recorded network is not routable:
+                    // its prefix is not one the runtime can vouch for.
+                    if let Some(pod_prefix) = actuator.recorded_pod_prefix(&dr.instance) {
+                        // spec: LCY#routing-pool
+                        // observed_unhealthy + observed_healthy are derived above
+                        // from this tick's facts. A pod that's running but in
+                        // start-period (no health fact yet) is reported as
+                        // not-healthy here so the routing layer can keep it out of
+                        // the pool until podman confirms.
+                        result.running = Some(RunningPod {
+                            instance: dr.instance.clone(),
+                            pod_prefix,
+                            pod_ip,
+                            resource: dr.definition.clone(),
+                            observed_healthy: observed_healthy && !observed_unhealthy,
+                        });
+                    } else {
+                        tracing::warn!(
+                            instance = %dr.instance.display_name,
+                            "a running pod has no recorded pod network; leaving it out of routing"
+                        );
+                    }
                 }
             }
             Ok(None) => {}
@@ -366,6 +406,7 @@ async fn observe_one_pod<'a>(
         unit_start_limit_hit,
         container_exists,
         has_exited,
+        container_missing,
         network_exists,
         observed_unhealthy,
         observed_healthy,
@@ -387,6 +428,7 @@ async fn actuate_one_pod(
     app_priority: AppPriority,
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
+    hold_start: bool,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -410,27 +452,36 @@ async fn actuate_one_pod(
         let previously_ran = written_obs.contains(&(dr.instance.id, "container_running"))
             || started_jobs.contains(&dr.instance.id);
         let already_completed = completed_jobs.contains(&dr.instance.id);
+        // spec: JOB#deadline
+        let past_deadline = obs.is_running && job_deadline_passed(db, &dr.instance, &dr.definition);
         let is_done = obs.has_exited
             || (!obs.container_exists && !obs.is_running && previously_ran)
-            || already_completed;
+            || already_completed
+            || past_deadline;
         if is_done {
             // Always call stop: even when the container is already gone (--rm)
             // and the unit is merely Inactive, the pod network must be removed.
             // stop_pod_instance tolerates missing containers; the network
             // removal is the critical side-effect here.
-            let rule = if obs.has_exited {
+            let rule = if past_deadline {
+                "Job instance ran past its deadline; JOB#deadline requires it be stopped"
+            } else if obs.has_exited {
                 "Job container exited; AUTO#job-completion requires no restart, only cleanup"
             } else if previously_ran {
                 "Job container previously ran and is now gone; AUTO#job-completion requires cleanup of pod network"
             } else {
                 "Job instance previously recorded as completed but found running; AUTO#job-completion requires stop"
             };
-            let op_kind = if already_completed {
+            let op_kind = if past_deadline {
+                "job_deadline_stop"
+            } else if already_completed {
                 "job_terminal_defense"
             } else {
                 "job_terminal_stop"
             };
-            let op = autonomous_ops::record(db, &dr.instance, op_kind, rule);
+            let Some(op) = autonomous_ops::record(db, &dr.instance, op_kind, rule) else {
+                return Some(obs.result);
+            };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                 Ok(()) => "ok".to_owned(),
                 Err(e) => {
@@ -506,6 +557,34 @@ async fn actuate_one_pod(
     if (obs.unit_start_limit_hit || crash_looped.contains(&dr.instance.id))
         && dr.desired == LifecycleState::Ready
     {
+        // spec: AUTO#restart-pacing
+        // The supervisor's own restarts are prevented too: a unit it is
+        // bringing back up after a failure, or one whose container is gone
+        // while the unit stays up, is stopped so no restart is pending.
+        let restart_pending = !obs.is_running && (obs.unit_activating || obs.unit_active);
+        if restart_pending {
+            let rule = "instance has an active crash_loop fault and the supervisor would restart it; \
+                        AUTO#restart-pacing requires every automatic restart be prevented";
+            let Some(op) =
+                autonomous_ops::record(db, &dr.instance, "stop_crash_looping_unit", rule)
+            else {
+                return Some(obs.result);
+            };
+            let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
+                Ok(()) => "ok".to_owned(),
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        error = %e,
+                        "pods: stopping a crash-looping unit failed"
+                    );
+                    let msg = e.to_string();
+                    result.stop_failure = Some((dr.instance.clone(), msg.clone()));
+                    format!("error: {msg}")
+                }
+            };
+            op.complete(&outcome);
+        }
         return Some(obs.result);
     }
 
@@ -517,6 +596,8 @@ async fn actuate_one_pod(
         result.health_check_failure = Some(dr.instance.clone());
     } else if obs.observed_healthy {
         result.health_check_pass = Some(dr.instance.clone());
+    } else if obs.container_missing {
+        result.unscheduled = Some(dr.instance.clone());
     }
 
     // spec: AUTO#restarts
@@ -550,6 +631,11 @@ async fn actuate_one_pod(
             // container is not running), or the running container has a
             // stale spec, tear it down so the next tick can start a fresh
             // unit with the current AppDef config.
+            // spec: UPD#jobs
+            // A stale Job takes no part in a rolling or replace update: once
+            // it has stopped it starts again in the same pass, as a Job that
+            // finished a tick ago would otherwise read as completed.
+            let restart_at_once = obs.spec_stale && matches!(dr.definition, Resource::Job(_));
             if obs.unit_failed || obs.unit_active || obs.spec_stale {
                 result.running = None;
                 let rule = if obs.spec_stale {
@@ -559,7 +645,10 @@ async fn actuate_one_pod(
                 } else {
                     "systemd unit active but container not running; tearing down for restart"
                 };
-                let op = autonomous_ops::record(db, &dr.instance, "stop_broken_unit", rule);
+                let Some(op) = autonomous_ops::record(db, &dr.instance, "stop_broken_unit", rule)
+                else {
+                    return Some(obs.result);
+                };
                 let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                     Ok(()) => "ok".to_owned(),
                     Err(e) => {
@@ -574,6 +663,19 @@ async fn actuate_one_pod(
                     }
                 };
                 op.complete(&outcome);
+                if !restart_at_once || result.stop_failure.is_some() {
+                    return Some(obs.result);
+                }
+            }
+
+            // spec: UPD#replace-updates
+            // A replace update starts no replacement until every stale
+            // instance has fully stopped.
+            if hold_start {
+                tracing::debug!(
+                    instance = %dr.instance.display_name,
+                    "pods: holding a start until the stale instances have stopped"
+                );
                 return Some(obs.result);
             }
 
@@ -581,7 +683,50 @@ async fn actuate_one_pod(
             // spec: AUTO#restarts
             // spec: AUTO#scale
             let rule = "instance in desired state but not running; AUTO#restarts / AUTO#scale requires (re)start";
-            let op = autonomous_ops::record(db, &dr.instance, "start", rule);
+            // spec: HIST#autonomous-operations
+            // Repeated starts of one instance are spaced, so one that exits
+            // as soon as it starts is not restarted at full speed.
+            if !restart_at_once {
+                match autonomous_ops::back_off(db, &dr.instance, "start") {
+                    Ok(None) => {}
+                    Ok(Some(wait)) => {
+                        tracing::debug!(
+                            instance = %dr.instance.display_name,
+                            wait_secs = wait.as_secs(),
+                            "pods: backing off a repeated start"
+                        );
+                        return Some(obs.result);
+                    }
+                    // spec: RCN#reconciliation-loop
+                    // Whether to back off cannot be decided, so the start is
+                    // not performed this iteration.
+                    Err(e) => {
+                        error!(
+                            instance = %dr.instance.display_name,
+                            "pods: the autonomous operations log cannot be read, so the start waits: {e}"
+                        );
+                        return Some(obs.result);
+                    }
+                }
+            }
+            // spec: AUTO#recovery-restart
+            // spec: LCY#derivation
+            // Whether the start replaces a failed run is read before it is
+            // made: a history that cannot be read leaves the instance
+            // undetermined, and nothing is done to it this iteration.
+            let prior_run_failed = match db_run_failed(db, &dr.instance) {
+                Ok(failed) => failed,
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        "pods: the instance's history cannot be read, so it is not started: {e}"
+                    );
+                    return Some(obs.result);
+                }
+            };
+            let Some(op) = autonomous_ops::record(db, &dr.instance, "start", rule) else {
+                return Some(obs.result);
+            };
             let outcome = match actuator
                 .start(&dr.instance, &dr.definition, app_priority)
                 .await
@@ -591,18 +736,39 @@ async fn actuate_one_pod(
                         result.image_pull_success = Some((dr.instance.clone(), img));
                     }
                     result.started_instance = Some(dr.instance.clone());
+                    // spec: AUTO#recovery-restart
+                    // A start that replaces a run which ended in failure
+                    // brings the instance back after it exited unexpectedly,
+                    // whoever performs it. The unit's failure may not be
+                    // recorded yet, so this tick's observation counts too.
+                    result.replaced_failed_run = obs.unit_failed || prior_run_failed;
                     "ok".to_owned()
                 }
                 Err(crate::system::actuator::ActuateError::ImageUnavailable {
                     ref reference,
                     ..
                 }) => {
-                    error!(
-                        instance = %dr.instance.display_name,
-                        image = %reference,
-                        "pods: image pull failed"
-                    );
-                    result.image_pull_failure = Some((dr.instance.clone(), reference.clone()));
+                    // spec: FLT#workload-faults
+                    // A pull in progress, or backing off after its first
+                    // failures, is not a fault: only a reference that has
+                    // failed enough times in a row is.
+                    let failures = actuator.consecutive_pull_failures(reference);
+                    if actuator.pull_failure_is_fault(reference) {
+                        error!(
+                            instance = %dr.instance.display_name,
+                            image = %reference,
+                            failures,
+                            "pods: image pull failed"
+                        );
+                        result.image_pull_failure = Some((dr.instance.clone(), reference.clone()));
+                    } else {
+                        tracing::debug!(
+                            instance = %dr.instance.display_name,
+                            image = %reference,
+                            failures,
+                            "pods: image not yet available"
+                        );
+                    }
                     format!("error: image_unavailable {reference}")
                 }
                 Err(ref e @ crate::system::actuator::ActuateError::Registry { .. }) => {
@@ -658,7 +824,9 @@ async fn actuate_one_pod(
                 .push((dr.instance.clone(), "stop_sent", json!({})));
             // spec: AUTO#scale
             let rule = "instance has desired=Unscheduled but pod resources still present (running/container/network); AUTO#scale / scale-down requires stop";
-            let op = autonomous_ops::record(db, &dr.instance, "scale_down_stop", rule);
+            let Some(op) = autonomous_ops::record(db, &dr.instance, "scale_down_stop", rule) else {
+                return Some(obs.result);
+            };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                 Ok(()) => "ok".to_owned(),
                 Err(e) => {
@@ -680,6 +848,16 @@ async fn actuate_one_pod(
     Some(obs.result)
 }
 
+/// Whether the instance's most recent recorded run ended in failure.
+// spec: AUTO#recovery-restart
+fn db_run_failed(db: &DbHandle, instance: &ResourceInstance) -> rusqlite::Result<bool> {
+    let instance = instance.clone();
+    db.call(move |db| {
+        crate::runtime::history::query_observations(db, &instance)
+            .map(|o| crate::runtime::barrier::oracle::container_run_succeeded(&o) == Some(false))
+    })
+}
+
 /// Determine which stale instances should have their stop inhibited based on
 /// the deployment's update strategy.
 ///
@@ -692,6 +870,25 @@ fn image_ref_for_instance(definition: &Resource) -> Option<String> {
         Resource::Job(job) => job.def.lock().pod.lock().container.lock().image.clone(),
         _ => None,
     }
+}
+
+/// The instances of a Deployment whose start waits, because the replace
+/// strategy starts no replacement until every stale instance has fully
+/// stopped. An instance is stale for as long as a container of the old
+/// configuration exists, so this holds until the last of them is gone.
+// spec: UPD#replace-updates
+fn starts_held_by_stale_instances(
+    on_update: OnUpdate,
+    instances: &[&ObservedInstance<'_>],
+) -> Vec<String> {
+    if !matches!(on_update, OnUpdate::Replace) || !instances.iter().any(|o| o.spec_stale) {
+        return Vec::new();
+    }
+    instances
+        .iter()
+        .filter(|o| !o.spec_stale)
+        .map(|o| o.dr.instance.display_name.clone())
+        .collect()
 }
 
 /// Returns a set of instance display names that must NOT be stopped this tick,
@@ -805,22 +1002,38 @@ pub(super) async fn observe_and_actuate(
     db: &DbHandle,
     desired: &DesiredState,
     app_priority: AppPriority,
-    node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
     crash_looped: &HashSet<InstanceId>,
 ) -> PodActuationUpdate {
+    // spec: TRD#teardown
+    // An undeclared pod instance is held Unscheduled like any other, and
+    // stopping it needs only its recorded identity.
+    let undeclared: Vec<DesiredResource> = desired
+        .undeclared
+        .iter()
+        .filter_map(|instance| {
+            Some(DesiredResource {
+                instance: instance.clone(),
+                desired: LifecycleState::Unscheduled,
+                definition: undeclared_pod(instance)?,
+                demoted: false,
+            })
+        })
+        .collect();
+
     // Phase 1: observe all instances concurrently.
     let pod_resources: Vec<&DesiredResource> = desired
         .resources
         .iter()
         .filter(|dr| matches!(&dr.definition, Resource::Deployment(_) | Resource::Job(_)))
+        .chain(&undeclared)
         .collect();
 
     let observe_futures: Vec<_> = pod_resources
         .iter()
-        .map(|dr| observe_one_pod(observer, actuator, driver, dr, node_prefix))
+        .map(|dr| observe_one_pod(observer, actuator, driver, dr))
         .collect();
 
     // spec: OBS#failed-observation — instances whose observation
@@ -866,6 +1079,7 @@ pub(super) async fn observe_and_actuate(
     }
 
     let mut inhibited_instances: HashSet<String> = HashSet::new();
+    let mut held_starts: HashSet<String> = HashSet::new();
     let mut rolling_deployments: HashSet<String> = HashSet::new();
 
     for (dep_name, indices) in &deployment_groups {
@@ -881,6 +1095,7 @@ pub(super) async fn observe_and_actuate(
             compute_stop_inhibitions(dep_name, on_update, &group_refs);
 
         inhibited_instances.extend(inhibited);
+        held_starts.extend(starts_held_by_stale_instances(on_update, &group_refs));
         if rolling_active {
             rolling_deployments.insert(dep_name.clone());
         }
@@ -890,12 +1105,14 @@ pub(super) async fn observe_and_actuate(
     let mut actuate_futures = Vec::with_capacity(observed.len());
     for obs in observed {
         let inhibit = inhibited_instances.contains(&obs.dr.instance.display_name);
+        let hold_start = held_starts.contains(&obs.dr.instance.display_name);
         actuate_futures.push(actuate_one_pod(
             actuator,
             db,
             app_priority,
             obs,
             inhibit,
+            hold_start,
             written_obs,
             started_jobs,
             completed_jobs,
@@ -917,10 +1134,12 @@ pub(super) async fn observe_and_actuate(
         image_pull_successes: Vec::new(),
         unit_failures: Vec::new(),
         unit_healthy: Vec::new(),
+        failed_units: Vec::new(),
         crash_loops: Vec::new(),
         restart_counters: Vec::new(),
         health_check_failures: Vec::new(),
         health_check_passes: Vec::new(),
+        unscheduled: Vec::new(),
         registry_failures: Vec::new(),
         external_volume_failures: Vec::new(),
         start_failures: Vec::new(),
@@ -928,6 +1147,8 @@ pub(super) async fn observe_and_actuate(
         observe_failures: Vec::new(),
         rolling_deployments,
         started_instances: Vec::new(),
+        recovery_starts: Vec::new(),
+        observed: Vec::new(),
         completed_job_instances: Vec::new(),
     };
 
@@ -948,6 +1169,9 @@ pub(super) async fn observe_and_actuate(
         if let Some(h) = result.unit_healthy {
             update.unit_healthy.push(h);
         }
+        if let Some(f) = result.failed_unit {
+            update.failed_units.push(f);
+        }
         if let Some(c) = result.crash_loop {
             update.crash_loops.push(c);
         }
@@ -960,6 +1184,9 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(h) = result.health_check_pass {
             update.health_check_passes.push(h);
+        }
+        if let Some(u) = result.unscheduled {
+            update.unscheduled.push(u);
         }
         if let Some(f) = result.registry_failure {
             update.registry_failures.push(f);
@@ -976,7 +1203,13 @@ pub(super) async fn observe_and_actuate(
         if let Some(f) = result.observe_failure {
             update.observe_failures.push(f);
         }
+        if let Some(instance) = result.observed {
+            update.observed.push(instance);
+        }
         if let Some(s) = result.started_instance {
+            if result.replaced_failed_run {
+                update.recovery_starts.push(s.clone());
+            }
             update.started_instances.push(s);
         }
         // spec: AUTO#job-completion
@@ -986,4 +1219,212 @@ pub(super) async fn observe_and_actuate(
     }
 
     update
+}
+
+/// Whether the Job instance has been running for longer than its deadline,
+/// counted from the moment it last reached Running.
+// spec: JOB#deadline
+fn job_deadline_passed(db: &DbHandle, instance: &ResourceInstance, definition: &Resource) -> bool {
+    let Resource::Job(job) = definition else {
+        return false;
+    };
+    let Some(deadline_secs) = job.def.lock().deadline else {
+        return false;
+    };
+    let inst = instance.clone();
+    match db.call(move |db| crate::runtime::history::query_observations(db, &inst)) {
+        Ok(observations) => deadline_passed(
+            &observations,
+            deadline_secs,
+            jiff::Timestamp::now().as_millisecond(),
+        ),
+        // A history that cannot be read does not say how long it has run.
+        Err(e) => {
+            tracing::warn!(instance = %instance.display_name, "cannot read the history to check a Job's deadline: {e}");
+            false
+        }
+    }
+}
+
+/// Whether `deadline_secs` have passed since the latest `container_running`
+/// observation.
+// spec: JOB#deadline
+fn deadline_passed(
+    observations: &[crate::runtime::history::WorldObservation],
+    deadline_secs: u64,
+    now_ms: i64,
+) -> bool {
+    observations
+        .iter()
+        .filter(|o| o.obs_kind == "container_running")
+        .map(|o| o.recorded_at)
+        .max()
+        .is_some_and(|at| now_ms.saturating_sub(at) >= (deadline_secs as i64).saturating_mul(1000))
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use crate::{defs::resource::ResourceKind, runtime::history::WorldObservation};
+
+    fn observed(kind: &str, at: i64) -> WorldObservation {
+        WorldObservation {
+            id: 0,
+            recorded_at: at,
+            resource: ResourceInstance::new_singleton(
+                seedling_protocol::names::AppName::new("demo").unwrap(),
+                ResourceKind::Job,
+                "migrate",
+            ),
+            obs_kind: kind.to_owned(),
+            payload: serde_json::json!({}),
+        }
+    }
+
+    // spec: JOB#deadline
+    #[test]
+    fn a_job_is_past_its_deadline_once_it_has_run_that_long_since_it_last_reached_running() {
+        let obs = [
+            observed("container_created", 0),
+            observed("container_running", 1_000),
+        ];
+        assert!(!deadline_passed(&obs, 60, 60_999));
+        assert!(deadline_passed(&obs, 60, 61_000));
+        // A restart counts from the new run, not the old one.
+        let obs = [
+            observed("container_running", 1_000),
+            observed("container_exited", 5_000),
+            observed("container_running", 100_000),
+        ];
+        assert!(!deadline_passed(&obs, 60, 120_000));
+        // Never seen running: nothing to count from.
+        assert!(!deadline_passed(
+            &[observed("container_created", 0)],
+            1,
+            i64::MAX / 2
+        ));
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+    use crate::{defs::resource::ResourceKind, runtime::lifecycle::LifecycleState};
+
+    fn desired(name: &str) -> DesiredResource {
+        let instance = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("demo").unwrap(),
+            ResourceKind::Deployment,
+            name,
+        );
+        DesiredResource {
+            instance,
+            desired: LifecycleState::Ready,
+            definition: Resource::Deployment(crate::defs::deployment::Deployment {
+                name: std::sync::Arc::new(name.to_owned()),
+                def: Default::default(),
+                frozen: false,
+                anon_id: None,
+            }),
+            demoted: false,
+        }
+    }
+
+    fn observed(dr: &DesiredResource, stale: bool, running: bool) -> ObservedInstance<'_> {
+        ObservedInstance {
+            dr,
+            is_running: running,
+            spec_stale: stale,
+            unit_failed: false,
+            unit_active: running,
+            unit_activating: false,
+            unit_start_limit_hit: false,
+            container_exists: running,
+            has_exited: false,
+            container_missing: !running,
+            network_exists: running,
+            observed_unhealthy: false,
+            observed_healthy: running,
+            result: PodInstanceResult::default(),
+        }
+    }
+
+    // spec: UPD#replace-updates
+    #[test]
+    fn a_replace_update_starts_nothing_while_any_stale_instance_remains() {
+        let (a, b) = (desired("a"), desired("b"));
+        // `a` is stale and still stopping; `b` has already stopped and is due a
+        // replacement, which must wait for `a`.
+        let (oa, ob) = (observed(&a, true, true), observed(&b, false, false));
+        let held = starts_held_by_stale_instances(OnUpdate::Replace, &[&oa, &ob]);
+        assert_eq!(held, vec![b.instance.display_name.clone()]);
+
+        // Once the last stale instance is gone, nothing is held.
+        let (oa, ob) = (observed(&a, false, false), observed(&b, false, false));
+        assert!(starts_held_by_stale_instances(OnUpdate::Replace, &[&oa, &ob]).is_empty());
+    }
+
+    // spec: UPD#jobs
+    #[test]
+    fn a_stale_job_is_stopped_and_started_again_in_the_same_pass() {
+        use crate::system::reconcile::tests::test_reconciler;
+
+        const IMAGE: &str = "docker.io/library/nginx:1.29";
+        let oi = crate::oi::test_support::TestOi::new();
+        let reconciler = test_reconciler(&oi);
+        let job = crate::defs::job::Job {
+            name: std::sync::Arc::new("migrate".to_owned()),
+            def: Default::default(),
+            frozen: false,
+            anon_id: None,
+        };
+        job.def.lock().pod.lock().container.lock().image = Some(IMAGE.to_owned());
+        let dr = DesiredResource {
+            instance: ResourceInstance::new_singleton(
+                seedling_protocol::names::AppName::new("demo").unwrap(),
+                ResourceKind::Job,
+                "migrate",
+            ),
+            desired: LifecycleState::Ready,
+            definition: Resource::Job(job),
+            demoted: false,
+        };
+        let mut running = observed(&dr, true, true);
+        running.has_exited = false;
+
+        let result = oi
+            .block_on(async {
+                oi.state.container_runtime.pull_image(IMAGE).await.unwrap();
+                let none = HashSet::new();
+                actuate_one_pod(
+                    &reconciler.actuator,
+                    &reconciler.db,
+                    AppPriority::default(),
+                    running,
+                    false,
+                    false,
+                    &HashSet::from([(dr.instance.id, "container_running")]),
+                    &none,
+                    &none,
+                    &none,
+                )
+                .await
+            })
+            .expect("the instance is acted on");
+
+        assert!(result.stop_failure.is_none());
+        assert_eq!(
+            result.started_instance.as_ref().map(|i| i.id),
+            Some(dr.instance.id),
+            "a stale Job is started again in the pass that stopped it"
+        );
+    }
+
+    // spec: UPD#rolling-updates
+    #[test]
+    fn a_rolling_update_is_not_held_by_this_rule() {
+        let (a, b) = (desired("a"), desired("b"));
+        let (oa, ob) = (observed(&a, true, true), observed(&b, false, false));
+        assert!(starts_held_by_stale_instances(OnUpdate::Rolling, &[&oa, &ob]).is_empty());
+    }
 }

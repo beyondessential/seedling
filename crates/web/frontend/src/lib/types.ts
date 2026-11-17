@@ -2,7 +2,6 @@ export type AppStatus =
   | "not_installed"
   | "installing"
   | "uninstalling"
-  | "deregistering"
   | "operating"
   | "running"
   | "degraded"
@@ -41,7 +40,12 @@ export interface ResourceInstance {
   lifecycle: string;
   transition_time?: string;
   restarts?: RestartSummary | null;
+  /** The instance's health check state, `null` where none has been observed.
+   *  Absent from a server that predates it. */
+  health?: InstanceHealth | null;
 }
+
+export type InstanceHealth = "starting" | "passing" | "failing";
 
 export type RestartCause = "recovery" | "deliberate";
 
@@ -106,7 +110,7 @@ export interface HealthcheckSummary {
   timeout_secs: number;
   retries: number;
   start_period_secs: number;
-  on_failure: "none" | "kill" | "restart" | "stop";
+  on_failure: "replace" | "monitor";
 }
 
 export interface PodSummary {
@@ -258,6 +262,7 @@ export interface InstallRequirement {
   required: boolean;
   description: string;
   default_value: string | null;
+  secret?: boolean;
 }
 
 /** Who pushed a definition, as the OI records the request's actor. */
@@ -281,6 +286,23 @@ export type DefinitionProvenance = (
   content_hash: string;
   seedling_versions: string | null;
 };
+
+export type GenerationKind = "register" | "script_update" | "param_set" | "param_unset";
+
+export interface GenerationEntry {
+  generation: number;
+  timestamp: string;
+  kind: GenerationKind;
+  definition?: DefinitionProvenance;
+  param_name?: string;
+  previous_value?: string | null;
+  new_value?: string | null;
+  redacted?: boolean;
+  script_changed: boolean;
+  operation_id: string | null;
+  outcome: "pending" | "succeeded" | "cancelled" | "failed" | null;
+  error?: string;
+}
 
 export interface AppDetail {
   status: AppStatus;
@@ -340,7 +362,7 @@ export interface SeedlingEvent {
   phase?: string;
   // ParamSet / ParamUnset
   name?: string;
-  // OperationStarted / OperationCompleted / OperationFailed
+  // OperationStarted / OperationCompleted / OperationFailed / OperationCancelled
   action_name?: string;
   operation_id?: string;
   source_generation?: number;
@@ -359,7 +381,7 @@ export interface SeedlingEvent {
   // ScaleChanged
   deployment?: string;
   scale?: number;
-  previous_scale?: number;
+  previous_scale?: number | null;
   bounds_low?: number;
   bounds_high?: number;
   // AppPriorityChanged
@@ -522,8 +544,8 @@ export interface SiteServiceResolverEntry {
   aaaa: string[];
   a: string[];
   last_attempt_failed: boolean;
-  /// The record type whose lookup keeps failing while the other answers.
-  degraded_family: "A" | "AAAA" | null;
+  /// The record types whose most recent lookup failed, in ascending byte order.
+  failed_families: ("A" | "AAAA")[];
   age_seconds: number;
   ttl_remaining_seconds: number;
 }
@@ -584,8 +606,24 @@ export interface SiteIngressDiscoveryEntry {
   stale: boolean;
 }
 
+export interface SiteIngressDiscoveryIdentity {
+  hostname: string;
+  node_id: string;
+  backend_running: boolean;
+}
+
+export interface SiteIngressDiscoveryProvider {
+  name: string;
+  /** `null` before the provider's first poll. */
+  healthy: boolean | null;
+  last_poll_at?: string;
+  last_error?: string;
+  identity?: SiteIngressDiscoveryIdentity;
+  ingresses: SiteIngressDiscoveryEntry[];
+}
+
 export interface SiteIngressDiscoveryStatus {
-  providers: { name: string; ingresses: SiteIngressDiscoveryEntry[] }[];
+  providers: SiteIngressDiscoveryProvider[];
 }
 
 export interface ExportedService {
@@ -808,7 +846,7 @@ export type TlsCertState =
   | "failed"
   | "revoked";
 export type TlsCertOrigin = "manual" | "csr" | "acme_dns" | "tailscale" | "canopy";
-export type TlsKeyType = "ecdsa_p256";
+export type TlsKeyType = "ecdsa_p256" | "ecdsa_p384" | "ecdsa_p521" | "ed25519" | "rsa";
 
 export interface TlsCertificate {
   id: number;
@@ -873,7 +911,7 @@ export interface TlsCertAttemptsResponse {
   attempts: TlsCertAttempt[];
 }
 
-export type TlsRetryBlockSource = "auto" | "operator";
+export type TlsRetryBlockSource = "operator";
 
 export interface TlsRetryBlock {
   hostname: string;
@@ -888,8 +926,7 @@ export type TlsHostnameStatus =
   | "error"
   | "pending"
   | "blocked"
-  | "no_cert"
-  | "default";
+  | "none";
 
 export type TlsHostnamePolicy =
   | { strategy: "default" }
@@ -918,14 +955,15 @@ export interface TlsHostnameChain {
 }
 
 export interface TlsHostnameActiveCert {
-  /** Null when the cert is owned by Caddy rather than the runtime DB. */
+  /** Null when the cert is held by the proxy rather than stored by the runtime. */
   id: number | null;
-  /** `caddy` for certs Caddy manages itself; runtime-owned certs use the
+  /** `proxy` for certs the proxy holds itself; runtime-owned certs use the
    * narrower {@link TlsCertOrigin} values. */
-  origin: TlsCertOrigin | "caddy";
-  /** Caddy's issuer-subdir name for `origin: "caddy"`: e.g. `local`
-   * (internal CA) or `acme-v02.api.letsencrypt.org-directory`. */
-  caddy_issuer?: string;
+  origin: TlsCertOrigin | "proxy";
+  /** For `origin: "proxy"`: `local` (the proxy's internal CA), otherwise the
+   * host of the ACME directory that issued it, such as
+   * `acme-v02.api.letsencrypt.org`. */
+  proxy_issuer?: string;
   issuer: string | null;
   not_before: number | null;
   not_after: number | null;
@@ -962,10 +1000,10 @@ export type TlsHostnameLastIssuance =
     cert_id: number | null;
   }
   | {
-    kind: "caddy";
+    kind: "proxy";
     at: number | null;
     cert_id: null;
-    /** Caddy's issuer-subdir name. */
+    /** The `proxy_issuer` of the certificate. */
     provider: string;
   };
 
@@ -975,7 +1013,8 @@ export interface TlsHostnameView {
   hostname: string;
   apps: string[];
   policy: TlsHostnamePolicy;
-  status: TlsHostnameStatus;
+  /** Null where the runtime cannot tell. */
+  status: TlsHostnameStatus | null;
   chain: TlsHostnameChain | null;
   active_cert: TlsHostnameActiveCert | null;
   last_issuance: TlsHostnameLastIssuance | null;

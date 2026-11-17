@@ -49,6 +49,26 @@ fn output_rules_have_fib_daddr_local_guard() {
 
 // spec: INFRA#host-originated-traffic
 #[test]
+fn output_rules_are_ipv6_only_though_the_proxy_has_an_ipv4_address() {
+    let mut rule = test_rule(80, ForwardProto::Both);
+    rule.caddy_v4 = Some(SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2)),
+        8080,
+    ));
+
+    let pre = ingress_rule_stmts(&rule);
+    assert_eq!(pre.len(), 4, "prerouting covers IPv6 and IPv4");
+
+    let out = output_ingress_rule_stmts(&rule);
+    assert_eq!(out.len(), 2, "output covers the same ports and protocols");
+    for stmts in &out {
+        let json = serde_json::to_string(&stmts[0]).unwrap();
+        assert!(json.contains("nfproto") && json.contains("10"), "{json}");
+    }
+}
+
+// spec: INFRA#host-originated-traffic
+#[test]
 fn output_rules_dnat_to_caddy() {
     let rule = test_rule(443, ForwardProto::Tcp);
     let stmts_list = output_ingress_rule_stmts(&rule);

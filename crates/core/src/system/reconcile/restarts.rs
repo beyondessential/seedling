@@ -16,9 +16,7 @@ use crate::{
         db::Db,
         generations,
         identity::ResourceInstance,
-        restarts::{
-            self, Cause, ExitKind, ExitStatus, RETAIN_PER_INSTANCE, RestartSettings, RestartSubject,
-        },
+        restarts::{self, Cause, ExitKind, ExitStatus, RestartSubject},
     },
     system::types::{UnitExit, UnitExitKind},
 };
@@ -29,7 +27,7 @@ fn subject(instance: &ResourceInstance, generation: Option<i64>) -> RestartSubje
     RestartSubject {
         app: instance.app.clone(),
         instance_id: instance.id.to_hex(),
-        resource_type: Some(format!("{:?}", instance.kind).to_lowercase()),
+        resource_type: Some(instance.kind.type_name().to_owned()),
         resource_name: instance.name.clone(),
         generation,
     }
@@ -60,11 +58,36 @@ pub(super) fn reconcile_counters(
     app: &AppName,
     counters: &[(ResourceInstance, pods::RestartCounter)],
     started: &[ResourceInstance],
+    replaced_failed: &[ResourceInstance],
+    retain: usize,
 ) -> Vec<CrashLoop> {
-    let settings = restarts::settings(db).unwrap_or(RestartSettings {
-        threshold: 5,
-        window_secs: 1800,
-    });
+    // A threshold nobody set is not one to detect against: with the settings
+    // unreadable, no rate-derived crash loop is declared this tick, and the
+    // restarts are still recorded.
+    let settings = match restarts::settings(db) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            warn!(app = %app, "could not read the crash-loop settings; detecting no restart rate this tick: {e}");
+            None
+        }
+    };
+    let rate_loop = |instance: &ResourceInstance, hex: &str| -> Option<CrashLoop> {
+        let settings = settings?;
+        match restarts::recent_recovery_count(db, hex, settings.window_secs) {
+            Ok(count) if count >= settings.threshold => Some(CrashLoop {
+                instance: instance.clone(),
+                cause: CrashLoopCause::RestartRate {
+                    count,
+                    window_secs: settings.window_secs,
+                },
+            }),
+            Ok(_) => None,
+            Err(e) => {
+                warn!(app = %app, instance = %hex, "failed to count recent restarts: {e}");
+                None
+            }
+        }
+    };
     let generation = generations::current(db, app)
         .ok()
         .flatten()
@@ -74,18 +97,33 @@ pub(super) fn reconcile_counters(
     // A start the reconciler issued for an instance it has already run is a
     // deliberate restart. The fresh transient unit's counter begins at zero, so
     // re-baseline here rather than reading the drop as a reset next tick.
+    let mut rate_loops = Vec::new();
     for instance in started {
         let hex = instance.id.to_hex();
         match restarts::baseline(db, &hex) {
             Ok(Some(_)) => {
+                // spec: AUTO#recovery-restart
+                // A start that replaces a run that ended in failure is a
+                // recovery restart, as one the supervisor makes is, and counts
+                // toward the crash loop; any other start is deliberate.
+                let recovery = replaced_failed.iter().any(|r| r.id == instance.id);
+                let cause = if recovery {
+                    Cause::Recovery
+                } else {
+                    Cause::Deliberate
+                };
                 if let Err(e) = restarts::record(
                     db,
                     &subject(instance, generation),
-                    Cause::Deliberate,
+                    cause,
                     None,
                     Timestamp::now().as_millisecond(),
+                    retain,
                 ) {
-                    warn!(app = %app, instance = %hex, "failed to record deliberate restart: {e}");
+                    warn!(app = %app, instance = %hex, "failed to record restart: {e}");
+                } else if recovery {
+                    // spec: AUTO#crash-loop-detection
+                    rate_loops.extend(rate_loop(instance, &hex));
                 }
             }
             // No baseline: the reconciler has never seen this instance's unit,
@@ -101,7 +139,6 @@ pub(super) fn reconcile_counters(
         }
     }
 
-    let mut rate_loops = Vec::new();
     for (instance, counter) in counters {
         let hex = instance.id.to_hex();
         if started.iter().any(|s| s.id == instance.id) {
@@ -154,25 +191,13 @@ pub(super) fn reconcile_counters(
             };
             // Stamp a burst apart so its ordering survives.
             let at = now - (new_restarts - 1 - n);
-            if let Err(e) = restarts::record(db, &subject, Cause::Recovery, exit, at) {
+            if let Err(e) = restarts::record(db, &subject, Cause::Recovery, exit, at, retain) {
                 warn!(app = %app, instance = %hex, "failed to record restart: {e}");
             }
         }
 
         // spec: AUTO#crash-loop-detection
-        match restarts::recent_recovery_count(db, &hex, settings.window_secs) {
-            Ok(count) if count >= settings.threshold => rate_loops.push(CrashLoop {
-                instance: instance.clone(),
-                cause: CrashLoopCause::RestartRate {
-                    count,
-                    window_secs: settings.window_secs,
-                },
-            }),
-            Ok(_) => {}
-            Err(e) => {
-                warn!(app = %app, instance = %hex, "failed to count recent restarts: {e}");
-            }
-        }
+        rate_loops.extend(rate_loop(instance, &hex));
     }
     rate_loops
 }
@@ -189,9 +214,18 @@ impl super::Reconciler {
         let app_owned = app.clone();
         let counters = update.restart_counters.clone();
         let started: Vec<ResourceInstance> = update.started_instances.to_vec();
-        let rate_loops = self
-            .db
-            .call(move |db| reconcile_counters(db, &app_owned, &counters, &started));
+        let replaced_failed: Vec<ResourceInstance> = update.recovery_starts.to_vec();
+        let retain = self.instance_gc.retain_restart_records;
+        let rate_loops = self.db.call(move |db| {
+            reconcile_counters(
+                db,
+                &app_owned,
+                &counters,
+                &started,
+                &replaced_failed,
+                retain,
+            )
+        });
 
         for loop_ in rate_loops {
             // A unit that also hit the start limit is already listed; one
@@ -211,8 +245,8 @@ impl super::Reconciler {
 // spec: GC#restart-records
 /// Drop restart bookkeeping for instances that no longer exist, and re-apply
 /// the per-instance cap. Recording already enforces the cap on write; this
-/// catches rows left by an older build or a partial write.
-pub fn gc(db: &Db) -> rusqlite::Result<usize> {
+/// catches rows left by a run configured with a higher cap or a partial write.
+pub fn gc(db: &Db, retain: usize) -> rusqlite::Result<usize> {
     let orphaned_records = db.conn.execute(
         "DELETE FROM instance_restarts
          WHERE instance_id NOT IN (SELECT id FROM resource_instances)",
@@ -229,12 +263,12 @@ pub fn gc(db: &Db) -> rusqlite::Result<usize> {
             "SELECT instance_id FROM instance_restarts
              GROUP BY instance_id HAVING COUNT(*) > ?1",
         )?;
-        let rows = stmt.query_map([RETAIN_PER_INSTANCE as i64], |r| r.get(0))?;
+        let rows = stmt.query_map([retain as i64], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
     let mut pruned = 0;
     for instance_id in over_cap {
-        pruned += restarts::prune_instance(db, &instance_id, RETAIN_PER_INSTANCE)?;
+        pruned += restarts::prune_instance(db, &instance_id, retain)?;
     }
 
     Ok(orphaned_records + orphaned_counters + pruned)

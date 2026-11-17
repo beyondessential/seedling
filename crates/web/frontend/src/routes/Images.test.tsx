@@ -109,10 +109,11 @@ describe("Images", () => {
   });
 
   // spec: UI#images
+  // spec: UI#guarded-controls
   it("clears a pin via /images/pins/clear after confirmation", async () => {
     const { request } = renderWithSession(<Images />, {
       fixtures,
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
     const pinCell = await screen.findByText(pin.reference, { selector: "td" });
     const row = pinCell.closest("tr")!;

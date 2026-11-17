@@ -4,8 +4,22 @@ use super::{
     Freezable, Holder, Port,
     container::ContainerDef,
     resource::ResourceId,
-    service::{HttpService, HttpServiceRoute, Service, ServicePort},
+    service::{BoundService, HttpService, HttpServiceRoute, Service, ServicePort},
 };
+
+/// Refuse to bind a pod to a service the operator maps to its endpoint.
+// spec: POD#port-bindings
+fn refuse_external(service: &BoundService) -> Result<(), Box<EvalAltResult>> {
+    if service.is_external() {
+        return Err(format!(
+            "cannot bind a pod to external service '{}': an external service's only target is \
+             the endpoint an operator maps to it",
+            service.name()
+        )
+        .into());
+    }
+    Ok(())
+}
 
 // spec: POD#pod-interface
 #[derive(Debug, Default, Clone)]
@@ -46,7 +60,24 @@ impl PodDef {
             "mount",
             move |this: &mut T, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                ext(this).lock().service_mounts.push(svc);
+                let holder = ext(this);
+                let mut pod = holder.lock();
+                // spec: POD#service-mounts
+                // A mount is reached at `localmount` on its port number, so
+                // two on one port would leave one of them unreachable.
+                if let Some(earlier) = pod.service_mounts.iter().find(|m| m.port == svc.port) {
+                    return Err(format!(
+                        "cannot mount port {} of service '{}': the pod already mounts port {} of \
+                         service '{}'",
+                        svc.port.get(),
+                        svc.service.name(),
+                        earlier.port.get(),
+                        earlier.service.name()
+                    )
+                    .into());
+                }
+                pod.service_mounts.push(svc);
+                drop(pod);
                 Ok(this.clone())
             },
         );
@@ -60,6 +91,8 @@ impl PodDef {
                   -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
+                // spec: POD#port-bindings
+                refuse_external(&route.http.service)?;
                 // spec: HTTP#route-redirects
                 // Refuses a prefix already declared as a redirect, and records
                 // the binding so one declared afterwards is refused too.
@@ -78,6 +111,8 @@ impl PodDef {
             move |this: &mut T, port: i64, service: HttpService| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
+                // spec: POD#port-bindings
+                refuse_external(&service.service)?;
                 // Binding a bare service is binding it at "/", so the service
                 // must learn about that route the same as an explicit one.
                 let mut route = service.root_route();
@@ -97,6 +132,8 @@ impl PodDef {
             move |this: &mut T, port: i64, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
+                // spec: POD#port-bindings
+                refuse_external(&svc.service)?;
                 ext(this).lock().tcp_bindings.push(TcpUdpBinding {
                     pod_port: port,
                     service_port: svc,
@@ -129,6 +166,8 @@ impl PodDef {
             move |this: &mut T, port: i64, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
+                // spec: POD#port-bindings
+                refuse_external(&svc.service)?;
                 ext(this).lock().udp_bindings.push(TcpUdpBinding {
                     pod_port: port,
                     service_port: svc,

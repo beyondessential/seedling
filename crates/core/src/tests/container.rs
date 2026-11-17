@@ -289,6 +289,41 @@ fn container_mount_external_volume() {
 
 // spec: CTR#volume-mounts
 #[test]
+fn a_mount_at_another_spelling_of_a_mountpoint_replaces_the_first() {
+    let app = run_test_script_app(
+        r#"
+        let first = app.volume("first");
+        let second = app.volume("second");
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .mount("/data", first)
+            .mount("//data/./sub/..", second);
+    "#,
+    );
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == "web")
+        .unwrap();
+    let defs::resource::Resource::Deployment(dep) = &def.resources[id] else {
+        panic!("expected Deployment");
+    };
+    let dep_def = dep.def.lock();
+    let pod = dep_def.pod.lock();
+    let container = pod.container.lock();
+    let mounts: Vec<_> = container.volume_mounts.keys().cloned().collect();
+    assert_eq!(mounts, vec![std::path::PathBuf::from("/data")]);
+    match &container.volume_mounts[std::path::Path::new("/data")] {
+        defs::container::VolumeMount::Volume(v) => {
+            assert_eq!(v.name.as_ref().map(|n| n.as_str()), Some("second"));
+        }
+        other => panic!("expected a volume, got {other:?}"),
+    }
+}
+
+// spec: CTR#volume-mounts
+#[test]
 fn mount_rejects_root() {
     let _ = run_test_script_err(
         r#"

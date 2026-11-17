@@ -109,3 +109,47 @@ fn param_declared_in_script_appears_in_params() {
     let def = app.def.load();
     assert!(def.params.contains_key("foo"));
 }
+
+// spec: APP#action-context
+// spec: ACN#action-declaration
+// spec: ACN#shells
+// spec: ACN#install-action
+// spec: APP#app-description
+// spec: PARAM#schema
+#[test]
+fn declarations_throw_inside_an_action_closure() {
+    let cases = [
+        (r#"app.on_action("later", |rt, p| {});"#, "on_action"),
+        (r#"app.on_start(|rt, p| {});"#, "on_start"),
+        (r#"app.on_shell("shell", |rt, sh, p| {});"#, "on_shell"),
+        (r#"app.on_install(|rt, p| {});"#, "on_install"),
+        (r#"app.description("x");"#, "description"),
+        (r#"p.kind("text");"#, "kind"),
+        (r#"p.required(true);"#, "required"),
+        (r#"p.default_value("1");"#, "default_value"),
+        (r#"p.description("x");"#, "description"),
+        (r#"p.secret(true);"#, "secret"),
+    ];
+    for (call, name) in cases {
+        let (engine, mut scope, app, _) = run_test_script(r#"let p = app.param("version");"#);
+        let before = app.def.load_full();
+        let _guard = crate::runtime::barrier::runtime::ActionClosureGuard::new(
+            std::sync::Arc::clone(&app.def),
+            "op".to_owned(),
+            Default::default(),
+        );
+        let err = engine.run_with_scope(&mut scope, call).expect_err(call);
+        assert!(
+            err.to_string().contains(name) && err.to_string().contains("action closure"),
+            "{call}: {err}"
+        );
+        let after = app.def.load_full();
+        assert_eq!(
+            before.actions.len() + before.shells.len(),
+            after.actions.len() + after.shells.len(),
+            "{call} declared something before throwing"
+        );
+        assert_eq!(before.install.is_some(), after.install.is_some(), "{call}");
+        assert_eq!(before.description, after.description, "{call}");
+    }
+}

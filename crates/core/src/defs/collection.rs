@@ -6,9 +6,10 @@ use super::app::App;
 use super::deployment::Deployment;
 use super::ingress::Ingress;
 use super::job::Job;
-use super::resource::{ResourceId, ResourceKind};
-use super::service::{HttpService, Service};
+use super::resource::{ResourceId, ResourceKind, ResourceName};
+use super::service::{BoundService, ExternalService, HttpService, Service};
 use super::volume::{ExternalVolume, Volume};
+use crate::runtime::identity::InstanceId;
 
 mod bag;
 mod collectable;
@@ -18,7 +19,7 @@ mod selector;
 pub use bag::ResourceBag;
 pub(crate) use bag::{AppBag, ItemBag};
 pub use collectable::Collectable;
-pub use handle::ResourceHandle;
+pub use handle::{Member, ResourceHandle};
 pub use selector::Selector;
 
 use collectable::{BagCollection, Empty, Except, Only, Select, Union};
@@ -106,6 +107,23 @@ impl CustomType for Collection {
 // col() — coerce any value into a Collection
 // ---------------------------------------------------------------------------
 
+/// A collection of the one resource `value`, identified as `member`.
+fn item(member: Member, value: Dynamic) -> Collection {
+    Collection::from_bag(Rc::new(ItemBag { member, value }))
+}
+
+/// How a Deployment, Job or Service is identified: by name, or by the
+/// identity an anonymous one holds.
+fn member(kind: ResourceKind, name: &ResourceName, anon_id: Option<InstanceId>) -> Member {
+    match anon_id {
+        Some(id) => Member::Anonymous { kind, id },
+        None => Member::Named(ResourceId {
+            kind,
+            name: name.clone(),
+        }),
+    }
+}
+
 // spec: COL#coercion
 pub fn col(val: Dynamic) -> Collection {
     if let Some(c) = val.clone().try_cast::<Collection>() {
@@ -117,85 +135,49 @@ pub fn col(val: Dynamic) -> Collection {
     }
 
     if let Some(dep) = val.clone().try_cast::<Deployment>() {
-        let id = ResourceId {
-            kind: ResourceKind::Deployment,
-            name: dep.name.clone(),
-        };
-        return Collection::from_bag(Rc::new(ItemBag {
-            id,
-            value: Dynamic::from(dep),
-        }));
+        let member = member(ResourceKind::Deployment, &dep.name, dep.anon_id);
+        return item(member, Dynamic::from(dep));
     }
 
     if let Some(svc) = val.clone().try_cast::<Service>() {
-        let id = ResourceId {
-            kind: ResourceKind::Service,
-            name: svc.name.clone(),
-        };
-        return Collection::from_bag(Rc::new(ItemBag {
-            id,
-            value: Dynamic::from(svc),
-        }));
+        let member = member(ResourceKind::Service, &svc.name, svc.anon_id);
+        return item(member, Dynamic::from(svc));
     }
 
-    // An HttpService is a view of a Service, so it takes the identity of the
-    // service it views rather than one of its own.
+    if let Some(ext) = val.clone().try_cast::<ExternalService>() {
+        let member = member(ResourceKind::ExternalService, &ext.name, None);
+        return item(member, Dynamic::from(ext));
+    }
+
+    // An HttpService is a view of a service, so it is that service.
     if let Some(h) = val.clone().try_cast::<HttpService>() {
-        let id = ResourceId {
-            kind: ResourceKind::Service,
-            name: h.service.name().clone(),
+        return match h.service {
+            BoundService::App(svc) => col(Dynamic::from(svc)),
+            BoundService::External(ext) => col(Dynamic::from(ext)),
         };
-        return Collection::from_bag(Rc::new(ItemBag {
-            id,
-            value: Dynamic::from(h),
-        }));
     }
 
     if let Some(job) = val.clone().try_cast::<Job>() {
-        let id = ResourceId {
-            kind: ResourceKind::Job,
-            name: job.name.clone(),
-        };
-        return Collection::from_bag(Rc::new(ItemBag {
-            id,
-            value: Dynamic::from(job),
-        }));
+        let member = member(ResourceKind::Job, &job.name, job.anon_id);
+        return item(member, Dynamic::from(job));
     }
 
     if let Some(ingress) = val.clone().try_cast::<Ingress>() {
-        let id = ResourceId {
-            kind: ResourceKind::Ingress,
-            name: ingress.name.clone(),
-        };
-        return Collection::from_bag(Rc::new(ItemBag {
-            id,
-            value: Dynamic::from(ingress),
-        }));
+        let member = member(ResourceKind::Ingress, &ingress.name, None);
+        return item(member, Dynamic::from(ingress));
     }
 
     if let Some(vol) = val.clone().try_cast::<Volume>() {
-        if let Some(name) = vol.name.clone() {
-            let id = ResourceId {
-                kind: ResourceKind::Volume,
-                name,
-            };
-            return Collection::from_bag(Rc::new(ItemBag {
-                id,
-                value: Dynamic::from(vol),
-            }));
-        }
-        return Collection::empty();
+        let Some(name) = vol.name.clone() else {
+            return Collection::empty();
+        };
+        let member = member(ResourceKind::Volume, &name, None);
+        return item(member, Dynamic::from(vol));
     }
 
     if let Some(vol) = val.clone().try_cast::<ExternalVolume>() {
-        let id = ResourceId {
-            kind: ResourceKind::ExternalVolume,
-            name: vol.name.clone(),
-        };
-        return Collection::from_bag(Rc::new(ItemBag {
-            id,
-            value: Dynamic::from(vol),
-        }));
+        let member = member(ResourceKind::ExternalVolume, &vol.name, None);
+        return item(member, Dynamic::from(vol));
     }
 
     if let Some(arr) = val.try_cast::<rhai::Array>() {

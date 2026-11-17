@@ -74,6 +74,37 @@ pub fn spawn(
     })
 }
 
+/// Spawn the task that fetches each certificate's ACME renewal information
+/// again when it falls due, waking for the soonest. It looks again at least
+/// hourly, for certificates issued in the meantime.
+// spec: TLS#renewal
+pub fn spawn_ari_refresh(db: DbHandle, cipher: Arc<Cipher>) -> tokio::task::JoinHandle<()> {
+    const MIN_WAIT: i64 = 60;
+    const MAX_WAIT: i64 = 3600;
+    tokio::spawn(async move {
+        loop {
+            let now = jiff::Timestamp::now().as_second();
+            let polls = match db.call(move |db| super::store::ari_polls(db, now)) {
+                Ok(polls) => polls,
+                Err(e) => {
+                    tracing::warn!(error = %e, "tls: cannot list certificates for renewal info");
+                    Vec::new()
+                }
+            };
+            let mut soonest = now + MAX_WAIT;
+            for poll in &polls {
+                if poll.next_poll_at <= now {
+                    super::acme::refresh_renewal_info(&db, &cipher, poll).await;
+                } else {
+                    soonest = soonest.min(poll.next_poll_at);
+                }
+            }
+            let wait = (soonest - jiff::Timestamp::now().as_second()).clamp(MIN_WAIT, MAX_WAIT);
+            tokio::time::sleep(Duration::from_secs(wait as u64)).await;
+        }
+    })
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RenewalReport {
     /// Number of hostnames queued for issuance this pass. The coordinator

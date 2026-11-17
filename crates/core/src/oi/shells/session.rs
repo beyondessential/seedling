@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
-use seedling_protocol::names::{ActionName, AppName, SessionId, ShellName};
+use seedling_protocol::{
+    events::EventSenderWithActor,
+    names::{ActionName, AppName, SessionId, ShellName},
+};
 use tokio::io::AsyncWriteExt;
 
 use super::registry::{ShellSession, StopSignal};
@@ -14,18 +17,15 @@ use crate::{
             OperationId,
             oracle::DbWorldOracle,
             replay::{DbActionLog, OperationContext, OperationResult, run_operation},
-            shell::{ShellAttachCtx, ShellOutcome, clear_shell_attach_ctx, set_shell_attach_ctx},
+            shell::{
+                ShellAttachCtx, ShellExecTarget, ShellExit, ShellHost, ShellProgress,
+                clear_shell_attach_ctx, set_shell_attach_ctx,
+            },
         },
         identity::{InstanceVariant, ResourceInstance},
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
-    system::{
-        translate::{
-            container::job_spec,
-            proxy::{instance_ipv6, pod_network_prefix},
-        },
-        types::ExecHandle,
-    },
+    system::{translate::container::job_spec, types::ExecHandle},
 };
 
 /// The three streams of a shell session: the session stream the handshake and
@@ -38,21 +38,30 @@ pub(super) struct SessionStreams {
 
 impl SessionStreams {
     // spec: SHL#session-end
-    /// Ends the session: writes the exit frame and closes all three streams.
-    /// `reason` is why a session that failed to start ended, and is written to
+    /// Ends the session: writes the exit frame, finishes the session stream and
+    /// then finishes stderr; stdout is finished too if the attachment has not
+    /// already. `reason` is why a session that failed ended, and is written to
     /// stderr for the client to show.
     pub(super) async fn end(mut self, exit_code: i32, reason: Option<&str>) {
+        let _ = self.stdout.finish();
         if let Some(reason) = reason {
             let _ = self
                 .stderr
                 .write_all(format!("{reason}\n").as_bytes())
                 .await;
         }
-        let _ = self.stderr.finish();
-        let _ = self.stdout.finish();
         let _ = write_frame(&mut self.send, &exit_frame(exit_code)).await;
         let _ = self.send.finish();
+        let _ = self.stderr.finish();
     }
+}
+
+/// A session's streams as a whole: the three it ends with, and the client's
+/// side of the session stream, which carries stdin while the job is attached.
+pub(super) struct SessionIo {
+    pub(super) recv: quinn::RecvStream,
+    pub(super) leftover_stdin: Vec<u8>,
+    pub(super) streams: SessionStreams,
 }
 
 // spec: WIRE#shell-sessions
@@ -87,10 +96,11 @@ pub(super) async fn reject(send: &mut quinn::SendStream, code: &str, message: im
 pub(crate) async fn open_shell_session(
     conn: quinn::Connection,
     mut send: quinn::SendStream,
-    mut recv: quinn::RecvStream,
+    recv: quinn::RecvStream,
     leftover_stdin: Vec<u8>,
     initial_line: Vec<u8>,
     state: Arc<OiState>,
+    events: EventSenderWithActor,
 ) {
     // spec: SHL#opening-an-app-shell
     #[derive(serde::Deserialize)]
@@ -105,19 +115,21 @@ pub(crate) async fn open_shell_session(
     #[derive(serde::Deserialize)]
     struct Request {
         #[serde(default)]
-        actor: Option<seedling_protocol::actor::Actor>,
-        #[serde(default)]
         params: serde_json::Value,
     }
 
     let req: Request = match serde_json::from_slice(&initial_line) {
         Ok(r) => r,
         Err(e) => {
-            reject(&mut send, "not_found", format!("invalid request: {e}")).await;
+            reject(
+                &mut send,
+                "requirements_invalid",
+                format!("invalid request: {e}"),
+            )
+            .await;
             return;
         }
     };
-    let req_actor = req.actor;
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => {
@@ -180,22 +192,21 @@ pub(crate) async fn open_shell_session(
         }
     };
 
-    let validated_params: serde_json::Map<String, serde_json::Value> =
-        if shell_params_schema.is_empty() {
-            serde_json::Map::new()
-        } else {
-            match crate::oi::handler::actions::install::validate_requirements(
-                &shell_params_schema,
-                &submitted_params,
-            ) {
-                Ok(filled) => filled
-                    .into_iter()
-                    .map(|(k, v)| (k, serde_json::Value::String(v)))
-                    .collect(),
-                Err(e) => {
-                    reject(&mut send, "requirements_invalid", e.message).await;
-                    return;
-                }
+    // spec: ACN#param-delivery
+    // spec: SHL#opening-an-app-shell
+    // A shell's params are validated as an action's are, by the same code:
+    // the schema fills defaults and checks kinds, `volume` params must name a
+    // site volume, and params the schema does not declare reach the closure.
+    let validated_params =
+        match validate_shell_params(&state, &shell_params_schema, &submitted_params) {
+            Ok(params) => params,
+            Err(e) => {
+                let code = serde_json::to_value(e.code)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "requirements_invalid".to_owned());
+                reject(&mut send, &code, e.message).await;
+                return;
             }
         };
 
@@ -229,12 +240,13 @@ pub(crate) async fn open_shell_session(
         session_id,
         app_name.clone(),
         shell_name.as_str().to_owned(),
-        req_actor,
+        Some((*events.actor).clone()),
         (initial_rows, initial_cols),
         stop.clone(),
     );
     if !begin_session(
         &state,
+        &events,
         &mut send,
         session,
         &shell_name,
@@ -245,39 +257,87 @@ pub(crate) async fn open_shell_session(
     {
         return;
     }
-    let streams = SessionStreams {
-        send,
-        stdout: stdout_send,
-        stderr: stderr_send,
-    };
-
-    let live =
-        match start_app_shell(&state, app, &app_name, &shell_name, validated_params, &stop).await {
-            Ok(live) => live,
-            Err(failure) => {
-                abort_startup(&state, session_id, failure, streams).await;
-                return;
-            }
-        };
-
-    let exit_code = run_to_exit(
-        &state,
+    let host = Arc::new(AppShellHost {
+        handle: tokio::runtime::Handle::current(),
+        state: Arc::clone(&state),
         session_id,
+        app_name: app_name.clone(),
+        shell_name: shell_name.clone(),
+        stop: stop.clone(),
+        io: Mutex::new(Some(SessionIo {
+            recv,
+            leftover_stdin,
+            streams: SessionStreams {
+                send,
+                stdout: stdout_send,
+                stderr: stderr_send,
+            },
+        })),
+        job_exit: Mutex::new(None),
+    });
+
+    let run = run_app_shell(
+        &state,
+        app,
+        &app_name,
+        &shell_name,
+        &shell_params_schema,
+        validated_params,
         &stop,
-        live,
-        &mut recv,
-        &leftover_stdin,
-        streams,
+        Arc::clone(&host) as Arc<dyn ShellHost>,
     )
     .await;
+    let outcome = session_outcome(&run, stop.is_requested(), *host.job_exit.lock());
 
-    tracing::info!(app = %app_name, shell = %shell_name, %exit_code, "shell session ended");
+    state.shells.remove(&session_id);
+    // spec: SHL#session-end
+    events.shell_exited(session_id, outcome.exit_code);
+    let io = host.io.lock().take();
+    if let Some(io) = io {
+        io.streams
+            .end(outcome.exit_code, outcome.reason.as_deref())
+            .await;
+    }
+
+    tracing::info!(
+        app = %app_name, shell = %shell_name, exit_code = %outcome.exit_code,
+        "shell session ended"
+    );
+}
+
+/// Validate the params a client submitted for a shell, as an action's are.
+///
+/// The schema fills defaults and checks kinds, `volume` params must name a
+/// site volume, and params the schema does not declare reach the closure.
+// spec: ACN#param-delivery
+pub(super) fn validate_shell_params(
+    state: &OiState,
+    schema: &std::collections::BTreeMap<
+        seedling_protocol::names::ParamName,
+        crate::defs::install::ParamDef,
+    >,
+    submitted: &std::collections::BTreeMap<String, String>,
+) -> Result<serde_json::Map<String, serde_json::Value>, seedling_protocol::error::OiError> {
+    let mut params: serde_json::Map<String, serde_json::Value> = submitted
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    crate::runtime::action_params::apply_schema(schema, &mut params)
+        .and_then(|()| {
+            crate::runtime::action_params::validate_volume_params(
+                schema,
+                &params,
+                &crate::oi::handler::actions::StateVolumeLookup(state),
+            )
+        })
+        .map_err(crate::oi::handler::actions::validation_error_to_oi)?;
+    Ok(params)
 }
 
 /// Why a session ended before its job was running.
 pub(super) struct StartupFailure {
     /// What went wrong, for the client; `None` when the session was stopped.
-    reason: Option<String>,
+    pub(super) reason: Option<String>,
     /// The pod network to remove, if one had been created.
     network: Option<String>,
 }
@@ -305,6 +365,7 @@ impl StartupFailure {
 /// told.
 pub(super) async fn begin_session(
     state: &OiState,
+    events: &EventSenderWithActor,
     send: &mut quinn::SendStream,
     session: ShellSession,
     event_name: &ShellName,
@@ -335,7 +396,7 @@ pub(super) async fn begin_session(
     }
 
     // spec: SHL#session-events
-    state.event_tx.shell_started(session_id, &app, event_name);
+    events.shell_started(session_id, &app, event_name);
     true
 }
 
@@ -343,16 +404,17 @@ pub(super) async fn begin_session(
 /// failed.
 pub(super) async fn abort_startup(
     state: &OiState,
+    events: &EventSenderWithActor,
     session_id: SessionId,
     failure: StartupFailure,
     streams: SessionStreams,
 ) {
     if let Some(network) = &failure.network {
-        let _ = state.container_runtime.remove_network(network).await;
+        super::remove_session_network(state, network).await;
     }
     state.shells.remove(&session_id);
     // spec: SHL#session-end
-    state.event_tx.shell_exited(session_id, -1);
+    events.shell_exited(session_id, -1);
     streams.end(-1, failure.reason.as_deref()).await;
 }
 
@@ -383,31 +445,134 @@ async fn ensure_image(
     }
 }
 
-/// Runs the shell's script and starts the job it attaches to, ending early if
-/// a stop is requested.
+/// How a shell's closure ended.
+pub(super) enum ScriptEnd {
+    Completed,
+    Failed(String),
+    /// The session was stopped while the script waited.
+    Cancelled,
+}
+
+/// A shell's closure run to its end, and what it did.
+pub(super) struct ShellRun {
+    pub(super) end: ScriptEnd,
+    pub(super) progress: Arc<ShellProgress>,
+}
+
+/// How a session ended: the exit code for its exit frame, and why if it failed.
+pub(super) struct SessionOutcome {
+    pub(super) exit_code: i32,
+    pub(super) reason: Option<String>,
+}
+
+// spec: SHL#session-end
+// spec: SHL#session-startup
+/// Reads how a session ended from how its closure did.
 ///
-/// A stop is acted on wherever the startup waits, and between the steps that
-/// are not interrupted part-way: creating the network and starting the job.
-async fn start_app_shell(
+/// The session ends when the closure returns. A closure that failed, called
+/// `shell.error`, or returned without attaching, is a failed session; so is a
+/// job that could not be attached. Otherwise the code is the job's.
+pub(super) fn session_outcome(
+    run: &ShellRun,
+    stopped: bool,
+    job_exit: Option<i32>,
+) -> SessionOutcome {
+    let failed = |reason: String| SessionOutcome {
+        exit_code: -1,
+        reason: Some(reason),
+    };
+    if let Some(message) = run.progress.error() {
+        return failed(message);
+    }
+    match &run.end {
+        ScriptEnd::Failed(reason) => failed(
+            run.progress
+                .attach_failure()
+                .unwrap_or_else(|| reason.clone()),
+        ),
+        ScriptEnd::Cancelled => SessionOutcome {
+            exit_code: job_exit.unwrap_or(-1),
+            reason: None,
+        },
+        ScriptEnd::Completed if run.progress.attached() => SessionOutcome {
+            exit_code: job_exit.unwrap_or(-1),
+            reason: None,
+        },
+        ScriptEnd::Completed if stopped => SessionOutcome {
+            exit_code: -1,
+            reason: None,
+        },
+        ScriptEnd::Completed => failed("the shell did not attach".to_owned()),
+    }
+}
+
+// spec: ACN#shell-control
+/// Runs the shell's closure to its end, on a thread of its own. The closure
+/// suspends in `shell.attach` while `host` runs the job, so this returns only
+/// once the closure has returned; the session ends then.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a shell session's whole state, each piece of which the run uses"
+)]
+pub(super) async fn run_app_shell(
     state: &OiState,
     app: App,
     app_name: &AppName,
     shell_name: &ShellName,
+    schema: &std::collections::BTreeMap<
+        seedling_protocol::names::ParamName,
+        crate::defs::install::ParamDef,
+    >,
     validated_params: serde_json::Map<String, serde_json::Value>,
     stop: &StopSignal,
-) -> Result<LiveShell, StartupFailure> {
-    let result_slot: Arc<Mutex<Option<ShellOutcome>>> = Arc::new(Mutex::new(None));
-    let result_slot_for_task = Arc::clone(&result_slot);
+    host: Arc<dyn ShellHost>,
+) -> ShellRun {
+    let progress = Arc::new(ShellProgress::default());
+    let operation_id = OperationId::new();
+    // spec: ACN#volume-params
+    // A binding that cannot be made fails the session without running the
+    // closure.
+    let crate::oi::handler::actions::lifecycle::BoundParams {
+        params: validated_params,
+        bindings: operation_volume_bindings,
+    } = match crate::oi::handler::actions::lifecycle::bind_volume_params(
+        state,
+        schema,
+        validated_params,
+        &operation_id.0,
+    ) {
+        Ok(bound) => bound,
+        Err(why) => {
+            return ShellRun {
+                end: ScriptEnd::Failed(format!("a volume param could not be bound: {why}")),
+                progress,
+            };
+        }
+    };
+    let progress_for_task = Arc::clone(&progress);
     let db_for_task = state.db.clone();
     let script_limits = state.script_limits.clone();
-    let operation_id = OperationId::new();
+    let cipher = Arc::clone(&state.cipher);
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
     let shell_name_for_task = shell_name.clone();
     let cancel = stop.cancel_token();
 
-    let mut script = tokio::task::spawn_blocking(move || {
-        let (engine, mut scope, _) = crate::setup_language(&script_limits, Arc::clone(&app.bundle));
+    let script = tokio::task::spawn_blocking(move || {
+        let (engine, mut scope, _) =
+            match crate::setup_language(&script_limits, Arc::clone(&app.bundle)) {
+                Ok(language) => language,
+                // spec: CONST#host-constants
+                Err(e) => {
+                    tracing::error!(
+                        app = %app_name_for_task, shell = %shell_name_for_task,
+                        "shell script cannot be evaluated: {e}"
+                    );
+                    return ScriptEnd::Failed(format!(
+                        "the shell's script cannot be evaluated: {e}"
+                    ));
+                }
+            };
         let compiled = app
             .bundle
             .script()
@@ -424,7 +589,7 @@ async fn start_app_shell(
                     app = %app_name_for_task, shell = %shell_name_for_task,
                     "shell script compile error: {e}"
                 );
-                return false;
+                return ScriptEnd::Failed(format!("the shell's script does not compile: {e}"));
             }
         };
         let db = db_for_task;
@@ -443,10 +608,11 @@ async fn start_app_shell(
 
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
-            result: Arc::clone(&result_slot_for_task),
+            host,
+            progress: progress_for_task,
         });
 
-        let success = loop {
+        let end = loop {
             let result = run_operation(
                 OperationContext {
                     engine: &engine,
@@ -471,8 +637,8 @@ async fn start_app_shell(
                     source_generation: 0,
                     target_generation: 0,
                     script_limits: None,
-                    cipher: None,
-                    operation_volume_bindings: std::collections::HashMap::new(),
+                    cipher: Some(Arc::clone(&cipher)),
+                    operation_volume_bindings: operation_volume_bindings.clone(),
                     // Shell sessions don't participate in operator-initiated
                     // cancellation; the token fires only when the session is
                     // stopped, which ends the script early.
@@ -484,189 +650,224 @@ async fn start_app_shell(
                 &mut scope,
             );
             match result {
-                OperationResult::Completed => break true,
+                OperationResult::Completed => break ScriptEnd::Completed,
                 OperationResult::Failed(e) => {
                     tracing::error!(
                         app = %app_name_for_task, shell = %shell_name_for_task,
                         "shell closure failed: {e}"
                     );
-                    break false;
+                    break ScriptEnd::Failed(format!("the shell's script failed: {e}"));
                 }
                 // spec: OPS#cancellation
-                // The session was stopped while the script waited.
-                OperationResult::Cancelled => break false,
+                OperationResult::Cancelled => break ScriptEnd::Cancelled,
                 OperationResult::Suspended(_) => cancel.wait_for(Duration::from_secs(2)),
             }
         };
 
         clear_shell_attach_ctx();
-        success
+        end
     });
 
     // spec: SHL#session-startup
-    let script_ok = tokio::select! {
-        _ = stop.requested() => {
-            // The script's thread cannot be abandoned: it sees the stop at its
-            // next wait and exits, and until then it may still be creating
-            // things the teardown would miss.
-            let _ = (&mut script).await;
-            return Err(StartupFailure::stopped(None));
+    // The script's thread cannot be abandoned: a stop reaches it at its next
+    // wait, or through the attachment it is blocked in, and until it returns
+    // it may still be creating things the teardown would miss.
+    let end = script
+        .await
+        .unwrap_or_else(|e| ScriptEnd::Failed(format!("the shell's script panicked: {e}")));
+    ShellRun { end, progress }
+}
+
+/// Runs a shell's job for its closure's `shell.attach`.
+struct AppShellHost {
+    handle: tokio::runtime::Handle,
+    state: Arc<OiState>,
+    session_id: SessionId,
+    app_name: AppName,
+    shell_name: ShellName,
+    stop: StopSignal,
+    /// The session's streams, held here while no attachment is using them.
+    io: Mutex<Option<SessionIo>>,
+    /// The exit code the job gave, once it has been attached and ended.
+    job_exit: Mutex<Option<i32>>,
+}
+
+impl ShellHost for AppShellHost {
+    // spec: ACN#shell-control
+    fn attach(&self, target: ShellExecTarget) -> Result<ShellExit, String> {
+        let Some(mut io) = self.io.lock().take() else {
+            return Err("the session's streams are no longer available".to_owned());
+        };
+        let attached = self.handle.block_on(self.run_job(target, &mut io));
+        // spec: SHL#session-end
+        let _ = io.streams.stdout.finish();
+        *self.io.lock() = Some(io);
+        match attached? {
+            Some(end) => {
+                *self.job_exit.lock() = Some(end.exit_code);
+                Ok(if end.exited {
+                    ShellExit::exited(end.exit_code)
+                } else {
+                    ShellExit::ended()
+                })
+            }
+            None => Ok(ShellExit::ended()),
         }
-        done = &mut script => done.unwrap_or(false),
-    };
-    if stop.is_requested() {
-        return Err(StartupFailure::stopped(None));
     }
-    if !script_ok {
-        return Err(StartupFailure::failed("the shell's script failed", None));
-    }
+}
 
-    let shell_outcome = result_slot.lock().take();
-    let exec_target = match shell_outcome {
-        Some(ShellOutcome::Attach(target)) => target,
-        Some(ShellOutcome::Error(msg)) => {
-            tracing::warn!(app = %app_name, shell = %shell_name, "shell error: {msg}");
-            return Err(StartupFailure::failed(msg, None));
-        }
-        None => {
-            tracing::warn!(
-                app = %app_name, shell = %shell_name,
-                "shell closure completed but attach was not called"
-            );
-            return Err(StartupFailure::failed("the shell did not attach", None));
-        }
-    };
+impl AppShellHost {
+    /// Starts the target's job and runs the attachment to its end. Returns
+    /// `None` if the session was stopped before the job ran.
+    ///
+    /// A stop is acted on wherever the startup waits, and between the steps
+    /// that are not interrupted part-way: creating the network and starting the
+    /// job.
+    async fn run_job(
+        &self,
+        exec_target: ShellExecTarget,
+        io: &mut SessionIo,
+    ) -> Result<Option<AttachmentEnd>, String> {
+        let state = &*self.state;
+        let app_name = &self.app_name;
+        let shell_name = &self.shell_name;
+        let stop = &self.stop;
 
-    let instance = ResourceInstance {
-        id: exec_target.instance_id,
-        app: exec_target.app_name.clone(),
-        kind: ResourceKind::Job,
-        name: Some(exec_target.job_name.clone()),
-        variant: InstanceVariant::Scaled,
-        display_name: format!(
-            "{}-{}-{}",
-            exec_target.app_name,
-            exec_target.job_name,
-            exec_target.instance_id.display_suffix()
-        ),
-    };
-    let container_name = instance.display_name.clone();
+        let instance = ResourceInstance {
+            id: exec_target.instance_id,
+            app: exec_target.app_name.clone(),
+            kind: ResourceKind::Job,
+            name: Some(exec_target.job_name.clone()),
+            variant: InstanceVariant::Scaled,
+            display_name: format!(
+                "{}-{}-{}",
+                exec_target.app_name,
+                exec_target.job_name,
+                exec_target.instance_id.display_suffix()
+            ),
+        };
+        let container_name = instance.display_name.clone();
 
-    let image = exec_target
-        .job_def
-        .pod
-        .lock()
-        .container
-        .lock()
-        .image
-        .clone()
-        .unwrap_or_default();
-    if !image.is_empty() {
-        // spec: SHL#session-startup
-        tokio::select! {
-            _ = stop.requested() => return Err(StartupFailure::stopped(None)),
-            ensured = ensure_image(state, app_name, shell_name, &image) => {
-                ensured.map_err(|reason| StartupFailure::failed(reason, None))?;
+        let image = exec_target
+            .job_def
+            .pod
+            .lock()
+            .container
+            .lock()
+            .image
+            .clone()
+            .unwrap_or_default();
+        if !image.is_empty() {
+            // spec: SHL#session-startup
+            tokio::select! {
+                _ = stop.requested() => return Ok(None),
+                ensured = ensure_image(state, app_name, shell_name, &image) => ensured?,
             }
         }
-    }
 
-    if stop.is_requested() {
-        return Err(StartupFailure::stopped(None));
-    }
+        if stop.is_requested() {
+            return Ok(None);
+        }
 
-    let net_name = format!("seedling-{}", instance.display_name);
-    let net_prefix = pod_network_prefix(&state.node_prefix, &instance);
-    if let Err(e) = state
-        .container_runtime
-        .create_network(&net_name, net_prefix, None)
-        .await
-    {
-        tracing::warn!(app = %app_name, shell = %shell_name, %net_name, "create network failed: {e}");
-        return Err(StartupFailure::failed(
-            format!("create network failed: {e}"),
-            None,
-        ));
-    }
+        let net_name = format!("seedling-{}", instance.display_name);
+        let net_prefix = super::allocate_session_prefix(state, &net_name, instance.kind)
+            .map_err(|e| format!("create network failed: {e}"))?;
+        if let Err(e) = state
+            .container_runtime
+            .create_network(&net_name, net_prefix, None)
+            .await
+        {
+            super::remove_session_network(state, &net_name).await;
+            tracing::warn!(app = %app_name, shell = %shell_name, %net_name, "create network failed: {e}");
+            return Err(format!("create network failed: {e}"));
+        }
 
-    let resolved_mounts: Vec<(u16, Ipv6Addr, u16)> = {
-        let service_mounts = exec_target.job_def.pod.lock().service_mounts.clone();
-        if service_mounts.is_empty() {
-            vec![]
-        } else {
-            let mount_registry = DbInstanceRegistry::new(state.db.clone());
-            let result: Result<Vec<_>, RegistryError> = service_mounts
-                .iter()
-                .map(|sp| {
-                    let svc_instance = mount_registry.get_or_create_singleton(
-                        &exec_target.app_name,
-                        ResourceKind::Service,
-                        Some(sp.service.name().as_str()),
-                    )?;
-                    let svc_ip = instance_ipv6(&state.node_prefix, &svc_instance);
-                    Ok((sp.port.get(), svc_ip, sp.port.get()))
-                })
-                .collect();
-            match result {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(app = %app_name, shell = %shell_name, "service mount registry lookup failed: {e}");
-                    return Err(StartupFailure::failed(
-                        format!("service mount lookup failed: {e}"),
-                        Some(net_name),
-                    ));
+        let resolved_mounts: Vec<(u16, Ipv6Addr, u16)> = {
+            let service_mounts = exec_target.job_def.pod.lock().service_mounts.clone();
+            if service_mounts.is_empty() {
+                vec![]
+            } else {
+                let mount_registry = DbInstanceRegistry::new(state.db.clone());
+                let result: Result<Vec<_>, RegistryError> = service_mounts
+                    .iter()
+                    .map(|sp| {
+                        let svc_instance = mount_registry.get_or_create_singleton(
+                            &exec_target.app_name,
+                            ResourceKind::Service,
+                            Some(sp.service.name().as_str()),
+                        )?;
+                        let svc_ip =
+                            mount_registry.service_address(&state.node_prefix, &svc_instance)?;
+                        Ok((sp.port.get(), svc_ip, sp.port.get()))
+                    })
+                    .collect();
+                match result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(app = %app_name, shell = %shell_name, "service mount registry lookup failed: {e}");
+                        super::remove_session_network(state, &net_name).await;
+                        return Err(format!("service mount lookup failed: {e}"));
+                    }
                 }
             }
+        };
+
+        // spec: ACN#shells
+        // Match the reconciler's volume/external-volume resolution so a shell
+        // session sees the same on-disk state as a Job (bind-mounts under the
+        // volume store directory, same external-volume mappings). Previously we
+        // passed None for volumes_dir and an empty external_volumes map, which
+        // silently swapped bind-mounts for fresh podman-managed volumes with
+        // matching names — the shell would open inside a pristine empty volume
+        // and operators would see no data from the app's real state.
+        let external_volumes = crate::system::actuator::resolve_external_volumes(
+            &state.db,
+            &state.driver.volume_store,
+            app_name,
+        );
+        let mut container_spec = job_spec(
+            &exec_target.job_def,
+            &instance,
+            &BTreeMap::new(),
+            &(net_name.clone(), net_prefix),
+            &resolved_mounts,
+            &state.dns_servers,
+            Some(state.driver.volume_store.volumes_dir()),
+            &external_volumes,
+            0,
+        );
+        container_spec.health = None;
+        container_spec.labels.insert(
+            crate::system::types::SESSION_LABEL.to_string(),
+            "shell".to_string(),
+        );
+
+        // spec: SHL#session-startup
+        if stop.is_requested() {
+            super::remove_session_network(state, &net_name).await;
+            return Ok(None);
         }
-    };
 
-    // spec: ACN#shells
-    // Match the reconciler's volume/external-volume resolution so a shell
-    // session sees the same on-disk state as a Job (bind-mounts under the
-    // volume store directory, same external-volume mappings). Previously we
-    // passed None for volumes_dir and an empty external_volumes map, which
-    // silently swapped bind-mounts for fresh podman-managed volumes with
-    // matching names — the shell would open inside a pristine empty volume
-    // and operators would see no data from the app's real state.
-    let external_volumes = crate::system::actuator::resolve_external_volumes(
-        &state.db,
-        &state.driver.volume_store,
-        app_name,
-    );
-    let mut container_spec = job_spec(
-        &exec_target.job_def,
-        &instance,
-        &BTreeMap::new(),
-        &(net_name.clone(), net_prefix),
-        &resolved_mounts,
-        &state.dns_servers,
-        Some(state.driver.volume_store.volumes_dir()),
-        &external_volumes,
-        0,
-    );
-    container_spec.health = None;
-    container_spec.labels.insert(
-        crate::system::types::SESSION_LABEL.to_string(),
-        "shell".to_string(),
-    );
-
-    // spec: SHL#session-startup
-    if stop.is_requested() {
-        return Err(StartupFailure::stopped(Some(net_name)));
-    }
-
-    match state.container_runtime.exec(container_spec).await {
-        Ok(exec) => Ok(LiveShell {
-            exec,
-            container_name,
-            net_name,
-        }),
-        Err(e) => {
-            tracing::warn!(app = %app_name, shell = %shell_name, "exec failed: {e}");
-            Err(StartupFailure::failed(
-                format!("exec failed: {e}"),
-                Some(net_name),
-            ))
+        match state.container_runtime.exec(container_spec).await {
+            Ok(exec) => Ok(Some(
+                run_attachment(
+                    state,
+                    self.session_id,
+                    stop,
+                    LiveShell {
+                        exec,
+                        container_name,
+                        net_name,
+                    },
+                    io,
+                )
+                .await,
+            )),
+            Err(e) => {
+                tracing::warn!(app = %app_name, shell = %shell_name, "exec failed: {e}");
+                super::remove_session_network(state, &net_name).await;
+                Err(format!("exec failed: {e}"))
+            }
         }
     }
 }
@@ -679,21 +880,38 @@ pub(super) struct LiveShell {
     pub(super) net_name: String,
 }
 
-/// Runs a registered session to its end and tears everything it holds down:
-/// the job, the session's registry entry, its pod network and its streams.
-/// Returns the exit code reported to the client.
+/// How an attachment ended.
+pub(super) struct AttachmentEnd {
+    /// Whether the job's process exited, as opposed to the attachment ending
+    /// first.
+    pub(super) exited: bool,
+    /// The job's exit status, or the one forced on it when the session failed.
+    pub(super) exit_code: i32,
+}
+
+// spec: SHL#session-end
+/// The exit status of a finished process: its exit code, or 128 plus the
+/// signal that ended it.
+fn exit_status_code(status: std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    status
+        .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
+        .unwrap_or(-1)
+}
+
+/// Relays the session's input and output to its job until the attachment ends,
+/// then stops the job, finishes stdout and removes the job's network.
 ///
-/// Every way a session can end comes through here, so none can leave the job or
-/// its network behind.
-pub(super) async fn run_to_exit(
+/// Every way an attachment can end comes through here, so none can leave the
+/// job or its network behind.
+pub(super) async fn run_attachment(
     state: &OiState,
     session_id: SessionId,
     stop: &StopSignal,
     mut live: LiveShell,
-    recv: &mut quinn::RecvStream,
-    leftover_stdin: &[u8],
-    mut streams: SessionStreams,
-) -> i32 {
+    io: &mut SessionIo,
+) -> AttachmentEnd {
     // The job has exited on its own, with this status, or it has to be stopped
     // and the exit code is the one its termination gives (or the one forced).
     let job_exit: Result<i32, Option<i32>> = 'run: {
@@ -706,22 +924,24 @@ pub(super) async fn run_to_exit(
             live.exec.pty_master_fd,
         );
         if !attached {
-            break 'run Err(None);
+            break 'run Err(Some(-1));
         }
 
-        if !leftover_stdin.is_empty() && live.exec.stdin.write_all(leftover_stdin).await.is_err() {
+        if !io.leftover_stdin.is_empty()
+            && live.exec.stdin.write_all(&io.leftover_stdin).await.is_err()
+        {
             break 'run Err(Some(-1));
         }
 
         // spec: SHL#session-end
-        match relay_session(recv, &mut live.exec, &mut streams.stdout, stop).await {
-            Some(status) => Ok(status.ok().and_then(|s| s.code()).unwrap_or(-1)),
-            None => Err(None),
+        match relay_session(&mut io.recv, &mut live.exec, &mut io.streams.stdout, stop).await {
+            Some(Ok(status)) => Ok(exit_status_code(status)),
+            Some(Err(_)) | None => Err(None),
         }
     };
 
-    let exit_code = match job_exit {
-        Ok(code) => code,
+    let (exited, exit_code) = match job_exit {
+        Ok(code) => (true, code),
         Err(forced) => {
             // spec: SHL#session-end
             if let Some(pid) = live.exec.child.id() {
@@ -731,32 +951,44 @@ pub(super) async fn run_to_exit(
             let graceful =
                 tokio::time::timeout(Duration::from_secs(5), live.exec.child.wait()).await;
             let terminated = match graceful {
-                Ok(status) => status.ok().and_then(|s| s.code()).unwrap_or(-1),
+                Ok(status) => status.map_or(-1, exit_status_code),
                 Err(_timeout) => {
                     let _ = state
                         .container_runtime
                         .remove_container(&live.container_name, true)
                         .await;
                     let _ = live.exec.child.kill().await;
-                    live.exec
-                        .child
-                        .wait()
-                        .await
-                        .ok()
-                        .and_then(|s| s.code())
-                        .unwrap_or(-1)
+                    live.exec.child.wait().await.map_or(-1, exit_status_code)
                 }
             };
-            forced.unwrap_or(terminated)
+            (false, forced.unwrap_or(terminated))
         }
     };
 
+    // spec: SHL#session-end
+    let _ = io.streams.stdout.finish();
+    state.shells.detach(&session_id);
+    super::remove_session_network(state, &live.net_name).await;
+    AttachmentEnd { exited, exit_code }
+}
+
+/// Runs a registered session whose job is already started to its end and tears
+/// down everything it holds: the job, the session's registry entry, its pod
+/// network and its streams. Returns the exit code reported to the client.
+pub(super) async fn run_to_exit(
+    state: &OiState,
+    events: &EventSenderWithActor,
+    session_id: SessionId,
+    stop: &StopSignal,
+    live: LiveShell,
+    mut io: SessionIo,
+) -> i32 {
+    let end = run_attachment(state, session_id, stop, live, &mut io).await;
     state.shells.remove(&session_id);
     // spec: SHL#session-end
-    state.event_tx.shell_exited(session_id, exit_code);
-    let _ = state.container_runtime.remove_network(&live.net_name).await;
-    streams.end(exit_code, None).await;
-    exit_code
+    events.shell_exited(session_id, end.exit_code);
+    io.streams.end(end.exit_code, None).await;
+    end.exit_code
 }
 
 // spec: WIRE#shell-sessions

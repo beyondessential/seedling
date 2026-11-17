@@ -24,7 +24,7 @@ mod peer;
 mod relay;
 mod transport;
 
-pub use peer::{QuicPeer, RelayPeer, RelayStream};
+pub use peer::{QuicPeer, RelayPeer, RelayRecv, RelaySend, RelayStream};
 pub use relay::{RelayFailure, relay_request};
 pub use transport::OiCanopyTransport;
 
@@ -33,6 +33,44 @@ pub use transport::OiCanopyTransport;
 #[cfg(test)]
 pub(crate) fn test_peer() -> std::sync::Arc<dyn RelayPeer> {
     std::sync::Arc::new(peer::NullPeer)
+}
+
+/// A peer that answers each relayed request with what `answer` returns for its
+/// path, as a status and a body.
+#[cfg(test)]
+pub(crate) fn test_peer_answering(
+    answer: impl Fn(&str) -> (u16, Vec<u8>) + Send + Sync + 'static,
+) -> std::sync::Arc<dyn RelayPeer> {
+    use seedling_protocol::canopy::{
+        Headers, MAX_RELAY_BODY, RelayRequest, RelayResponse, read_frame, write_frame,
+    };
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let answer = std::sync::Arc::new(answer);
+    peer::DuplexPeer::new(move |mut stream| {
+        let answer = std::sync::Arc::clone(&answer);
+        tokio::spawn(async move {
+            let mut all = Vec::new();
+            stream.read_to_end(&mut all).await.unwrap();
+            let (request, _): (RelayRequest, Vec<u8>) =
+                read_frame(&all[..], MAX_RELAY_BODY).await.unwrap();
+            let (status, body) = answer(&request.path);
+            write_frame(
+                &mut stream,
+                &RelayResponse::Response {
+                    status,
+                    headers: Headers::from([(
+                        "content-type".to_owned(),
+                        "application/json".to_owned(),
+                    )]),
+                },
+                &body,
+            )
+            .await
+            .unwrap();
+            stream.shutdown().await.unwrap();
+        });
+    })
 }
 
 // spec: RLY#offers
@@ -46,6 +84,9 @@ pub struct Offer {
     pub agent: String,
     pub endpoint: String,
     pub via: Option<String>,
+    /// Fingerprint of the key the offering client authenticated with, when the
+    /// connection presented one.
+    pub key_fingerprint: Option<String>,
     pub offered_at: Timestamp,
     /// How to open a relay stream to the offering client.
     pub peer: std::sync::Arc<dyn RelayPeer>,
@@ -163,6 +204,7 @@ impl CanopyState {
         agent: String,
         endpoint: String,
         via: Option<String>,
+        key_fingerprint: Option<String>,
         peer: std::sync::Arc<dyn RelayPeer>,
     ) -> Offer {
         let offer = Offer {
@@ -171,6 +213,7 @@ impl CanopyState {
             agent,
             endpoint,
             via,
+            key_fingerprint,
             offered_at: Timestamp::now(),
             peer,
             seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
@@ -279,6 +322,7 @@ mod tests {
                     format!("agent-{i}"),
                     "https://example.invalid".into(),
                     None,
+                    None,
                     Arc::new(peer::NullPeer),
                 )
             })
@@ -348,9 +392,30 @@ mod tests {
     #[test]
     fn losing_a_connection_drops_only_its_own_offers() {
         let state = CanopyState::new();
-        let a = state.offer(1, "a".into(), "e".into(), None, Arc::new(peer::NullPeer));
-        let b = state.offer(1, "b".into(), "e".into(), None, Arc::new(peer::NullPeer));
-        let c = state.offer(2, "c".into(), "e".into(), None, Arc::new(peer::NullPeer));
+        let a = state.offer(
+            1,
+            "a".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
+        let b = state.offer(
+            1,
+            "b".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
+        let c = state.offer(
+            2,
+            "c".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
 
         let dropped = state.remove_by_conn(1);
         let dropped: Vec<_> = dropped.iter().map(|o| o.offer_id).collect();
@@ -374,9 +439,23 @@ mod tests {
     #[test]
     fn re_offering_after_teardown_leaves_no_stale_index_entry() {
         let state = CanopyState::new();
-        state.offer(7, "a".into(), "e".into(), None, Arc::new(peer::NullPeer));
+        state.offer(
+            7,
+            "a".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
         state.remove_by_conn(7);
-        let again = state.offer(7, "b".into(), "e".into(), None, Arc::new(peer::NullPeer));
+        let again = state.offer(
+            7,
+            "b".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
 
         assert_eq!(state.count(), 1);
         assert_eq!(state.current().unwrap().offer_id, again.offer_id);

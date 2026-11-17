@@ -230,6 +230,68 @@ pub struct ResolvedBalance {
     pub interval_secs: f64,
 }
 
+impl ResolvedBalance {
+    /// Retrying with no pause between attempts: the proxy would spin whenever
+    /// every backend is unreachable. Each level's own declaration is checked
+    /// when parsed, which cannot see a zero interval at one level meeting a
+    /// non-zero try duration at the other, so a definition holding this on
+    /// any route is refused once it has evaluated.
+    pub fn spins(&self) -> bool {
+        self.interval_secs == 0.0 && self.try_duration_secs > 0.0
+    }
+}
+
+/// Refuse a definition in which a route of an HTTP service resolves to a zero
+/// `interval` with a non-zero `try_duration`. Checked once the definition has
+/// evaluated, because a later call can change either value.
+// spec: HTTP#balancing
+pub(crate) fn check_route_balances(def: &crate::defs::app::AppDef) -> Result<(), String> {
+    use crate::defs::resource::Resource;
+
+    for resource in def.resources.values() {
+        let (kind, name, service_level, http) = match resource {
+            Resource::Service(service) => {
+                let def = service.def.lock();
+                (
+                    "service",
+                    service.name.to_string(),
+                    def.proxy_settings(),
+                    def.http.clone(),
+                )
+            }
+            Resource::ExternalService(service) => {
+                let def = service.def.lock();
+                (
+                    "external service",
+                    service.name.to_string(),
+                    def.proxy_settings(),
+                    def.http.clone(),
+                )
+            }
+            _ => continue,
+        };
+        let Some(http) = http else { continue };
+
+        let mut prefixes: Vec<&str> = http.routes.keys().map(String::as_str).collect();
+        if !http.routes.contains_key("/") {
+            prefixes.push("/");
+        }
+        for prefix in prefixes {
+            if resolve(&service_level, http.settings(prefix))
+                .balance
+                .spins()
+            {
+                return Err(format!(
+                    "route `{prefix}` of {kind} '{name}' resolves to a balance `interval` of zero \
+                     with a non-zero `try_duration`, which retries without pause; give the \
+                     route or the {kind} an `interval` above zero, or a `try_duration` of zero"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The settings actually in force on one route. `compress` is `None` when
 /// compression is off for that route, `rate_limit` when the route is not
 /// rate limited.
@@ -699,22 +761,10 @@ fn resolve_balance(service: &BalanceSettings, route: Option<&BalanceSettings>) -
         .and_then(|r| r.try_duration_secs)
         .or(service.try_duration_secs)
         .unwrap_or(DEFAULT_TRY_DURATION_SECS);
-    let mut interval_secs = route
+    let interval_secs = route
         .and_then(|r| r.interval_secs)
         .or(service.interval_secs)
         .unwrap_or(DEFAULT_INTERVAL_SECS);
-
-    // Each level is checked on its own when parsed, which cannot see a zero
-    // interval at one level meeting a non-zero try duration at the other.
-    // Caddy spins the CPU on that pairing, so refuse to emit it.
-    if interval_secs == 0.0 && try_duration_secs > 0.0 {
-        tracing::warn!(
-            try_duration_secs,
-            "balance interval of zero would spin against a non-zero try duration; \
-             using the default interval"
-        );
-        interval_secs = DEFAULT_INTERVAL_SECS;
-    }
 
     ResolvedBalance {
         policy,
@@ -732,10 +782,12 @@ pub(super) fn parse_compress(mut map: Map) -> Result<CompressSettings, Box<EvalA
     let encodings = match map.remove("encodings") {
         None => None,
         Some(value) => {
+            let value_type = value.type_name();
             let arr = value
                 .try_cast::<rhai::Array>()
                 .ok_or_else(|| -> Box<EvalAltResult> {
-                    "compress `encodings` must be an array of strings".into()
+                    format!("compress `encodings` must be an array of strings, got {value_type}")
+                        .into()
                 })?;
             if arr.is_empty() {
                 return Err("compress `encodings` must not be empty".into());
@@ -770,10 +822,14 @@ pub(super) fn parse_compress(mut map: Map) -> Result<CompressSettings, Box<EvalA
     let content_types = match map.remove("content_types") {
         None => None,
         Some(value) => {
+            let value_type = value.type_name();
             let arr = value
                 .try_cast::<rhai::Array>()
                 .ok_or_else(|| -> Box<EvalAltResult> {
-                    "compress `content_types` must be an array of strings".into()
+                    format!(
+                        "compress `content_types` must be an array of strings, got {value_type}"
+                    )
+                    .into()
                 })?;
             if arr.is_empty() {
                 return Err("compress `content_types` must not be empty".into());
@@ -1097,7 +1153,7 @@ fn take_seconds(map: &mut Map, key: &str) -> Result<Option<f64>, Box<EvalAltResu
         return Err(format!("balance `{key}` must not be negative, got {n}").into());
     }
     if !n.is_finite() {
-        return Err(format!("balance `{key}` must be a finite number of seconds").into());
+        return Err(format!("balance `{key}` must be a finite number of seconds, got {n}").into());
     }
     Ok(Some(n))
 }
@@ -1188,8 +1244,8 @@ impl RouteRedirect {
     }
 }
 
-// spec: HTTP#route-redirects
-fn redirect_code(code: i64) -> Result<u16, Box<EvalAltResult>> {
+// spec: HTTP#redirect-codes
+pub(crate) fn redirect_code(code: i64) -> Result<u16, Box<EvalAltResult>> {
     if !REDIRECT_CODES.contains(&code) {
         return Err(
             format!("redirect `code` must be one of 301, 302, 307, or 308, got {code}").into(),

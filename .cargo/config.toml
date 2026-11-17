@@ -1,0 +1,4 @@
+[registry]
+# A version published less than this long ago is not picked up by the resolver
+# unless the lockfile already holds it. Respected from Cargo 1.100.
+global-min-publish-age = "7 days"

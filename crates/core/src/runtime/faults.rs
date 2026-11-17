@@ -32,9 +32,14 @@ fn emit_filed(record: &FaultRecord) {
     }
 }
 
-fn emit_cleared(id: &str, app: &AppName, kind: &str) {
+fn emit_cleared(
+    id: &str,
+    app: &AppName,
+    kind: &str,
+    actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
+) {
     if let Some(tx) = EVENT_TX.get() {
-        tx.fault_cleared(id, app, kind);
+        tx.fault_cleared(id, app, kind, actor);
     }
 }
 
@@ -230,6 +235,18 @@ pub fn clear_fault(
     fault_id: &str,
     app: &AppName,
 ) -> rusqlite::Result<()> {
+    clear_fault_by(db, fault_id, app, None)
+}
+
+/// Clear a fault on behalf of `actor`, the operator whose request clears it,
+/// or of the runtime when `None`.
+// spec: EVT#event-objects
+pub fn clear_fault_by(
+    db: &crate::runtime::db::Db,
+    fault_id: &str,
+    app: &AppName,
+    actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
+) -> rusqlite::Result<()> {
     let now = Timestamp::now();
     // Read the kind before the UPDATE — after clearing, the row is no longer
     // "active" but still exists, so this also works post-clear, but reading
@@ -245,7 +262,7 @@ pub fn clear_fault(
         rusqlite::params![now.to_string(), fault_id],
     )?;
     if changed > 0 {
-        emit_cleared(fault_id, app, kind.as_deref().unwrap_or(""));
+        emit_cleared(fault_id, app, kind.as_deref().unwrap_or(""), actor);
     }
     Ok(())
 }
@@ -303,6 +320,24 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
 
 /// Clear all active faults matching an app + kind. Returns how many were cleared.
 // spec: FLTS#listing-faults
+/// Clear the active fault holding `key`, if one does, announcing it as any
+/// clear is. Returns whether one was cleared.
+pub fn clear_fault_by_key(db: &crate::runtime::db::Db, key: &FaultKey) -> rusqlite::Result<bool> {
+    let id: Option<String> = db
+        .conn
+        .query_row(
+            "SELECT id FROM faults
+             WHERE app = ?1 AND kind = ?2 AND subject = ?3 AND cleared_at IS NULL",
+            rusqlite::params![key.app, key.kind, key.subject],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match id {
+        Some(id) => clear_fault(db, &id, &key.app).map(|()| true),
+        None => Ok(false),
+    }
+}
+
 pub fn clear_faults_by_kind(
     db: &crate::runtime::db::Db,
     app: &AppName,
@@ -373,8 +408,132 @@ pub fn count_active_faults_for_app(
     )
 }
 
-pub fn has_active_faults(db: &crate::runtime::db::Db, app: &AppName) -> rusqlite::Result<bool> {
-    Ok(count_active_faults_for_app(db, app)? > 0)
+/// The fault held against an app while an ended operation's dynamic resources
+/// are not all torn down a minute after the cleanup began, or while their
+/// records cannot be read. Its subject is the operation.
+// spec: FLT#app-faults
+pub const OPERATION_CLEANUP_STALLED: &str = "operation_cleanup_stalled";
+
+/// Hold [`OPERATION_CLEANUP_STALLED`] for `operation_id` of `app`, logging an
+/// error when it is newly filed.
+// spec: FLT#app-faults
+// spec: OPS#completion
+pub fn hold_operation_cleanup_stalled(
+    db: &crate::runtime::db::Db,
+    app: &AppName,
+    operation_id: &str,
+    why: &str,
+) {
+    let key = FaultKey::new(app, OPERATION_CLEANUP_STALLED, operation_id);
+    let description =
+        format!("the dynamic resources of operation {operation_id} are not torn down: {why}");
+    match file_once(db, &key, &FaultMeta::default(), &description) {
+        Ok(true) => tracing::error!(
+            %app,
+            operation_id,
+            "the operation's dynamic resources are not torn down; still trying: {why}"
+        ),
+        Ok(false) => {}
+        Err(e) => tracing::error!(
+            %app,
+            operation_id,
+            "could not file {OPERATION_CLEANUP_STALLED} ({why}): {e}"
+        ),
+    }
+}
+
+/// Clear [`OPERATION_CLEANUP_STALLED`] for `operation_id` of `app`, once every
+/// dynamic resource of the operation is torn down.
+// spec: FLT#app-faults
+// spec: OPS#completion
+pub fn clear_operation_cleanup_stalled(
+    db: &crate::runtime::db::Db,
+    app: &AppName,
+    operation_id: &str,
+) {
+    let key = FaultKey::new(app, OPERATION_CLEANUP_STALLED, operation_id);
+    if let Err(e) = clear_fault_by_key(db, &key) {
+        tracing::warn!(%app, operation_id, "could not clear {OPERATION_CLEANUP_STALLED}: {e}");
+    }
+}
+
+/// The host fault held while the runtime cannot read the records of the
+/// dynamic resources previous runs left to tear down.
+// spec: FLT#host-faults
+pub const DYNAMIC_RESOURCES_UNREADABLE: &str = "dynamic_resources_unreadable";
+
+fn dynamic_resources_unreadable_key() -> FaultKey {
+    FaultKey::app_wide(
+        &AppName::new_unchecked("_system"),
+        DYNAMIC_RESOURCES_UNREADABLE,
+    )
+}
+
+/// Hold [`DYNAMIC_RESOURCES_UNREADABLE`], logging an error alongside.
+// spec: FLT#host-faults
+// spec: SUSP#abandoned-replay
+pub fn hold_dynamic_resources_unreadable(db: &crate::runtime::db::Db, why: &str) {
+    tracing::error!("cannot read the dynamic resources left to tear down: {why}");
+    let description = format!(
+        "the records of the dynamic resources previous runs left to tear down cannot be read: {why}"
+    );
+    if let Err(e) = file_once(
+        db,
+        &dynamic_resources_unreadable_key(),
+        &FaultMeta::default(),
+        &description,
+    ) {
+        tracing::warn!("could not file {DYNAMIC_RESOURCES_UNREADABLE}: {e}");
+    }
+}
+
+/// Clear [`DYNAMIC_RESOURCES_UNREADABLE`] once those records are read.
+// spec: FLT#host-faults
+// spec: SUSP#abandoned-replay
+pub fn clear_dynamic_resources_unreadable(db: &crate::runtime::db::Db) {
+    if let Err(e) = clear_fault_by_key(db, &dynamic_resources_unreadable_key()) {
+        tracing::warn!("could not clear {DYNAMIC_RESOURCES_UNREADABLE}: {e}");
+    }
+}
+
+/// The kinds of fault under which the runtime stops acting on the fault's
+/// subject until it clears.
+// spec: FLT#withholding-faults
+pub const WITHHOLDING_KINDS: [&str; 3] = [
+    "external_volume_not_mapped",
+    "crash_loop",
+    "health_check_replace_failed",
+];
+
+/// What an app's active faults come to for its status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FaultStanding {
+    /// How many faults are active against the app.
+    pub active: i64,
+    /// Whether any of them is a [withholding fault](WITHHOLDING_KINDS).
+    pub withholding: bool,
+}
+
+pub fn fault_standing(
+    db: &crate::runtime::db::Db,
+    app: &AppName,
+) -> rusqlite::Result<FaultStanding> {
+    let (active, withholding): (i64, i64) = db.conn.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(kind IN (?2, ?3, ?4)), 0)
+         FROM faults WHERE app = ?1 AND cleared_at IS NULL",
+        rusqlite::params![
+            app,
+            WITHHOLDING_KINDS[0],
+            WITHHOLDING_KINDS[1],
+            WITHHOLDING_KINDS[2]
+        ],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(FaultStanding {
+        active,
+        withholding: withholding > 0,
+    })
 }
 
 pub fn count_active_faults(db: &crate::runtime::db::Db) -> rusqlite::Result<i64> {
@@ -414,6 +573,22 @@ impl FaultScope {
             Self::Kind(kind) | Self::AppKind(_, kind) => kind,
         }
     }
+}
+
+/// Replace the description of the active fault holding `key`, and say whether
+/// one did. For a fault whose description carries a count that moves while it
+/// stays active.
+pub fn update_description(
+    db: &crate::runtime::db::Db,
+    key: &FaultKey,
+    description: &str,
+) -> rusqlite::Result<bool> {
+    let changed = db.conn.execute(
+        "UPDATE faults SET description = ?1
+         WHERE app = ?2 AND kind = ?3 AND subject = ?4 AND cleared_at IS NULL",
+        rusqlite::params![description, key.app, key.kind, key.subject],
+    )?;
+    Ok(changed > 0)
 }
 
 /// Whether any active fault of `kind` is filed, anywhere.

@@ -14,14 +14,6 @@ use serde::Serialize;
 
 use crate::runtime::db::Db;
 
-/// Most-recent restart records kept per instance.
-///
-/// The bound is per instance rather than global, and applied on write rather
-/// than by rate-limiting what gets recorded: a hard crash loop produces rows
-/// fastest exactly when the per-attempt exit codes are the diagnostic.
-// spec: GC#restart-records
-pub const RETAIN_PER_INSTANCE: usize = 50;
-
 /// Why a restart happened.
 ///
 /// Deliberately not "who performed it". On Linux systemd actions recovery
@@ -155,14 +147,22 @@ pub struct RestartSubject {
 }
 
 // spec: AUTO#restart-record
-/// Record one restart. `at_ms` lets a caller recording a burst of counter
-/// deltas stamp them apart rather than collapsing them onto one instant.
+/// Record one restart, then keep only the `retain` most recent records of the
+/// instance.
+///
+/// The bound is per instance rather than global, and applied on write rather
+/// than by rate-limiting what gets recorded: a hard crash loop produces rows
+/// fastest exactly when the per-attempt exit codes are the diagnostic.
+/// `at_ms` lets a caller recording a burst of counter deltas stamp them apart
+/// rather than collapsing them onto one instant.
+// spec: GC#restart-records
 pub fn record(
     db: &Db,
     subject: &RestartSubject,
     cause: Cause,
     exit: Option<ExitStatus>,
     at_ms: i64,
+    retain: usize,
 ) -> rusqlite::Result<i64> {
     db.conn.execute(
         "INSERT INTO instance_restarts
@@ -182,7 +182,7 @@ pub fn record(
         ],
     )?;
     let id = db.conn.last_insert_rowid();
-    prune_instance(db, &subject.instance_id, RETAIN_PER_INSTANCE)?;
+    prune_instance(db, &subject.instance_id, retain)?;
     Ok(id)
 }
 
@@ -377,6 +377,8 @@ pub fn settings(db: &Db) -> rusqlite::Result<RestartSettings> {
 pub enum SettingsError {
     ThresholdTooLow,
     WindowTooShort,
+    /// The stored settings could not be read or written; nothing was changed.
+    Unavailable(String),
 }
 
 impl std::fmt::Display for SettingsError {
@@ -384,6 +386,7 @@ impl std::fmt::Display for SettingsError {
         match self {
             Self::ThresholdTooLow => write!(f, "threshold must be at least {MIN_THRESHOLD}"),
             Self::WindowTooShort => write!(f, "window_secs must be at least {MIN_WINDOW_SECS}"),
+            Self::Unavailable(why) => write!(f, "the crash-loop settings are unavailable: {why}"),
         }
     }
 }
@@ -408,20 +411,27 @@ pub fn set_settings(
     {
         return Err(SettingsError::WindowTooShort);
     }
-    let current = settings(db).unwrap_or(RestartSettings {
-        threshold: 5,
-        window_secs: 1800,
-    });
+    // An omitted field keeps the stored value, so a stored value that cannot
+    // be read is not stood in for by the defaults and written back.
+    let current = settings(db).map_err(|e| SettingsError::Unavailable(e.to_string()))?;
     let next = RestartSettings {
         threshold: threshold.unwrap_or(current.threshold),
         window_secs: window_secs.unwrap_or(current.window_secs),
     };
-    let _ = db.conn.execute(
-        "UPDATE restart_settings
-            SET threshold = ?1, window_secs = ?2, updated_at = ?3
-          WHERE singleton = 1",
-        rusqlite::params![next.threshold, next.window_secs, now_ms()],
-    );
+    let changed = db
+        .conn
+        .execute(
+            "UPDATE restart_settings
+                SET threshold = ?1, window_secs = ?2, updated_at = ?3
+              WHERE singleton = 1",
+            rusqlite::params![next.threshold, next.window_secs, now_ms()],
+        )
+        .map_err(|e| SettingsError::Unavailable(e.to_string()))?;
+    if changed == 0 {
+        return Err(SettingsError::Unavailable(
+            "the settings record is missing".to_owned(),
+        ));
+    }
     Ok(next)
 }
 

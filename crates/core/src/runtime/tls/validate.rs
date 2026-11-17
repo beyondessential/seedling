@@ -50,6 +50,9 @@ pub enum ValidateError {
 
     #[snafu(display("supplied private key does not match the certificate's public key"))]
     KeyMismatch,
+
+    #[snafu(display("supplied private key's algorithm is not one a stored certificate may hold"))]
+    UnsupportedKeyType,
 }
 
 pub type Result<T, E = ValidateError> = std::result::Result<T, E>;
@@ -61,9 +64,7 @@ pub type Result<T, E = ValidateError> = std::result::Result<T, E>;
 pub struct Validated {
     pub parsed: parse::ParsedChain,
     pub warnings: Vec<&'static str>,
-    /// Key type detected from the supplied private key. Always
-    /// [`KeyType::EcdsaP256`] today; widening this enum is the path
-    /// for future PQC support.
+    /// Key type detected from the supplied private key.
     pub key_type: KeyType,
 }
 
@@ -73,7 +74,14 @@ pub struct Validated {
 /// list is non-empty (otherwise the cert can never bind to anything).
 // spec: TLS#operator-supplied-certificates
 pub fn validate_upload(cert_pem: &str, key_pem: &SecretString) -> Result<Validated> {
-    let parsed = parse::parse_chain(cert_pem).context(ParseCertSnafu)?;
+    // The leaf is the certificate the key belongs to, wherever it stands in
+    // the upload, and the chain is kept with it first.
+    let key = keypair::from_pem(key_pem.expose_secret()).context(ParseKeySnafu)?;
+    let key_spki = key.subject_public_key_info();
+    let leaf_first = parse::leaf_first(cert_pem, &key_spki)
+        .context(ParseCertSnafu)?
+        .ok_or(ValidateError::KeyMismatch)?;
+    let parsed = parse::parse_chain(&leaf_first).context(ParseCertSnafu)?;
 
     if parsed.san_dns_names.is_empty() {
         return NoSansSnafu {
@@ -103,17 +111,8 @@ pub fn validate_upload(cert_pem: &str, key_pem: &SecretString) -> Result<Validat
         warnings.push("not_yet_valid");
     }
 
-    // Key match.
-    let key = keypair::from_pem(key_pem.expose_secret()).context(ParseKeySnafu)?;
-    let key_spki = key.subject_public_key_info();
-    if key_spki != parsed.leaf_spki_der {
-        return KeyMismatchSnafu.fail();
-    }
-
-    // Today rcgen only hands us ECDSA-P256 keys (it's the only algorithm
-    // exposed via `KeyType`). When more variants land, key.is_compatible
-    // will let us classify by detected algorithm.
-    let key_type = KeyType::EcdsaP256;
+    // spec: TLSM#certificates
+    let key_type = keypair::key_type_of(&key).ok_or(ValidateError::UnsupportedKeyType)?;
 
     Ok(Validated {
         parsed,
@@ -218,8 +217,43 @@ mod tests {
         assert!(matches!(err, ValidateError::ParseKey { .. }), "{err:?}");
 
         let bad_cert = "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n";
-        let key_pem = SecretString::new("dummy".to_owned().into());
+        let (_, key_pem) = make("bar.example.com");
         let err = validate_upload(bad_cert, &key_pem).unwrap_err();
+        assert!(matches!(err, ValidateError::ParseCert { .. }), "{err:?}");
+    }
+
+    // spec: TLSM#certificates
+    #[test]
+    fn the_leaf_is_the_certificate_the_key_matches_wherever_it_stands() {
+        let (leaf, key) = make("leaf.example.com");
+        let (intermediate, _) = make("ca.example.com");
+
+        for upload in [
+            format!("{leaf}{intermediate}"),
+            format!("{intermediate}{leaf}"),
+        ] {
+            let v = validate_upload(&upload, &key).unwrap();
+            assert_eq!(v.parsed.san_dns_names, ["leaf.example.com"]);
+            assert_eq!(v.parsed.chain_len, 2);
+            let stored = pem::parse_many(v.parsed.chain_pem.as_bytes()).unwrap();
+            let leaf_block = pem::parse(leaf.as_bytes()).unwrap();
+            assert_eq!(
+                stored[0].contents(),
+                leaf_block.contents(),
+                "the chain is stored leaf first"
+            );
+        }
+    }
+
+    // spec: TLSM#certificates
+    #[test]
+    fn a_block_that_is_not_a_certificate_is_ignored_and_an_unparseable_one_rejected() {
+        let (leaf, key) = make("leaf.example.com");
+        let with_key = format!("{}{leaf}", key.expose_secret());
+        assert!(validate_upload(&with_key, &key).is_ok());
+
+        let broken = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+        let err = validate_upload(&format!("{broken}{leaf}"), &key).unwrap_err();
         assert!(matches!(err, ValidateError::ParseCert { .. }), "{err:?}");
     }
 }

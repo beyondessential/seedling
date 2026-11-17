@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
 use seedling_protocol::names::{AppName, ParamName};
@@ -37,12 +37,8 @@ fn current_param_value(
     let cipher = Arc::clone(&state.cipher);
     let map = state
         .db
-        .call(move |db| -> rusqlite::Result<BTreeMap<String, String>> {
-            Ok(crate::runtime::apps::load_all_params_for_app(
-                db, &cipher, &app_owned,
-            ))
-        })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     Ok(map.get(name_owned.as_str()).cloned())
 }
 
@@ -93,12 +89,8 @@ fn reload_and_persist_apperror(
     let cipher = Arc::clone(&state.cipher);
     let loaded_params = state
         .db
-        .call(move |db| -> rusqlite::Result<BTreeMap<String, String>> {
-            Ok(crate::runtime::apps::load_all_params_for_app(
-                db, &cipher, &app_owned,
-            ))
-        })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     // The outcome needs no gating here: this re-evaluates the app's existing
     // definition under new param values and derives nothing from the result
     // but the fault state synced below, which is filed on either outcome.
@@ -116,6 +108,9 @@ fn reload_and_persist_apperror(
             sync_fault_state(&state.db, entry);
         }
     }
+    // spec: FWD#forward-lifetime
+    // The re-evaluation may have dropped a service or port a forward reaches.
+    crate::oi::forwards::end_undeclared_forwards(state, app.as_str());
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(app.as_str()) {
@@ -139,7 +134,7 @@ fn reload_and_persist_apperror(
                     installing,
                 )
             })
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db persist: {e}")))?;
     }
     Ok(())
 }
@@ -172,7 +167,8 @@ fn validate_proposed(
     let cipher = Arc::clone(&state.cipher);
     let mut proposed = state
         .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned));
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     match change.1 {
         Some(v) => proposed.insert(change.0.as_str().to_owned(), v.to_owned()),
         None => proposed.remove(change.0.as_str()),
@@ -207,11 +203,12 @@ fn validate_proposed(
 /// Admit the `on_change` handler for a committed change in place of the
 /// hold [`hold_for_change`] took before it, or report that none runs.
 pub(crate) fn schedule_on_change(
-    state: &OiState,
+    state: &Arc<OiState>,
     hold: AppHold,
     app: &AppName,
     param_name: &ParamName,
     generation: generations::Generation,
+    actor: &Arc<seedling_protocol::actor::Actor>,
 ) -> Result<&'static str, OiError> {
     let (has_on_change, is_installed, tick_notify, phase_handle) = {
         let reg = state.registry.read();
@@ -239,20 +236,47 @@ pub(crate) fn schedule_on_change(
         generation,
         "param_change",
         &phase_handle,
+        Some(Arc::clone(actor)),
     );
     match result {
         // A queued handler runs when the other app's operation ends, and is
         // the operation this change triggered all the same.
         ScheduleResult::Accepted | ScheduleResult::Queued => {
+            let refused_after_commit = |why: &dyn std::fmt::Display| {
+                OiError::internal(format!(
+                    "the change to {app} was applied as generation {generation}, but its \
+                     on_change handler could not be scheduled: {why}"
+                ))
+            };
+            let op_id = op_id.ok_or_else(|| refused_after_commit(&"it holds no operation"))?;
             // Attach the operation to the generation history entry so the
             // outcome can be recorded against it later.
-            if let Some(op_id) = op_id {
+            {
                 let app_owned = app.clone();
+                let op = op_id.0.clone();
                 state.db.call(move |db| {
-                    if let Err(e) = generations::attach_operation(db, &app_owned, generation, &op_id.0) {
+                    if let Err(e) = generations::attach_operation(db, &app_owned, generation, &op) {
                         tracing::warn!(app = %app_owned, generation, "failed to attach op to generation: {e}");
                     }
                 });
+            }
+            // spec: OPS#initiating-events
+            // spec: OPS#concurrency
+            if matches!(result, ScheduleResult::Accepted) {
+                super::actions::lifecycle::spawn_accepted_operation(
+                    Arc::clone(state),
+                    app.clone(),
+                    param_action,
+                    op_id,
+                    super::actions::lifecycle::OperationParams::Requested(serde_json::Map::new()),
+                    source_generation,
+                    generation,
+                    "param_change".to_owned(),
+                    Some(Arc::clone(actor)),
+                );
+            } else {
+                super::actions::lifecycle::persist_queued(state, &op_id)
+                    .map_err(|e| refused_after_commit(&e.message))?;
             }
             tick_notify.notify_one();
             Ok("accepted")
@@ -278,7 +302,7 @@ pub(crate) fn schedule_on_change(
 // spec: PRM#parameter-storage
 // spec: PARAM#change-handlers
 pub(crate) fn set_param(
-    state: &OiState,
+    state: &Arc<OiState>,
     params: SetParamParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
@@ -357,14 +381,14 @@ pub(crate) fn set_param(
                 Ok((generation, previous_is_secret))
             })
         })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     reload_and_persist_apperror(state, app, generation)?;
 
     // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, app);
 
-    let schedule = schedule_on_change(state, hold, app, param_name, generation)?;
+    let schedule = schedule_on_change(state, hold, app, param_name, generation, &ctx.events.actor)?;
 
     // spec: PRM#parameter-storage
     // spec: SEC#generation-history — the event carries one redaction flag for both
@@ -386,7 +410,7 @@ pub(crate) fn set_param(
 // spec: PRM#parameter-unset
 // spec: PARAM#change-handlers
 pub(crate) fn unset_param(
-    state: &OiState,
+    state: &Arc<OiState>,
     params: UnsetParamParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
@@ -461,18 +485,20 @@ pub(crate) fn unset_param(
                 Ok((generation, previous_is_secret))
             })
         })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     reload_and_persist_apperror(state, app, generation)?;
 
     // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, app);
 
-    let schedule = schedule_on_change(state, hold, app, param_name, generation)?;
+    let schedule = schedule_on_change(state, hold, app, param_name, generation, &ctx.events.actor)?;
 
     // spec: PRM#parameter-storage
     // spec: SEC#generation-history
-    if previous_is_secret {
+    // spec: SEC#redaction — a value is withheld if the parameter is secret now
+    // as well as if it was protected when it was recorded.
+    if is_secret || previous_is_secret {
         ctx.events
             .param_change(app.clone(), generation, previous_generation)
             .unset_redacted(param_name);

@@ -10,7 +10,7 @@ use crate::{
         barrier::oracle::{container_run_succeeded, derive_lifecycle_state, has_lifecycle},
         db::{Db, DbHandle},
         faults,
-        history::{find_instances_for_group, query_observations_for},
+        history::{find_instances_for_group, query_observations_for, read_lifecycle},
         identity::ResourceInstance,
         lifecycle::LifecycleState,
         scaling,
@@ -29,18 +29,21 @@ pub fn active_operation(scheduler: &Mutex<Scheduler>) -> Option<ActiveOperation>
 ///
 /// The registry is read only to take a snapshot, and released before every
 /// app is read from the database in one pass.
+///
+/// A failed read fails the whole call: a status derived without what could
+/// not be read would claim an app healthy that nobody checked.
 pub fn all(
     registry: &RwLock<AppRegistry>,
     scheduler: &Mutex<Scheduler>,
     db: &DbHandle,
-) -> Vec<(AppName, AppStatus)> {
+) -> rusqlite::Result<Vec<(AppName, AppStatus)>> {
     let (active, snapshots) = snapshot_all(registry, scheduler, |_| ());
     db.call(move |db| {
         snapshots
             .into_iter()
             .map(|(snapshot, ())| {
-                let status = status_in(db, &snapshot, active.as_ref());
-                (snapshot.name, status)
+                let status = status_in(db, &snapshot, active.as_ref())?;
+                Ok((snapshot.name, status))
             })
             .collect()
     })
@@ -69,11 +72,12 @@ pub fn standings<T: Send + 'static>(
         snapshots
             .into_iter()
             .map(|(snapshot, extra)| {
-                let fault_count = faults::count_active_faults_for_app(db, &snapshot.name)?;
+                let faults = faults::fault_standing(db, &snapshot.name)?;
+                let fault_count = faults.active;
                 let stopped = stopped::load_stopped(db, &snapshot.name)?;
                 let status = match settled(&snapshot, active.as_ref()) {
                     Some(status) => status,
-                    None => steady(db, &snapshot, fault_count > 0, &stopped)?,
+                    None => steady(db, &snapshot, faults, &stopped)?,
                 };
                 let standing = Standing {
                     status,
@@ -93,7 +97,14 @@ pub fn standings<T: Send + 'static>(
 /// The phase resolves the states that outrank an operation; an operation the
 /// scheduler is running for the app is the only thing that makes it
 /// Operating, because the scheduler is what knows which action it is.
-pub fn of(entry: &AppEntry, active: Option<&ActiveOperation>, db: &DbHandle) -> AppStatus {
+///
+/// A failed read is an error, never a status: Running claims everything was
+/// checked, and Degraded claims something was found wrong.
+pub fn of(
+    entry: &AppEntry,
+    active: Option<&ActiveOperation>,
+    db: &DbHandle,
+) -> rusqlite::Result<AppStatus> {
     let snapshot = Snapshot::of(entry);
     let active = active.cloned();
     db.call(move |db| status_in(db, &snapshot, active.as_ref()))
@@ -148,33 +159,33 @@ fn snapshot_all<T>(
 /// `None` for an installed app with no operation, whose status is its health.
 fn settled(snapshot: &Snapshot, active: Option<&ActiveOperation>) -> Option<AppStatus> {
     match snapshot.phase {
-        AppPhase::Uninstalling => Some(AppStatus::Uninstalling),
-        AppPhase::Installing => Some(AppStatus::Installing),
+        AppPhase::Uninstalling => return Some(AppStatus::Uninstalling),
+        AppPhase::Installing => return Some(AppStatus::Installing),
+        AppPhase::NotInstalled | AppPhase::Installed => {}
+    }
+    // An operation outranks the app not being installed.
+    if let Some(op) = active.filter(|a| a.app == snapshot.name) {
+        return Some(AppStatus::Operating {
+            action_name: op.action.clone(),
+        });
+    }
+    match snapshot.phase {
         AppPhase::NotInstalled => Some(AppStatus::NotInstalled),
-        AppPhase::Installed => {
-            active
-                .filter(|a| a.app == snapshot.name)
-                .map(|op| AppStatus::Operating {
-                    action_name: op.action.clone(),
-                })
-        }
+        _ => None,
     }
 }
 
-fn status_in(db: &Db, snapshot: &Snapshot, active: Option<&ActiveOperation>) -> AppStatus {
-    settled(snapshot, active).unwrap_or_else(|| {
-        let read = faults::has_active_faults(db, &snapshot.name).and_then(|faulted| {
-            let stopped = stopped::load_stopped(db, &snapshot.name)?;
-            steady(db, snapshot, faulted, &stopped)
-        });
-        read.unwrap_or_else(|e| {
-            // Running is a claim that everything was checked. With a read
-            // failed nothing was, and Degraded is the status that has an
-            // operator look.
-            tracing::warn!(app = %snapshot.name, "could not read the app's state to derive its status: {e}");
-            AppStatus::Degraded
-        })
-    })
+fn status_in(
+    db: &Db,
+    snapshot: &Snapshot,
+    active: Option<&ActiveOperation>,
+) -> rusqlite::Result<AppStatus> {
+    if let Some(status) = settled(snapshot, active) {
+        return Ok(status);
+    }
+    let faults = faults::fault_standing(db, &snapshot.name)?;
+    let stopped = stopped::load_stopped(db, &snapshot.name)?;
+    steady(db, snapshot, faults, &stopped)
 }
 
 /// What the status rollup reads of one declared resource.
@@ -194,7 +205,7 @@ fn declared(entry: &AppEntry) -> Vec<Declared> {
             let scale_bounds = match resource {
                 Resource::Deployment(d) => {
                     let scale = &d.def.lock().scale;
-                    Some((scale.start, scale.end))
+                    Some((*scale.start(), *scale.end()))
                 }
                 _ => None,
             };
@@ -208,14 +219,20 @@ fn declared(entry: &AppEntry) -> Vec<Declared> {
 }
 
 /// Faulted, Degraded or Running, for an installed app with no operation.
+///
+/// Only a withholding fault faults the app: any other active fault, like a
+/// resource away from its desired state, only degrades it.
 fn steady(
     db: &Db,
     snapshot: &Snapshot,
-    faulted: bool,
+    faults: faults::FaultStanding,
     stopped: &StoppedSet,
 ) -> rusqlite::Result<AppStatus> {
-    if faulted {
+    if faults.withholding {
         return Ok(AppStatus::Faulted);
+    }
+    if faults.active > 0 {
+        return Ok(AppStatus::Degraded);
     }
     let app_name = &snapshot.name;
     for Declared {
@@ -272,7 +289,12 @@ fn at_desired_state(
             .get(&inst.id)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        match (desired, derive_lifecycle_state(inst, obs)) {
+        let state = if inst.kind == ResourceKind::ExternalVolume {
+            read_lifecycle(db, inst)?.0
+        } else {
+            derive_lifecycle_state(inst, obs)
+        };
+        match (desired, state) {
             (Desired::Ready | Desired::Run, LifecycleState::Ready) => reached = true,
             // A Job that has run rests here, removed or not.
             (Desired::Run, LifecycleState::Terminated | LifecycleState::Unscheduled) => {

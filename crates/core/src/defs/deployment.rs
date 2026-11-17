@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
@@ -12,12 +12,14 @@ use super::{
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
     take::take_int_in_range,
 };
+use crate::runtime::identity::InstanceId;
 
 // spec: DEP#declaration
 #[derive(Debug, Clone)]
 pub struct DeploymentDef {
     pub pod: Holder<PodDef>,
-    pub scale: Range<u16>,
+    /// The lower and upper bounds of the instance count, both inclusive.
+    pub scale: RangeInclusive<u16>,
     pub on_update: OnUpdate,
     pub on_terminate: OnTerminate,
     // spec: DEP#priority
@@ -30,7 +32,7 @@ impl Default for DeploymentDef {
     fn default() -> Self {
         Self {
             pod: Holder::default(),
-            scale: 1..1,
+            scale: 1..=1,
             on_update: OnUpdate::default(),
             on_terminate: OnTerminate::default(),
             priority: Priority::default(),
@@ -44,13 +46,16 @@ pub struct Deployment {
     pub name: ResourceName,
     pub def: Holder<DeploymentDef>,
     pub frozen: bool,
+    /// The identity an anonymous Deployment holds for its lifetime; `None` for a named one.
+    // spec: IDN#anonymous-instances
+    pub anon_id: Option<InstanceId>,
 }
 
 impl Freezable for Deployment {
     // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
-        // Anonymous deployments use an empty name as a sentinel (see app/deployment.rs).
-        self.frozen || (!self.name.is_empty() && is_in_action_closure())
+        // An anonymous deployment stays mutable inside the action that creates it.
+        self.frozen || (self.anon_id.is_none() && is_in_action_closure())
     }
 }
 
@@ -98,33 +103,35 @@ impl CustomType for Deployment {
                 |this: &mut Self, scale: i64| -> Result<Deployment, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let s = validate_scale(scale)?;
-                    // spec: DEP#scale
                     check_lower_bound(s)?;
-                    this.def.lock().scale = s..s;
+                    this.def.lock().scale = s..=s;
                     Ok(this.clone())
                 },
             )
+            // spec: DEP#scale
+            // `lower..end` excludes `end`, as it does everywhere in Rhai.
             .with_fn(
                 "scale",
                 |this: &mut Self, scale: Range<i64>| -> Result<Deployment, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    let min = validate_scale_lower(scale.start)?;
-                    let max = validate_scale(scale.end)?;
-                    // spec: DEP#scale
-                    check_lower_bound(min)?;
-                    if max == 0 {
-                        return Err("scale upper bound must be non-zero".into());
-                    }
-                    // spec: DEP#scale — an inverted range is an empty
-                    // one, so `scale(5..2)` stored bounds no replica count can
-                    // satisfy instead of naming the mistake.
-                    if min > max {
-                        return Err(format!(
-                            "scale lower bound must not exceed the upper bound, got {min}..{max}"
-                        )
-                        .into());
-                    }
-                    this.def.lock().scale = min..max;
+                    let bounds = scale_bounds(
+                        scale.start,
+                        scale.end.saturating_sub(1),
+                        &format!("{scale:?}"),
+                    )?;
+                    this.def.lock().scale = bounds;
+                    Ok(this.clone())
+                },
+            )
+            // spec: DEP#scale
+            .with_fn(
+                "scale",
+                |this: &mut Self,
+                 scale: RangeInclusive<i64>|
+                 -> Result<Deployment, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    let bounds = scale_bounds(*scale.start(), *scale.end(), &format!("{scale:?}"))?;
+                    this.def.lock().scale = bounds;
                     Ok(this.clone())
                 },
             )
@@ -177,6 +184,27 @@ fn validate_scale(n: i64) -> Result<u16, Box<EvalAltResult>> {
 
 fn validate_scale_lower(n: i64) -> Result<u16, Box<EvalAltResult>> {
     take_int_in_range::<u16>("scale lower bound", n, 0..=i64::from(u16::MAX))
+}
+
+/// Check a scale range's bounds, `upper` inclusive, naming the range as the
+/// script wrote it.
+// spec: DEP#scale
+fn scale_bounds(
+    lower: i64,
+    upper: i64,
+    written: &str,
+) -> Result<RangeInclusive<u16>, Box<EvalAltResult>> {
+    let lower = validate_scale_lower(lower)?;
+    check_lower_bound(lower)?;
+    if upper < i64::from(lower) {
+        return Err(format!(
+            "scale range {written} holds no instance count: its lower bound must not exceed its \
+             upper bound"
+        )
+        .into());
+    }
+    let upper = take_int_in_range::<u16>("scale upper bound", upper, 1..=i64::from(u16::MAX))?;
+    Ok(lower..=upper)
 }
 
 fn check_lower_bound(n: u16) -> Result<(), Box<EvalAltResult>> {

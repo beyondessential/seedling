@@ -30,7 +30,7 @@ pub(crate) fn list_restarts(state: &OiState, params: ListRestartsParams) -> Hand
     let records = state
         .db
         .call(move |db| restarts::list(db, app.as_ref(), instance.as_deref(), limit))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db query: {e}")))?;
 
     // spec: FLTS#restart-records
     let result: Vec<serde_json::Value> = records
@@ -58,7 +58,7 @@ pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
     let s = state
         .db
         .call(restarts::settings)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db query: {e}")))?;
     Ok(json!({ "threshold": s.threshold, "window_secs": s.window_secs }))
 }
 
@@ -76,10 +76,20 @@ pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> Handle
         threshold,
         window_secs,
     } = params;
+    // spec: FLTS#crash-loop-settings
+    if threshold.is_none() && window_secs.is_none() {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            "give threshold, window_secs or both",
+        ));
+    }
     let s = state
         .db
         .call(move |db| restarts::set_settings(db, threshold, window_secs))
-        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+        .map_err(|e| match e {
+            restarts::SettingsError::Unavailable(_) => OiError::internal(e.to_string()),
+            _ => OiError::new(ErrorCode::RequirementsInvalid, e.to_string()),
+        })?;
     Ok(json!({ "threshold": s.threshold, "window_secs": s.window_secs }))
 }
 

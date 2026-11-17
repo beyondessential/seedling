@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use seedling_protocol::error::{HandlerResult, OiError};
+use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
 use seedling_protocol::names::ForwardId;
 use serde::Deserialize;
 use serde_json::json;
@@ -41,9 +41,12 @@ pub(crate) fn list_forwards(state: &Arc<OiState>, params: ListForwardsParams) ->
 // spec: FWD#stopping-a-forward
 pub(crate) fn stop_forward(state: &Arc<OiState>, params: StopForwardParams) -> HandlerResult {
     let id_str = &params.forward_id;
-    let forward_id: ForwardId = id_str
-        .parse()
-        .map_err(|_| OiError::not_found(format!("invalid forward_id: {id_str}")))?;
+    let forward_id: ForwardId = id_str.parse().map_err(|_| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("forward_id is not a UUID: {id_str}"),
+        )
+    })?;
     let entry = state
         .forwards
         .lock()

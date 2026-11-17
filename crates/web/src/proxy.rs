@@ -35,33 +35,108 @@ where
     limited.read_line(out).await
 }
 
-/// Read and parse the first JSON line from a WT recv stream, inject the actor
-/// field, and return the method and remaining buffered stream.
-pub async fn peek_request(
-    wt_recv: wtransport::RecvStream,
-    actor: &Actor,
-) -> Result<PeekedRequest, Box<dyn std::error::Error + Send + Sync>> {
-    let mut buf = BufReader::new(wt_recv);
-    let mut first_line = String::new();
-    let n = read_bounded_line(&mut buf, &mut first_line, MAX_FIRST_LINE).await?;
-    if n == 0 {
-        return Err("empty stream".into());
-    }
-    if first_line.len() > MAX_FIRST_LINE {
-        return Err(format!("first line too large ({} bytes)", first_line.len()).into());
-    }
+/// Why a request could not be read from its stream.
+#[derive(Debug)]
+pub enum PeekError {
+    /// The request line breaks the rules: it is too long, is not UTF-8, or is
+    /// not a JSON object. The client is told, as the daemon tells a client
+    /// whose control request it cannot parse.
+    Invalid(String),
+    /// The stream failed before a request line was read; there is no one to
+    /// answer.
+    Stream(std::io::Error),
+}
 
-    let raw = first_line.trim_end_matches(['\n', '\r']);
-    let mut json: serde_json::Value = serde_json::from_str(raw)?;
-    let method = json
+impl std::fmt::Display for PeekError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(why) => f.write_str(why),
+            Self::Stream(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// The error response for a request line that breaks the rules, as one JSON
+/// object followed by a newline.
+// spec: WEB#request-relay
+pub fn invalid_request_response(why: &str) -> Vec<u8> {
+    let mut response = serde_json::to_vec(&serde_json::json!({
+        "error": { "code": "requirements_invalid", "message": why }
+    }))
+    .expect("an error response serialises");
+    response.push(b'\n');
+    response
+}
+
+/// The refusal for a method the web interface cannot relay, as one JSON object
+/// followed by a newline.
+///
+/// A port forward needs a direct Operator Interface connection, and a Canopy
+/// offer needs a connection that can answer relay streams.
+// spec: WEB#request-relay
+pub fn unrelayable_method_response(method: &str) -> Option<Vec<u8>> {
+    let why = match method {
+        "/forwards/start" => "a port forward needs a direct Operator Interface connection",
+        "/canopy/offer" | "/canopy/withdraw" => {
+            "a Canopy offer needs a direct Operator Interface connection that can answer relay streams"
+        }
+        _ => return None,
+    };
+    Some(invalid_request_response(why))
+}
+
+/// Check a request line and set its top-level `actor`, returning the request's
+/// method and the line to relay.
+// spec: WEB#request-relay
+fn prepare_request_line(raw: &str, actor: &Actor) -> Result<(String, Vec<u8>), String> {
+    let serde_json::Value::Object(mut members) =
+        serde_json::from_str(raw).map_err(|e| format!("the request is not JSON: {e}"))?
+    else {
+        return Err("the request must be a JSON object".to_owned());
+    };
+    let method = members
         .get("method")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned();
-    if let Some(obj) = json.as_object_mut() {
-        obj.insert("actor".into(), serde_json::to_value(actor)?);
+    members.insert(
+        "actor".into(),
+        serde_json::to_value(actor).map_err(|e| format!("the actor cannot be written: {e}"))?,
+    );
+    let line =
+        serde_json::to_vec(&members).map_err(|e| format!("the request cannot be written: {e}"))?;
+    Ok((method, line))
+}
+
+/// Read and parse the first JSON line from a WT recv stream, inject the actor
+/// field, and return the method and remaining buffered stream.
+// spec: WEB#request-relay
+pub async fn peek_request(
+    wt_recv: wtransport::RecvStream,
+    actor: &Actor,
+) -> Result<PeekedRequest, PeekError> {
+    let mut buf = BufReader::new(wt_recv);
+    let mut first_line = String::new();
+    let n = match read_bounded_line(&mut buf, &mut first_line, MAX_FIRST_LINE).await {
+        Ok(n) => n,
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            return Err(PeekError::Invalid("the request is not UTF-8".to_owned()));
+        }
+        Err(e) => return Err(PeekError::Stream(e)),
+    };
+    if n == 0 {
+        return Err(PeekError::Invalid(
+            "the stream carried no request".to_owned(),
+        ));
     }
-    let modified_line = serde_json::to_vec(&json)?;
+    if first_line.len() > MAX_FIRST_LINE {
+        return Err(PeekError::Invalid(format!(
+            "the request line exceeds {MAX_FIRST_LINE} bytes"
+        )));
+    }
+
+    let raw = first_line.trim_end_matches(['\n', '\r']);
+    let (method, modified_line) = prepare_request_line(raw, actor).map_err(PeekError::Invalid)?;
 
     Ok(PeekedRequest {
         method,
@@ -97,7 +172,58 @@ pub async fn proxy_from_peeked(
 
 #[cfg(test)]
 mod tests {
-    use super::read_bounded_line;
+    use super::{
+        Actor, invalid_request_response, prepare_request_line, read_bounded_line,
+        unrelayable_method_response,
+    };
+
+    // spec: WEB#request-relay
+    #[test]
+    fn forwards_and_canopy_offers_are_refused_as_needing_a_direct_connection() {
+        for method in ["/forwards/start", "/canopy/offer", "/canopy/withdraw"] {
+            let response = unrelayable_method_response(method).expect(method);
+            assert_eq!(response.last(), Some(&b'\n'));
+            let body: serde_json::Value =
+                serde_json::from_slice(&response[..response.len() - 1]).unwrap();
+            assert_eq!(body["error"]["code"], "requirements_invalid", "{method}");
+            assert!(
+                body["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("direct Operator Interface connection"),
+                "{method}"
+            );
+        }
+        assert!(unrelayable_method_response("/apps/list").is_none());
+    }
+
+    // spec: WEB#request-relay
+    #[test]
+    fn a_request_line_that_is_not_a_json_object_is_refused() {
+        let actor = Actor::default();
+        for raw in ["not json", "[1]", "42", "\"method\"", "null", ""] {
+            assert!(prepare_request_line(raw, &actor).is_err(), "{raw}");
+        }
+        let (method, line) =
+            prepare_request_line(r#"{"method":"/apps/list","actor":{"id":"x"}}"#, &actor).unwrap();
+        assert_eq!(method, "/apps/list");
+        let relayed: serde_json::Value = serde_json::from_slice(&line).unwrap();
+        assert_ne!(
+            relayed["actor"]["id"], "x",
+            "the client's actor is replaced"
+        );
+    }
+
+    // spec: WEB#request-relay
+    #[test]
+    fn the_refusal_is_one_requirements_invalid_object_and_a_newline() {
+        let response = invalid_request_response("too long");
+        assert_eq!(response.last(), Some(&b'\n'));
+        let body: serde_json::Value =
+            serde_json::from_slice(&response[..response.len() - 1]).unwrap();
+        assert_eq!(body["error"]["code"], "requirements_invalid");
+        assert_eq!(body["error"]["message"], "too long");
+    }
 
     // spec: WEB#request-relay
     #[tokio::test]

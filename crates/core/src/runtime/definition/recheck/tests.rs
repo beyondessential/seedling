@@ -149,6 +149,41 @@ fn a_failed_recheck_leaves_the_fault_as_it_was() {
 }
 
 // spec: RCK#back-off
+// spec: FLT#app-faults
+#[test]
+fn five_failed_rechecks_file_a_fault_that_a_success_clears() {
+    let mut h = Harness::new();
+    let first = h.publish("1", "// one");
+    h.fetched("web", &format!("{REPO}:1"), &first);
+    h.registry.set_unreachable(true);
+    let failed = |h: &Harness| -> usize {
+        let a = app("web");
+        h.db.call(move |db| list_active_faults(db, Some(&a)).unwrap())
+            .into_iter()
+            .filter(|f| f.kind == faults::RECHECK_FAILED)
+            .count()
+    };
+
+    // Each failure waits out its back-off before the next attempt: a minute,
+    // then two, four and eight.
+    h.rechecker = Rechecker::new(Duration::ZERO, MIN, 24 * 60 * MIN);
+    let mut at = Duration::ZERO;
+    for (attempt, wait) in [(1, 1), (2, 2), (3, 4), (4, 8), (5, 16)] {
+        h.pass_at(at);
+        assert_eq!(failed(&h), usize::from(attempt >= 5), "after {attempt}");
+        at += wait * MIN;
+    }
+    // It goes on, and the fault stays one.
+    h.pass_at(at);
+    assert_eq!(failed(&h), 1);
+    at += 32 * MIN;
+
+    h.registry.set_unreachable(false);
+    h.pass_at(at);
+    assert_eq!(failed(&h), 0, "a success clears it");
+}
+
+// spec: RCK#back-off
 #[test]
 fn failures_back_off_to_a_cap_and_a_success_resets() {
     let mut h = Harness::new();

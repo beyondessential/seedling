@@ -5,11 +5,13 @@ use sha2::{Digest, Sha256};
 
 use crate::system::types::{
     ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
-    ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, SliceSpec, TransientUnitSpec,
-    UnitState, UnitSummary,
+    ExecOutput, ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, SliceSpec,
+    TransientUnitSpec, UnitState, UnitSummary,
 };
 
 pub mod actuator;
+pub mod backends;
+pub mod host_probes;
 pub mod nat64;
 pub mod netinfo;
 pub mod observer;
@@ -24,7 +26,6 @@ pub(crate) mod confined;
 pub(crate) mod data_plane;
 pub mod jool;
 pub(crate) mod journal;
-pub mod leftover_snapshots;
 pub(crate) mod podman;
 pub mod resolver;
 pub mod startup_cleanup;
@@ -152,11 +153,6 @@ pub trait ContainerRuntime: Send + Sync + 'static {
         tmpfs: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>>;
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
-    /// List volume names matching a given prefix.
-    fn list_volumes_by_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>>;
     /// Returns the host filesystem path where the named volume is mounted.
     fn volume_mountpoint<'a>(
         &'a self,
@@ -186,14 +182,14 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     // spec: RT#command-execution
     /// Run a command (`argv`) inside the running container `name` and wait
     /// for it to exit. `extra_env` is layered on top of the container's
-    /// environment. Stdout and stderr are forwarded to the container's log
-    /// sink, not captured. Returns the command's exit code.
+    /// environment. Returns what the command wrote and its exit code; the
+    /// caller records the output with the container's logs.
     fn exec_command<'a>(
         &'a self,
         name: &'a str,
         argv: &'a [String],
         extra_env: &'a [(String, String)],
-    ) -> BoxFuture<'a, Result<i32, BoxError>>;
+    ) -> BoxFuture<'a, Result<ExecOutput, BoxError>>;
 }
 
 pub trait ProcessManager: Send + Sync + 'static {
@@ -277,20 +273,26 @@ pub struct System {
     pub proxy: Arc<dyn NetworkProxy>,
     pub data_plane: Arc<dyn DataPlane>,
     pub volume_store: volume_store::VolumeStore,
-    /// `Some(reason)` when the container runtime (podman) or process manager
-    /// (systemd) could not be reached at startup and the daemon came up in a
-    /// degraded mode. In this state the backends are erroring stubs (see
-    /// [`unavailable`]): the OI, database, and reconciler run so the operator
-    /// can see the fault, but no workloads are actuated. `None` in normal
-    /// operation.
-    pub degraded: Option<String>,
+    /// Whether the container runtime (podman) and process manager (systemd)
+    /// are reachable. While either is not, the daemon runs degraded: the
+    /// backend is an erroring stub (see [`unavailable`]), the OI, database and
+    /// reconciler run so the operator can see the fault, and no workloads are
+    /// actuated. The reconciler probes the backends again, and
+    /// [`Self::container`] and [`Self::process`] become the working ones when
+    /// a probe reaches them.
+    pub backends: backends::Backends,
 }
 
 impl System {
-    /// The reason the daemon is running in degraded mode, if it is. See
-    /// [`System::degraded`].
-    pub fn degraded_reason(&self) -> Option<&str> {
-        self.degraded.as_deref()
+    /// The reason the daemon is running in degraded mode, if it is.
+    pub fn degraded_reason(&self) -> Option<String> {
+        self.backends.unavailable_reason()
+    }
+
+    /// Probe an unavailable backend again, if the delay since the last probe
+    /// has passed, and say why one is still unavailable.
+    pub async fn probe_backends(&self) -> Option<String> {
+        self.backends.probe_unavailable().await
     }
 }
 
@@ -355,32 +357,22 @@ impl System {
         // in erroring backends, record the reason, and let the OI, database, and
         // reconciler come up so the operator sees a system-wide fault explaining
         // what is broken.
-        let podman = podman::PodmanRuntime::new().await;
-        let systemd = systemd::SystemdManager::connect().await;
-        let (container, process, degraded): (
-            Arc<dyn ContainerRuntime>,
-            Arc<dyn ProcessManager>,
-            Option<String>,
-        ) = match (podman, systemd) {
-            (Ok(c), Ok(p)) => (Arc::new(c), Arc::new(p), None),
-            (podman, systemd) => {
-                let reason = match (&podman, &systemd) {
-                    (Err(e), _) => format!("container runtime (podman) unavailable: {e}"),
-                    (_, Err(e)) => format!("process manager (systemd) unavailable: {e}"),
-                    (Ok(_), Ok(_)) => unreachable!("matched the all-Ok arm above"),
-                };
-                tracing::error!(
-                    "{reason} — starting in degraded mode; the operator interface will \
-                     report a system fault and no workloads will be actuated until the \
-                     daemon is restarted with a working podman/systemd"
-                );
-                (
-                    Arc::new(unavailable::UnavailableContainerRuntime),
-                    Arc::new(unavailable::UnavailableProcessManager),
-                    Some(reason),
-                )
-            }
-        };
+        let connector = Arc::new(backends::HostConnector {
+            data_dir: data_dir.to_path_buf(),
+        });
+        let backends = backends::Backends::new(
+            connector.clone(),
+            backends::Connector::container(&*connector).await,
+            backends::Connector::process(&*connector).await,
+        );
+        if let Some(reason) = backends.unavailable_reason() {
+            tracing::error!(
+                "{reason} — starting in degraded mode; the operator interface will \
+                 report a system fault and no workloads will be actuated until the \
+                 backend is reachable again"
+            );
+        }
+        let (container, process) = (backends.container(), backends.process());
         let data_plane_arc: Arc<dyn DataPlane> =
             Arc::new(data_plane::NftablesDataPlane::new(node_prefix)?);
 
@@ -392,7 +384,7 @@ impl System {
         // once it succeeds. So on failure we start with a placeholder client
         // and let the reconciler heal it; the OI, DB, and scheduler come up
         // regardless and the operator sees the fault.
-        let caddy_proxy = if degraded.is_some() {
+        let caddy_proxy = if backends.unavailable_reason().is_some() {
             // No point trying to build/run Caddy through the unavailable
             // container runtime — it would only error. Start with a placeholder;
             // the reconciler's degraded guard files the overarching fault.
@@ -400,7 +392,7 @@ impl System {
         } else {
             match caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await
             {
-                Ok(initial) => Arc::new(caddy::CaddyProxy::new(&initial.admin_socket)?),
+                Ok(initial) => Arc::new(caddy::CaddyProxy::new(&initial.addrs.admin_socket)?),
                 Err(e) => {
                     tracing::error!(
                         "initial Caddy bring-up failed: {e} — starting without ingress; \
@@ -421,7 +413,7 @@ impl System {
             proxy,
             data_plane: data_plane_arc,
             volume_store,
-            degraded,
+            backends,
         });
         Ok((system, caddy_admin_client))
     }
@@ -453,13 +445,17 @@ impl System {
             .expect("default reqwest client builds");
         let caddy_admin_client = Arc::new(tokio::sync::RwLock::new(placeholder_client));
 
+        let backends = backends::Backends::working(
+            container as Arc<dyn ContainerRuntime>,
+            process as Arc<dyn ProcessManager>,
+        );
         let system = Arc::new(Self {
-            container: container as Arc<dyn ContainerRuntime>,
-            process: process as Arc<dyn ProcessManager>,
+            container: backends.container(),
+            process: backends.process(),
             proxy,
             data_plane: data_plane_arc,
             volume_store,
-            degraded: None,
+            backends,
         });
         Ok((system, caddy_admin_client))
     }
@@ -478,13 +474,14 @@ impl System {
             .expect("default reqwest client builds");
         let caddy_admin_client = Arc::new(tokio::sync::RwLock::new(placeholder_client));
 
+        let backends = backends::Backends::unreachable("backends unavailable");
         let system = Arc::new(Self {
-            container: Arc::new(unavailable::UnavailableContainerRuntime),
-            process: Arc::new(unavailable::UnavailableProcessManager),
+            container: backends.container(),
+            process: backends.process(),
             proxy: Arc::new(stub::StubNetworkProxy),
             data_plane: Arc::new(stub::StubDataPlane),
             volume_store,
-            degraded: Some("backends unavailable".to_owned()),
+            backends,
         });
         Ok((system, caddy_admin_client))
     }

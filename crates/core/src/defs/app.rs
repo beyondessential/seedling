@@ -5,7 +5,6 @@ use std::sync::Arc;
 use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 
-use crate::runtime::barrier::runtime::action_def;
 use crate::runtime::definition::Bundle;
 
 use super::{
@@ -141,11 +140,23 @@ impl Drop for ValidatorFrame {
     }
 }
 
-/// Refuse a resource definition made from within a validator.
+/// Refuse a change to the app or any of its resources made from within a
+/// validator.
 // spec: PARAM#validators
+// spec: APP#validator-immutability
 pub(crate) fn ensure_not_validating() -> Result<(), Box<rhai::EvalAltResult>> {
     if IN_VALIDATOR.with(|v| v.get()) {
-        return Err("a validator must not define resources".into());
+        return Err("a validator must not change the app or its resources".into());
+    }
+    Ok(())
+}
+
+/// Refuse a declaration made from within an action closure, where the
+/// definition is already fixed.
+// spec: APP#action-context
+pub(crate) fn ensure_not_in_action_closure(what: &str) -> Result<(), Box<rhai::EvalAltResult>> {
+    if crate::runtime::barrier::runtime::is_in_action_closure() {
+        return Err(format!("{what} cannot be called from within an action closure").into());
     }
     Ok(())
 }
@@ -172,17 +183,20 @@ pub(crate) trait StaticResource: Clone {
     fn freeze(&mut self);
 }
 
-/// The static resource `name` of type `T`, as a frozen reference.
+/// The static resource `name` of type `T` in `app`, as a frozen reference.
 ///
 /// Every named-resource method resolves the same way in the action context, so
 /// the lookup lives here rather than in each of them: one diagnosis for a name
-/// that is not there, and nothing for the next resource type to copy.
+/// that is not there, and nothing for the next resource type to copy. It reads
+/// the definition of the `App` it was called on, so `old` in a change handler
+/// answers from the previous generation rather than the current one.
 // spec: APP#named-resources
-pub(crate) fn static_ref<T: StaticResource>(name: &str) -> Result<T, Box<rhai::EvalAltResult>> {
-    let adef = action_def().ok_or_else(|| -> Box<rhai::EvalAltResult> {
-        "internal: action context but no action AppDef set".into()
-    })?;
-    let def = adef.load();
+// spec: PARAM#change-handlers
+pub(crate) fn static_ref<T: StaticResource>(
+    app: &App,
+    name: &str,
+) -> Result<T, Box<rhai::EvalAltResult>> {
+    let def = app.def.load();
     let id = ResourceId {
         kind: T::KIND,
         name: Arc::new(name.to_owned()),
@@ -460,20 +474,26 @@ impl CustomType for App {
         builder.with_name("App");
 
         // spec: APP#app-description
-        builder.with_fn("description", |this: &mut App, desc: &str| -> App {
-            let desc_owned = desc.to_owned();
-            this.def.rcu(|d| {
-                let mut d = (**d).clone();
-                d.description = Some(desc_owned.clone());
-                d
-            });
-            this.clone()
-        });
+        builder.with_fn(
+            "description",
+            |this: &mut App, desc: &str| -> Result<App, Box<rhai::EvalAltResult>> {
+                ensure_not_validating()?;
+                ensure_not_in_action_closure("description")?;
+                let desc_owned = desc.to_owned();
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.description = Some(desc_owned.clone());
+                    d
+                });
+                Ok(this.clone())
+            },
+        );
 
         // spec: APP#canopy-type
         builder.with_fn(
             "canopy_type",
             |this: &mut App, canopy_type: Dynamic| -> Result<App, Box<rhai::EvalAltResult>> {
+                ensure_not_validating()?;
                 if crate::runtime::barrier::runtime::is_in_action_closure() {
                     return Err("canopy_type cannot be called from within an action closure".into());
                 }

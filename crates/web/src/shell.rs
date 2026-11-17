@@ -35,14 +35,14 @@ async fn open_prefixed_wt_uni(
     Ok(send)
 }
 
-/// Whether the accumulated bytes are a complete exit frame.
+/// The accumulated bytes, when they are a complete, newline-terminated exit
+/// frame.
 ///
-/// The frame is newline-terminated. The relay used to report a constant
-/// `true`, so `mark_exited` always ran and the guard's `/shells/stop` cleanup
-/// was unreachable — and the case it exists for is precisely the one where no
-/// frame arrived, because `daemon_recv` errored and nothing was accumulated.
-fn is_complete_exit_frame(buf: &[u8]) -> bool {
-    buf.last() == Some(&b'\n')
+/// An incomplete frame is never relayed: a client reading half a frame cannot
+/// tell it from the session's end.
+// spec: WEB#shell-relay
+fn complete_exit_frame(buf: &[u8]) -> Option<&[u8]> {
+    (buf.last() == Some(&b'\n')).then_some(buf)
 }
 
 /// RAII guard: fires `/shells/stop` when dropped if the session did not exit cleanly.
@@ -237,15 +237,13 @@ pub async fn handle_shell_start(
                 break;
             }
         }
-        // A complete exit frame is newline-terminated. Returning a constant
-        // `true` here made `did_exit` unconditional, so `mark_exited` always
-        // ran and the guard's `/shells/stop` cleanup was unreachable — the
-        // case it exists for is exactly the one where no frame arrived,
-        // because `daemon_recv` errored and `exit_buf` is empty.
-        let saw_exit_frame = is_complete_exit_frame(&exit_buf);
-        if !exit_buf.is_empty() {
-            let _ = wt_send.write_all(&exit_buf).await;
-        }
+        let saw_exit_frame = match complete_exit_frame(&exit_buf) {
+            Some(frame) => {
+                let _ = wt_send.write_all(frame).await;
+                true
+            }
+            None => false,
+        };
         let _ = wt_send.shutdown().await;
         saw_exit_frame
     };
@@ -259,25 +257,24 @@ pub async fn handle_shell_start(
 
 #[cfg(test)]
 mod tests {
-    use super::is_complete_exit_frame;
+    use super::complete_exit_frame;
 
     // spec: WEB#shell-relay
     #[test]
-    fn a_newline_terminated_frame_counts_as_an_exit() {
-        assert!(is_complete_exit_frame(b"{\"exit_code\":0}\n"));
-    }
-
-    // spec: WEB#shell-relay
-    // This is the case the cleanup guard exists for: the relay reported a
-    // constant true, so it never fired.
-    #[test]
-    fn no_frame_at_all_does_not_count_as_an_exit() {
-        assert!(!is_complete_exit_frame(b""));
+    fn a_newline_terminated_frame_is_relayed_whole() {
+        let frame = b"{\"exit_code\":0}\n";
+        assert_eq!(complete_exit_frame(frame), Some(&frame[..]));
     }
 
     // spec: WEB#shell-relay
     #[test]
-    fn a_truncated_frame_does_not_count_as_an_exit() {
-        assert!(!is_complete_exit_frame(b"{\"exit_code\":0}"));
+    fn no_frame_at_all_is_not_an_exit() {
+        assert_eq!(complete_exit_frame(b""), None);
+    }
+
+    // spec: WEB#shell-relay
+    #[test]
+    fn a_truncated_frame_is_not_relayed() {
+        assert_eq!(complete_exit_frame(b"{\"exit_code\":0}"), None);
     }
 }

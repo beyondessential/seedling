@@ -5,6 +5,8 @@ use crate::{
     system::types::{UnitExit, UnitExitKind},
 };
 
+const RETAIN: usize = 50;
+
 fn app() -> AppName {
     AppName::new("myapp").unwrap()
 }
@@ -19,7 +21,14 @@ fn counter(count: u32, exit: Option<UnitExit>) -> pods::RestartCounter {
 
 /// One observe tick: the counter the supervisor reports for `inst`.
 fn tick(db: &Db, inst: &ResourceInstance, count: u32, exit: Option<UnitExit>) -> Vec<CrashLoop> {
-    reconcile_counters(db, &app(), &[(inst.clone(), counter(count, exit))], &[])
+    reconcile_counters(
+        db,
+        &app(),
+        &[(inst.clone(), counter(count, exit))],
+        &[],
+        &[],
+        RETAIN,
+    )
 }
 
 fn records(db: &Db, inst: &ResourceInstance) -> Vec<restarts::RestartRecord> {
@@ -155,7 +164,7 @@ fn a_runtime_start_is_recorded_as_deliberate_and_rebaselines() {
 
     // The reconciler tore the unit down and started a fresh one. systemd's
     // counter for the new transient unit begins at zero.
-    reconcile_counters(&db, &app(), &[], std::slice::from_ref(&inst));
+    reconcile_counters(&db, &app(), &[], std::slice::from_ref(&inst), &[], RETAIN);
 
     let rows = records(&db, &inst);
     assert_eq!(rows.len(), 4);
@@ -171,6 +180,36 @@ fn a_runtime_start_is_recorded_as_deliberate_and_rebaselines() {
     assert_eq!(records(&db, &inst).len(), 4);
 }
 
+// spec: AUTO#recovery-restart
+// spec: AUTO#crash-loop-detection
+#[test]
+fn a_runtime_start_replacing_a_failed_run_is_a_recovery_restart_that_counts_toward_the_loop() {
+    let db = Db::open_in_memory().expect("open");
+    let inst = instance();
+    tick(&db, &inst, 0, None);
+
+    let mut loops = Vec::new();
+    for _ in 0..5 {
+        loops = reconcile_counters(
+            &db,
+            &app(),
+            &[],
+            std::slice::from_ref(&inst),
+            std::slice::from_ref(&inst),
+            RETAIN,
+        );
+    }
+
+    let rows = records(&db, &inst);
+    assert_eq!(rows.len(), 5);
+    assert!(rows.iter().all(|r| r.cause == Cause::Recovery));
+    assert_eq!(
+        loops.len(),
+        1,
+        "five recoveries within the window reach the threshold"
+    );
+}
+
 // spec: AUTO#restart-record
 #[test]
 fn a_first_start_is_not_a_restart() {
@@ -178,7 +217,7 @@ fn a_first_start_is_not_a_restart() {
     let inst = instance();
 
     // No baseline yet: the reconciler has never seen this instance's unit.
-    reconcile_counters(&db, &app(), &[], std::slice::from_ref(&inst));
+    reconcile_counters(&db, &app(), &[], std::slice::from_ref(&inst), &[], RETAIN);
     assert!(records(&db, &inst).is_empty());
 }
 
@@ -231,7 +270,7 @@ fn a_rolling_update_does_not_read_as_a_crash_burst() {
     // Ten reconciler-driven restarts in a row — well past the threshold if
     // they counted. They are recorded, but not against the rate.
     for _ in 0..10 {
-        reconcile_counters(&db, &app(), &[], std::slice::from_ref(&inst));
+        reconcile_counters(&db, &app(), &[], std::slice::from_ref(&inst), &[], RETAIN);
         assert!(tick(&db, &inst, 0, None).is_empty());
     }
 
@@ -255,8 +294,8 @@ fn instances_are_accounted_for_independently() {
         ]
     };
 
-    reconcile_counters(&db, &app(), &counters(0, 0), &[]);
-    let loops = reconcile_counters(&db, &app(), &counters(6, 1), &[]);
+    reconcile_counters(&db, &app(), &counters(0, 0), &[], &[], RETAIN);
+    let loops = reconcile_counters(&db, &app(), &counters(6, 1), &[], &[], RETAIN);
 
     assert_eq!(loops.len(), 1);
     assert_eq!(loops[0].instance.id, one.id);
@@ -275,11 +314,27 @@ fn gc_drops_bookkeeping_for_instances_that_no_longer_exist() {
 
     // The instance was never written to the registry, so from GC's point of
     // view it has been retired.
-    let removed = gc(&db).expect("gc");
+    let removed = gc(&db, RETAIN).expect("gc");
     assert!(removed >= 2);
     assert!(records(&db, &inst).is_empty());
     assert_eq!(
         restarts::baseline(&db, &inst.id.to_hex()).expect("baseline"),
         None
     );
+}
+
+// spec: AUTO#crash-loop-detection
+#[test]
+fn unreadable_settings_declare_no_crash_loop_but_still_record() {
+    let db = Db::open_in_memory().expect("open");
+    let inst = instance();
+    tick(&db, &inst, 0, None);
+    db.conn
+        .execute_batch("ALTER TABLE restart_settings RENAME TO gone;")
+        .unwrap();
+
+    // Far beyond any threshold; with none readable, none is invented.
+    let loops = tick(&db, &inst, 50, None);
+    assert!(loops.is_empty());
+    assert_eq!(records(&db, &inst).len(), 50);
 }

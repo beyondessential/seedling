@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use jiff::Timestamp;
 use seedling_protocol::names::AppName;
 
 use super::{Reconciler, pods, volumes};
@@ -8,41 +9,19 @@ use crate::runtime::{
 };
 
 impl Reconciler {
-    /// File a fault scoped to a specific resource instance, if no active fault
-    /// of the same kind already exists for that instance. Used by callers that
-    /// don't have a typed update struct (e.g. cert observation).
-    // spec: FLT#filing-and-clearing
-    // spec: FLT#fault-records
-    pub(super) fn file_resource_fault(
+    /// File `cert_acquisition_failed` for an ingress instance, or bring the
+    /// description of the one already active up to date with the hostnames
+    /// failing now and their latest errors.
+    // spec: FLT#certificate-faults
+    pub(super) fn file_cert_acquisition_fault(
         &self,
         instance: &ResourceInstance,
-        fault_kind: &str,
-        description: &str,
+        failing: &[(String, AcquisitionError)],
     ) {
         let instance = instance.clone();
-        let fault_kind = fault_kind.to_owned();
-        let description = description.to_owned();
-        self.db.call(move |db| {
-            let inst_hex = instance.id.to_hex();
-            let kind_str = format!("{:?}", instance.kind).to_lowercase();
-            let already_filed = faults::list_active_faults(db, Some(&instance.app))
-                .unwrap_or_default()
-                .iter()
-                .any(|f| f.kind == fault_kind && f.instance_id.as_deref() == Some(&inst_hex));
-            if !already_filed
-                && let Err(e) = faults::file_fault(
-                    db,
-                    &instance.app,
-                    Some(&kind_str),
-                    instance.name.as_deref(),
-                    Some(&inst_hex),
-                    &fault_kind,
-                    &description,
-                )
-            {
-                tracing::warn!(app = %instance.app, instance = %inst_hex, kind = %fault_kind, "failed to file resource fault: {e}");
-            }
-        });
+        let description = describe_cert_acquisition(failing);
+        self.db
+            .call(move |db| apply_cert_acquisition_fault(db, &instance, &description));
     }
 
     /// Clear all active faults of the given kind for a specific resource
@@ -73,10 +52,10 @@ impl Reconciler {
     // whenever any instance in the app successfully pulls the same image.
     pub(super) fn file_image_pull_faults(&self, app: &AppName, update: &pods::PodActuationUpdate) {
         let app = app.clone();
-        let image_pull_failures: Vec<(ResourceInstance, String)> = update
+        let image_pull_failures: Vec<String> = update
             .image_pull_failures
             .iter()
-            .map(|(inst, r)| (inst.clone(), r.clone()))
+            .map(|(_, reference)| reference.clone())
             .collect();
         let image_pull_successes: Vec<String> = update
             .image_pull_successes
@@ -84,42 +63,19 @@ impl Reconciler {
             .map(|(_, r)| r.clone())
             .collect();
         self.db.call(move |db| {
-            for (instance, reference) in &image_pull_failures {
-                let inst_hex = instance.id.to_hex();
-                let kind_str = format!("{:?}", instance.kind).to_lowercase();
+            // Keyed by the image reference, so operators see one fault per
+            // broken image, however many instances need it.
+            for reference in &image_pull_failures {
+                let key = faults::FaultKey::new(&app, "image_pull_failed", reference.as_str());
                 let desc = format!("failed to pull image: {reference}");
-                // Dedupe on the fault's description: if another instance in
-                // this app has already reported the same image unavailable,
-                // we don't file a second fault. Operators see one fault per
-                // broken image, not one per instance.
-                let already_filed = faults::list_active_faults(db, Some(&app))
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|f| f.kind == "image_pull_failed" && f.description == desc);
-                if !already_filed
-                    && let Err(e) = faults::file_fault(
-                        db,
-                        &app,
-                        Some(&kind_str),
-                        instance.name.as_deref(),
-                        Some(&inst_hex),
-                        "image_pull_failed",
-                        &desc,
-                    ) {
-                        tracing::warn!(app = %app, instance = %inst_hex, "failed to file image-pull fault: {e}");
-                    }
+                if let Err(e) = faults::file_once(db, &key, &faults::FaultMeta::default(), &desc) {
+                    tracing::warn!(app = %app, image = %reference, "failed to file image-pull fault: {e}");
+                }
             }
             for reference in &image_pull_successes {
-                let desc = format!("failed to pull image: {reference}");
-                let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|f| f.kind == "image_pull_failed" && f.description == desc)
-                    .collect();
-                for f in cleared {
-                    if let Err(e) = faults::clear_fault(db, &f.id, &app) {
-                        tracing::warn!(app = %app, fault_id = %f.id, "failed to clear image-pull fault: {e}");
-                    }
+                let key = faults::FaultKey::new(&app, "image_pull_failed", reference.as_str());
+                if let Err(e) = faults::clear_fault_by_key(db, &key) {
+                    tracing::warn!(app = %app, image = %reference, "failed to clear image-pull fault: {e}");
                 }
             }
         });
@@ -136,18 +92,6 @@ impl Reconciler {
         let deployment = deployment.to_owned();
         let replacement_display = replacement_display.to_owned();
         self.db.call(move |db| {
-            // Dedupe: only file once per deployment until the fault is cleared
-            // (by a generation bump that resets replace_failed).
-            let already = faults::list_active_faults(db, Some(&app))
-                .unwrap_or_default()
-                .iter()
-                .any(|f| {
-                    f.kind == "health_check_replace_failed"
-                        && f.resource_name.as_deref() == Some(deployment.as_str())
-                });
-            if already {
-                return;
-            }
             let desc = format!(
                 "automatic replacement {replacement_display} for deployment '{deployment}' failed to become healthy; original instance kept running in degraded mode pending operator action"
             );
@@ -157,35 +101,11 @@ impl Reconciler {
             // `retire_unscheduled_excess` / `clear_faults_for_instance` —
             // which would silently remove our hard fault. The fault must
             // outlive the instance that triggered it; it clears only when the
-            // AppDef generation advances (see `clear_replace_failed_faults`).
-            if let Err(e) = faults::file_fault(
-                db,
-                &app,
-                Some("deployment"),
-                Some(deployment.as_str()),
-                None,
-                "health_check_replace_failed",
-                &desc,
-            ) {
+            // generation changes.
+            let key = faults::FaultKey::new(&app, "health_check_replace_failed", deployment.as_str());
+            let meta = faults::FaultMeta::resource("deployment", deployment.as_str());
+            if let Err(e) = faults::file_once(db, &key, &meta, &desc) {
                 tracing::warn!(app = %app, deployment = %deployment, "failed to file health_check_replace_failed fault: {e}");
-            }
-        });
-    }
-
-    // spec: AUTO#replacement-guard
-    /// Clear all `health_check_replace_failed` faults for the named app. Called
-    /// when the AppDef generation advances so a freshly-shipped script gets a
-    /// clean slate.
-    pub(super) fn clear_replace_failed_faults(&self, app: &AppName) {
-        let app = app.clone();
-        self.db.call(move |db| {
-            let active = faults::list_active_faults(db, Some(&app)).unwrap_or_default();
-            for f in active {
-                if f.kind == "health_check_replace_failed"
-                    && let Err(e) = faults::clear_fault(db, &f.id, &app)
-                {
-                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear health_check_replace_failed fault: {e}");
-                }
             }
         });
     }
@@ -260,53 +180,14 @@ impl Reconciler {
     ) {
         let app = app.clone();
         let failures: Vec<ResourceInstance> = update.health_check_failures.to_vec();
-        let passes: Vec<ResourceInstance> = update.health_check_passes.to_vec();
-        self.db.call(move |db| {
-            for instance in &failures {
-                let inst_hex = instance.id.to_hex();
-                let kind_str = format!("{:?}", instance.kind).to_lowercase();
-                let already_filed = faults::list_active_faults(db, Some(&app))
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|f| {
-                        f.kind == "health_check_failed"
-                            && f.instance_id.as_deref() == Some(&inst_hex)
-                    });
-                if !already_filed {
-                    let desc = format!(
-                        "healthcheck for {} has been failing past its grace window",
-                        instance.display_name,
-                    );
-                    if let Err(e) = faults::file_fault(
-                        db,
-                        &app,
-                        Some(&kind_str),
-                        instance.name.as_deref(),
-                        Some(&inst_hex),
-                        "health_check_failed",
-                        &desc,
-                    ) {
-                        tracing::warn!(app = %app, instance = %inst_hex, "failed to file health_check_failed fault: {e}");
-                    }
-                }
-            }
-            for instance in &passes {
-                let inst_hex = instance.id.to_hex();
-                let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|f| {
-                        f.kind == "health_check_failed"
-                            && f.instance_id.as_deref() == Some(&inst_hex)
-                    })
-                    .collect();
-                for f in cleared {
-                    if let Err(e) = faults::clear_fault(db, &f.id, &app) {
-                        tracing::warn!(app = %app, fault_id = %f.id, "failed to clear health_check_failed fault: {e}");
-                    }
-                }
-            }
-        });
+        let cleared: Vec<ResourceInstance> = update
+            .health_check_passes
+            .iter()
+            .chain(&update.unscheduled)
+            .cloned()
+            .collect();
+        self.db
+            .call(move |db| apply_health_check_faults(db, &app, &failures, &cleared));
     }
 
     // spec: FLT#workload-faults
@@ -321,7 +202,7 @@ impl Reconciler {
         self.db.call(move |db| {
             for instance in &unit_failures {
                 let inst_hex = instance.id.to_hex();
-                let kind_str = format!("{:?}", instance.kind).to_lowercase();
+                let kind_str = instance.kind.type_name().to_owned();
                 let already_filed = faults::list_active_faults(db, Some(&app))
                     .unwrap_or_default()
                     .iter()
@@ -404,7 +285,7 @@ impl Reconciler {
         self.db.call(move |db| {
             for (instance, vol_name) in &external_volume_failures {
                 let inst_hex = instance.id.to_hex();
-                let kind_str = format!("{:?}", instance.kind).to_lowercase();
+                let kind_str = instance.kind.type_name().to_owned();
                 let already_filed = faults::list_active_faults(db, Some(&app))
                     .unwrap_or_default()
                     .iter()
@@ -463,13 +344,16 @@ impl Reconciler {
     fn escalate_observe_failures(
         &mut self,
         failures: &[(ResourceInstance, String)],
+        observed: &[ResourceInstance],
     ) -> Vec<(ResourceInstance, String)> {
-        let failing: std::collections::HashSet<crate::runtime::identity::InstanceId> =
-            failures.iter().map(|(inst, _)| inst.id).collect();
-        // Any instance not failing this tick observed successfully, so its
-        // streak resets — a flapping probe never accumulates to a fault.
-        self.observe_failure_streaks
-            .retain(|id, _| failing.contains(id));
+        // An instance observed successfully this tick has its streak reset, so
+        // a flapping probe never accumulates to a fault. Only those this
+        // caller observed are reset: the streaks are shared by every app and
+        // every kind of resource, so keeping only this call's failing set
+        // dropped everyone else's on each call.
+        for instance in observed {
+            self.observe_failure_streaks.remove(&instance.id);
+        }
 
         let mut escalated = Vec::new();
         for (instance, error) in failures {
@@ -498,7 +382,9 @@ impl Reconciler {
             .iter()
             .map(|(i, s)| (i.clone(), s.clone()))
             .collect();
-        let observe_failures = self.escalate_observe_failures(&update.observe_failures);
+        let observed: Vec<ResourceInstance> = update.observed.to_vec();
+        let observe_failures =
+            self.escalate_observe_failures(&update.observe_failures, &update.observed);
         // spec: FLT#filing-and-clearing — the file set and the clear set must be
         // disjoint per instance. `stop_sent` is recorded before the stop is
         // attempted, so an instance whose stop just failed appears in both:
@@ -520,6 +406,7 @@ impl Reconciler {
             Self::file_instance_faults(db, &app, &start_failures, "start_failed");
             Self::file_instance_faults(db, &app, &stop_failures, "stop_failed");
             Self::file_instance_faults(db, &app, &observe_failures, "observe_failed");
+            Self::clear_observe_failed(db, &app, &observed);
 
             if !stopped_instances.is_empty() {
                 let active_faults = faults::list_active_faults(db, Some(&app)).unwrap_or_default();
@@ -537,17 +424,45 @@ impl Reconciler {
         });
     }
 
-    pub(super) fn file_volume_actuation_faults(
+    /// Clear every `cert_issue_failed` fault whose hostname is not one of
+    /// `needing`, the hostnames some ingress needs a certificate for.
+    // spec: FLT#certificate-faults
+    pub(super) fn clear_cert_issue_faults_not_needed(
         &self,
+        needing: std::collections::BTreeSet<String>,
+    ) {
+        self.db.call(move |db| {
+            let system = AppName::new_unchecked("_system");
+            let active = match faults::list_active_faults(db, Some(&system)) {
+                Ok(active) => active,
+                Err(e) => {
+                    tracing::warn!(
+                        "could not read the host's faults to clear cert_issue_failed: {e}"
+                    );
+                    return;
+                }
+            };
+            for f in active
+                .iter()
+                .filter(|f| f.kind == "cert_issue_failed" && !needing.contains(&f.subject))
+            {
+                let key = faults::FaultKey::new(&system, &f.kind, &f.subject);
+                if let Err(e) = faults::clear_fault_by_key(db, &key) {
+                    tracing::warn!(hostname = %f.subject, "failed to clear cert_issue_failed: {e}");
+                }
+            }
+        });
+    }
+
+    // spec: FLT#volume-faults
+    pub(super) fn file_volume_actuation_faults(
+        &mut self,
         app: &AppName,
         update: &volumes::VolumeActuationUpdate,
     ) {
         let app = app.clone();
-        let observe_failures: Vec<(ResourceInstance, String)> = update
-            .observe_failures
-            .iter()
-            .map(|(i, s)| (i.clone(), s.clone()))
-            .collect();
+        let observe_failures =
+            self.escalate_observe_failures(&update.observe_failures, &update.observed);
         let create_failures: Vec<(ResourceInstance, String)> = update
             .create_failures
             .iter()
@@ -558,26 +473,56 @@ impl Reconciler {
             .iter()
             .map(|(i, s)| (i.clone(), s.clone()))
             .collect();
+        let observed: Vec<ResourceInstance> = update.observed.to_vec();
+        // The faults filed and cleared in one pass share no key: an instance
+        // whose create or removal failed this tick is not cleared for it.
+        let failed_creates: std::collections::HashSet<_> =
+            create_failures.iter().map(|(i, _)| i.id).collect();
+        let present: Vec<ResourceInstance> = update
+            .present
+            .iter()
+            .filter(|i| !failed_creates.contains(&i.id))
+            .cloned()
+            .collect();
+        let failed_removes: std::collections::HashSet<_> =
+            remove_failures.iter().map(|(i, _)| i.id).collect();
+        let removed: Vec<ResourceInstance> = update
+            .removed
+            .iter()
+            .filter(|i| !failed_removes.contains(&i.id))
+            .cloned()
+            .collect();
         self.db.call(move |db| {
             Self::file_instance_faults(db, &app, &observe_failures, "observe_failed");
+            Self::clear_observe_failed(db, &app, &observed);
             Self::file_instance_faults(db, &app, &create_failures, "volume_create_failed");
+            Self::clear_instance_faults(db, &app, "volume_create_failed", &present);
             Self::file_instance_faults(db, &app, &remove_failures, "volume_remove_failed");
+            Self::clear_instance_faults(db, &app, "volume_remove_failed", &removed);
         });
     }
 
-    pub(super) fn file_registry_fault(&self, app: &AppName, description: &str) {
+    // spec: FLT#app-faults
+    pub(super) fn file_desired_state_fault(&self, app: &AppName, description: &str) {
         let app = app.clone();
         let description = description.to_owned();
         self.db.call(move |db| {
             let already_filed = faults::list_active_faults(db, Some(&app))
                 .unwrap_or_default()
                 .iter()
-                .any(|f| f.kind == "registry_error");
+                .any(|f| f.kind == "desired_state_unreadable");
             if !already_filed
-                && let Err(e) =
-                    faults::file_fault(db, &app, None, None, None, "registry_error", &description)
+                && let Err(e) = faults::file_fault(
+                    db,
+                    &app,
+                    None,
+                    None,
+                    None,
+                    "desired_state_unreadable",
+                    &description,
+                )
             {
-                tracing::warn!(app = %app, "failed to file registry fault: {e}");
+                tracing::warn!(app = %app, "failed to file desired_state_unreadable fault: {e}");
             }
         });
     }
@@ -605,8 +550,9 @@ impl Reconciler {
     }
 
     /// Converge `ingress_conflict` faults to the current `(hostname, port)`
-    /// collision set: one fault per involved app ingress and one against
-    /// `_system` per involved site ingress, and nothing else.
+    /// collision set: one fault per involved app ingress, one per app ingress
+    /// left out for another app's claim, and one against `_system` per
+    /// involved site ingress, and nothing else.
     ///
     /// This used to clear only `prior \\ current`, where `prior` was a
     /// `Reconciler` field that starts empty on every daemon start — so a
@@ -620,10 +566,45 @@ impl Reconciler {
         report: &super::site_proxy::ConflictReport,
     ) {
         let parties = report.parties.clone();
+        let app_claims = report.app_claims.clone();
+        let site_claims = report.site_claims.clone();
         self.db.call(move |db| {
             let system = AppName::new_unchecked("_system");
             let mut current: BTreeMap<faults::FaultKey, (faults::FaultMeta, String)> =
                 BTreeMap::new();
+
+            // spec: ING#claims-across-apps
+            for lost in &app_claims {
+                let (served_app, served_ingress) = &lost.served;
+                current.insert(
+                    faults::FaultKey::new(&lost.app, "ingress_conflict", lost.ingress.as_str()),
+                    (
+                        faults::FaultMeta::resource("ingress", lost.ingress.as_str()),
+                        format!(
+                            "ingress conflict on ({}:{}) with app ingress {served_app}/\
+                             {served_ingress}, whose app installed first; this ingress is left \
+                             out of the proxy while that one claims them",
+                            lost.hostname, lost.port
+                        ),
+                    ),
+                );
+            }
+
+            // spec: SITE#ingress-conflicts
+            for lost in &site_claims {
+                current.insert(
+                    faults::FaultKey::new(&system, "ingress_conflict", lost.site_ingress.as_str()),
+                    (
+                        faults::FaultMeta::resource("site_ingress", lost.site_ingress.as_str()),
+                        format!(
+                            "ingress conflict on ({}:{}) with site ingress {}, whose attachment \
+                             was created first; this attachment is left out of the proxy while \
+                             that one claims them",
+                            lost.hostname, lost.port, lost.served
+                        ),
+                    ),
+                );
+            }
 
             for party in &parties {
                 let app_summary: Vec<String> = party
@@ -634,6 +615,17 @@ impl Reconciler {
                 let site_summary: Vec<String> = party.site.clone();
                 let host_port = format!("{}:{}", party.hostname, party.port);
 
+                let app_claim = if party.redirect {
+                    "the HTTP redirect of an app ingress"
+                } else {
+                    "an app ingress"
+                };
+                let dropped = if party.redirect {
+                    "the redirect and the attachment are"
+                } else {
+                    "both sides are"
+                };
+
                 for (app, ingress_name) in &party.apps {
                     // Subject is the party's own ingress, so one app's fault
                     // clearing cannot depend on another app's still standing.
@@ -643,7 +635,7 @@ impl Reconciler {
                             faults::FaultMeta::resource("ingress", ingress_name.as_str()),
                             format!(
                                 "ingress conflict on ({host_port}) with site ingress(es) \
-                                 {site_summary:?}; both sides are dropped from the proxy until \
+                                 {site_summary:?}; {dropped} dropped from the proxy until \
                                  resolved"
                             ),
                         ),
@@ -656,8 +648,8 @@ impl Reconciler {
                         (
                             faults::FaultMeta::resource("site_ingress", site_name.as_str()),
                             format!(
-                                "ingress conflict on ({host_port}) with app ingress(es) \
-                                 {app_summary:?}; both sides are dropped from the proxy until \
+                                "ingress conflict on ({host_port}) with {app_claim} \
+                                 {app_summary:?}; {dropped} dropped from the proxy until \
                                  resolved"
                             ),
                         ),
@@ -686,53 +678,41 @@ impl Reconciler {
         let entries: Vec<_> = unresolved.to_vec();
         self.db.call(move |db| {
             let system = AppName::new_unchecked("_system");
-            let active = faults::list_active_faults(db, Some(&system)).unwrap_or_default();
-            // Track which currently-active site_ingress_target_missing
-            // faults survive this tick — anything that doesn't get a
-            // matching `entries` row is cleared at the end.
-            let mut keep: std::collections::BTreeSet<String> =
+            // The subject is the attachment: its site ingress, port and
+            // protocol. Not part of the description, which is free to change.
+            let mut current: std::collections::BTreeSet<String> =
                 std::collections::BTreeSet::new();
             for entry in &entries {
-                let key = format!(
+                let subject = format!(
                     "{}:{}:{}",
                     entry.site_ingress, entry.port, entry.protocol
                 );
-                let already = active.iter().any(|f| {
-                    f.kind == "site_ingress_target_missing"
-                        && f.resource_name.as_deref() == Some(entry.site_ingress.as_str())
-                        && f.description.contains(&key)
-                });
-                keep.insert(key.clone());
-                if already {
-                    continue;
-                }
                 let desc = format!(
-                    "[{key}] {} (site ingress {} port {} protocol {})",
+                    "{} (site ingress {} port {} protocol {})",
                     entry.reason, entry.site_ingress, entry.port, entry.protocol
                 );
-                if let Err(e) = faults::file_fault(
-                    db,
-                    &system,
-                    Some("site_ingress"),
-                    Some(entry.site_ingress.as_str()),
-                    None,
-                    "site_ingress_target_missing",
-                    &desc,
-                ) {
+                let key =
+                    faults::FaultKey::new(&system, "site_ingress_target_missing", subject.as_str());
+                let meta = faults::FaultMeta::resource("site_ingress", entry.site_ingress.as_str());
+                if let Err(e) = faults::file_once(db, &key, &meta, &desc) {
                     tracing::warn!(site_ingress = %entry.site_ingress, "failed to file site_ingress_target_missing fault: {e}");
                 }
+                current.insert(subject);
             }
-            // Clear stale faults whose key no longer appears in this
-            // tick's unresolved set.
-            for f in active {
-                if f.kind != "site_ingress_target_missing" {
-                    continue;
+            // Clear the attachments no longer unresolved, and only those.
+            let active = match faults::list_active_faults(db, Some(&system)) {
+                Ok(active) => active,
+                Err(e) => {
+                    tracing::warn!("could not read the host's faults to clear site_ingress_target_missing: {e}");
+                    return;
                 }
-                let still_in_set = keep.iter().any(|key| f.description.contains(&format!("[{key}]")));
-                if still_in_set {
-                    continue;
-                }
-                if let Err(e) = faults::clear_fault(db, &f.id, &system) {
+            };
+            for f in active
+                .iter()
+                .filter(|f| f.kind == "site_ingress_target_missing" && !current.contains(&f.subject))
+            {
+                let key = faults::FaultKey::new(&system, &f.kind, &f.subject);
+                if let Err(e) = faults::clear_fault_by_key(db, &key) {
                     tracing::warn!(fault_id = %f.id, "failed to clear site_ingress_target_missing fault: {e}");
                 }
             }
@@ -947,18 +927,15 @@ impl Reconciler {
         });
     }
 
-    pub(super) fn clear_registry_faults(&self, app: &AppName) {
+    /// Clear the app's `desired_state_unreadable` fault, which clears when the
+    /// runtime next computes its desired state.
+    // spec: FLT#filing-and-clearing
+    pub(super) fn clear_desired_state_fault(&self, app: &AppName) {
         let app = app.clone();
         self.db.call(move |db| {
-            let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|f| f.kind == "registry_error")
-                .collect();
-            for f in cleared {
-                if let Err(e) = faults::clear_fault(db, &f.id, &app) {
-                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
-                }
+            let key = faults::FaultKey::app_wide(&app, "desired_state_unreadable");
+            if let Err(e) = faults::clear_fault_by_key(db, &key) {
+                tracing::warn!(app = %app, "failed to clear desired_state_unreadable fault: {e}");
             }
         });
     }
@@ -969,14 +946,17 @@ impl Reconciler {
         instance: &ResourceInstance,
     ) {
         let inst_hex = instance.id.to_hex();
-        let kind_str = format!("{:?}", instance.kind).to_lowercase();
+        let kind_str = instance.kind.type_name().to_owned();
         let already_filed = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .iter()
-            .any(|f| f.kind == "registry_error" && f.instance_id.as_deref() == Some(&inst_hex));
+            .any(|f| {
+                f.kind == "instance_identity_unreadable"
+                    && f.instance_id.as_deref() == Some(&inst_hex)
+            });
         if !already_filed {
             let desc = format!(
-                "instance registry lookup failed for {}",
+                "the recorded identity of {} cannot be read",
                 instance.display_name,
             );
             if let Err(e) = faults::file_fault(
@@ -985,10 +965,10 @@ impl Reconciler {
                 Some(&kind_str),
                 instance.name.as_deref(),
                 Some(&inst_hex),
-                "registry_error",
+                "instance_identity_unreadable",
                 &desc,
             ) {
-                tracing::warn!(app = %app, instance = %inst_hex, "failed to file registry fault: {e}");
+                tracing::warn!(app = %app, instance = %inst_hex, "failed to file instance_identity_unreadable fault: {e}");
             }
         }
     }
@@ -1002,11 +982,54 @@ impl Reconciler {
         let cleared: Vec<_> = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .into_iter()
-            .filter(|f| f.kind == "registry_error" && f.instance_id.as_deref() == Some(&inst_hex))
+            .filter(|f| {
+                f.kind == "instance_identity_unreadable"
+                    && f.instance_id.as_deref() == Some(&inst_hex)
+            })
             .collect();
         for f in cleared {
             if let Err(e) = faults::clear_fault(db, &f.id, app) {
-                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear instance_identity_unreadable fault: {e}");
+            }
+        }
+    }
+
+    /// Clear the `kind` fault held by each of `instances`, and no other.
+    // spec: FLT#filing-and-clearing
+    fn clear_instance_faults(
+        db: &crate::runtime::db::Db,
+        app: &AppName,
+        kind: &str,
+        instances: &[ResourceInstance],
+    ) {
+        for instance in instances {
+            let key = faults::FaultKey::new(app, kind, instance.id.to_hex());
+            if let Err(e) = faults::clear_fault_by_key(db, &key) {
+                tracing::warn!(app = %app, instance = %key.subject, "failed to clear {kind} fault: {e}");
+            }
+        }
+    }
+
+    /// Clear the `observe_failed` fault of each instance observed successfully
+    /// this iteration: the observation it reports failing has since succeeded.
+    // spec: OBS#failed-observation
+    // spec: FLT#filing-and-clearing
+    fn clear_observe_failed(
+        db: &crate::runtime::db::Db,
+        app: &AppName,
+        observed: &[ResourceInstance],
+    ) {
+        if observed.is_empty() {
+            return;
+        }
+        let hexes: std::collections::HashSet<String> =
+            observed.iter().map(|i| i.id.to_hex()).collect();
+        for f in faults::list_active_faults(db, Some(app)).unwrap_or_default() {
+            if f.kind == "observe_failed"
+                && f.instance_id.as_ref().is_some_and(|id| hexes.contains(id))
+                && let Err(e) = faults::clear_fault(db, &f.id, app)
+            {
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear observe_failed fault: {e}");
             }
         }
     }
@@ -1019,7 +1042,7 @@ impl Reconciler {
     ) {
         for (instance, description) in failures {
             let inst_hex = instance.id.to_hex();
-            let kind_str = format!("{:?}", instance.kind).to_lowercase();
+            let kind_str = instance.kind.type_name().to_owned();
             let already_filed = faults::list_active_faults(db, Some(app))
                 .unwrap_or_default()
                 .iter()
@@ -1041,6 +1064,118 @@ impl Reconciler {
     }
 }
 
+/// What is known of a hostname's latest acquisition error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AcquisitionError {
+    Recorded(String),
+    /// No attempt or strategy has recorded a failure for the hostname.
+    None,
+    /// The store holding the errors could not be read.
+    Unreadable,
+}
+
+/// A `cert_acquisition_failed` description naming each failing hostname and
+/// its most recent acquisition error.
+// spec: FLT#certificate-faults
+pub(super) fn describe_cert_acquisition(failing: &[(String, AcquisitionError)]) -> String {
+    let hostnames: Vec<String> = failing
+        .iter()
+        .map(|(hostname, error)| match error {
+            AcquisitionError::Recorded(error) => {
+                format!("{hostname} (latest acquisition error: {error})")
+            }
+            AcquisitionError::None => format!("{hostname} (no acquisition error recorded)"),
+            AcquisitionError::Unreadable => {
+                format!("{hostname} (latest acquisition error could not be read)")
+            }
+        })
+        .collect();
+    format!(
+        "no usable TLS certificate has been observed for {}",
+        hostnames.join(", ")
+    )
+}
+
+// spec: FLT#certificate-faults
+pub(super) fn apply_cert_acquisition_fault(
+    db: &Db,
+    instance: &ResourceInstance,
+    description: &str,
+) {
+    let inst_hex = instance.id.to_hex();
+    let key = faults::FaultKey::new(&instance.app, "cert_acquisition_failed", inst_hex.clone());
+    let meta = faults::FaultMeta {
+        resource_type: Some(instance.kind.type_name().to_owned()),
+        resource_name: instance.name.clone(),
+        instance_id: Some(inst_hex),
+    };
+    match faults::file_once(db, &key, &meta, description) {
+        Ok(true) => {}
+        Ok(false) => {
+            if let Err(e) = faults::update_description(db, &key, description) {
+                tracing::warn!(app = %instance.app, error = %e, "failed to refresh cert_acquisition_failed description");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(app = %instance.app, error = %e, "failed to file cert_acquisition_failed fault");
+        }
+    }
+}
+
+// spec: FLT#workload-faults
+/// The database side of [`Reconciler::file_health_check_faults`]: a
+/// `health_check_failed` fault is filed for each failing instance and cleared
+/// for each instance observed healthy or unscheduled.
+pub(super) fn apply_health_check_faults(
+    db: &Db,
+    app: &AppName,
+    failures: &[ResourceInstance],
+    cleared: &[ResourceInstance],
+) {
+    for instance in failures {
+        let inst_hex = instance.id.to_hex();
+        let kind_str = instance.kind.type_name().to_owned();
+        let already_filed = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .iter()
+            .any(|f| {
+                f.kind == "health_check_failed" && f.instance_id.as_deref() == Some(&inst_hex)
+            });
+        if !already_filed {
+            let desc = format!(
+                "healthcheck for {} has been failing past its grace window",
+                instance.display_name,
+            );
+            if let Err(e) = faults::file_fault(
+                db,
+                app,
+                Some(&kind_str),
+                instance.name.as_deref(),
+                Some(&inst_hex),
+                "health_check_failed",
+                &desc,
+            ) {
+                tracing::warn!(app = %app, instance = %inst_hex, "failed to file health_check_failed fault: {e}");
+            }
+        }
+    }
+    for instance in cleared {
+        let inst_hex = instance.id.to_hex();
+        let to_clear: Vec<_> = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| {
+                f.kind == "health_check_failed" && f.instance_id.as_deref() == Some(&inst_hex)
+            })
+            .collect();
+        for f in to_clear {
+            if let Err(e) = faults::clear_fault(db, &f.id, app) {
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear health_check_failed fault: {e}");
+            }
+        }
+    }
+}
+
 // spec: FLT#workload-faults
 /// The database side of [`Reconciler::file_crash_loop_faults`], split out so
 /// the filing and clearing policy can be exercised against a database without
@@ -1054,7 +1189,7 @@ pub(super) fn apply_crash_loop_faults(
     for crash_loop in crash_loops {
         let instance = &crash_loop.instance;
         let inst_hex = instance.id.to_hex();
-        let kind_str = format!("{:?}", instance.kind).to_lowercase();
+        let kind_str = instance.kind.type_name().to_owned();
         let already_filed = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .iter()
@@ -1089,17 +1224,29 @@ pub(super) fn apply_crash_loop_faults(
             }
         }
     }
-    // Once the unit is back up healthy, clear any prior crash_loop fault —
-    // operator clearing the fault and the unit recovering are both valid paths
-    // out of this state.
+    // A crash_loop fault is latched: it clears once the instance has stayed
+    // running, with no recovery restart, for the restart window, or when an
+    // operator clears it. Being up this iteration is not enough, since the
+    // supervisor brings a crashing instance up between its crashes.
     for instance in unit_healthy {
         let inst_hex = instance.id.to_hex();
-        let cleared: Vec<_> = faults::list_active_faults(db, Some(app))
+        let held: Vec<_> = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .into_iter()
             .filter(|f| f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex))
             .collect();
-        for f in cleared {
+        if held.is_empty() {
+            continue;
+        }
+        match stayed_running_for_the_restart_window(db, instance) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                tracing::warn!(app = %app, instance = %inst_hex, "could not tell whether the instance has stayed running; leaving its crash_loop fault: {e}");
+                continue;
+            }
+        }
+        for f in held {
             if let Err(e) = faults::clear_fault(db, &f.id, app) {
                 tracing::warn!(app = %app, fault_id = %f.id, "failed to clear crash_loop fault: {e}");
             }
@@ -1107,5 +1254,54 @@ pub(super) fn apply_crash_loop_faults(
     }
 }
 
+/// When the run the observations end in began: the first `container_running`
+/// after the last observation that ended or restarted a run. `None` while the
+/// container is not running.
+// spec: FLT#workload-faults
+fn current_run_started_at(
+    observations: &[crate::runtime::history::WorldObservation],
+) -> Option<i64> {
+    let mut since = None;
+    for obs in observations {
+        match obs.obs_kind.as_str() {
+            "container_created"
+            | "container_exited"
+            | "container_removed"
+            | "unit_failed"
+            | "unit_start_limit_hit" => since = None,
+            "container_running" if since.is_none() => since = Some(obs.recorded_at),
+            _ => {}
+        }
+    }
+    since
+}
+
+/// Whether the instance has been running for the whole of the restart window,
+/// with no recovery restart recorded in it.
+// spec: FLT#workload-faults
+// spec: AUTO#crash-loop-detection
+fn stayed_running_for_the_restart_window(
+    db: &Db,
+    instance: &ResourceInstance,
+) -> rusqlite::Result<bool> {
+    let window_secs = crate::runtime::restarts::settings(db)?.window_secs;
+    let inst_hex = instance.id.to_hex();
+    if crate::runtime::restarts::recent_recovery_count(db, &inst_hex, window_secs)? > 0 {
+        return Ok(false);
+    }
+    let observations = crate::runtime::history::query_observations(db, instance)?;
+    let cutoff = Timestamp::now().as_millisecond() - window_secs * 1000;
+    Ok(current_run_started_at(&observations).is_some_and(|started| started <= cutoff))
+}
+
 #[cfg(test)]
 mod crash_loop_tests;
+
+#[cfg(test)]
+mod registry_fault_tests;
+
+#[cfg(test)]
+mod health_check_tests;
+
+#[cfg(test)]
+mod cert_acquisition_tests;

@@ -28,18 +28,17 @@ use crate::{
     system::{
         System,
         priority::WorkloadStanding,
-        translate::{
-            container::{deployment_spec, job_spec, podman_args, spec_hash},
-            proxy::pod_network_prefix,
-        },
+        translate::container::{deployment_spec, job_spec, podman_args, spec_hash},
     },
 };
 
 mod pod;
+
+pub(crate) use pod::unit_name;
 mod pull;
 
-use pod::{ContainerVolume, collect_container_volumes, map_on_exit};
-pub use pod::{TMPFS_VOLUMES_DIR, tmpfs_volume_path};
+pub use pod::{TMPFS_VOLUMES_DIR, remove_anonymous_volumes, tmpfs_volume_path};
+use pod::{anonymous_volumes, collect_container_volumes, map_on_exit};
 use pull::PullState;
 
 // ---------------------------------------------------------------------------
@@ -70,6 +69,11 @@ pub enum ActuateError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("{source}"))]
+    PodNetwork {
+        source: crate::runtime::pod_networks::AllocationError,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("image {reference} not found and pull failed"))]
     ImageUnavailable {
         reference: String,
@@ -96,12 +100,35 @@ pub enum ActuateError {
         source: crate::runtime::registry::RegistryError,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("anonymous volume record: {source}"))]
+    AnonymousVolumeRecord {
+        source: rusqlite::Error,
+        backtrace: snafu::Backtrace,
+    },
     // spec: FLT#workload-faults
     #[snafu(display("external volume '{name}' is not mapped"))]
     ExternalVolumeNotMapped {
         name: String,
         backtrace: snafu::Backtrace,
     },
+}
+
+/// Remove the directory holding a tmpfs volume's data, not a stand-in for
+/// it. A directory that is not there is not an error.
+// spec: ACTU#volume-storage
+async fn remove_tmpfs_dir(host_path: &Path) -> Result<(), ActuateError> {
+    // spec: ACTU#storage-confinement — a symlink wearing the name is refused
+    // rather than unlinked, so a stop never reports a cleanup that removed
+    // only a link.
+    if super::confined::owned_dir_async(host_path)
+        .await
+        .context(VolumeWriteSnafu { path: host_path })?
+        && let Err(e) = tokio::fs::remove_dir_all(host_path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(VolumeWriteSnafu { path: host_path }.into_error(e));
+    }
+    Ok(())
 }
 
 // spec: VOL#write-paths
@@ -173,6 +200,88 @@ pub(crate) async fn ensure_named_volume(
     }
 
     Ok(true)
+}
+
+/// Bring a named volume's storage into being before something writes into
+/// it outside a start, as `rt.write` does: storage that is absent is created
+/// and seeded with the volume's declared writes, as starting the volume
+/// would, and storage that is present is left as it is.
+///
+/// The legacy name is migrated first, so storage under it is found rather
+/// than shadowed by a fresh, seeded copy.
+// spec: ACTU#volume-creation-and-seeding
+pub(crate) async fn ensure_named_volume_storage(
+    vol_store: &crate::system::volume_store::VolumeStore,
+    app: &str,
+    name: &str,
+    writes: &[(String, bytes::Bytes)],
+) -> Result<std::path::PathBuf, ActuateError> {
+    let vol_name = VolumeName::for_app(app, name);
+    let legacy = format!("{app}-{name}");
+    vol_store
+        .migrate_legacy(&legacy, &vol_name, app)
+        .await
+        .map_err(|e| {
+            VolumeWriteSnafu {
+                path: vol_store.path(&vol_name),
+            }
+            .into_error(e)
+        })?;
+    ensure_named_volume(vol_store, &vol_name, writes).await?;
+    Ok(vol_store.path(&vol_name))
+}
+
+/// Create a tmpfs volume's directory if it is absent, and seed it with the
+/// volume's declared writes when this call created it.
+///
+/// A directory already present is left as it is: whoever created it seeded
+/// it, and writes the app made since are its own. A seed that fails takes
+/// the directory back out, so the next attempt creates and seeds it afresh.
+// spec: ACTU#volume-creation-and-seeding
+pub(crate) async fn ensure_tmpfs_volume_dir(
+    host_path: &Path,
+    writes: &[(String, bytes::Bytes)],
+) -> Result<(), ActuateError> {
+    // spec: ACTU#storage-confinement
+    if crate::system::confined::owned_dir_async(host_path)
+        .await
+        .context(VolumeWriteSnafu {
+            path: host_path.to_path_buf(),
+        })?
+    {
+        return Ok(());
+    }
+    if let Some(parent) = host_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .context(VolumeWriteSnafu {
+                path: parent.to_path_buf(),
+            })?;
+    }
+    match tokio::fs::create_dir(host_path).await {
+        Ok(()) => {}
+        // Another part of the runtime created it first, and seeds it.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(e) => {
+            return Err(VolumeWriteSnafu {
+                path: host_path.to_path_buf(),
+            }
+            .into_error(e));
+        }
+    }
+    for (path, contents) in writes {
+        if let Err(e) = safe_volume_write(host_path, path, contents).await {
+            if let Err(cleanup) = tokio::fs::remove_dir_all(host_path).await {
+                tracing::error!(
+                    path = %host_path.display(),
+                    "seeding failed and the directory it created could not be removed, \
+                     so the volume will stay unseeded: {cleanup}"
+                );
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -499,103 +608,110 @@ impl Actuator {
     ) -> Result<(), ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
-                let anon_volumes: Vec<ContainerVolume> = {
+                let declared = {
                     let def = dep.def.lock();
                     let pod = def.pod.lock();
-                    collect_container_volumes(
+                    anonymous_volumes(&collect_container_volumes(
                         &pod,
                         instance,
                         Some(self.driver.volume_store.volumes_dir()),
-                    )
-                    .into_iter()
-                    .filter(|v| v.remove_on_stop)
-                    .collect()
+                    ))
                 };
-                self.stop_pod_instance(instance, &anon_volumes).await
+                self.stop_pod_instance(instance, &declared).await
             }
             Resource::Job(job) => {
-                let anon_volumes: Vec<ContainerVolume> = {
+                let declared = {
                     let def = job.def.lock();
                     let pod = def.pod.lock();
-                    collect_container_volumes(
+                    anonymous_volumes(&collect_container_volumes(
                         &pod,
                         instance,
                         Some(self.driver.volume_store.volumes_dir()),
-                    )
-                    .into_iter()
-                    .filter(|v| v.remove_on_stop)
-                    .collect()
+                    ))
                 };
-                self.stop_pod_instance(instance, &anon_volumes).await
+                self.stop_pod_instance(instance, &declared).await
             }
             Resource::Volume(vol) => {
                 let tmpfs = vol.def.lock().tmpfs;
                 if tmpfs {
-                    // spec: ACTU#volume-storage
-                    // Remove the directory holding the data, not a stand-in
-                    // for it: the tmpfs backing under /run is reclaimed once
-                    // the directory is gone.
-                    let host_path = tmpfs_volume_path(&instance.display_name);
-                    // spec: ACTU#storage-confinement — a symlink wearing the
-                    // name is refused rather than unlinked, so a stop never
-                    // reports a cleanup that removed only a link.
-                    if crate::system::confined::owned_dir_async(&host_path)
-                        .await
-                        .context(VolumeWriteSnafu {
-                            path: host_path.clone(),
-                        })?
-                        && let Err(e) = tokio::fs::remove_dir_all(&host_path).await
-                        && e.kind() != std::io::ErrorKind::NotFound
-                    {
-                        return Err(VolumeWriteSnafu { path: host_path }.into_error(e));
-                    }
-                    // Earlier releases stood a podman tmpfs-driver volume up
-                    // beside the directory. Reap it on the way past, by the
-                    // exact name those releases gave it.
-                    let podman_name = &instance.display_name;
-                    if self
-                        .driver
-                        .container
-                        .volume_exists(podman_name)
-                        .await
-                        .context(ContainerSnafu)?
-                    {
-                        self.driver
-                            .container
-                            .remove_volume(podman_name)
-                            .await
-                            .context(ContainerSnafu)?;
-                    }
+                    self.remove_tmpfs_volume(instance).await
                 } else {
-                    // spec: ACTU#held-volumes
-                    let vol_store = &self.driver.volume_store;
-                    let name = VolumeName::of_instance(instance);
-                    let held = vol_store
-                        .hold(&name, instance.app.as_str(), "removed from app definition")
-                        .await
-                        .map_err(|e| {
-                            VolumeWriteSnafu {
-                                path: vol_store.path(&name),
-                            }
-                            .into_error(e)
-                        })?;
-                    if let Some(meta) = held {
-                        // spec: ACTU#held-volumes
-                        self.event_tx.held_volume_created(
-                            meta.id,
-                            &instance.app,
-                            &meta.volume_name,
-                            &meta.reason,
-                            None,
-                        );
-                    }
+                    self.hold_named_volume(instance).await
                 }
-                Ok(())
             }
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(()),
             Resource::Service(_) => Ok(()),
             Resource::Ingress(_) => Ok(()),
         }
+    }
+
+    /// Stop a volume instance nothing declares, which leaves nothing to say
+    /// where its storage is: remove it at the tmpfs path its recorded identity
+    /// gives it, and hold it from the volume store under the name that
+    /// identity gives it, whichever of the two stands.
+    // spec: TRD#teardown
+    // spec: ACTU#volume-removal
+    #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
+    pub async fn stop_undeclared_volume(
+        &self,
+        instance: &ResourceInstance,
+    ) -> Result<(), ActuateError> {
+        self.remove_tmpfs_volume(instance).await?;
+        self.hold_named_volume(instance).await
+    }
+
+    /// Remove a tmpfs volume's storage. Storage that is not there is not an
+    /// error.
+    async fn remove_tmpfs_volume(&self, instance: &ResourceInstance) -> Result<(), ActuateError> {
+        // spec: ACTU#volume-storage
+        // Remove the directory holding the data, not a stand-in for it: the
+        // tmpfs backing under /run is reclaimed once the directory is gone.
+        remove_tmpfs_dir(&tmpfs_volume_path(&instance.display_name)).await?;
+        // Earlier releases stood a podman tmpfs-driver volume up beside the
+        // directory. Reap it on the way past, by the exact name those releases
+        // gave it.
+        let podman_name = &instance.display_name;
+        if self
+            .driver
+            .container
+            .volume_exists(podman_name)
+            .await
+            .context(ContainerSnafu)?
+        {
+            self.driver
+                .container
+                .remove_volume(podman_name)
+                .await
+                .context(ContainerSnafu)?;
+        }
+        Ok(())
+    }
+
+    /// Hold a named volume's storage for operator review. Storage that is not
+    /// there is not an error.
+    // spec: ACTU#held-volumes
+    async fn hold_named_volume(&self, instance: &ResourceInstance) -> Result<(), ActuateError> {
+        let vol_store = &self.driver.volume_store;
+        let name = VolumeName::of_instance(instance);
+        let held = vol_store
+            .hold(&name, instance.app.as_str(), "removed from app definition")
+            .await
+            .map_err(|e| {
+                VolumeWriteSnafu {
+                    path: vol_store.path(&name),
+                }
+                .into_error(e)
+            })?;
+        if let Some(meta) = held {
+            self.event_tx.held_volume_created(
+                meta.id,
+                &instance.app,
+                &meta.volume_name,
+                &meta.reason,
+                None,
+            );
+        }
+        Ok(())
     }
 
     /// Hold a named volume's data for operator review instead of deleting it.
@@ -639,6 +755,56 @@ impl Actuator {
         Ok(())
     }
 
+    /// The /64 of the instance's pod network, allocated and recorded now if
+    /// it has none.
+    // spec: INFRA#pod-networks
+    pub(crate) fn allocate_pod_prefix(
+        &self,
+        instance: &ResourceInstance,
+    ) -> Result<ipnet::Ipv6Net, ActuateError> {
+        let node_prefix = self.node_prefix;
+        let net_name = format!("seedling-{}", instance.display_name);
+        let kind = instance.kind;
+        self.db
+            .call(move |db| {
+                crate::runtime::pod_networks::allocated_prefix(db, &node_prefix, &net_name, kind)
+            })
+            .context(PodNetworkSnafu)
+    }
+
+    /// The /64 recorded for the instance's pod network, or `None` when it has
+    /// none or the record cannot be read.
+    // spec: INFRA#pod-networks
+    pub(crate) fn recorded_pod_prefix(
+        &self,
+        instance: &ResourceInstance,
+    ) -> Option<ipnet::Ipv6Net> {
+        let node_prefix = self.node_prefix;
+        let net_name = format!("seedling-{}", instance.display_name);
+        let kind = instance.kind;
+        match self.db.call(move |db| {
+            crate::runtime::pod_networks::recorded_prefix(db, &node_prefix, &net_name, kind)
+        }) {
+            Ok(prefix) => prefix,
+            Err(e) => {
+                tracing::warn!(instance = %instance.display_name, "cannot read the pod network record: {e}");
+                None
+            }
+        }
+    }
+
+    /// Free the instance's pod network prefix, once its network is gone.
+    // spec: INFRA#pod-networks
+    pub(crate) fn release_pod_prefix(&self, instance: &ResourceInstance) {
+        let net_name = format!("seedling-{}", instance.display_name);
+        if let Err(e) = self
+            .db
+            .call(move |db| crate::runtime::pod_networks::release(db, &net_name))
+        {
+            tracing::warn!(instance = %instance.display_name, "cannot free a pod network prefix: {e}");
+        }
+    }
+
     /// Compute the spec hash that would be used if this instance were started
     /// right now. Returns `None` for resource kinds that have no container spec.
     ///
@@ -650,7 +816,9 @@ impl Actuator {
         resource: &Resource,
     ) -> Option<String> {
         let net_name = format!("seedling-{}", instance.display_name);
-        let net_prefix = pod_network_prefix(&self.node_prefix, instance);
+        // A pod network that has no recorded prefix has no container running
+        // on it to have drifted from anything.
+        let net_prefix = self.recorded_pod_prefix(instance)?;
 
         let spec = match resource {
             Resource::Deployment(dep) => {
@@ -723,17 +891,28 @@ pub fn resolve_external_volumes(
     vol_store: &crate::system::volume_store::VolumeStore,
     app: &AppName,
 ) -> HashMap<ExternalVolumeName, crate::system::types::ResolvedExternalMount> {
+    try_resolve_external_volumes(db, vol_store, app).unwrap_or_else(|e| {
+        tracing::warn!(app = %app, error = %e, "failed to load external volume mappings");
+        HashMap::new()
+    })
+}
+
+/// As [`resolve_external_volumes`], but a failed read is an error rather than
+/// an app with no mappings.
+// spec: VOL#external-volumes
+pub fn try_resolve_external_volumes(
+    db: &DbHandle,
+    vol_store: &crate::system::volume_store::VolumeStore,
+    app: &AppName,
+) -> rusqlite::Result<HashMap<ExternalVolumeName, crate::system::types::ResolvedExternalMount>> {
     use crate::system::types::{MountSource, ResolvedExternalMount};
 
     let app_owned = app.clone();
     let (mappings, site_vols) = db.call(move |db| {
-        let mappings = external_volume_mappings::list_for_app(db, &app_owned).unwrap_or_else(|e| {
-            tracing::warn!(app = %app_owned, error = %e, "failed to load external volume mappings");
-            vec![]
-        });
-        let site_vols = site_volumes::list(db).unwrap_or_default();
-        (mappings, site_vols)
-    });
+        let mappings = external_volume_mappings::list_for_app(db, &app_owned)?;
+        let site_vols = site_volumes::list(db)?;
+        Ok::<_, rusqlite::Error>((mappings, site_vols))
+    })?;
 
     let mut resolved = HashMap::new();
     for mapping in mappings {
@@ -786,7 +965,7 @@ pub fn resolve_external_volumes(
         };
         resolved.insert(mapping.external_name, mount);
     }
-    resolved
+    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -896,5 +1075,23 @@ mod tests {
 
         assert!(store.create(&name).await.unwrap());
         assert!(!store.create(&name).await.unwrap());
+    }
+
+    // spec: ACTU#volume-creation-and-seeding
+    #[tokio::test]
+    async fn a_tmpfs_directory_is_seeded_only_by_the_call_that_creates_it() {
+        let data = tempfile::tempdir().unwrap();
+        let dir = data.path().join("tmpfs").join("app-volume-scratch");
+        let writes = vec![("note".to_owned(), bytes::Bytes::from("seed"))];
+
+        ensure_tmpfs_volume_dir(&dir, &writes).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("note")).unwrap(), "seed");
+
+        std::fs::write(dir.join("note"), "the app's own").unwrap();
+        ensure_tmpfs_volume_dir(&dir, &writes).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("note")).unwrap(),
+            "the app's own"
+        );
     }
 }

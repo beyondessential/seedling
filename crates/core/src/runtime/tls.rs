@@ -148,7 +148,6 @@ pub enum TlsCertState {
     CsrPending,
     Active,
     Superseded,
-    Failed,
     /// Canopy reported the certificate revoked or its key condemned. Never
     /// served and never counted as usable.
     // spec: TCAN#revocation
@@ -161,7 +160,6 @@ impl TlsCertState {
             Self::CsrPending => "csr_pending",
             Self::Active => "active",
             Self::Superseded => "superseded",
-            Self::Failed => "failed",
             Self::Revoked => "revoked",
         }
     }
@@ -171,7 +169,6 @@ impl TlsCertState {
             "csr_pending" => Some(Self::CsrPending),
             "active" => Some(Self::Active),
             "superseded" => Some(Self::Superseded),
-            "failed" => Some(Self::Failed),
             "revoked" => Some(Self::Revoked),
             _ => None,
         }
@@ -216,25 +213,37 @@ impl TlsCertOrigin {
     }
 }
 
-/// Key types accepted today. ECDSA P-256 only; the enum is kept so adding
-/// PQC variants later (ML-DSA once Caddy / public CAs catch up) is a single
-/// new arm.
+/// The algorithm of a stored certificate's private key. The runtime
+/// generates P-256 keys only; an operator's upload may carry any of these.
+// spec: TLSM#certificates
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyType {
     EcdsaP256,
+    EcdsaP384,
+    EcdsaP521,
+    Ed25519,
+    Rsa,
 }
 
 impl KeyType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::EcdsaP256 => "ecdsa_p256",
+            Self::EcdsaP384 => "ecdsa_p384",
+            Self::EcdsaP521 => "ecdsa_p521",
+            Self::Ed25519 => "ed25519",
+            Self::Rsa => "rsa",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "ecdsa_p256" => Some(Self::EcdsaP256),
+            "ecdsa_p384" => Some(Self::EcdsaP384),
+            "ecdsa_p521" => Some(Self::EcdsaP521),
+            "ed25519" => Some(Self::Ed25519),
+            "rsa" => Some(Self::Rsa),
             _ => None,
         }
     }
@@ -250,13 +259,6 @@ pub enum TlsPolicy {
     AcmeDns {
         dns_provider: String,
     },
-    /// Hostnames whose certs are obtained from the local Tailscale
-    /// facility. The Coordinator dispatches to
-    /// [`super::tls::tailscale_issuer`] for these instead of running
-    /// ACME. Only legal on hostnames that match a discovered Tailscale
-    /// site ingress.
-    // spec: TLS#tailscale-certificates
-    Tailscale,
     /// Canopy is the chain's only strategy: the hostname never passes to
     /// HTTP-01 or the proxy's internal CA.
     // spec: TCAN#canopy-only-policy
@@ -280,6 +282,9 @@ pub struct TlsChainRow {
     pub row: chain::Row,
     /// Why the responsible strategy last failed to produce a certificate.
     pub last_error: Option<String>,
+    /// The last answer Canopy gave for the hostname rejected the runtime's
+    /// certificate signing request.
+    pub csr_rejected: bool,
     pub updated_at: i64,
 }
 
@@ -389,9 +394,6 @@ pub struct TlsCertAttempt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RetryBlockSource {
-    /// Set by the runtime after a failed issuance attempt to prevent Caddy
-    /// from re-triggering on every handshake. Cleared by manual retry.
-    Auto,
     /// Set by an operator via the operator interface. Persists until the
     /// operator clears it.
     Operator,
@@ -400,14 +402,12 @@ pub enum RetryBlockSource {
 impl RetryBlockSource {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Auto => "auto",
             Self::Operator => "operator",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "auto" => Some(Self::Auto),
             "operator" => Some(Self::Operator),
             _ => None,
         }

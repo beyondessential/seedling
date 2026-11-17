@@ -41,10 +41,12 @@ impl Default for ScriptLimits {
     }
 }
 
+/// An engine for evaluating a script, and the scope and app it evaluates
+/// into; fails where the scope cannot be built, as [`defs::scope`] does.
 pub fn setup_language(
     limits: &ScriptLimits,
     bundle: std::sync::Arc<runtime::definition::Bundle>,
-) -> (Engine, Scope<'static>, defs::app::App) {
+) -> Result<(Engine, Scope<'static>, defs::app::App), String> {
     let mut engine = Engine::new();
 
     engine.set_max_operations(limits.max_operations);
@@ -55,8 +57,8 @@ pub fn setup_language(
     engine.set_max_map_size(limits.max_map_size);
 
     defs::register(&mut engine);
-    let (scope, app) = defs::scope(bundle);
-    (engine, scope, app)
+    let (scope, app) = defs::scope(bundle)?;
+    Ok((engine, scope, app))
 }
 
 #[cfg(test)]
@@ -64,7 +66,8 @@ mod engine_limits_tests {
     use super::*;
 
     fn eval(limits: ScriptLimits, src: &str) -> Result<(), Box<rhai::EvalAltResult>> {
-        let (engine, mut scope, _app) = setup_language(&limits, Default::default());
+        let (engine, mut scope, _app) =
+            setup_language(&limits, Default::default()).expect("the scope builds");
         let ast = engine.compile(src)?;
         engine.run_ast_with_scope(&mut scope, &ast)
     }

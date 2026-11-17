@@ -83,7 +83,10 @@ The named/anonymous distinction also governs volume lifecycle:
   container restarts. Writes (`volume.write(...)`) are applied only at creation time.
 - **Anonymous dynamic volumes** are created by the actuator immediately before the
   container starts and removed when the container stops. Writes are applied on each
-  creation.
+  creation. Each is recorded against the pod instance it was created for before its
+  storage is, so a pod stopped from its recorded identity alone (at the end of its
+  operation, at startup, or on uninstall) still removes them. A volume another pod
+  instance is also recorded with is left for that instance's stop.
 
 Named volumes defined inside an action closure (dynamic named volumes) are created by
 the actuator if they do not already exist, and are never automatically removed — they

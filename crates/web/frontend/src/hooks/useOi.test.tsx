@@ -161,10 +161,10 @@ function ActionProbe() {
 describe("useOiAction", () => {
   it("executes the request and resolves the value", async () => {
     const { request } = renderProbe(<ActionProbe />, {
-      "/apps/restart": { operation_id: "op-1" },
+      "/apps/restart": { restart_id: "r-1" },
     });
     fireEvent.click(screen.getByText("go"));
-    expect(await screen.findByText('{"operation_id":"op-1"}')).toBeTruthy();
+    expect(await screen.findByText('{"restart_id":"r-1"}')).toBeTruthy();
     expect(screen.getByTestId("error").textContent).toBe("");
     expect(request).toHaveBeenCalledWith("/apps/restart", { app: "shop" });
   });

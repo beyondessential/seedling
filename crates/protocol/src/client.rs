@@ -411,7 +411,7 @@ impl OiClient {
     }
 
     /// As [`Self::open_subscription`], but sending a request whose envelope the
-    /// caller has already serialised.
+    /// caller has already serialised, without its line feed.
     ///
     /// Only for callers that must preserve an envelope built elsewhere — the
     /// web gateway relays the browser session's actor rather than its own.
@@ -436,7 +436,11 @@ impl OiClient {
             .await
             .map_err(|e| ClientError::Transport(Box::new(e)))?;
 
+        // spec: WIRE#stream-dispatch
         send.write_all(request)
+            .await
+            .map_err(|e| ClientError::Transport(Box::new(e)))?;
+        send.write_all(b"\n")
             .await
             .map_err(|e| ClientError::Transport(Box::new(e)))?;
         send.finish()
@@ -500,12 +504,14 @@ impl OiClient {
     /// Send a single JSON request and return the parsed result value.
     // spec: WIRE#actor-attribution
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, ClientError> {
-        let req_bytes = serde_json::to_vec(&serde_json::json!({
+        let mut req_bytes = serde_json::to_vec(&serde_json::json!({
             "method": method,
             "actor": &self.actor,
             "params": params,
         }))
         .expect("request serialisation never fails");
+        // spec: WIRE#stream-dispatch
+        req_bytes.push(b'\n');
 
         let (mut send, mut recv) = self
             .conn
@@ -694,6 +700,9 @@ mod tests {
         OkThenNoUni,
         /// The full, correct handshake.
         OkThenUni,
+        /// The full handshake if the request ended with a line feed, and an
+        /// error otherwise.
+        RequireLineFeed,
     }
 
     /// Accept any client key, but negotiate the raw-public-key certificate
@@ -769,7 +778,14 @@ mod tests {
                     let Ok((mut send, mut recv)) = conn.accept_bi().await else {
                         return;
                     };
-                    let _ = recv.read_to_end(64 * 1024).await;
+                    let request = recv.read_to_end(64 * 1024).await.unwrap_or_default();
+                    let behaviour = match behaviour {
+                        StubBehaviour::RequireLineFeed if request.ends_with(b"\n") => {
+                            StubBehaviour::OkThenUni
+                        }
+                        StubBehaviour::RequireLineFeed => StubBehaviour::Error,
+                        other => other,
+                    };
 
                     match behaviour {
                         StubBehaviour::Error => {
@@ -784,7 +800,7 @@ mod tests {
                             let _ = send.write_all(br#"{"result":{}}"#).await;
                             let _ = send.finish();
                         }
-                        StubBehaviour::OkThenUni => {
+                        StubBehaviour::OkThenUni | StubBehaviour::RequireLineFeed => {
                             let _ = send.write_all(br#"{"result":{}}"#).await;
                             let _ = send.finish();
                             if let Ok(mut uni) = conn.open_uni().await {
@@ -884,5 +900,37 @@ mod tests {
             .expect("handshake should succeed");
         let body = stream.read_to_end(4096).await.expect("read events");
         assert_eq!(body, b"{\"event\":\"hello\"}\n");
+    }
+
+    // spec: WIRE#stream-dispatch
+    #[tokio::test]
+    async fn a_subscription_request_ends_with_a_line_feed() {
+        subscribe_against(StubBehaviour::RequireLineFeed)
+            .await
+            .expect("the stub answers only a request ending in a line feed");
+    }
+
+    // spec: WIRE#stream-dispatch
+    #[tokio::test]
+    async fn a_control_request_ends_with_a_line_feed() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let addr = spawn_stub_server(StubBehaviour::RequireLineFeed);
+        let identity = ClientIdentity::ephemeral();
+        let client = OiClient::connect_from(
+            addr,
+            "0.0.0.0:0".parse().unwrap(),
+            ClientAuth::TrustAny,
+            &identity,
+            Actor::default(),
+        )
+        .await
+        .expect("connect to stub");
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            client.request("/apps/list", serde_json::json!({})),
+        )
+        .await
+        .expect("request must not block indefinitely")
+        .expect("the stub answers only a request ending in a line feed");
     }
 }

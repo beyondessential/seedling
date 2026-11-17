@@ -31,7 +31,6 @@ pub(super) async fn run_pods_phase(
     driver: &std::sync::Arc<System>,
     db: &DbHandle,
     apps: &[AppSnapshot],
-    node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -47,7 +46,6 @@ pub(super) async fn run_pods_phase(
                 db,
                 &app.desired,
                 app.app_priority,
-                node_prefix,
                 written_obs,
                 started_jobs,
                 completed_jobs,
@@ -68,9 +66,15 @@ pub(super) async fn run_volumes_phase(
 ) -> Vec<(AppName, volumes::VolumeActuationUpdate)> {
     let futures: Vec<_> = apps
         .iter()
-        .filter(|app| app.phase != AppPhase::Uninstalling)
         .map(|app| async move {
-            let update = volumes::observe_and_actuate(observer, actuator, db, &app.desired).await;
+            // An uninstalling app's volumes are torn down by its own phase,
+            // but its external volumes are held Unscheduled as its desired
+            // state has them.
+            let update = if app.phase == AppPhase::Uninstalling {
+                volumes::VolumeActuationUpdate::external_volumes_only(&app.desired)
+            } else {
+                volumes::observe_and_actuate(observer, actuator, db, &app.desired).await
+            };
             (app.name.clone(), update)
         })
         .collect();
@@ -84,8 +88,10 @@ pub(super) struct RoutesBuild {
         &'static str,
         serde_json::Value,
     )>,
-    /// `Partial` when an app's routes could not be built. Its service routes
-    /// are absent from `routes`, which replaces the host's whole route set.
+    /// `Partial` when an app's routes could not be built, or the site
+    /// services and external service mappings could not be read. Their
+    /// routes are absent from `routes`, which replaces the host's whole route
+    /// set.
     pub coverage: Coverage,
 }
 
@@ -94,7 +100,7 @@ pub(super) fn compute_routes(
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
-    ext_snapshot: &ExternalServiceSnapshot,
+    ext_snapshot: Option<&ExternalServiceSnapshot>,
     resolve_ctx: &ResolveCtx<'_>,
 ) -> RoutesBuild {
     let mut all_routes = Vec::new();
@@ -132,7 +138,8 @@ pub(super) fn compute_routes(
     RoutesBuild {
         routes: all_routes,
         observations: all_obs,
-        coverage: Coverage::of(dropped),
+        // spec: SITE#unreadable-site-services
+        coverage: Coverage::of(dropped).and(Coverage::of_read(ext_snapshot)),
     }
 }
 
@@ -166,19 +173,17 @@ pub(super) fn classify_site_service_endpoints(
         let mut unresolvable: BTreeSet<String> = BTreeSet::new();
         let mut unroutable: BTreeSet<(String, UnroutableReason)> = BTreeSet::new();
         for ep in endpoints {
-            match resolve_endpoint(&ep.remote_host, resolve_ctx) {
-                ResolveOutcome::Routable(_) => {}
-                ResolveOutcome::Unroutable { reason } => {
-                    unroutable.insert((ep.remote_host.clone(), reason));
-                }
-                ResolveOutcome::Unresolved { .. } => {
-                    // Only fault when the resolver has actually given up
-                    // on this host. "Not yet in the cache" right after
-                    // startup is normal and shouldn't fault.
-                    if unresolved_hosts.contains(&ep.remote_host) {
-                        unresolvable.insert(ep.remote_host.clone());
-                    }
-                }
+            // spec: SITE#endpoint-addressing
+            // Five unanswered lookups in a row make an endpoint unresolvable
+            // whether or not answers kept from before still route it; "not
+            // yet in the cache" right after startup is not a fault.
+            if unresolved_hosts.contains(&ep.remote_host) {
+                unresolvable.insert(ep.remote_host.clone());
+            }
+            if let ResolveOutcome::Unroutable { reason } =
+                resolve_endpoint(&ep.remote_host, resolve_ctx)
+            {
+                unroutable.insert((ep.remote_host.clone(), reason));
             }
         }
         if !unresolvable.is_empty() {
@@ -199,8 +204,10 @@ pub(super) fn classify_site_service_endpoints(
 pub(super) struct NftablesBuild {
     pub rules: DataPlaneRules,
     pub degraded_services_by_app: HashMap<AppName, std::collections::BTreeSet<String>>,
-    /// `Partial` when an app's rules could not be built. Its DNAT and mount
-    /// rules are absent from `rules`, which is applied wholesale.
+    /// `Partial` when an app's rules could not be built, or the site
+    /// ingresses, or the site services and external service mappings, could
+    /// not be read. Their rules are absent from `rules`, which is applied
+    /// wholesale.
     pub coverage: Coverage,
 }
 
@@ -215,8 +222,9 @@ pub(super) fn compute_nftables_rules(
     caddy_v4_addr: Option<Ipv4Addr>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
-    ext_snapshot: &ExternalServiceSnapshot,
+    ext_snapshot: Option<&ExternalServiceSnapshot>,
     resolve_ctx: &ResolveCtx<'_>,
+    site_snapshot: Option<&site_proxy::SiteIngressSnapshot>,
 ) -> NftablesBuild {
     let backends_by_app = rules::collect_backends_by_app(running_pods_by_app);
 
@@ -238,7 +246,13 @@ pub(super) fn compute_nftables_rules(
             caddy_ip,
             caddy_v4_addr,
         ));
-        all_mounts.extend(rules::build_mount_rules(running));
+        all_mounts.extend(rules::build_mount_rules(
+            running,
+            &app.name,
+            ext_snapshot,
+            &backends_by_app,
+            resolve_ctx,
+        ));
         match rules::build_service_dnat_rules(
             node_prefix,
             registry,
@@ -261,6 +275,15 @@ pub(super) fn compute_nftables_rules(
             }
         }
     }
+    // spec: INFRA#ingress-redirection
+    // spec: SITE#unreadable-site-ingresses
+    if let Some(snapshot) = site_snapshot {
+        all_ingress.extend(rules::build_site_ingress_rules(
+            snapshot,
+            caddy_ip,
+            caddy_v4_addr,
+        ));
+    }
     NftablesBuild {
         rules: DataPlaneRules {
             ingress: all_ingress,
@@ -268,15 +291,20 @@ pub(super) fn compute_nftables_rules(
             service_dnat: all_service_dnat,
         },
         degraded_services_by_app: degraded_by_app,
-        coverage: Coverage::of(dropped),
+        // spec: SITE#unreadable-site-ingresses
+        // spec: SITE#unreadable-site-services
+        coverage: Coverage::of(dropped)
+            .and(Coverage::of_read(site_snapshot))
+            .and(Coverage::of_read(ext_snapshot)),
     }
 }
 
 pub(super) struct ProxyBuildResult {
     pub config: crate::system::types::ProxyConfig,
-    /// `Partial` when an app's ingresses could not be built. Its virtual
-    /// hosts and L4 routes are absent from `config`, which replaces the
-    /// proxy's whole configuration.
+    /// `Partial` when an app was held back from the tick, an app's ingresses
+    /// could not be built, or the site ingresses could not be read. Their
+    /// virtual hosts and L4 routes are absent from `config`, which replaces
+    /// the proxy's whole configuration.
     pub coverage: Coverage,
     pub observations: Vec<(
         crate::runtime::identity::ResourceInstance,
@@ -291,19 +319,24 @@ pub(super) struct ProxyBuildResult {
     /// Site-ingress / app-ingress collisions on the same `(hostname, port)`
     /// detected this tick. The reconciler files faults on both parties for
     /// new conflicts and clears them when a `(host, port)` drops out of the
-    /// set. Both sides are dropped from the proxy config.
+    /// set. Both sides are dropped from the proxy config. `None` unless
+    /// `coverage` is complete: an app or site ingress missing from the build
+    /// is absent rather than unclaimed, so no conflict can be decided.
     // spec: SITE#ingress-conflicts
-    pub conflicts: super::site_proxy::ConflictReport,
+    // spec: SITE#unreadable-site-ingresses
+    pub conflicts: Option<super::site_proxy::ConflictReport>,
     /// Site-ingress attachments that couldn't be resolved this tick (target
     /// app/service missing, unsupported protocol, etc). Each entry produces
-    /// a `site_ingress_target_missing` fault under the `_system` app.
-    pub unresolved_site_attachments: Vec<super::site_proxy::UnresolvedAttachment>,
+    /// a `site_ingress_target_missing` fault under the `_system` app. `None`
+    /// unless `coverage` is complete: the target of an attachment may be an
+    /// app missing from the build.
+    pub unresolved_site_attachments: Option<Vec<super::site_proxy::UnresolvedAttachment>>,
 }
 
-/// Resolve all warm-cert ingresses across snapshots into `(instance, hostname)`
-/// pairs. Filters out non-TLS ingresses and ingresses already covered by a
-/// routed vhost (since Caddy will acquire those via the standard server-block
-/// driven path).
+/// The `(instance, hostname)` pairs whose certificates are observed: every
+/// TLS-terminating ingress an app's desired state holds, and each ingress an
+/// operation's `rt.warm_certs` names.
+// spec: OBS#ingresses
 // spec: RT#certificate-warming
 pub(super) fn warm_cert_targets(
     apps: &[AppSnapshot],
@@ -326,7 +359,7 @@ pub(super) fn warm_cert_targets(
             };
             let hostname = {
                 let ing_def = ing.def.lock();
-                if !ing_def.tls {
+                if !(ing_def.tls || ing_def.dtls) {
                     continue;
                 }
                 ing_def.hostname.clone()
@@ -342,13 +375,41 @@ pub(super) fn warm_cert_targets(
                 }
             }
         }
+        for desired in &app.desired.resources {
+            if desired.desired != crate::runtime::lifecycle::LifecycleState::Ready {
+                continue;
+            }
+            let crate::defs::resource::Resource::Ingress(ing) = &desired.definition else {
+                continue;
+            };
+            let hostname = {
+                let ing_def = ing.def.lock();
+                if !(ing_def.tls || ing_def.dtls) {
+                    continue;
+                }
+                ing_def.hostname.clone()
+            };
+            if !out
+                .iter()
+                .any(|(instance, _)| instance.id == desired.instance.id)
+            {
+                out.push((desired.instance.clone(), hostname));
+            }
+        }
     }
     out
 }
 
+/// `app_coverage` says whether `apps` holds every app contributing to the
+/// proxy, or the tick held some back.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one of the tick's snapshots the build reads"
+)]
 pub(super) fn compute_proxy_config(
     apps: &[AppSnapshot],
-    site_snapshot: &site_proxy::SiteIngressSnapshot,
+    app_coverage: Coverage,
+    site_snapshot: Option<&site_proxy::SiteIngressSnapshot>,
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
@@ -393,6 +454,8 @@ pub(super) fn compute_proxy_config(
             all_pairs.push((app.name.clone(), def, upstream));
         }
         all_l4_routes.extend(build.l4_routes);
+        // spec: ING#certificates
+        all_warm.extend(build.certificate_hostnames);
         observations.extend(build.observations);
         ready_observations.extend(build.ready_observations);
         // spec: RT#certificate-warming
@@ -416,6 +479,37 @@ pub(super) fn compute_proxy_config(
         }
     }
 
+    // spec: ING#claims-across-apps
+    let install_seqs: HashMap<&AppName, Option<i64>> =
+        apps.iter().map(|a| (&a.name, a.install_seq)).collect();
+    let (all_pairs, lost_app_claims) =
+        site_proxy::resolve_app_claims(all_pairs, |app| install_seqs.get(app).copied().flatten());
+
+    // spec: SITE#unreadable-site-ingresses
+    // Without the site ingresses no conflict can be decided and no attachment
+    // resolved, so neither is reported, and the build is partial: the config
+    // lacks every site ingress, which applied would withdraw them.
+    let Some(site_snapshot) = site_snapshot else {
+        let app_proxy_pairs: Vec<_> = all_pairs
+            .into_iter()
+            .map(|(_app, def, up)| (def, up))
+            .collect();
+        return ProxyBuildResult {
+            config: finish_proxy_config(
+                build_proxy_config(&app_proxy_pairs, &[]),
+                all_l4_routes,
+                all_warm,
+                cert_endpoint_url,
+                renewal_ratios,
+            ),
+            coverage: Coverage::Partial,
+            observations,
+            ready_observations,
+            conflicts: None,
+            unresolved_site_attachments: None,
+        };
+    };
+
     // spec: SITE#site-ingresses, SITE#attachments
     let site_data = site_proxy::collect(
         site_snapshot,
@@ -426,11 +520,20 @@ pub(super) fn compute_proxy_config(
     );
 
     // spec: SITE#ingress-conflicts
-    let conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);
-    let surviving_app_pairs =
-        site_proxy::drop_conflicting_app_pairs(all_pairs, &conflicts.conflicts);
-    let surviving_site_data =
-        site_proxy::drop_conflicting_site_data(site_data, &conflicts.conflicts);
+    let (site_data, lost_site_claims) = site_proxy::resolve_site_claims(site_data);
+
+    // spec: SITE#ingress-conflicts
+    let mut conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);
+    conflicts.app_claims = lost_app_claims;
+    conflicts.site_claims = lost_site_claims;
+    let surviving_app_pairs = site_proxy::drop_conflicting_redirects(
+        site_proxy::drop_conflicting_app_pairs(all_pairs, &conflicts.conflicts),
+        &conflicts.redirect_conflicts,
+    );
+    let surviving_site_data = site_proxy::drop_conflicting_plaintext(
+        site_proxy::drop_conflicting_site_data(site_data, &conflicts.conflicts),
+        &conflicts.redirect_conflicts,
+    );
 
     // build_proxy_config wants the (def, upstream) shape — the app name was
     // only carried along so the conflict report could attribute the apps.
@@ -451,25 +554,50 @@ pub(super) fn compute_proxy_config(
 
     let mut combined_forwards = app_proxy_pairs;
     combined_forwards.extend(site_forward_pairs);
-    let mut config = build_proxy_config(&combined_forwards, &site_redirect_pairs);
-    config.l4_routes = all_l4_routes;
     // spec: SITE#attachments
-    config.l4_routes.extend(
+    all_l4_routes.extend(
         surviving_site_data
             .l4_routes
             .into_iter()
             .map(|entry| entry.route),
     );
-    crate::system::translate::proxy::augment_with_warm_certs(&mut config, all_warm);
-    config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
-    config.renewal_ratios = renewal_ratios.clone();
 
+    // spec: FLT#filing-and-clearing
+    // spec: RCN#applying-absolute-state
+    // An app held back from the tick, or whose ingresses could not be built,
+    // is absent from the claims rather than claiming nothing: its own
+    // conflicts would read as resolved, another app would win a port it does
+    // not hold, and an attachment forwarding to it would read as having no
+    // target. So nothing is concluded about those faults, as for a withheld
+    // apply.
+    let coverage = Coverage::of(dropped).and(app_coverage);
+    let decided = coverage.is_complete();
     ProxyBuildResult {
-        config,
-        coverage: Coverage::of(dropped),
+        config: finish_proxy_config(
+            build_proxy_config(&combined_forwards, &site_redirect_pairs),
+            all_l4_routes,
+            all_warm,
+            cert_endpoint_url,
+            renewal_ratios,
+        ),
+        coverage,
         observations,
         ready_observations,
-        conflicts,
-        unresolved_site_attachments: surviving_site_data.unresolved,
+        conflicts: decided.then_some(conflicts),
+        unresolved_site_attachments: decided.then_some(surviving_site_data.unresolved),
     }
+}
+
+fn finish_proxy_config(
+    mut config: crate::system::types::ProxyConfig,
+    l4_routes: Vec<crate::system::types::L4Route>,
+    warm: std::collections::BTreeSet<String>,
+    cert_endpoint_url: Option<&str>,
+    renewal_ratios: &std::collections::BTreeMap<String, f64>,
+) -> crate::system::types::ProxyConfig {
+    config.l4_routes = l4_routes;
+    crate::system::translate::proxy::augment_with_warm_certs(&mut config, warm);
+    config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
+    config.renewal_ratios = renewal_ratios.clone();
+    config
 }

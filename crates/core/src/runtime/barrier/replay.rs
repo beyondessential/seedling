@@ -36,7 +36,20 @@ pub trait ActionLog: Send + Sync {
     /// committing an entry that already exists updates its barrier satisfaction
     /// status rather than creating a duplicate.
     fn commit(&self, entries: &[ActionLogEntry]);
+
+    /// A handle that commits entries at once, whose failure is reported, for
+    /// a call that must have its entry on record before it acts on the host.
+    ///
+    /// `None` for a log that cannot commit mid-pass, whose calls then record
+    /// themselves only when the pass ends.
+    // spec: SUSP#side-effecting-calls
+    fn early_committer(&self) -> Option<EarlyCommit> {
+        None
+    }
 }
+
+/// Commits entries to the log at once, and says whether they are on record.
+pub type EarlyCommit = Arc<dyn Fn(&[ActionLogEntry]) -> Result<(), String> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // InMemoryActionLog
@@ -45,7 +58,20 @@ pub trait ActionLog: Send + Sync {
 // spec: HIST#action-execution-log
 #[derive(Debug, Default)]
 pub struct InMemoryActionLog {
-    entries: Mutex<Vec<ActionLogEntry>>,
+    entries: Arc<Mutex<Vec<ActionLogEntry>>>,
+}
+
+/// Replace the entry at each of `new_entries`' positions, or add it.
+fn merge_entries(entries: &mut Vec<ActionLogEntry>, new_entries: &[ActionLogEntry]) {
+    for entry in new_entries {
+        match entries
+            .iter_mut()
+            .find(|e| e.call_index == entry.call_index)
+        {
+            Some(existing) => *existing = entry.clone(),
+            None => entries.push(entry.clone()),
+        }
+    }
 }
 
 impl InMemoryActionLog {
@@ -56,7 +82,19 @@ impl InMemoryActionLog {
 
 impl ActionLog for InMemoryActionLog {
     fn load(&self) -> Result<Vec<ActionLogEntry>, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(self.entries.lock().clone())
+        // In the order of the calls, as the database log returns them: the
+        // entries are read back by position.
+        let mut entries = self.entries.lock().clone();
+        entries.sort_by_key(|e| e.call_index);
+        Ok(entries)
+    }
+
+    fn early_committer(&self) -> Option<EarlyCommit> {
+        let entries = Arc::clone(&self.entries);
+        Some(Arc::new(move |new_entries| {
+            merge_entries(&mut entries.lock(), new_entries);
+            Ok(())
+        }))
     }
 
     fn commit(&self, new_entries: &[ActionLogEntry]) {
@@ -75,15 +113,7 @@ impl ActionLog for InMemoryActionLog {
         // A re-emitted entry is always a whole entry: every caller that
         // claims a position already held clones the committed entry and
         // changes the one field it means to.
-        for entry in new_entries {
-            match entries
-                .iter_mut()
-                .find(|e| e.call_index == entry.call_index)
-            {
-                Some(existing) => *existing = entry.clone(),
-                None => entries.push(entry.clone()),
-            }
-        }
+        merge_entries(&mut entries, new_entries);
     }
 }
 
@@ -115,7 +145,34 @@ impl DbActionLog {
     }
 }
 
+impl DbActionLog {
+    fn commit_checked(&self, entries: &[super::ActionLogEntry]) -> Result<(), String> {
+        let op_id = self.operation_id.clone();
+        let app = self.app.clone();
+        let action_name = self.action_name.clone();
+        let entries = entries.to_vec();
+        self.db
+            .call(move |db| {
+                for entry in &entries {
+                    history::insert_action_log_entry(db, &op_id, &app, &action_name, entry)?;
+                }
+                Ok::<_, rusqlite::Error>(())
+            })
+            .map_err(|e| e.to_string())
+    }
+}
+
 impl ActionLog for DbActionLog {
+    fn early_committer(&self) -> Option<EarlyCommit> {
+        let log = DbActionLog::new(
+            self.db.clone(),
+            self.operation_id.clone(),
+            self.app.clone(),
+            self.action_name.clone(),
+        );
+        Some(Arc::new(move |entries| log.commit_checked(entries)))
+    }
+
     fn load(&self) -> Result<Vec<super::ActionLogEntry>, Box<dyn std::error::Error + Send + Sync>> {
         let op_id = self.operation_id.clone();
         Ok(self
@@ -301,7 +358,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         active_progress,
         tick_notify,
         params,
-        is_shell: _,
+        is_shell: requested_shell,
         db,
         source_generation,
         target_generation: _,
@@ -356,6 +413,10 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     ctx.lock().volume_writer = volume_writer;
     // spec: RT#command-execution
     ctx.lock().executor = executor;
+    // spec: SEC#storage
+    ctx.lock().cipher = cipher.clone();
+    // spec: SUSP#side-effecting-calls
+    ctx.lock().early_commit = log.early_committer();
 
     // Clear the thread-local barrier-hit flag at the start of each pass.
     clear_barrier_hit();
@@ -375,7 +436,16 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // discarded immediately after. The fresh AppDef is compared against the
     // stored one as an idempotency check, then also discarded.
     let (closure, is_param_change, is_shell, captured_actions) = {
-        let (mut fresh_scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle));
+        let (mut fresh_scope, fresh_app) = match crate::defs::scope(Arc::clone(&app.bundle)) {
+            Ok(language) => language,
+            // spec: CONST#host-constants
+            Err(e) => {
+                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                    e.into(),
+                    rhai::Position::NONE,
+                )));
+            }
+        };
         fresh_app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = app_name.clone();
@@ -395,19 +465,35 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         let captured_actions = captured.actions.clone();
         let (closure, is_install, is_shell) = if action_name == "install" {
             if let Some(c) = captured.install {
-                (c, true, false)
+                (Some(c), true, false)
             } else {
                 return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                     "install action not defined in script".into(),
                     rhai::Position::NONE,
                 )));
             }
+        } else if requested_shell {
+            // spec: ACN#shells
+            // A shell is looked up among shells, and an action among
+            // actions: a shell and an action may share a name.
+            match captured.shells.get(action_name) {
+                Some(c) => (Some(c.clone()), false, true),
+                None => {
+                    return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                        format!("Shell '{}' not found", action_name).into(),
+                        rhai::Position::NONE,
+                    )));
+                }
+            }
         } else if let Some(c) = captured.actions.get(action_name) {
-            (c.clone(), false, false)
+            (Some(c.clone()), false, false)
         } else if let Some(c) = captured.param_changes.get(action_name) {
-            (c.clone(), false, false)
-        } else if let Some(c) = captured.shells.get(action_name) {
-            (c.clone(), false, true)
+            (Some(c.clone()), false, false)
+        } else if action_name == "start" {
+            // spec: ACN#start-action
+            // An app that declares no start action is brought up as though
+            // its closure called `rt.start(app)`.
+            (None, false, false)
         } else {
             return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                 format!("Action '{}' not found", action_name).into(),
@@ -425,39 +511,49 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // For param-change handlers, materialise `old` from the previous
     // generation (= source_generation). For other operations, leave it
     // empty: the spec only defines `old` for on_change handlers, but the
-    // closure-call script still references the variable.
+    // closure-call script still references the variable. A handler is never
+    // invoked with an `old` that does not reflect the previous generation.
     let old_app = if is_param_change && source_generation > 0 {
         match (&db, &script_limits, &cipher) {
             (Some(db_handle), Some(limits), Some(cipher)) => {
                 let app_name_owned = app.def.load().name.clone();
                 let limits = limits.clone();
                 let cipher = std::sync::Arc::clone(cipher);
-                db_handle.call(move |db| {
-                    match generations::reconstruct_app_def(
+                let rebuilt = db_handle.call(move |db| {
+                    generations::reconstruct_app_def(
                         db,
                         &app_name_owned,
                         source_generation,
                         &limits,
                         &cipher,
-                    ) {
-                        Ok(a) => a,
-                        Err(e) => {
-                            tracing::warn!(
-                                app = %app_name_owned,
-                                source_generation,
-                                "failed to reconstruct old App for on_change; using empty: {e}"
-                            );
-                            App::default()
-                        }
+                    )
+                });
+                match rebuilt {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::error!(
+                            app = %app.def.load().name,
+                            source_generation,
+                            "cannot rebuild the previous generation for on_change: {e}"
+                        );
+                        return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                            format!(
+                                "the previous generation ({source_generation}) cannot be rebuilt, \
+                                 so the change handler was not run: {e}"
+                            )
+                            .into(),
+                            rhai::Position::NONE,
+                        )));
                     }
-                })
+                }
             }
             _ => {
-                debug_assert!(
-                    false,
-                    "param_change replay missing db, script_limits, or cipher in OperationContext"
-                );
-                App::default()
+                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                    "the previous generation cannot be rebuilt without the database, script \
+                     limits and cipher, so the change handler was not run"
+                        .into(),
+                    rhai::Position::NONE,
+                )));
             }
         }
     } else {
@@ -465,7 +561,18 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     };
 
     scope.push("__bsl_rt", rt);
-    scope.push("__bsl_closure", closure);
+    let default_start = closure.is_none();
+    // spec: PARAM#change-handlers
+    // A change handler is called with as many of its arguments as it takes.
+    let change_handler_arity = closure
+        .as_ref()
+        .filter(|_| is_param_change)
+        .and_then(|c| closure_arity(script_ast, c));
+    if let Some(closure) = closure {
+        scope.push("__bsl_closure", closure);
+    } else {
+        scope.push("__bsl_app", app.clone());
+    }
     scope.push("__bsl_old_app", old_app);
     let param_map: rhai::Map = params
         .iter()
@@ -476,8 +583,11 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         scope.push("__bsl_shell", super::shell::ShellControl::new());
     }
 
-    let call_script = if is_param_change {
-        "__bsl_closure.call(__bsl_rt, __bsl_old_app)"
+    let call_script = if default_start {
+        // spec: ACN#start-action
+        "__bsl_rt.start(__bsl_app)"
+    } else if is_param_change {
+        change_handler_call_script(change_handler_arity)
     } else if is_shell {
         "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
     } else {
@@ -509,6 +619,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
 
     let _ = scope.remove::<Dynamic>("__bsl_rt");
     let _ = scope.remove::<Dynamic>("__bsl_closure");
+    let _ = scope.remove::<crate::defs::app::App>("__bsl_app");
     let _ = scope.remove::<Dynamic>("__bsl_old_app");
     let _ = scope.remove::<rhai::Map>("__bsl_param");
     if is_shell {
@@ -587,3 +698,24 @@ fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
 
 #[cfg(test)]
 mod tests;
+
+/// The script that calls a change handler declaring `arity` parameters with as
+/// many of `rt` and `old` as it takes. A handler whose arity is unknown, or
+/// above two, is called with both, so one declaring more than two fails when
+/// called, as it must.
+// spec: PARAM#change-handlers
+pub(crate) fn change_handler_call_script(arity: Option<usize>) -> &'static str {
+    match arity {
+        Some(0) => "__bsl_closure.call()",
+        Some(1) => "__bsl_closure.call(__bsl_rt)",
+        _ => "__bsl_closure.call(__bsl_rt, __bsl_old_app)",
+    }
+}
+
+/// How many parameters the closure `closure` declares, not counting the
+/// variables it captured, or `None` if `ast` does not hold it.
+pub(crate) fn closure_arity(ast: &rhai::AST, closure: &rhai::FnPtr) -> Option<usize> {
+    ast.iter_functions()
+        .find(|f| f.name == closure.fn_name())
+        .map(|f| f.params.len().saturating_sub(closure.curry().len()))
+}

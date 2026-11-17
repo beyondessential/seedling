@@ -6,7 +6,11 @@ const HEADER_NAME: &str = "tailscale-user-name";
 
 // spec: WEB#tailscale-identity
 pub fn extract_actor(headers: &HeaderMap) -> Option<Actor> {
-    let id = headers.get(HEADER_LOGIN)?.to_str().ok()?.to_owned();
+    let id = headers.get(HEADER_LOGIN)?.to_str().ok()?;
+    if !is_visible_ascii(id) {
+        return None;
+    }
+    let id = id.to_owned();
     let display = headers
         .get(HEADER_NAME)
         .and_then(|v| v.to_str().ok())
@@ -19,6 +23,13 @@ pub fn extract_actor(headers: &HeaderMap) -> Option<Actor> {
         display: Some(display),
         session: None,
     })
+}
+
+/// Whether the value is non-empty and every byte is visible ASCII (0x21 to
+/// 0x7E): a login holding a space, a control character or anything else
+/// is not a login.
+fn is_visible_ascii(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|b| (0x21..=0x7E).contains(&b))
 }
 
 /// Decode the display-name header. Tailscale Serve carries non-ASCII names as
@@ -99,5 +110,18 @@ mod tests {
             HeaderValue::from_bytes(b"\xff\xfe not-utf8").unwrap(),
         );
         assert!(extract_actor(&h).is_none());
+    }
+
+    // spec: WEB#tailscale-identity
+    #[test]
+    fn a_login_that_is_empty_or_not_visible_ascii_is_ignored() {
+        for login in ["", " ", "alice smith", " alice", "alice\t"] {
+            let mut h = HeaderMap::new();
+            h.insert(
+                HEADER_LOGIN,
+                HeaderValue::from_bytes(login.as_bytes()).unwrap(),
+            );
+            assert!(extract_actor(&h).is_none(), "{login:?}");
+        }
     }
 }

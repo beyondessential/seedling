@@ -22,8 +22,8 @@ use parking_lot::Mutex;
 use super::{
     BoxError, BoxFuture, ContainerFilter, ContainerHealth, ContainerRuntime, ContainerSpec,
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
-    ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig, ServiceRoute,
-    TransientUnitSpec, UnitState, UnitSummary,
+    ExecOutput, ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig,
+    ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
     types::{ActiveState, SPEC_HASH_LABEL, SliceSpec, UnitExit},
 };
 
@@ -73,6 +73,9 @@ pub struct StubContainerRuntime {
     /// Where stub volumes' mountpoints live. One subdir per volume name; the
     /// runtime owns this dir for the duration of the daemon's lifetime.
     volumes_root: PathBuf,
+    /// Whether removing a volume fails, as a container runtime refusing it
+    /// does.
+    refuse_volume_removal: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -114,7 +117,15 @@ impl StubContainerRuntime {
                 ..Default::default()
             }),
             volumes_root,
+            refuse_volume_removal: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Make every later volume removal fail, or succeed again.
+    #[cfg(test)]
+    pub(crate) fn refuse_volume_removal(&self, refuse: bool) {
+        self.refuse_volume_removal
+            .store(refuse, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Add a running container carrying `labels`, as one left behind by a
@@ -426,29 +437,18 @@ impl ContainerRuntime for StubContainerRuntime {
 
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
+            if self
+                .refuse_volume_removal
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(format!("volume {name} is refused removal").into());
+            }
             self.state.lock().volumes.remove(name);
             let dir = self.volumes_root.join(name);
             if dir.exists() {
                 let _ = std::fs::remove_dir_all(&dir);
             }
             Ok(())
-        }
-        .boxed()
-    }
-
-    fn list_volumes_by_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>> {
-        async move {
-            Ok(self
-                .state
-                .lock()
-                .volumes
-                .iter()
-                .filter(|n| n.starts_with(prefix))
-                .cloned()
-                .collect())
         }
         .boxed()
     }
@@ -498,8 +498,15 @@ impl ContainerRuntime for StubContainerRuntime {
         _name: &'a str,
         _argv: &'a [String],
         _extra_env: &'a [(String, String)],
-    ) -> BoxFuture<'a, Result<i32, BoxError>> {
-        async move { Ok(0) }.boxed()
+    ) -> BoxFuture<'a, Result<ExecOutput, BoxError>> {
+        async move {
+            Ok(ExecOutput {
+                exit_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        }
+        .boxed()
     }
 }
 
@@ -530,6 +537,8 @@ struct UnitRecord {
     /// when the unit is recreated. Driven directly by tests.
     restarts: u32,
     last_exit: Option<UnitExit>,
+    /// The unit's `Result` property.
+    result: Option<String>,
 }
 
 impl StubProcessManager {
@@ -548,6 +557,21 @@ impl StubProcessManager {
         if let Some(u) = self.state.lock().units.get_mut(unit) {
             u.restarts += times;
             u.last_exit = exit;
+        }
+    }
+
+    /// Simulate the supervisor pausing before an automatic restart: the
+    /// container has exited and the unit is activating again.
+    pub fn simulate_auto_restart_pause(&self, unit: &str) {
+        let container_name = unit.strip_suffix(".service").unwrap_or(unit).to_owned();
+        self.container
+            .state
+            .lock()
+            .containers
+            .remove(&container_name);
+        if let Some(u) = self.state.lock().units.get_mut(unit) {
+            u.state = ActiveState::Activating;
+            u.sub = "auto-restart".to_owned();
         }
     }
 
@@ -646,6 +670,7 @@ impl ProcessManager for StubProcessManager {
                     oom_score_adjust: spec.oom_score_adjust,
                     restarts: 0,
                     last_exit: None,
+                    result: None,
                 },
             );
             drop(spec);
@@ -715,6 +740,7 @@ impl ProcessManager for StubProcessManager {
             Ok(self.state.lock().units.get(name).map(|u| UnitState {
                 active: u.state,
                 sub: u.sub.clone(),
+                result: u.result.clone(),
                 restarts: Some(u.restarts),
                 last_exit: u.last_exit,
             }))
@@ -783,6 +809,7 @@ impl ProcessManager for StubProcessManager {
                 oom_score_adjust: None,
                 restarts: 0,
                 last_exit: None,
+                result: None,
             });
             Ok(())
         }

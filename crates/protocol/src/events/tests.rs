@@ -302,7 +302,7 @@ fn fault_and_resource_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.fault_cleared("f1", &app, "health_check_failed")),
+        shape(|tx| tx.fault_cleared("f1", &app, "health_check_failed", None)),
         json!({
             "type": "FaultCleared",
             "id": "f1",
@@ -312,7 +312,7 @@ fn fault_and_resource_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.resource_state_changed(&app, "deployment", "srv", "srv-0", "running")),
+        shape(|tx| tx.resource_state_changed(&app, "deployment", Some("srv"), "srv-0", "running")),
         json!({
             "type": "ResourceStateChanged",
             "app": "web",
@@ -320,6 +320,48 @@ fn fault_and_resource_events_wire_shape() {
             "resource_name": "srv",
             "instance_id": "srv-0",
             "state": "running",
+        })
+    );
+
+    assert_eq!(
+        shape(|tx| tx.resource_state_changed(&app, "job", None, "job-0", "Ready")),
+        json!({
+            "type": "ResourceStateChanged",
+            "app": "web",
+            "resource_type": "job",
+            "resource_name": null,
+            "instance_id": "job-0",
+            "state": "Ready",
+        })
+    );
+
+    // spec: APPS#resources
+    assert_eq!(
+        shape(|tx| tx.instance_health_changed(
+            &app,
+            "deployment",
+            Some("srv"),
+            "srv-0",
+            Some("failing")
+        )),
+        json!({
+            "type": "InstanceHealthChanged",
+            "app": "web",
+            "resource_type": "deployment",
+            "resource_name": "srv",
+            "instance_id": "srv-0",
+            "health": "failing",
+        })
+    );
+    assert_eq!(
+        shape(|tx| tx.instance_health_changed(&app, "deployment", None, "srv-0", None)),
+        json!({
+            "type": "InstanceHealthChanged",
+            "app": "web",
+            "resource_type": "deployment",
+            "resource_name": null,
+            "instance_id": "srv-0",
+            "health": null,
         })
     );
 }
@@ -333,7 +375,7 @@ fn shell_events_wire_shape() {
     let session = SessionId::generate();
 
     assert_eq!(
-        shape(|tx| tx.shell_started(session, &app, &name)),
+        shape(|tx| tx.shell_started(session, &app, &name, None)),
         json!({
             "type": "ShellStarted",
             "session_id": session.to_string(),
@@ -343,7 +385,7 @@ fn shell_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.shell_exited(session, 130)),
+        shape(|tx| tx.shell_exited(session, 130, None)),
         json!({
             "type": "ShellExited",
             "session_id": session.to_string(),
@@ -359,7 +401,7 @@ fn forward_events_wire_shape() {
     let forward = ForwardId::generate();
 
     assert_eq!(
-        shape(|tx| tx.forward_started(forward, &app, "api", 8080)),
+        shape(|tx| tx.forward_started(forward, &app, "api", 8080, None)),
         json!({
             "type": "ForwardStarted",
             "forward_id": forward.to_string(),
@@ -370,7 +412,7 @@ fn forward_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.forward_stopped(forward)),
+        shape(|tx| tx.forward_stopped(forward, None)),
         json!({"type": "ForwardStopped", "forward_id": forward.to_string()})
     );
 }
@@ -381,7 +423,7 @@ fn scale_and_server_busy_events_wire_shape() {
     let app = app();
 
     assert_eq!(
-        shape(|tx| tx.scale(app.clone(), "srv", 1, 5, None).changed(3, 1)),
+        shape(|tx| tx.scale(app.clone(), "srv", 1, 5, None).changed(3, Some(1))),
         json!({
             "type": "ScaleChanged",
             "app": "web",
@@ -411,7 +453,7 @@ fn deployment_restart_and_resource_stop_events_wire_shape() {
             "type": "DeploymentRestarted",
             "app": "web",
             "deployment": "srv",
-            "operation_id": "op-9",
+            "restart_id": "op-9",
         })
     );
 
@@ -756,11 +798,10 @@ fn site_ingress_events_wire_shape() {
             &name,
             443,
             "https",
-            "forward",
-            Some(&app),
-            Some(&service),
-            None,
-            None,
+            AttachmentTargetRef::Forward {
+                app: &app,
+                service: &service,
+            },
             None,
         )),
         json!({
@@ -779,11 +820,11 @@ fn site_ingress_events_wire_shape() {
             &name,
             443,
             "https",
-            "redirect",
-            None,
-            None,
-            Some("https://example.org/"),
-            Some(301),
+            AttachmentTargetRef::Redirect {
+                url: "https://example.org/",
+                code: 301,
+                preserve_path: false,
+            },
             None,
         )),
         json!({
@@ -794,16 +835,29 @@ fn site_ingress_events_wire_shape() {
             "target_kind": "redirect",
             "redirect_url": "https://example.org/",
             "redirect_code": 301,
+            "redirect_preserve_path": false,
         })
     );
 
     assert_eq!(
-        shape(|tx| tx.site_ingress_attachment_removed(&name, 443, "https", None)),
+        shape(|tx| tx.site_ingress_attachment_removed(
+            &name,
+            443,
+            "https",
+            AttachmentTargetRef::Forward {
+                app: &app,
+                service: &service,
+            },
+            None,
+        )),
         json!({
             "type": "SiteIngressAttachmentRemoved",
             "name": "front",
             "port": 443,
             "protocol": "https",
+            "target_kind": "forward",
+            "target_app": "web",
+            "target_service": "api",
         })
     );
 }
@@ -853,6 +907,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     let ext_svc = ExternalServiceName::new("upstream").unwrap();
     let ingress = SiteIngressName::new("front").unwrap();
     let template = TemplateName::new("postgres-stack").unwrap();
+    let app_service = AppServiceName::new("api").unwrap();
     let vol_ref = VolumeRef::Site {
         name: SiteVolumeName::new("shared").unwrap(),
     };
@@ -865,7 +920,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.app_deregistered(&app);
     sender.app_updated(&app, 2, Some(1), json!({"kind": "pushed"}), None);
     sender.app_phase_changed(&app, "installed");
-    sender.scale(app.clone(), "srv", 0, 4).changed(2, 1);
+    sender.scale(app.clone(), "srv", 0, 4).changed(2, Some(1));
     sender
         .operation(app.clone(), action.clone(), "op-1", 1, 1)
         .started("operator");
@@ -878,6 +933,14 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.held_volume_created(held, &app, "data", "uninstall");
     sender.held_volume_deleted(held);
     sender.held_volume_restored(held, "recovered");
+    // spec: EVT#event-objects
+    sender.fault_cleared("fault-1", &app, "crash_loop");
+    let session = SessionId::generate();
+    sender.shell_started(session, &app, &ShellName::new("psql").unwrap());
+    sender.shell_exited(session, 0);
+    let forward = ForwardId::generate();
+    sender.forward_started(forward, &app, "db", 5432);
+    sender.forward_stopped(forward);
     sender.site_volume_created("shared", "managed", None);
     sender.site_volume_deleted("shared", "managed", Some(held));
     sender.site_volume_snapshotted("snap-1", &vol_ref);
@@ -911,27 +974,22 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.site_ingress_created(&ingress, "example.com", "manual", None, "acme", None);
     sender.site_ingress_updated(&ingress, "example.com", "acme", None);
     sender.site_ingress_deleted(&ingress, "manual");
-    sender.site_ingress_attachment_added(
-        &ingress,
-        443,
-        "https",
-        "forward",
-        Some(&app),
-        None,
-        None,
-        None,
-    );
+    let forward = AttachmentTargetRef::Forward {
+        app: &app,
+        service: &app_service,
+    };
+    sender.site_ingress_attachment_added(&ingress, 443, "https", forward);
     sender.site_ingress_attachment_updated(
         &ingress,
         443,
         "https",
-        "redirect",
-        None,
-        None,
-        Some("https://example.org/"),
-        Some(301),
+        AttachmentTargetRef::Redirect {
+            url: "https://example.org/",
+            code: 301,
+            preserve_path: true,
+        },
     );
-    sender.site_ingress_attachment_removed(&ingress, 443, "https");
+    sender.site_ingress_attachment_removed(&ingress, 443, "https", forward);
     sender.template_created(&template);
     sender.template_updated(&template);
     sender.template_removed(&template);
@@ -947,5 +1005,5 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
         );
         count += 1;
     }
-    assert_eq!(count, 37, "every delegate emitted exactly one event");
+    assert_eq!(count, 42, "every delegate emitted exactly one event");
 }

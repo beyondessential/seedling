@@ -24,24 +24,37 @@ use crate::{
 pub(crate) fn list_images(state: &OiState) -> HandlerResult {
     let (images, in_use_ids) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let images = state.container_runtime.list_images().await.map_err(|e| {
-                OiError::new(ErrorCode::NotFound, format!("list_images failed: {e}"))
-            })?;
+            let images = state
+                .container_runtime
+                .list_images()
+                .await
+                .map_err(|e| OiError::internal(format!("list_images failed: {e}")))?;
 
             let mut in_use_ids: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
+            // A failed read of the containers is an error, never "nothing in use".
             let running = state
                 .container_runtime
                 // Unfiltered: every running container (workload, shell, Caddy,
                 // resolver, or operator-started) keeps its image in use.
                 .list(crate::system::types::ContainerFilter::default())
                 .await
-                .unwrap_or_default();
+                .map_err(|e| OiError::internal(format!("listing containers failed: {e}")))?;
             for c in running {
-                if let Ok(Some(s)) = state.container_runtime.inspect(&c.name).await
-                    && let Some(id) = s.image_id
-                {
-                    in_use_ids.insert(id);
+                match state.container_runtime.inspect(&c.name).await {
+                    Ok(Some(s)) => {
+                        if let Some(id) = s.image_id {
+                            in_use_ids.insert(id);
+                        }
+                    }
+                    // Gone since the list: it no longer holds an image.
+                    Ok(None) => {}
+                    Err(e) => {
+                        return Err(OiError::internal(format!(
+                            "inspecting container {} failed: {e}",
+                            c.name
+                        )));
+                    }
                 }
             }
             Ok::<_, OiError>((images, in_use_ids))
@@ -53,26 +66,31 @@ pub(crate) fn list_images(state: &OiState) -> HandlerResult {
         .iter()
         .flat_map(|img| img.all_references().map(str::to_owned))
         .collect();
-    let pinned_map = state.db.call(move |db| {
-        images::list_pinned_apps_for_references(
-            db,
-            &references.iter().map(String::as_str).collect::<Vec<_>>(),
-        )
-        .unwrap_or_default()
-    });
+    let pinned_map = state
+        .db
+        .call(move |db| {
+            images::list_pinned_apps_for_references(
+                db,
+                &references.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+        })
+        .map_err(|e| OiError::internal(format!("db query: {e}")))?;
 
     // Pull tracking rows once to enrich last_used_at.
     let tracking: BTreeMap<String, i64> = {
         let ids: Vec<String> = images.iter().map(|i| i.image_id.clone()).collect();
-        state.db.call(move |db| {
-            let mut out = BTreeMap::new();
-            for id in ids {
-                if let Ok(Some(row)) = images::get_tracking(db, &id) {
-                    out.insert(id, row.last_used_at);
+        state
+            .db
+            .call(move |db| {
+                let mut out = BTreeMap::new();
+                for id in ids {
+                    if let Some(row) = images::get_tracking(db, &id)? {
+                        out.insert(id, row.last_used_at);
+                    }
                 }
-            }
-            out
-        })
+                Ok::<_, rusqlite::Error>(out)
+            })
+            .map_err(|e| OiError::internal(format!("db query: {e}")))?
     };
 
     let mut out: Vec<Value> = Vec::with_capacity(images.len());
@@ -174,11 +192,10 @@ pub(crate) fn pull_image(state: &OiState, params: PullParams) -> HandlerResult {
         }
         let reference_for_pin = params.reference.clone();
         let app_for_pin = app.clone();
-        state.db.call(move |db| {
-            if let Err(e) = images::upsert_pin(db, &app_for_pin, &reference_for_pin) {
-                tracing::warn!(error = %e, "pull_image: failed to upsert pin");
-            }
-        });
+        state
+            .db
+            .call(move |db| images::upsert_pin(db, &app_for_pin, &reference_for_pin))
+            .map_err(|e| OiError::internal(format!("pinning the image failed: {e}")))?;
     }
 
     tokio::task::block_in_place(|| {
@@ -187,7 +204,7 @@ pub(crate) fn pull_image(state: &OiState, params: PullParams) -> HandlerResult {
                 .container_runtime
                 .pull_image(&params.reference)
                 .await
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("pull failed: {e}")))
+                .map_err(|e| OiError::new(ErrorCode::FetchFailed, format!("pull failed: {e}")))
         })
     })?;
 
@@ -224,21 +241,28 @@ pub(crate) fn remove_image(state: &OiState, params: RemoveParams) -> HandlerResu
                     .container_runtime
                     .local_image_id(&params.reference)
                     .await
-                    .ok()
-                    .flatten();
+                    .map_err(|e| OiError::internal(format!("looking up the image failed: {e}")))?;
                 if let Some(target_id) = target_id.as_deref() {
                     let running = state
                         .container_runtime
                         .list(crate::system::types::ContainerFilter::default())
                         .await
-                        .unwrap_or_default();
+                        .map_err(|e| {
+                            OiError::internal(format!("listing containers failed: {e}"))
+                        })?;
                     for c in running {
-                        if let Ok(Some(s)) = state.container_runtime.inspect(&c.name).await
-                            && let Some(id) = s.image_id.as_deref()
-                            && id == target_id
+                        let inspected =
+                            state.container_runtime.inspect(&c.name).await.map_err(|e| {
+                                OiError::internal(format!(
+                                    "inspecting container {} failed: {e}",
+                                    c.name
+                                ))
+                            })?;
+                        if let Some(s) = inspected
+                            && s.image_id.as_deref() == Some(target_id)
                         {
                             return Err(OiError::new(
-                                ErrorCode::RequirementsInvalid,
+                                ErrorCode::ImageInUse,
                                 "image is in use by a running container; pass force=true to remove anyway"
                                     .to_string(),
                             ));
@@ -247,17 +271,20 @@ pub(crate) fn remove_image(state: &OiState, params: RemoveParams) -> HandlerResu
                 }
             }
 
+            // Cleared before the image is looked for, so the pins are gone
+            // whether or not an image is then removed.
             let reference = params.reference.clone();
-            state.db.call(move |db| {
-                let _ = images::clear_pins_by_reference(db, &reference);
-            });
+            state
+                .db
+                .call(move |db| images::clear_pins_by_reference(db, &reference))
+                .map_err(|e| OiError::internal(format!("clearing the pins failed: {e}")))?;
 
             let removed = state
                 .container_runtime
                 .remove_image(&params.reference, params.force)
                 .await
                 .map_err(|e| {
-                    OiError::new(ErrorCode::NotFound, format!("remove_image failed: {e}"))
+                    OiError::internal(format!("remove_image failed: {e}"))
                 })?;
             if !removed {
                 return Err(OiError::not_found(format!(
@@ -291,7 +318,8 @@ pub(crate) fn list_pins(state: &OiState, params: PinsListParams) -> HandlerResul
     let app_for_query = app.clone();
     let pins = state
         .db
-        .call(move |db| images::list_pins(db, app_for_query.as_ref()).unwrap_or_default());
+        .call(move |db| images::list_pins(db, app_for_query.as_ref()))
+        .map_err(|e| OiError::internal(format!("db query: {e}")))?;
     let arr: Vec<Value> = pins
         .into_iter()
         .map(|p| {
@@ -345,10 +373,12 @@ pub(crate) struct DiscoverParams {
     /// proposed script would introduce.
     #[serde(default)]
     pub proposed_script: Option<String>,
-    /// Per-handler supplied param values. Outer key = handler name
-    /// (e.g. `"migrate"`, `"install"`), inner = param-name → string.
+    /// Per-handler supplied param values: handler kind (`"install"`,
+    /// `"start"`, `"action"`, `"shell"` or `"param_change"`), then handler
+    /// name, then param name to string.
+    // spec: IMGM#image-discovery
     #[serde(default)]
-    pub action_params: HashMap<String, HashMap<String, String>>,
+    pub action_params: HashMap<String, HashMap<String, HashMap<String, String>>>,
     #[serde(default)]
     pub lenient: bool,
 }
@@ -376,16 +406,17 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
     let app = if params.proposed_script.is_some() {
         let name_owned = name.clone();
         let cipher = std::sync::Arc::clone(&state.cipher);
-        let stored_params = state.db.call(move |db| {
-            crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)
-        });
+        let stored_params = state
+            .db
+            .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned))
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         let (proposed_app, err) =
             crate::runtime::apps::evaluate(&name, &bundle, &stored_params, &state.script_limits);
+        // spec: IMGM#image-discovery
         if let Some(e) = err {
-            return Err(OiError::new(
-                ErrorCode::NotFound,
-                format!("proposed script failed to evaluate: {e}"),
-            ));
+            return Err(OiError::script_error(format!(
+                "proposed script failed to evaluate: {e}"
+            )));
         }
         proposed_app
     } else {
@@ -394,17 +425,15 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
 
     let script = bundle.script()?;
     let (engine, _scope, _stub_app) =
-        crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle));
+        crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle))
+            .map_err(OiError::script_error)?;
     let ast = match engine.compile(script.text()) {
         Ok(a) => a,
         Err(e) => {
-            return Err(OiError::new(
-                ErrorCode::NotFound,
-                format!(
-                    "failed to compile app script: {}",
-                    script.remap_error(&e.to_string())
-                ),
-            ));
+            return Err(OiError::script_error(format!(
+                "failed to compile app script: {}",
+                script.remap_error(&e.to_string())
+            )));
         }
     };
 
@@ -416,7 +445,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         lenient: params.lenient,
     };
     let response = probe_app(&engine, &ast, &app, registry, &request)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("probe failed: {e}")))?;
+        .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
 
     let per_handler: Vec<Value> = response
         .per_handler
@@ -483,8 +512,20 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
         );
         return;
     };
-    let (engine, _scope, _stub) =
-        crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle));
+    let (engine, _scope, _stub) = match crate::setup_language(
+        &state.script_limits,
+        std::sync::Arc::clone(&bundle),
+    ) {
+        Ok(language) => language,
+        Err(e) => {
+            tracing::warn!(
+                app = %app_name,
+                error = %e,
+                "post-update pin reconciliation: script cannot be evaluated; leaving pins untouched"
+            );
+            return;
+        }
+    };
     let ast = match engine.compile(script.text()) {
         Ok(a) => a,
         Err(e) => {

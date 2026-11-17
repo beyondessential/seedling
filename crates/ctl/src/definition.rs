@@ -132,6 +132,21 @@ pub(super) async fn resolve_or_exit(args: &DefinitionArgs) -> Option<Definition>
     })
 }
 
+/// Directories version-control systems keep their metadata in.
+const VCS_METADATA_DIRS: &[&str] = &[
+    ".git", ".jj", ".hg", ".sl", ".svn", ".bzr", ".pijul", "_darcs", "CVS",
+];
+
+/// Whether `entry` is version-control metadata: one of the directories above,
+/// or the `.git` file a linked work tree keeps in its place.
+fn is_vcs_metadata(entry: &ignore::DirEntry) -> bool {
+    let Some(name) = entry.file_name().to_str() else {
+        return false;
+    };
+    name == ".git"
+        || (entry.file_type().is_some_and(|t| t.is_dir()) && VCS_METADATA_DIRS.contains(&name))
+}
+
 /// Read a definition folder: every regular file, leaving out version-control
 /// metadata and what `.seedignore` excludes. Anything else that is not left
 /// out is an error, so nothing is sent.
@@ -142,7 +157,7 @@ pub(super) fn read_folder(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Stri
         .hidden(false)
         .follow_links(false)
         .add_custom_ignore_filename(".seedignore")
-        .filter_entry(|e| !matches!(e.file_name().to_str(), Some(".git" | ".jj")))
+        .filter_entry(|e| !is_vcs_metadata(e))
         .build();
     let mut files = BTreeMap::new();
     for entry in walker {

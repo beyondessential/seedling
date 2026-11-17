@@ -90,7 +90,12 @@ the node prefix and the service's persisted instance ID:
     fd5e:XXYY:ZZWW:01UU:UUUU:UUUU:UUUU:UUUU/128
 
 where `01` is the Service kind discriminant and the remaining bytes are
-from the UUID.
+from the UUID. That derived address is the service's first choice: the
+address it takes is allocated and recorded in the database, so two services
+whose UUIDs agree on those bytes never share one. A service whose first
+choice is taken takes the next free address, moving only the low eight
+bytes, so it stays clear of pod networks and infrastructure addresses. The
+record goes with the service's instance.
 
 An `ip -6 route replace` installs a host route for each service:
 
@@ -162,14 +167,16 @@ endpoint per tick. Inputs:
 - `has_ipv6_egress` — whether the host has a default IPv6 route plus a
   non-loopback global unicast source. Same probe that decides DNS64
   `translate_all` (see "Forcing translation on IPv4-only hosts" under
-  NAT64).
+  NAT64). While the probe has not determined it, endpoints are routed as
+  for a host without IPv6 egress.
 - A read-only borrow of the resolver cache.
 
 The decision matrix is:
 
 | `remote_host` shape    | `nat64_active` | `has_ipv6_egress` | Outcome                           |
 |------------------------|---------------:|------------------:|-----------------------------------|
-| IPv6 literal           |              — |                 — | use literally                     |
+| IPv6 literal           |              — |              true | use literally                     |
+| IPv6 literal           |              — |             false | unroutable → fault                |
 | IPv4 literal           |           true |                 — | synthesise `64:ff9b::a.b.c.d`     |
 | IPv4 literal           |          false |                 — | unroutable → fault                |
 | DNS, AAAA + IPv6 egress|              — |              true | use AAAA records literally        |
@@ -190,24 +197,34 @@ up promptly.
 The A and AAAA queries are independent: when one fails and the other
 returns records, the host resolves from those records, the failed family
 keeps its last answer, and the host is looked up again after a few
-seconds. Only a host with no records from either family, and at least
-one failed query, counts towards the unresolvable threshold. The
-resolver-status entry names the failing family in `degraded_family`, so
-a host resolving on one family alone is visible as such rather than
-looking healthy; a lookup where both families fail clears it.
+seconds. Only a lookup that returned no records from either family counts
+towards the unresolvable threshold, whether a query failed or both found
+none; a lookup that returned records ends the run. The resolver-status
+entry lists every family whose most recent lookup failed in
+`failed_families`, so a host resolving on one family alone is visible as
+such rather than looking healthy. A system DNS configuration that cannot
+be read is read again on each refresh, and until it can be, every lookup
+is unanswered.
 
 Endpoints that can't be turned into a routable address surface as
 faults on the affected site service:
 
-- `site_service_endpoint_unresolvable` — DNS lookup has failed past
-  the consecutive-failure threshold (currently 5).
+- `site_service_endpoint_unresolvable` — 5 lookups in a row have been
+  unanswered, even while answers kept from before still route the endpoint.
 - `site_service_endpoint_unroutable` — the endpoint requires NAT64 but
-  NAT64 isn't active on this host.
+  NAT64 isn't active on this host, or it needs IPv6 egress the host lacks.
 
 Both auto-clear on the first tick where the condition no longer
 applies. They are non-blocking: a misbehaving endpoint reduces only
 its own site service's backend pool — it never affects other site
 services or any apps.
+
+While the site services or the external service mappings cannot be
+read, neither the routes nor the nftables rules are applied: both stay
+as last applied rather than withdrawing every external service's
+backends, and a `site_services_unreadable` fault is held on `_system`
+until a read succeeds. The two site service endpoint faults are left as
+they are meanwhile, and external services keep their lifecycle state.
 
 ## Ingress
 
@@ -229,12 +246,25 @@ Caddy runs in one of two container slots — `seedling-caddy-blue` and
 `seedling-caddy-green` — for blue/green upgrades. The active slot is
 recorded in the database; the default for fresh installations is blue.
 During an image upgrade, the new container is started in the inactive
-slot, configured, and health-checked before traffic is switched over.
+slot, configured, and health-checked before traffic is switched over. If
+the replacement rejects the persisted configuration, the upgrade is
+aborted: the replacement is stopped, the running proxy stays active and
+serving, and a `caddy_failed` fault names the rejection until an upgrade
+succeeds. A bring-up failure's `caddy_failed` clears once an iteration
+finds the proxy healthy. Both clear when the proxy is stopped because no
+app is installed or installing, as do `resolver_failed` and the NAT64
+translator.
 
 ### nftables ingress rules
 
-Every ingress port gets nftables DNAT rules in both the prerouting and
-output chains that redirect traffic to Caddy. For IPv6:
+Every ingress port gets nftables DNAT rules in the prerouting chain, and
+IPv6 ones in the output chain, that redirect traffic to Caddy. The ports
+are those of app ingresses (UDP alone for a DTLS ingress; TCP, and UDP
+as well, for an HTTPS one; TCP otherwise) and their HTTP redirects, and of the
+attachments of site ingresses (UDP for a `udp` attachment; otherwise TCP,
+and UDP as well for an `http` or `http2` attachment on a site ingress that
+terminates TLS), except for a site ingress that has lost its source.
+For IPv6:
 
     meta nfproto ipv6 fib daddr type local tcp dport <port>
     dnat ip6 to [<caddy_ipv6>]:<port>
@@ -244,13 +274,46 @@ For IPv4 (dual-stack):
     meta nfproto ipv4 fib daddr type local tcp dport <port>
     dnat ip to <caddy_ipv4>:<port>
 
-Both prerouting and output chains carry identical rules. The output
-chain rules catch host-originated traffic (e.g., `curl localhost:80`)
-via the `fib daddr type local` guard.
+The prerouting chain carries both the IPv6 and the IPv4 rules. The
+output chain carries the IPv6 rules only, for the same ports and
+protocols, so it catches host-originated IPv6 traffic (e.g.,
+`curl http://[::1]:80`) via the `fib daddr type local` guard and leaves
+host-originated IPv4 traffic alone.
 
 The `fib daddr type local` guard is essential: without it, the
 prerouting dport rule would catch Caddy's own upstream traffic to
 `service_ip:<port>` and loop it back to Caddy.
+
+While the site ingresses or their attachments cannot be read, neither
+these rules nor the proxy configuration is applied: both stay as last
+applied rather than withdrawing every site ingress port, and a
+`site_ingresses_unreadable` fault is held on `_system` until a read
+succeeds. The `ingress_conflict` and `site_ingress_target_missing` faults
+are left as they are meanwhile.
+
+### Ingress conflicts
+
+When two claims on one `(hostname, port)` meet, the proxy configuration
+leaves one or both out and an `ingress_conflict` fault names the party
+left out:
+
+- an app ingress and a site ingress attachment: both are left out;
+- the ingresses of two apps: the app whose install completed first is
+  served;
+- the attachments of two site ingresses: the attachment created first is
+  served;
+- an app ingress's HTTP redirect and a plaintext site ingress attachment
+  on the redirect's port: the redirect and the attachment are left out,
+  and the ingress itself is still served.
+
+A conflict on one port never affects other ports on the same hostname.
+
+While an app is held back from reconciliation (its desired state, its
+stopped resources or its priority cannot be read, or its ingresses
+cannot be built), its claims are unknown rather than absent, and the
+proxy configuration is not applied. The `ingress_conflict` and
+`site_ingress_target_missing` faults are left as they are until every
+app's claims are known again.
 
 ### Loopback hairpin NAT
 
@@ -289,6 +352,12 @@ over IPv6:
       → nftables service DNAT: service_ip:80 → pod_ip:3000
       → pod receives on :3000
 
+A prefix a pod binds is routed straight to the binding pods. A service no
+pod binds a prefix of is served through a fallback route at `/`, whose
+upstream is the service address at the lowest port the service is viewed on
+with `service.http(port)`, or at the ingress's own port where it is viewed
+on none. An `http` or `http2` site ingress attachment routes the same way.
+
 Caddy runs one server per ingress port, so an ingress is reachable only on the
 port it was declared on: the same hostname on `:80` and `:8080` reaches two
 different services, one on each.
@@ -314,6 +383,15 @@ service upstream:
 
 The L4 config is generated as `layer4.servers` entries in the Caddy
 JSON, separate from the `http.servers` entries used for HTTP ingress.
+
+An ingress with no `tls()` gets a TCP listener only. A
+`tls(Terminate.Tls, Output.Tcp)` ingress puts the L4 `tls` handler
+ahead of the proxy, so Caddy terminates TLS with the certificate its
+TLS app holds for the hostname (the same chain as HTTPS ingresses) and
+the service receives the plaintext stream. A
+`tls(Terminate.Dtls, Output.Udp)` ingress gets a UDP listener only;
+the proxy image has no DTLS terminator yet, so its datagrams reach the
+service still encrypted.
 
 Because all ingress flows through Caddy, dual-stack works uniformly
 for both HTTP and TCP/UDP: IPv4 clients connect to Caddy over IPv4,
@@ -424,21 +502,20 @@ that catches matching packets before they reach the routing decision.
 No pool4 is configured, so Jool masquerades translated IPv4 traffic
 using the host's primary IPv4 address.
 
-Translator setup happens at daemon startup, before any pods are
-touched. If NAT64 is required but initialisation fails, the daemon
-exits and files a fault — pods must not come up on a node that cannot
-reach the IPv4 internet.
-
-The translator tracks the workload lifecycle after that. On the
-transition to idle (no workloads registered), the reconciler calls
-`jool instance remove seedling` so an idle node carries no stale
-translator state. On the transition back out of idle, the first tick
-that sees workloads calls `setup_nat64` again before the pod phase
-runs — failure there files a `nat64_setup_failed` fault and short-
-circuits the tick so no pod comes up without NAT64. The jool kernel
-module stays loaded across the idle cycle; only the instance is
-added and removed. Forwarding sysctls are not flipped on idle (they
-are host-wide state).
+The translator is set up by the reconciler, before any pod is touched,
+whenever an app is installed or installing, and torn down when none is
+(an uninstalling app counts as installed for this). The daemon sets
+nothing up at startup: a host that starts with no app installed carries
+no translator, and one left by an earlier run is removed on the first
+idle iteration. If setup fails, the reconciler files a
+`nat64_setup_failed` fault and short-circuits the iteration, so no pod
+comes up without NAT64, and tries again on the next one. A teardown that
+fails files `nat64_teardown_failed` and is tried again on each idle
+iteration. The jool kernel module stays loaded across the idle cycle;
+only the instance is added and removed. Forwarding sysctls are not
+flipped on idle (they are host-wide state). The daemon does not remove
+the translator when it shuts down, since workloads keep running across a
+restart and depend on it.
 
 ### DNS64
 

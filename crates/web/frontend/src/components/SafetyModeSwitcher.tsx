@@ -84,9 +84,9 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
 
   // spec: UI#guarded-controls
   // Per-tier peer counts drive the inline indicator on the matching menu
-  // item. The session-count icon in the navbar already flags peer
-  // elevation globally, so we don't repeat that signal alongside the
-  // mode chip itself.
+  // item. The mode chip itself is flagged, in the colour of the highest tier
+  // any other web session is in, whatever this console's own mode.
+  const peerTier = peerElevation?.tier ?? null;
   const peerCountAt = (tier: SafetyTier): number =>
     tier === "dangerous"
       ? (peerElevation?.dangerousCount ?? 0)
@@ -121,6 +121,22 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
 
   return (
     <>
+      {peerTier !== null && (
+        <Tooltip
+          title={`Another web session is in ${MODE_LABEL[peerTier].toLowerCase()} mode`}
+        >
+          <Chip
+            data-testid="peer-mode-flag"
+            data-peer-mode={peerTier}
+            icon={<ModeIcon mode={peerTier} />}
+            label={`Others: ${MODE_LABEL[peerTier]}`}
+            size="small"
+            color={chipColor(peerTier)}
+            variant="outlined"
+            sx={{ mr: 0.5, fontFamily: "monospace" }}
+          />
+        </Tooltip>
+      )}
       <Tooltip title={tooltip}>
         <Chip
           icon={<ModeIcon mode={mode} />}
@@ -134,6 +150,10 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
             mr: 1,
             pl: "0.5em",
             fontFamily: "monospace",
+            ...(peerTier !== null && {
+              outline: `2px solid ${theme.palette[peerTier === "write" ? "warning" : "error"].light}`,
+              outlineOffset: 1,
+            }),
             ...(mode === "read" && {
               color: "common.white",
               borderColor: "rgba(255,255,255,0.5)",

@@ -7,7 +7,7 @@ use seedling_protocol::names::{
 use super::{
     registry::{ShellSession, StopSignal},
     session::{
-        LiveShell, SessionStreams, StartupFailure, abort_startup, begin_session, reject,
+        LiveShell, SessionIo, SessionStreams, StartupFailure, abort_startup, begin_session, reject,
         run_to_exit,
     },
 };
@@ -15,10 +15,7 @@ use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
     runtime::identity::{InstanceId, InstanceVariant, ResourceInstance},
-    system::{
-        translate::proxy::pod_network_prefix,
-        types::{ContainerSpec, Mount, MountSource},
-    },
+    system::types::{ContainerSpec, Mount, MountSource},
 };
 
 #[derive(serde::Deserialize)]
@@ -58,10 +55,11 @@ fn sanitise_name(s: &str) -> String {
 pub(crate) async fn open_volume_shell_session(
     conn: quinn::Connection,
     mut send: quinn::SendStream,
-    mut recv: quinn::RecvStream,
+    recv: quinn::RecvStream,
     leftover_stdin: Vec<u8>,
     initial_line: Vec<u8>,
     state: Arc<OiState>,
+    events: seedling_protocol::events::EventSenderWithActor,
 ) {
     #[derive(serde::Deserialize)]
     struct Params {
@@ -77,8 +75,6 @@ pub(crate) async fn open_volume_shell_session(
     #[derive(serde::Deserialize)]
     struct Request {
         #[serde(default)]
-        actor: Option<seedling_protocol::actor::Actor>,
-        #[serde(default)]
         params: serde_json::Value,
     }
 
@@ -91,9 +87,8 @@ pub(crate) async fn open_volume_shell_session(
 
     let req: Request = match serde_json::from_slice(&initial_line) {
         Ok(r) => r,
-        Err(e) => err!("not_found", format!("invalid request: {e}")),
+        Err(e) => err!("requirements_invalid", format!("invalid request: {e}")),
     };
-    let req_actor = req.actor;
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => err!("requirements_invalid", format!("invalid params: {e}")),
@@ -121,7 +116,7 @@ pub(crate) async fn open_volume_shell_session(
                 }) {
                     Ok(Some(d)) => d,
                     Ok(None) => err!("not_found", format!("site volume not found: {name}")),
-                    Err(e) => err!("internal_error", format!("db error: {e}")),
+                    Err(e) => err!("internal", format!("db error: {e}")),
                 };
 
                 use crate::runtime::site_volumes::SiteVolumeKind;
@@ -175,7 +170,7 @@ pub(crate) async fn open_volume_shell_session(
                 // name instead of a raw UUID.
                 let held_list = match vol_store.list_held() {
                     Ok(v) => v,
-                    Err(e) => err!("internal_error", format!("list held: {e}")),
+                    Err(e) => err!("internal", format!("list held: {e}")),
                 };
                 let meta = held_list.iter().find(|m| m.id == *id);
                 let label = meta
@@ -192,6 +187,23 @@ pub(crate) async fn open_volume_shell_session(
             read_only,
             display_name,
         });
+    }
+
+    // spec: SHL#volume-shells
+    {
+        let mut seen = std::collections::HashSet::new();
+        if let Some(clash) = resolved
+            .iter()
+            .find(|r| !seen.insert(r.display_name.as_str()))
+        {
+            err!(
+                "requirements_invalid",
+                format!(
+                    "two volumes would both mount at /mnt/{}",
+                    clash.display_name
+                )
+            );
+        }
     }
 
     let session_name = resolved
@@ -228,21 +240,28 @@ pub(crate) async fn open_volume_shell_session(
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
             if let Err(e) = build_volume_shell_image(&data_dir).await {
                 tracing::warn!(%image, "image build failed: {e}");
-                err!("shell_error", format!("image build failed: {e}"));
+                err!("internal", format!("image build failed: {e}"));
             }
         }
         Err(e) => tracing::warn!(%image, "image_exists check failed: {e}"),
     }
 
     let net_name = format!("seedling-{container_name}");
-    let net_prefix = pod_network_prefix(&state.node_prefix, &instance);
+    let net_prefix = match super::allocate_session_prefix(&state, &net_name, instance.kind) {
+        Ok(prefix) => prefix,
+        Err(e) => {
+            tracing::warn!(%net_name, "volume shell: allocating the pod network failed: {e}");
+            err!("internal", format!("create network failed: {e}"));
+        }
+    };
     if let Err(e) = state
         .container_runtime
         .create_network(&net_name, net_prefix, None)
         .await
     {
+        super::remove_session_network(&state, &net_name).await;
         tracing::warn!(%net_name, "volume shell: create network failed: {e}");
-        err!("shell_error", format!("create network failed: {e}"));
+        err!("internal", format!("create network failed: {e}"));
     }
 
     // Open daemon stdout/stderr uni streams.
@@ -254,7 +273,7 @@ pub(crate) async fn open_volume_shell_session(
         Err(e) => {
             tracing::warn!("volume shell: open stdout uni: {e}");
             let _ = send.finish();
-            let _ = state.container_runtime.remove_network(&net_name).await;
+            super::remove_session_network(&state, &net_name).await;
             return;
         }
     };
@@ -266,7 +285,7 @@ pub(crate) async fn open_volume_shell_session(
         Err(e) => {
             tracing::warn!("volume shell: open stderr uni: {e}");
             let _ = send.finish();
-            let _ = state.container_runtime.remove_network(&net_name).await;
+            super::remove_session_network(&state, &net_name).await;
             return;
         }
     };
@@ -280,13 +299,14 @@ pub(crate) async fn open_volume_shell_session(
         session_id,
         volumes_app,
         session_name.clone(),
-        req_actor,
+        Some((*events.actor).clone()),
         (params.rows, params.cols),
         stop.clone(),
     );
-    let event_name = ShellName::new_unchecked("volume-shell");
+    let event_name = ShellName::new_unchecked(session_name.as_str());
     if !begin_session(
         &state,
+        &events,
         &mut send,
         session,
         &event_name,
@@ -295,7 +315,7 @@ pub(crate) async fn open_volume_shell_session(
     )
     .await
     {
-        let _ = state.container_runtime.remove_network(&net_name).await;
+        super::remove_session_network(&state, &net_name).await;
         return;
     }
     let streams = SessionStreams {
@@ -372,6 +392,7 @@ pub(crate) async fn open_volume_shell_session(
     if stop.is_requested() {
         abort_startup(
             &state,
+            &events,
             session_id,
             StartupFailure::stopped(Some(net_name)),
             streams,
@@ -385,13 +406,14 @@ pub(crate) async fn open_volume_shell_session(
         Err(e) => {
             tracing::warn!("volume shell: exec failed: {e}");
             let failure = StartupFailure::failed(format!("exec failed: {e}"), Some(net_name));
-            abort_startup(&state, session_id, failure, streams).await;
+            abort_startup(&state, &events, session_id, failure, streams).await;
             return;
         }
     };
 
     let exit_code = run_to_exit(
         &state,
+        &events,
         session_id,
         &stop,
         LiveShell {
@@ -399,9 +421,11 @@ pub(crate) async fn open_volume_shell_session(
             container_name,
             net_name,
         },
-        &mut recv,
-        &leftover_stdin,
-        streams,
+        SessionIo {
+            recv,
+            leftover_stdin,
+            streams,
+        },
     )
     .await;
 

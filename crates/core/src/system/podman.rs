@@ -31,7 +31,7 @@ use crate::system::{
     translate::container::podman_args,
     types::{
         ContainerFilter, ContainerHealth, ContainerSpec, ContainerState, ContainerStatus,
-        ContainerSummary, ExecHandle, ImageSummary, NetworkSummary, SPEC_HASH_LABEL,
+        ContainerSummary, ExecHandle, ExecOutput, ImageSummary, NetworkSummary, SPEC_HASH_LABEL,
     },
 };
 
@@ -465,27 +465,6 @@ impl PodmanRuntime {
         Ok(std::path::PathBuf::from(mountpoint))
     }
 
-    async fn list_volumes_by_prefix_impl(&self, prefix: &str) -> Result<Vec<String>, PodmanError> {
-        let volumes = self
-            .client
-            .v5()
-            .volumes()
-            .volume_list_libpod(None)
-            .await
-            .map_err(map_api_err)?;
-        Ok(volumes
-            .into_iter()
-            .filter_map(|v| {
-                let name = v.name?;
-                if name.starts_with(prefix) {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect())
-    }
-
     // spec: RT#signal-delivery
     async fn signal_container_impl(&self, name: &str, signal: &str) -> Result<bool, PodmanError> {
         use podman_rest_client::v5::params::ContainerKillLibpod;
@@ -739,7 +718,11 @@ struct AsyncPtyHalf(AsyncFd<OwnedFd>);
 
 impl AsyncPtyHalf {
     fn new(fd: OwnedFd) -> io::Result<Self> {
-        Ok(Self(AsyncFd::new(fd)?))
+        // SAFETY: `fd` is an open descriptor that the `AsyncFd` takes
+        // ownership of, so it stays open, and the same one, for as long as the
+        // `AsyncFd` lives.
+        let registered = unsafe { AsyncFd::register(fd) }.map_err(|e| e.into_parts().1)?;
+        Ok(Self(registered))
     }
 }
 
@@ -1042,17 +1025,6 @@ impl ContainerRuntime for PodmanRuntime {
         Box::pin(async move { self.remove_volume_impl(name).await.map_err(Into::into) })
     }
 
-    fn list_volumes_by_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>> {
-        Box::pin(async move {
-            self.list_volumes_by_prefix_impl(prefix)
-                .await
-                .map_err(Into::into)
-        })
-    }
-
     fn volume_mountpoint<'a>(
         &'a self,
         name: &'a str,
@@ -1094,16 +1066,16 @@ impl ContainerRuntime for PodmanRuntime {
         name: &'a str,
         argv: &'a [String],
         extra_env: &'a [(String, String)],
-    ) -> BoxFuture<'a, Result<i32, BoxError>> {
+    ) -> BoxFuture<'a, Result<ExecOutput, BoxError>> {
         Box::pin(async move {
             // Subprocess `podman exec` is the simplest path that satisfies the
-            // BSL contract: run the command, forward stdio to the daemon's log
-            // sink (journald in production), and return the exit code. The
-            // libpod REST exec/start endpoint upgrades to a streaming protocol
-            // we don't need; subprocess avoids parsing it.
+            // BSL contract: run the command, capture what it wrote for the
+            // caller to record with the container's logs, and return the exit
+            // code. The libpod REST exec/start endpoint upgrades to a
+            // streaming protocol we don't need; subprocess avoids parsing it.
             let mut cmd = tokio::process::Command::new("podman");
             cmd.args(exec_argv(name, argv, extra_env));
-            let status = cmd.status().await.map_err(|e| -> BoxError {
+            let output = cmd.output().await.map_err(|e| -> BoxError {
                 ProtocolSnafu {
                     message: format!("podman exec spawn failed: {e}"),
                 }
@@ -1113,10 +1085,16 @@ impl ContainerRuntime for PodmanRuntime {
             // status.code() is None when the process was killed by a signal;
             // mirror the Unix convention of 128 + signum so callers see a
             // non-zero exit and don't silently treat it as success.
-            Ok(status.code().unwrap_or_else(|| {
+            let status = output.status;
+            let exit_code = status.code().unwrap_or_else(|| {
                 use std::os::unix::process::ExitStatusExt;
                 128 + status.signal().unwrap_or(0)
-            }))
+            });
+            Ok(ExecOutput {
+                exit_code,
+                stdout: output.stdout,
+                stderr: output.stderr,
+            })
         })
     }
 }

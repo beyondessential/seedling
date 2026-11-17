@@ -105,12 +105,13 @@ describe("Navbar", () => {
     expect(chip.closest("a")?.getAttribute("href")).toBe("/faults");
   });
 
-  it("counts web, shell, and forward sessions in the sessions badge", async () => {
+  // spec: UI#connected-clients
+  it("counts only open web sessions in the sessions badge", async () => {
     renderWithSession(<Navbar />, {
       fixtures: { "/connected-clients/list": clients },
     });
-    // 2 web + 1 shell + 0 forwards
-    expect(await screen.findByText("3")).toBeTruthy();
+    // 2 web sessions; the open shell does not count.
+    expect(await screen.findByText("2")).toBeTruthy();
   });
 
   // spec: UI#guarded-controls
@@ -126,12 +127,48 @@ describe("Navbar", () => {
     renderWithSession(<Navbar />, {
       fixtures: { "/connected-clients/list": elevated },
     });
-    const badge = await screen.findByText("4");
+    const badge = await screen.findByText("3");
     fireEvent.mouseOver(badge.closest("a")!);
     const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain("4 connected clients");
+    expect(tooltip.textContent).toContain("3 open web sessions");
     expect(tooltip.textContent).toContain("1 in dangerous mode");
     expect(tooltip.textContent).toContain("1 in write mode");
+  });
+
+  // spec: UI#guarded-controls
+  it("flags the safety mode control with the highest peer mode, whatever our own mode", async () => {
+    const elevated: ConnectedClients = {
+      ...clients,
+      web: [
+        webSession("test-web-session", "read"),
+        webSession("peer-1", "write"),
+        webSession("peer-2", "dangerous"),
+      ],
+    };
+    renderWithSession(<Navbar />, {
+      fixtures: { "/connected-clients/list": elevated },
+    });
+    const flag = await screen.findByTestId("peer-mode-flag");
+    expect(flag.getAttribute("data-peer-mode")).toBe("dangerous");
+    expect(flag.className).toContain("MuiChip-colorError");
+  });
+
+  // spec: UI#guarded-controls
+  it("flags a write-mode peer in the warning colour and flags nothing for read peers", async () => {
+    const { unmount } = renderWithSession(<Navbar />, {
+      fixtures: {
+        "/connected-clients/list": { ...clients, web: [webSession("peer-1", "write")] },
+      },
+    });
+    const flag = await screen.findByTestId("peer-mode-flag");
+    expect(flag.getAttribute("data-peer-mode")).toBe("write");
+    expect(flag.className).toContain("MuiChip-colorWarning");
+    unmount();
+    renderWithSession(<Navbar />, {
+      fixtures: { "/connected-clients/list": clients },
+    });
+    await screen.findByText("2");
+    expect(screen.queryByTestId("peer-mode-flag")).toBeNull();
   });
 
   // spec: UI#guarded-controls
@@ -148,7 +185,18 @@ describe("Navbar", () => {
     const badge = await screen.findByText("1");
     fireEvent.mouseOver(badge.closest("a")!);
     const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toBe("1 connected client");
+    expect(tooltip.textContent).toBe("1 open web session");
+    expect(screen.queryByTestId("peer-mode-flag")).toBeNull();
+  });
+
+  // spec: UI#operator-capabilities
+  it("says so when a count could not be read instead of showing none", async () => {
+    renderWithSession(<Navbar />, {
+      fixtures: {
+        "/faults/list": { ok: false, error: { code: "internal", message: "db gone" } },
+      },
+    });
+    expect(await screen.findByText("counts unavailable")).toBeTruthy();
   });
 
   // spec: UI#volumes

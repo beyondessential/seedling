@@ -46,8 +46,7 @@ const STATUS_LABEL: Record<TlsHostnameStatus, string> = {
   error: "error",
   pending: "pending",
   blocked: "blocked",
-  no_cert: "no cert",
-  default: "default (proxy)",
+  none: "none",
 };
 
 const STATUS_COLOR: Record<
@@ -59,8 +58,7 @@ const STATUS_COLOR: Record<
   error: "error",
   pending: "warning",
   blocked: "warning",
-  no_cert: "default",
-  default: "default",
+  none: "default",
 };
 
 function formatTime(unix: number | null): string {
@@ -83,8 +81,8 @@ function policySummary(view: TlsHostnameView): string {
   const policy = view.policy;
   switch (policy.strategy) {
     case "default": {
-      const caddy = view.active_cert?.caddy_issuer;
-      if (caddy) return `default — ${caddyIssuerLabel(caddy)}`;
+      const proxy = view.active_cert?.proxy_issuer;
+      if (proxy) return `default — ${proxyIssuerLabel(proxy)}`;
       return "default — Caddy automatic TLS";
     }
     case "acme_dns":
@@ -114,10 +112,9 @@ function chainLabel(chain: TlsHostnameChain | null, now: number): string | null 
   return who;
 }
 
-function caddyIssuerLabel(issuer: string): string {
+function proxyIssuerLabel(issuer: string): string {
   if (issuer === "local") return "Caddy internal CA";
-  if (issuer.startsWith("acme-")) return `Caddy ACME (${issuer})`;
-  return `Caddy (${issuer})`;
+  return `Caddy ACME (${issuer})`;
 }
 
 function lastIssuanceLabel(
@@ -140,8 +137,8 @@ function lastIssuanceLabel(
   if (last.kind === "canopy") {
     return { primary: "Canopy", secondary: when };
   }
-  if (last.kind === "caddy") {
-    return { primary: caddyIssuerLabel(last.provider), secondary: when };
+  if (last.kind === "proxy") {
+    return { primary: proxyIssuerLabel(last.provider), secondary: when };
   }
   const provider = last.provider ?? "unknown provider";
   return { primary: `ACME-DNS via ${provider}`, secondary: when };
@@ -249,8 +246,8 @@ export function TlsHostnamesTable({
                       ? `Paused: ${row.retry_block.reason}`
                       : row.status === "blocked"
                         ? "Issuance is paused for this domain"
-                        : row.status === "default"
-                          ? "No policy bound — the proxy handles ACME-HTTP-01 automatically"
+                        : row.status === null
+                          ? "The runtime cannot tell whether a usable certificate is served"
                           : row.status === "pending" && row.force_retry_at
                             ? "Retry queued"
                             : "";
@@ -288,9 +285,9 @@ export function TlsHostnamesTable({
                       >
                         <Tooltip title={statusTooltip}>
                           <Chip
-                            label={STATUS_LABEL[row.status]}
+                            label={row.status ? STATUS_LABEL[row.status] : "unknown"}
                             size="small"
-                            color={STATUS_COLOR[row.status]}
+                            color={row.status ? STATUS_COLOR[row.status] : "default"}
                             variant={
                               row.status === "active" ? "filled" : "outlined"
                             }

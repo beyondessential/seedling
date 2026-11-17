@@ -37,3 +37,5 @@ http.reverse_proxy.selection_policies.first
 
 layer4
 layer4.handlers.proxy
+# A TLS ingress is terminated by the proxy before its stream is forwarded.
+layer4.handlers.tls

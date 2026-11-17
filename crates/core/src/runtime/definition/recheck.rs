@@ -168,6 +168,9 @@ impl Rechecker {
             match outcome {
                 Ok(selected) => {
                     self.gates.record_success(&app);
+                    // spec: FLT#app-faults
+                    let cleared = app.clone();
+                    db.call(move |db| faults::clear_recheck_failed(db, &cleared));
                     self.next_due
                         .insert(app.clone(), now + interval + jitter(interval));
                     // The definition may have been replaced while the
@@ -191,9 +194,18 @@ impl Rechecker {
                     db.call(move |db| faults::sync_source_moved(db, &app_owned, moved));
                 }
                 Err(e) => {
-                    // spec: FLT#app-faults — a failed
-                    // re-check neither files nor clears the fault.
+                    // spec: FLT#app-faults — a failed re-check neither files
+                    // nor clears `definition_source_moved`.
                     let failures = self.gates.record_failure(app.clone(), now);
+                    // spec: RCK#back-off
+                    // Five in a row is worth an operator's attention; the
+                    // re-checks go on at the cap regardless.
+                    if failures >= faults::RECHECK_FAULT_AFTER {
+                        let (faulted, latest) = (app.clone(), e.to_string());
+                        db.call(move |db| {
+                            faults::file_recheck_failed(db, &faulted, failures, &latest)
+                        });
+                    }
                     tracing::warn!(
                         app = %app,
                         reference = %target.reference,

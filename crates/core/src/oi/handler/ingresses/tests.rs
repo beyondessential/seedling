@@ -298,16 +298,10 @@ fn discovery_status_and_refresh_without_tailscale() {
     let status = oi
         .call("/ingresses/site/discovery/status", json!({}))
         .unwrap();
-    let providers = status["providers"].as_array().unwrap();
-    assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0]["name"], "tailscale");
-    assert_eq!(providers[0]["healthy"], false);
-    assert_eq!(providers[0]["ingresses"], json!([]));
-    assert!(
-        providers[0]["last_error"]
-            .as_str()
-            .unwrap()
-            .contains("not configured")
+    assert_eq!(
+        status["providers"],
+        json!([]),
+        "one object for each provider the runtime runs"
     );
 
     let (code, msg) = oi
@@ -361,4 +355,271 @@ fn attaching_on_port_zero_is_refused() {
         msg.contains("got 0"),
         "message should name the value: {msg}"
     );
+}
+
+fn event_types(
+    rx: &mut tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
+) -> Vec<serde_json::Value> {
+    let mut events = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        events.push(serde_json::to_value(&e).unwrap());
+    }
+    events
+}
+
+fn create(oi: &TestOi, name: &str) {
+    oi.call(
+        "/ingresses/site/create",
+        json!({ "name": name, "hostname": format!("{name}.example.com") }),
+    )
+    .unwrap();
+}
+
+fn attach_forward(
+    oi: &TestOi,
+    name: &str,
+    service: &str,
+) -> Result<serde_json::Value, (String, String)> {
+    oi.call(
+        "/ingresses/site/attach/forward",
+        json!({
+            "name": name,
+            "port": 443,
+            "protocol": "http",
+            "target_app": "my-app",
+            "target_service": service,
+        }),
+    )
+}
+
+fn record_discovered(oi: &TestOi, name: &str, stale: bool) {
+    use crate::runtime::site_ingresses::{
+        self, DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider,
+    };
+    let def = SiteIngressDef {
+        name: seedling_protocol::names::SiteIngressName::new(name).unwrap(),
+        hostname: "host.ts.net".into(),
+        description: None,
+        source: SiteIngressSource::Discovered {
+            provider: DiscoveryProvider::Tailscale,
+            key: "n-1".into(),
+        },
+        tls_provider: TlsProvider::Tailscale,
+        stale,
+        created_at: jiff::Timestamp::now().to_string(),
+    };
+    oi.state
+        .db
+        .call(move |db| site_ingresses::create(db, &def))
+        .unwrap();
+}
+
+// spec: INGM#creation
+#[test]
+fn creating_under_a_name_a_site_ingress_has_is_refused() {
+    let oi = TestOi::new();
+    create(&oi, "front");
+    let (code, _) = oi
+        .call(
+            "/ingresses/site/create",
+            json!({ "name": "front", "hostname": "other.example.com" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert_eq!(show(&oi, "front")["hostname"], "front.example.com");
+
+    record_discovered(&oi, "found", false);
+    let (code, _) = oi
+        .call(
+            "/ingresses/site/create",
+            json!({ "name": "found", "hostname": "other.example.com" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid", "of either source");
+}
+
+// spec: INGM#update
+#[test]
+fn an_update_that_changes_nothing_emits_no_event() {
+    let oi = TestOi::new();
+    create(&oi, "front");
+    let mut rx = oi.state.event_tx.subscribe();
+
+    oi.call(
+        "/ingresses/site/update",
+        json!({ "name": "front", "tls_provider": "acme" }),
+    )
+    .unwrap();
+    oi.call(
+        "/ingresses/site/update",
+        json!({ "name": "front", "description": null }),
+    )
+    .unwrap();
+    assert!(event_types(&mut rx).is_empty());
+
+    oi.call(
+        "/ingresses/site/update",
+        json!({ "name": "front", "description": "the front", "tls_provider": "none" }),
+    )
+    .unwrap();
+    let events = event_types(&mut rx);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["type"], "SiteIngressUpdated");
+    assert_eq!(events[0]["hostname"], "front.example.com");
+    assert_eq!(events[0]["tls_provider"], "none");
+    assert_eq!(events[0]["description"], "the front");
+}
+
+// spec: INGM#deletion
+#[test]
+fn deleting_emits_a_removal_for_each_attachment_and_the_real_source() {
+    let oi = TestOi::new();
+    create(&oi, "front");
+    attach_forward(&oi, "front", "web").unwrap();
+    oi.call(
+        "/ingresses/site/attach/redirect",
+        json!({
+            "name": "front",
+            "port": 80,
+            "protocol": "http",
+            "redirect_url": "https://front.example.com",
+        }),
+    )
+    .unwrap();
+    let mut rx = oi.state.event_tx.subscribe();
+
+    oi.call("/ingresses/site/delete", json!({ "name": "front" }))
+        .unwrap();
+    let events = event_types(&mut rx);
+    let types: Vec<_> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
+    assert_eq!(
+        types,
+        [
+            "SiteIngressAttachmentRemoved",
+            "SiteIngressAttachmentRemoved",
+            "SiteIngressDeleted"
+        ]
+    );
+    assert_eq!(events[0]["port"], 80);
+    assert_eq!(events[0]["target_kind"], "redirect");
+    assert_eq!(events[1]["target_app"], "my-app");
+    assert_eq!(events[2]["source"], "manual");
+}
+
+// spec: INGM#deletion
+#[test]
+fn a_discovered_site_ingress_can_be_deleted_once_its_provider_stops_reporting_it() {
+    let oi = TestOi::new();
+    record_discovered(&oi, "found", false);
+    let (code, _) = oi
+        .call("/ingresses/site/delete", json!({ "name": "found" }))
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    show(&oi, "found");
+
+    oi.state
+        .db
+        .call(|db| {
+            crate::runtime::site_ingresses::set_stale(
+                db,
+                &seedling_protocol::names::SiteIngressName::new("found").unwrap(),
+                true,
+            )
+        })
+        .unwrap();
+    let mut rx = oi.state.event_tx.subscribe();
+    oi.call("/ingresses/site/delete", json!({ "name": "found" }))
+        .unwrap();
+    let events = event_types(&mut rx);
+    assert_eq!(events[0]["type"], "SiteIngressDeleted");
+    assert_eq!(events[0]["source"], "discovered");
+}
+
+// spec: INGM#attachments
+#[test]
+fn attaching_on_an_existing_port_replaces_the_target_and_keeps_created_at() {
+    let oi = TestOi::new();
+    create(&oi, "front");
+    let mut rx = oi.state.event_tx.subscribe();
+
+    attach_forward(&oi, "front", "web").unwrap();
+    let created_at = show(&oi, "front")["attachments"][0]["created_at"].clone();
+    let events = event_types(&mut rx);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["type"], "SiteIngressAttachmentAdded");
+
+    // The same target changes nothing and emits nothing.
+    attach_forward(&oi, "front", "web").unwrap();
+    assert!(event_types(&mut rx).is_empty());
+
+    // Another target replaces it in place.
+    attach_forward(&oi, "front", "api").unwrap();
+    let atts = show(&oi, "front")["attachments"].clone();
+    assert_eq!(atts.as_array().unwrap().len(), 1);
+    assert_eq!(atts[0]["target_service"], "api");
+    assert_eq!(
+        atts[0]["created_at"], created_at,
+        "decides ingress conflicts"
+    );
+    let events = event_types(&mut rx);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["type"], "SiteIngressAttachmentUpdated");
+    assert_eq!(events[0]["target_service"], "api");
+
+    // A redirect on the same port replaces a forward.
+    oi.call(
+        "/ingresses/site/attach/redirect",
+        json!({
+            "name": "front",
+            "port": 443,
+            "protocol": "http",
+            "redirect_url": "https://elsewhere.example.com",
+            "redirect_preserve_path": false,
+        }),
+    )
+    .unwrap();
+    let att = &show(&oi, "front")["attachments"][0];
+    assert_eq!(att["target_kind"], "redirect");
+    assert_eq!(att["redirect_preserve_path"], false);
+    assert!(att.get("target_app").is_none());
+    let events = event_types(&mut rx);
+    assert_eq!(events[0]["type"], "SiteIngressAttachmentUpdated");
+    assert_eq!(events[0]["redirect_preserve_path"], false);
+}
+
+// spec: INGM#attachments
+#[test]
+fn detaching_reports_the_target_it_removed() {
+    let oi = TestOi::new();
+    create(&oi, "front");
+    attach_forward(&oi, "front", "web").unwrap();
+    let mut rx = oi.state.event_tx.subscribe();
+    oi.call(
+        "/ingresses/site/detach",
+        json!({ "name": "front", "port": 443, "protocol": "http" }),
+    )
+    .unwrap();
+    let events = event_types(&mut rx);
+    assert_eq!(events[0]["type"], "SiteIngressAttachmentRemoved");
+    assert_eq!(events[0]["target_kind"], "forward");
+    assert_eq!(events[0]["target_app"], "my-app");
+    assert_eq!(events[0]["target_service"], "web");
+}
+
+// spec: INGM#discovery-status
+#[test]
+fn discovery_health_is_null_before_the_first_poll() {
+    let oi = TestOi::with_tailscale_provider();
+    let status = oi
+        .call("/ingresses/site/discovery/status", json!({}))
+        .unwrap();
+    let providers = status["providers"].as_array().unwrap();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0]["name"], "tailscale");
+    assert_eq!(providers[0]["healthy"], serde_json::Value::Null);
+    assert!(providers[0].get("last_poll_at").is_none());
+    assert!(providers[0].get("last_error").is_none());
+
+    oi.call("/ingresses/site/discovery/refresh", json!({}))
+        .unwrap();
 }

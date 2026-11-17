@@ -239,6 +239,89 @@ fn install_params_without_schema_are_rejected() {
     assert!(message.contains("no install params"), "message: {message}");
 }
 
+// spec: ACN#start-action
+// spec: OPS#initiating-events
+// spec: RCN#desired-state
+#[test]
+fn an_app_moving_to_installed_without_an_install_action_has_its_start_action_run() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    let mut events = oi.state.event_tx.subscribe();
+    oi.call("/apps/install/invoke", json!({ "app": "demo" }))
+        .unwrap();
+
+    let (phase_actor, started) = oi.block_on(async {
+        let wait = async {
+            let mut phase_actor = None;
+            loop {
+                match events.recv().await {
+                    Ok(OiEvent::AppPhaseChanged { actor, phase, .. }) if phase == "installed" => {
+                        phase_actor = Some(actor.and_then(|a| a.id.clone()));
+                    }
+                    Ok(OiEvent::OperationStarted {
+                        action_name,
+                        trigger,
+                        actor,
+                        ..
+                    }) => {
+                        break (
+                            phase_actor,
+                            (
+                                action_name.to_string(),
+                                trigger,
+                                actor.and_then(|a| a.id.clone()),
+                            ),
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => panic!("event stream ended: {e}"),
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), wait)
+            .await
+            .expect("the start action starts")
+    });
+    // spec: WIRE#actor-attribution
+    // The start action is caused by the install request, and so is its phase
+    // change: both carry that request's actor.
+    assert_eq!(
+        phase_actor,
+        Some(Some("test-suite".to_owned())),
+        "the AppPhaseChanged event"
+    );
+    assert_eq!(
+        started,
+        (
+            "start".to_owned(),
+            "install".to_owned(),
+            Some("test-suite".to_owned())
+        )
+    );
+}
+
+// spec: ACN#param-delivery
+#[test]
+fn install_params_with_a_reserved_suffix_are_rejected() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": INSTALL_SCRIPT }),
+    )
+    .unwrap();
+    for key in ["data_volume", "upload_filename"] {
+        let (code, message) = oi
+            .call(
+                "/apps/install/invoke",
+                json!({ "app": "demo", "params": { "admin-email": "a@b.co", key: "x" } }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{key}");
+        assert!(message.contains(key), "{message}");
+    }
+}
+
 // spec: ACI#install-parameters
 #[test]
 fn install_with_missing_required_requirement_is_rejected() {

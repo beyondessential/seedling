@@ -37,7 +37,7 @@ export const healthcheck: HealthcheckSummary = {
   timeout_secs: 5,
   retries: 3,
   start_period_secs: 30,
-  on_failure: "restart",
+  on_failure: "replace",
 };
 
 export function makeWebDeployment(

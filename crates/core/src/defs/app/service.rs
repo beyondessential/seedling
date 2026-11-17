@@ -1,6 +1,6 @@
 use rhai::{EvalAltResult, TypeBuilder};
 
-use crate::runtime::barrier::runtime::is_in_action_closure;
+use crate::runtime::barrier::runtime::{is_in_action_closure, next_anon_instance_id};
 
 use super::super::{
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
@@ -18,7 +18,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
-                super::static_ref::<Service>(name)
+                super::static_ref::<Service>(this, name)
             } else {
                 let weak = std::sync::Arc::downgrade(&this.def);
                 let id = ResourceId {
@@ -48,7 +48,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             if !is_in_action_closure() {
                 return Err("anonymous services can only be created inside action closures".into());
             }
-            Ok(Service::new(ResourceName::new(String::new())))
+            Ok(Service::anonymous(next_anon_instance_id("service")))
         },
     );
 
@@ -65,7 +65,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 name: rname.clone(),
             };
             if is_in_action_closure() {
-                return super::static_ref::<ExternalService>(name);
+                return super::static_ref::<ExternalService>(this, name);
             }
             this.def.rcu(|d| {
                 let mut d = (**d).clone();

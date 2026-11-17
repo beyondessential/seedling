@@ -51,12 +51,19 @@ fn is_synthesised_aaaa(addr: std::net::Ipv6Addr) -> bool {
     }
 }
 
-/// Returns `true` if the network already provides NAT64 (and seedling should
-/// not activate its own).
-pub async fn detect_external_nat64() -> bool {
+/// Whether the network already provides NAT64 and DNS64, which is the
+/// decision `ipv4only.arpa` gives once it is answered.
+///
+/// `Err` is a detection that could not be made: the lookup failed, or came
+/// back with no answer at all. That is neither the network providing NAT64
+/// nor its lacking it, and is not reported as either.
+// spec: NAT64#detection
+pub async fn detect_external_nat64() -> Result<bool, String> {
     match tokio::net::lookup_host("ipv4only.arpa:0").await {
         Ok(addrs) => {
+            let mut answered = false;
             for addr in addrs {
+                answered = true;
                 let std::net::IpAddr::V6(v6) = addr.ip() else {
                     continue;
                 };
@@ -71,27 +78,59 @@ pub async fn detect_external_nat64() -> bool {
                     addr = %v6,
                     "detected existing NAT64+DNS64 infrastructure via RFC 7050"
                 );
-                return true;
+                return Ok(true);
+            }
+            if !answered {
+                return Err("the lookup of ipv4only.arpa received no answer".to_owned());
             }
             tracing::info!("no NAT64+DNS64 detected (ipv4only.arpa returned no AAAA records)");
-            false
+            Ok(false)
         }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "NAT64 detection failed (could not resolve ipv4only.arpa); assuming no NAT64"
-            );
-            false
-        }
+        Err(e) => Err(format!("the lookup of ipv4only.arpa failed: {e}")),
     }
 }
 
+/// Whether the runtime provides its own NAT64 translator, and why that may
+/// rest on a detection that could not be made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activation {
+    pub active: bool,
+    /// Why detection was undetermined, when it was. NAT64 is active meanwhile.
+    pub undetermined: Option<String>,
+}
+
 /// Determines whether seedling should activate its own NAT64 translator.
-pub async fn should_activate_nat64(mode: Nat64Mode) -> bool {
+///
+/// Decided once, at start. While detection is undetermined NAT64 is active,
+/// and a detection that succeeds later does not change that until the next
+/// start.
+// spec: NAT64#detection
+pub async fn should_activate_nat64(mode: Nat64Mode) -> Activation {
     match mode {
-        Nat64Mode::Enabled => true,
-        Nat64Mode::Disabled => false,
-        Nat64Mode::Auto => !detect_external_nat64().await,
+        Nat64Mode::Enabled => Activation {
+            active: true,
+            undetermined: None,
+        },
+        Nat64Mode::Disabled => Activation {
+            active: false,
+            undetermined: None,
+        },
+        Nat64Mode::Auto => activation_from_detection(detect_external_nat64().await),
+    }
+}
+
+/// The activation a detection gives.
+// spec: NAT64#detection
+pub fn activation_from_detection(detection: Result<bool, String>) -> Activation {
+    match detection {
+        Ok(external) => Activation {
+            active: !external,
+            undetermined: None,
+        },
+        Err(why) => Activation {
+            active: true,
+            undetermined: Some(why),
+        },
     }
 }
 
@@ -99,7 +138,7 @@ pub async fn should_activate_nat64(mode: Nat64Mode) -> bool {
 mod detection_tests {
     use std::net::Ipv6Addr;
 
-    use super::is_synthesised_aaaa;
+    use super::{activation_from_detection, is_synthesised_aaaa};
 
     // spec: NAT64#detection
     // A resolver handing back the canonical A records in IPv4-mapped form has
@@ -134,5 +173,17 @@ mod detection_tests {
         assert!(is_synthesised_aaaa(
             "::ffff:203.0.113.1".parse::<Ipv6Addr>().unwrap()
         ));
+    }
+
+    // spec: NAT64#detection
+    #[test]
+    fn an_undetermined_detection_activates_nat64_and_says_why() {
+        let undetermined = activation_from_detection(Err("no answer".to_owned()));
+        assert!(undetermined.active);
+        assert_eq!(undetermined.undetermined.as_deref(), Some("no answer"));
+
+        assert!(!activation_from_detection(Ok(true)).active);
+        let absent = activation_from_detection(Ok(false));
+        assert!(absent.active && absent.undetermined.is_none());
     }
 }

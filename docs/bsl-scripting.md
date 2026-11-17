@@ -94,8 +94,10 @@ svc.ingress("dtls.example.com", 443)
 // The resulting Ingress is bound to the Service. Throws on external services.
 http_svc.ingress("api.example.com", 443).tls(Terminate.Https, Output.Http1);
 
-// External services are slots; the operator binds them to a concrete endpoint.
+// External services are slots; the operator maps them to a concrete endpoint.
+// A pod reaches one by mounting its ports; binding a pod to one throws.
 let db = app.external_service("upstream-db");
+app.deployment("api").mount(db.port(5432));
 ```
 
 ### Deployment / Job (Container + Pod)
@@ -124,7 +126,7 @@ app.deployment("worker")
     .tcp(5432, db_svc.port(5432))     // expose pod port to TCP service
     .udp(5353, dns_svc)
     .scale(2)                         // fixed replicas (Deployment only)
-    .scale(1..8)                      // scalable range (Deployment only)
+    .scale(1..=8)                     // scalable range (Deployment only)
     .on_update(OnUpdate.Rolling)      // default; or OnUpdate.Replace
     .priority(Priority.Critical)      // claim on host resources (Deployment only)
     .on_exit(OnExit.Restart)          // default for Deployment; Terminate for Job
@@ -183,7 +185,7 @@ Available inside action closures:
 
 ```rhai
 rt.start(resources)             // schedule resources, returns Started
-rt.stop(resources, deadline?)   // unschedule and block until terminated
+rt.stop(resources, deadline?)   // unschedule and block until terminated; default deadline is the longest stop timeout + 30s
 rt.query(resources)             // returns Started without scheduling
 rt.restart(deployment)          // rotate a Deployment's instances per on_update
 rt.signal(target, "SIGHUP")     // deliver a POSIX signal to PID 1 of every running instance
@@ -199,6 +201,8 @@ started.ready(deadline?)
 started.terminated(deadline?)   // six-hour deadline, returns Termination
 started.terminated_eventually() // no deadline, returns Termination
 started.ready_eventually()      // no deadline, returns Started
+// On what rt.warm_certs or rt.warm_images returned, only ready() and
+// ready_eventually() are allowed; the other barriers throw.
 
 termination.ensure_success()    // throws if the resource failed
 
@@ -222,15 +226,15 @@ col.select(#{ name_patterns: ["worker-*"] })
 
 | Name | Type | Description |
 |---|---|---|
-| `AVAILABLE_THREADS` | int | Compute threads available |
-| `AVAILABLE_MEMORY` | int | Memory available to the application, in bytes |
+| `AVAILABLE_THREADS` | int | Compute threads available; `1` while undetermined, with a `host_constant_undetermined` fault on `_system` |
+| `AVAILABLE_MEMORY` | int | Memory available to the application, in bytes; while undetermined every evaluation fails, with a `host_constant_undetermined` fault on `_system` |
 | `CPU_ARCHITECTURE` | string | CPU architecture of the node (e.g. `x86_64`, `aarch64`) |
-| `HOST_HAS_IPV4` | bool | Whether the node has working IPv4 egress |
-| `HOST_HAS_IPV6` | bool | Whether the node has working IPv6 egress |
+| `HOST_HAS_IPV4` | bool | Whether the node has working IPv4 egress; `false` while undetermined, with an `ipv4_egress_undetermined` fault on `_system` |
+| `HOST_HAS_IPV6` | bool | Whether the node has working IPv6 egress; `false` while undetermined, with an `ipv6_egress_undetermined` fault on `_system` |
 | `NAT64_ACTIVE` | bool | Whether the node itself is providing NAT64 translation |
 | `HAS_SNAPSHOTS` | bool | Whether volume storage supports copy-on-write snapshots |
-| `NODE_NAME` | string | Identifier of the node running the application |
-| `TIMEZONE` | string | IANA timezone of the host (e.g. `Pacific/Auckland`); `UTC` when unknown |
+| `NODE_NAME` | string | Identifier of the node running the application; while undetermined every evaluation fails, with a `host_constant_undetermined` fault on `_system` |
+| `TIMEZONE` | string | IANA timezone of the host (e.g. `Pacific/Auckland`); `UTC` while undetermined, with a `timezone_undetermined` fault on `_system` |
 | `IDLE_CMD` | array | A no-op long-running command (`["sleep", "infinity"]`) for containers whose only purpose is to host `rt.exec` calls |
 
 ### Enum constants
@@ -280,7 +284,7 @@ let data = app.volume("data").exported(#{ description: "Application data" });
 // A deployment is a long-running container workload.
 app.deployment("api")
     .image(image.call())
-    .scale(1..4)
+    .scale(1..=4)
     .mount("/data", data)
     .http(8080, web_svc.route("/api"))
     .http(8080, web_svc.route("/"));
@@ -295,6 +299,9 @@ app.on_start(|rt, _param| {
 // Actions are available to operators via the UI or CLI.
 // The closure runs when an operator invokes the action.
 // `params` declares a validated schema; extra keys are passed through as-is.
+// Every handler (`on_action`, `on_start`, `on_shell`, `on_install`,
+// `on_change`, `validate`) must be a closure: passing a function by name, as
+// `handler` or `Fn("handler")`, throws. Wrap it instead: `|rt, param| handler(rt, param)`.
 app.on_action("migrate", |rt, param| {
     // Jobs defined inside actions are dynamic: created fresh per invocation.
     let job = app.job()
@@ -324,6 +331,17 @@ app.on_shell("bash", |_rt, shell, _param| {
     description: "Bash shell in the app container",
 });
 
+// `shell.attach` starts the job, connects the operator's terminal to it, and
+// blocks until the attachment ends: the job exits, the operator closes the
+// session or stops it, or the connection is lost. It returns a `ShellExit`
+// with `exited()`, `exit_code()` (`()` if the job did not exit), `success()`
+// and `ensure_success()`. The closure then runs on, with `rt` but without the
+// terminal, and the session ends when the closure returns.
+app.on_shell("check", |rt, shell, _param| {
+    shell.attach(app.job().image(image.call()).command("sh")).ensure_success();
+    rt.start(app.job().image(image.call()).command(["cleanup"])).terminated().ensure_success();
+});
+
 // on_install only runs on first install, and can prompt for secrets. Param
 // keys follow the BSL name rules (lowercase alphanumeric and hyphens), so
 // access them via `param["admin-password"]` rather than `param.admin_password`.
@@ -347,6 +365,7 @@ app.on_install(|rt, param| {
 });
 
 // on_change fires when a parameter value changes (not on first install).
+// The closure may take 0, 1 or 2 parameters: it is given as many of `rt` and `old` as it declares.
 version.on_change(|rt, old| {
     // old is the app at the previous generation; use it to stop old resources.
     rt.start(app.job()
@@ -371,8 +390,8 @@ app.deployment("api")
     .healthcheck(#{
         kind: "command",
         cmd: ["curl", "-fsS", "http://localhost:8080/healthz"],
-        interval: 10,         // seconds between checks (default 30)
-        timeout: 3,           // seconds before a check is considered failed (default 30)
+        interval: 10,         // seconds between checks, at least 1 (default 30)
+        timeout: 3,           // seconds before a check is considered failed, at least 1 (default 30)
         retries: 3,           // consecutive failures before transitioning to unhealthy (default 3)
         start_period: 15,     // seconds of grace after start before failures count (default 0)
         on_failure: "replace",// "replace" (default) or "monitor"
@@ -482,7 +501,8 @@ app.on_action("regenerate-config", |rt, _p| {
 
 Behaviour:
 
-- Target may be a named or anonymous `Volume`, or an `ExternalVolume` resolved from an operation-scoped `kind: "volume"` param.
+- Target may be a named or anonymous `Volume`, or an `ExternalVolume` that resolves to storage, through an operation-scoped `kind: "volume"` param or the host's external volume mappings.
+- The call throws for an `ExternalVolume` that resolves to nothing, for one whose binding or mapping is read-only, and for a `Volume` declared read-only.
 - Path validation matches static `Volume.write`: absolute, no `..`, must not be the volume root.
 - The call is at-most-once across replays.
 - Unlike static `Volume.write`, contents are NOT reapplied on container restart — `rt.write` is point-in-time. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.

@@ -57,11 +57,17 @@ export function Navbar() {
   useEffect(() => {
     document.title = data?.hostname ? `${data.hostname} · Seedling` : "Seedling";
   }, [data?.hostname]);
-  const { data: faults, refetch: refetchFaults } = useOiQuery<FaultRecord[]>("/faults/list", {});
-  const { data: clients, refetch: refetchClients } =
+  const { data: faults, error: faultsError, refetch: refetchFaults } =
+    useOiQuery<FaultRecord[]>("/faults/list", {});
+  const { data: clients, error: clientsError, refetch: refetchClients } =
     useOiQuery<ConnectedClients>("/connected-clients/list", {});
-  const { data: heldVols, refetch: refetchHeld } =
+  const { data: heldVols, error: heldError, refetch: refetchHeld } =
     useOiQuery<HeldVolume[]>("/volumes/held/list", {});
+  // spec: UI#operator-capabilities
+  // A count that could not be read must not read as zero.
+  const failedReads = [faultsError, clientsError, heldError].filter(
+    (e): e is NonNullable<typeof e> => e !== null,
+  );
   const { reconnecting, sidebarOpen, setSidebarOpen, webSessionId } = useSessionContext();
 
   const matchFaults = useCallback(isFaultEvent, []);
@@ -73,10 +79,8 @@ export function Navbar() {
 
   const faultCount = faults?.length ?? 0;
   const heldCount = heldVols?.length ?? 0;
-  const sessionCount =
-    (clients?.web.length ?? 0) +
-    (clients?.shells.length ?? 0) +
-    (clients?.forwards.length ?? 0);
+  // spec: UI#connected-clients
+  const sessionCount = clients?.web.length ?? 0;
 
   // spec: UI#guarded-controls
   // Compute the highest safety tier any *other* web session is currently in.
@@ -108,7 +112,7 @@ export function Navbar() {
         : "primary";
 
   const sessionsTooltip = peerElevation.tier
-    ? `${sessionCount} connected client${sessionCount === 1 ? "" : "s"} · ${
+    ? `${sessionCount} open web session${sessionCount === 1 ? "" : "s"} · ${
         peerElevation.dangerousCount > 0
           ? `${peerElevation.dangerousCount} in dangerous mode`
           : ""
@@ -119,7 +123,7 @@ export function Navbar() {
           ? `${peerElevation.writeCount} in write mode`
           : ""
       }`
-    : `${sessionCount} connected client${sessionCount === 1 ? "" : "s"}`;
+    : `${sessionCount} open web session${sessionCount === 1 ? "" : "s"}`;
 
   return (
     <AppBar position="fixed">
@@ -289,6 +293,19 @@ export function Navbar() {
           </IconButton>
         </Tooltip>
         <Box sx={{ flexGrow: 1 }} />
+        {failedReads.length > 0 && (
+          <Tooltip
+            title={failedReads.map((e) => `${e.method}: ${e.message}`).join("\n")}
+            slotProps={{ tooltip: { sx: { whiteSpace: "pre-line" } } }}
+          >
+            <Chip
+              label="counts unavailable"
+              size="small"
+              color="warning"
+              sx={{ mr: 1, fontFamily: "monospace" }}
+            />
+          </Tooltip>
+        )}
         {faultCount > 0 && (
           <Tooltip title={`${faultCount} active fault${faultCount === 1 ? "" : "s"}`}>
             <Chip

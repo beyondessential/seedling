@@ -118,7 +118,7 @@ export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
                     </TableCell>
                     <TableCell>
                       <Chip
-                        label={entry.resource_type.toLowerCase()}
+                        label={entry.resource_type}
                         size="small"
                         variant="outlined"
                       />

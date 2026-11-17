@@ -321,11 +321,13 @@ mod tests {
                     port: 5432,
                     proto: L4Proto::Tcp,
                     upstreams: vec!["[fd5e::2]:5432".to_owned()],
+                    terminate_tls: true,
                 },
                 L4Route {
                     port: 5353,
                     proto: L4Proto::Udp,
                     upstreams: vec!["[fd5e::2]:5353".to_owned()],
+                    terminate_tls: false,
                 },
             ],
             warm_cert_hostnames: BTreeSet::from(["warm.example.com".to_owned()]),
@@ -466,10 +468,17 @@ mod tests {
             .join("acme-v02.api.letsencrypt.org-directory")
             .join(host);
         std::fs::create_dir_all(&cert_dir).expect("create cert dir");
-        std::fs::write(cert_dir.join(format!("{host}.crt")), b"x").expect("write cert");
+        std::fs::write(
+            cert_dir.join(format!("{host}.crt")),
+            crate::runtime::tls::test_support::self_signed_pem(&[host]),
+        )
+        .expect("write cert");
 
         assert!(
-            super::super::cert_observation::cert_present(dir.path(), host),
+            matches!(
+                super::super::cert_observation::read_cert_state(dir.path(), host),
+                super::super::cert_observation::CertRead::Present(_)
+            ),
             "a certificate under {CERT_CACHE_DIR}/ must be observable; if this \
              fails the image has relocated its cache and cert_valid will never \
              be emitted"

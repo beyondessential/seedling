@@ -91,11 +91,11 @@ impl CertificateRelay for CanopyRelay {
         csr_der_b64: &str,
         app_type: Option<&str>,
     ) -> std::result::Result<CertificateResponse, RelayFailure> {
-        use bestool_canopy::{CanopyClient, CanopyHttpError, schema::RequestCertificateArgs};
+        use bestool_canopy::{CanopyClient, schema::RequestCertificateArgs};
 
-        let client = CanopyClient::with_transport(crate::oi::canopy::OiCanopyTransport::new(
-            Arc::clone(&self.canopy),
-        ));
+        let client = CanopyClient::new(crate::oi::canopy::OiCanopyTransport::new(Arc::clone(
+            &self.canopy,
+        )));
         let args = RequestCertificateArgs::builder()
             .name(name.to_owned())
             .csr(csr_der_b64.to_owned())
@@ -103,10 +103,10 @@ impl CertificateRelay for CanopyRelay {
             .build();
         match client.certificates_request(&args).await {
             Ok(response) => Ok(response),
-            Err(report) => Err(match report.downcast_ref::<CanopyHttpError>() {
+            Err(report) => Err(match report.http() {
                 Some(e) => RelayFailure::Status {
                     status: e.status.as_u16(),
-                    body: e.body.clone(),
+                    body: e.body_text().into_owned(),
                 },
                 None => RelayFailure::Unreachable(format!("{report}")),
             }),
@@ -744,6 +744,8 @@ fn apply(
             row.open_order_since = None;
             row.retry_not_before = Some(now + AUTO_RETRY_DEBOUNCE_SECS);
             store::put_chain_row(db, &ask.hostname, &row, Some(&reason))?;
+            // spec: TCAN#faults
+            store::set_csr_rejected(db, &ask.hostname)?;
             Ok(ApplyResult::Done(Outcome::Rejected(reason)))
         }
         Answer::Revoked { reason } => Ok(ApplyResult::Replaced(apply_revocation(
@@ -785,7 +787,14 @@ fn unavailable(
     reason: String,
 ) -> rusqlite::Result<ApplyResult> {
     row.retry_not_before = None;
+    // Nothing was answered, so what Canopy last answered still stands.
+    let rejected = store::get_chain_row(db, &ask.hostname)?
+        .filter(|r| r.row.identity == ask.replacing)
+        .is_some_and(|r| r.csr_rejected);
     store::put_chain_row(db, &ask.hostname, &row, Some(&reason))?;
+    if rejected {
+        store::set_csr_rejected(db, &ask.hostname)?;
+    }
     Ok(ApplyResult::Done(Outcome::Failed(reason)))
 }
 

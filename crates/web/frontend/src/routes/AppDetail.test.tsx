@@ -73,14 +73,14 @@ describe("AppDetail page", () => {
     const fault = makeFault();
     const { request } = mount(
       baseFixtures(makeDetail({ faults: [fault] })),
-      "dangerous",
+      "write",
     );
     expect(await screen.findByText("Faults")).toBeTruthy();
     expect(screen.getAllByText("container_crashed").length).toBeGreaterThan(0);
+    // spec: UI#guarded-controls
+    // Clearing faults needs write, even for a running app.
     fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
     const dialog = await screen.findByRole("dialog");
-    // Running app: clearing is danger-tier and the dialog says so.
-    expect(within(dialog).getByText(/danger-level action/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Clear faults" }));
     await waitFor(() =>
       expect(callsTo(request, "/faults/clear")).toEqual([
@@ -149,6 +149,21 @@ describe("AppDetail page", () => {
         ["/apps/resource/unstop", { app: "myapp", kind: "deployment", name: "web" }],
       ]),
     );
+  });
+
+  // spec: UI#guarded-controls
+  it("requires the dangerous mode to stop a resource, and only write to unstop one", async () => {
+    mount(baseFixtures(makeDetail()), "write");
+    expect(await screen.findByText("gen 4")).toBeTruthy();
+    const stop = screen.getByRole("button", { name: "Stop resource" }) as HTMLButtonElement;
+    expect(stop.disabled).toBe(true);
+  });
+
+  it("allows stopping a resource in the dangerous mode", async () => {
+    mount(baseFixtures(makeDetail()), "dangerous");
+    expect(await screen.findByText("gen 4")).toBeTruthy();
+    const stop = screen.getByRole("button", { name: "Stop resource" }) as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
   });
 
   it("uninstalls an installed app through the confirm dialog", async () => {

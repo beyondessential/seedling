@@ -5,7 +5,6 @@ use crate::{
     defs::{
         app::AppDef,
         ingress::IngressDef,
-        pod::PodDef,
         resource::{Resource, ResourceKind},
         service::{
             HttpServiceDef, ProxySettings, REDIRECT_OWNED_HEADER, RateLimitScope, RouteDecl,
@@ -17,7 +16,7 @@ use crate::{
         lifecycle::LifecycleState, registry::RegistryError,
     },
     system::{
-        translate::proxy::{HttpForwardRoute, HttpRedirectRoute, ServiceUpstream, instance_ipv6},
+        translate::proxy::{HttpForwardRoute, HttpRedirectRoute, ServiceUpstream},
         types::{L4Proto, L4Route, RouteProxy, RouteZone},
     },
 };
@@ -27,6 +26,11 @@ use super::RunningPod;
 pub(super) struct ProxyBuildOutput {
     pub pairs: Vec<(IngressDef, ServiceUpstream)>,
     pub l4_routes: Vec<L4Route>,
+    /// Hostnames of ingresses that terminate TLS or DTLS without terminating
+    /// HTTP. They have no virtual host for the proxy to acquire a certificate
+    /// through, so each is handed to it as a certificate to obtain.
+    // spec: ING#certificates
+    pub certificate_hostnames: Vec<String>,
     /// Observations to persist regardless of apply outcome (ingress_configured + uninstall).
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
     /// Observations to persist only after successful apply (ingress_ready).
@@ -48,6 +52,7 @@ pub(super) fn collect(
         Vec::new();
     let mut pairs: Vec<(IngressDef, ServiceUpstream)> = Vec::new();
     let mut l4_routes: Vec<L4Route> = Vec::new();
+    let mut certificate_hostnames: Vec<String> = Vec::new();
     let mut service_defs: std::collections::HashMap<String, ServiceProxyDef> =
         std::collections::HashMap::new();
 
@@ -62,9 +67,7 @@ pub(super) fn collect(
 
         let svc_instance =
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
-        let service_ip = instance_ipv6(node_prefix, &svc_instance);
-
-        let upstream_port = find_upstream_port(snapshot, svc_name, def.port.get());
+        let service_ip = registry.service_address(node_prefix, &svc_instance)?;
 
         // The ingress's resource name is "<hostname>:<port>" (multiple
         // ingresses can hang off one service). The instance must be keyed
@@ -78,26 +81,25 @@ pub(super) fn collect(
         )?;
 
         if def.http_terminate.is_none() {
-            let upstream_url = format!("[{}]:{}", service_ip, upstream_port);
+            if def.tls || def.dtls {
+                certificate_hostnames.push(def.hostname.clone());
+            }
+            // spec: ING#declaration
+            // Delivered to the Service at the ingress's own port number.
+            let upstream_url = format!("[{}]:{}", service_ip, def.port.get());
 
-            if def.dtls {
-                l4_routes.push(L4Route {
-                    port: def.port.get(),
-                    proto: L4Proto::Tcp,
-                    upstreams: vec![upstream_url.clone()],
-                });
-                l4_routes.push(L4Route {
-                    port: def.port.get(),
-                    proto: L4Proto::Udp,
-                    upstreams: vec![upstream_url],
-                });
-            } else {
-                l4_routes.push(L4Route {
-                    port: def.port.get(),
-                    proto: L4Proto::Tcp,
-                    upstreams: vec![upstream_url],
-                });
-            };
+            // spec: ING#termination
+            // A DTLS ingress accepts DTLS over UDP and nothing on TCP; one with
+            // no termination forwards TCP alone. A TLS ingress's connection is
+            // terminated by the proxy, so its Service receives the plaintext
+            // stream. The proxy has no DTLS termination, so a DTLS ingress's
+            // datagrams reach the Service as they arrive.
+            l4_routes.push(L4Route {
+                port: def.port.get(),
+                proto: if def.dtls { L4Proto::Udp } else { L4Proto::Tcp },
+                upstreams: vec![upstream_url],
+                terminate_tls: def.tls,
+            });
 
             observations.push((
                 ingress_instance.clone(),
@@ -136,6 +138,7 @@ pub(super) fn collect(
         // Read from the service's own declaration rather than from the pods,
         // there being no pod behind a redirect to read it from.
         let redirects = collect_redirect_routes(service_def);
+        let service_port = service_def.fallback_port(def.port.get());
 
         pairs.push((
             def,
@@ -143,7 +146,7 @@ pub(super) fn collect(
                 routes,
                 redirects,
                 service_ip,
-                service_port: upstream_port,
+                service_port,
                 proxy: service_level_proxy(snapshot, svc_name, service_def),
             },
         ));
@@ -178,58 +181,10 @@ pub(super) fn collect(
     Ok(ProxyBuildOutput {
         pairs,
         l4_routes,
+        certificate_hostnames,
         observations,
         ready_observations,
     })
-}
-
-/// Scan all Deployment and Job pod definitions for the first TCP or HTTP
-/// binding that references `service_name`, and return the pod port.
-///
-/// Falls back to `fallback_port` (the ingress's declared port) when no
-/// binding is found.
-///
-/// # Port translation
-/// Service DNAT rules handle translation from service port to pod port,
-/// so the returned port is always the service-facing port.
-fn find_upstream_port(snapshot: &AppDef, service_name: &str, fallback_port: u16) -> u16 {
-    for resource in snapshot.resources.values() {
-        let result = match resource {
-            Resource::Deployment(dep) => {
-                let def = dep.def.lock();
-                let pod = def.pod.lock();
-                scan_pod_for_port(&pod, service_name)
-            }
-            Resource::Job(job) => {
-                let def = job.def.lock();
-                let pod = def.pod.lock();
-                scan_pod_for_port(&pod, service_name)
-            }
-            _ => None,
-        };
-
-        if let Some(port) = result {
-            return port;
-        }
-    }
-
-    fallback_port
-}
-
-fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
-    for b in &pod.tcp_bindings {
-        if b.service_port.service.name().as_str() == service_name {
-            return Some(b.service_port.port.get());
-        }
-    }
-
-    for b in &pod.http_bindings {
-        if b.route.http.service.name().as_str() == service_name {
-            return Some(b.route.http.port.get());
-        }
-    }
-
-    None
 }
 
 /// Everything the emitters need from one service's declaration.
@@ -244,11 +199,21 @@ pub(super) struct ServiceProxyDef {
     pub service: ProxySettings,
     /// Every prefix the service declared, and what each is.
     pub routes: RouteMap,
+    /// The lowest Service Port the service is viewed on as an HTTP service.
+    pub lowest_http_port: Option<u16>,
 }
 
 type RouteMap = std::collections::BTreeMap<String, RouteDecl>;
 
 impl ServiceProxyDef {
+    /// The port of the fallback route's upstream: the lowest Service Port the
+    /// service is viewed on as an HTTP service, or the ingress's own port
+    /// where it is viewed on none.
+    // spec: PRX#route-emission
+    pub(super) fn fallback_port(&self, ingress_port: u16) -> u16 {
+        self.lowest_http_port.unwrap_or(ingress_port)
+    }
+
     /// What one prefix declared for itself, for resolution against the
     /// service's own values.
     fn settings(&self, prefix: &str) -> Option<&ProxySettings> {
@@ -262,6 +227,7 @@ pub(super) fn service_proxy_def(snapshot: &AppDef, service_name: &str) -> Servic
     let gather = |settings: ProxySettings, http: Option<&HttpServiceDef>| ServiceProxyDef {
         service: settings,
         routes: http.map(|h| h.routes.clone()).unwrap_or_default(),
+        lowest_http_port: http.and_then(|h| h.ports.first().copied()),
     };
     snapshot
         .resources
@@ -559,4 +525,214 @@ mod zone_tests {
     // The vhost serving a request is not a parameter of `zone_for` at all, so
     // a budget cannot vary by hostname or termination. That is the structural
     // form of the guarantee, which no test could state more strongly.
+}
+
+#[cfg(test)]
+mod certificate_tests {
+
+    use super::*;
+    use crate::{runtime::EphemeralInstanceRegistry, tests::run_test_script_app};
+
+    // spec: ING#certificates
+    #[test]
+    fn ingresses_terminating_tls_or_dtls_without_http_hand_their_hostnames_to_the_proxy() {
+        let app = run_test_script_app(
+            r#"
+            let web = app.service("web");
+            web.ingress("db.example.com", 5432).tls(Terminate.Tls, Output.Tcp);
+            web.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+            web.ingress("site.example.com", 443).tls(Terminate.Https, Output.Http1);
+        "#,
+        );
+        let out = collect(
+            &app.def.load(),
+            &DesiredState::default(),
+            &"fd5e:ed12:3456::/48".parse().unwrap(),
+            &EphemeralInstanceRegistry::new(),
+            &AppName::new_unchecked("demo"),
+            &[],
+        )
+        .expect("collects");
+        let mut hostnames = out.certificate_hostnames;
+        hostnames.sort();
+        assert_eq!(hostnames, ["db.example.com", "voip.example.com"]);
+        assert_eq!(out.pairs.len(), 1, "HTTPS is routed through a vhost");
+    }
+
+    // spec: ING#termination
+    #[test]
+    fn a_tls_ingress_is_terminated_and_a_dtls_ingress_listens_on_udp_alone() {
+        let app = run_test_script_app(
+            r#"
+            let web = app.service("web");
+            web.ingress("db.example.com", 5432).tls(Terminate.Tls, Output.Tcp);
+            web.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+            web.ingress("raw.example.com", 2222);
+        "#,
+        );
+        let out = collect(
+            &app.def.load(),
+            &DesiredState::default(),
+            &"fd5e:ed12:3456::/48".parse().unwrap(),
+            &EphemeralInstanceRegistry::new(),
+            &AppName::new_unchecked("demo"),
+            &[],
+        )
+        .expect("collects");
+        let mut routes: Vec<(u16, L4Proto, bool)> = out
+            .l4_routes
+            .iter()
+            .map(|r| (r.port, r.proto, r.terminate_tls))
+            .collect();
+        routes.sort_by_key(|(port, _, _)| *port);
+        assert_eq!(
+            routes,
+            [
+                (2222, L4Proto::Tcp, false),
+                (5432, L4Proto::Tcp, true),
+                (5684, L4Proto::Udp, false),
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod upstream_port_tests {
+    use super::*;
+    use crate::{runtime::EphemeralInstanceRegistry, tests::run_test_script_app};
+
+    fn collect_for(script: &str) -> ProxyBuildOutput {
+        let app = run_test_script_app(script);
+        collect(
+            &app.def.load(),
+            &DesiredState::default(),
+            &"fd5e:ed12:3456::/48".parse().unwrap(),
+            &EphemeralInstanceRegistry::new(),
+            &AppName::new_unchecked("demo"),
+            &[],
+        )
+        .expect("collects")
+    }
+
+    // spec: PRX#route-emission
+    #[test]
+    fn the_fallback_route_reaches_the_lowest_port_the_service_is_viewed_on_over_http() {
+        let out = collect_for(
+            r#"
+            let web = app.service("web");
+            web.http(9090);
+            web.http(8080).ingress("site.example.com", 443).tls(Terminate.Https, Output.Http1);
+            app.deployment("app").tcp(5432, web.port(7000));
+        "#,
+        );
+        let [(_, upstream)] = out.pairs.as_slice() else {
+            panic!("one HTTPS ingress, got {}", out.pairs.len());
+        };
+        assert!(upstream.routes.is_empty(), "no pod binds a prefix");
+        assert_eq!(upstream.service_port, 8080);
+    }
+
+    // spec: PRX#route-emission
+    #[test]
+    fn a_service_viewed_on_no_http_port_falls_back_to_the_ingress_port() {
+        let out = collect_for(
+            r#"
+            let web = app.service("web");
+            web.ingress("site.example.com", 8443).tls(Terminate.Https, Output.Http1);
+            app.deployment("app").tcp(5432, web.port(7000));
+        "#,
+        );
+        let [(_, upstream)] = out.pairs.as_slice() else {
+            panic!("one HTTPS ingress, got {}", out.pairs.len());
+        };
+        assert_eq!(upstream.service_port, 8443);
+    }
+
+    // spec: ING#declaration
+    #[test]
+    fn a_tls_dtls_or_unterminated_ingress_reaches_the_service_at_its_own_port() {
+        let out = collect_for(
+            r#"
+            let web = app.service("web");
+            web.http(80);
+            web.ingress("db.example.com", 5432).tls(Terminate.Tls, Output.Tcp);
+            web.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+            web.ingress("raw.example.com", 2222);
+            app.deployment("app").tcp(9999, web.port(7000));
+        "#,
+        );
+        let mut routes: Vec<(u16, String)> = out
+            .l4_routes
+            .iter()
+            .map(|r| (r.port, r.upstreams.join(",")))
+            .collect();
+        routes.sort();
+        for (port, upstream) in routes {
+            assert!(
+                upstream.ends_with(&format!("]:{port}")),
+                "the ingress on {port} reaches {upstream}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod route_emission_tests {
+    use super::*;
+    use crate::tests::run_test_script_app;
+
+    fn running(app: &AppDef, name: &str, ip: &str) -> RunningPod {
+        let resource = app
+            .resources
+            .iter()
+            .find(|(id, _)| id.name.as_str() == name)
+            .map(|(_, r)| r.clone())
+            .unwrap();
+        RunningPod {
+            instance: ResourceInstance::new_singleton(
+                AppName::new_unchecked("demo"),
+                ResourceKind::Deployment,
+                name,
+            ),
+            pod_prefix: "fd00:1:2:3::/64".parse().unwrap(),
+            pod_ip: ip.parse().unwrap(),
+            resource,
+            observed_healthy: true,
+        }
+    }
+
+    // spec: PRX#route-emission
+    #[test]
+    fn two_pods_binding_one_prefix_form_one_route_with_both_upstreams() {
+        let app = run_test_script_app(
+            r#"
+            let svc = app.service("public").http(80);
+            app.deployment("blue").http(3000, svc.route("/api"));
+            app.deployment("green").http(4000, svc.route("/api"));
+            app.deployment("idle").http(5000, svc.route("/idle"));
+        "#,
+        );
+        let def = app.def.load_full();
+        let pods = [
+            running(&def, "blue", "fd00:1:2:3::2"),
+            running(&def, "green", "fd00:1:2:4::2"),
+        ];
+        let service_def = service_proxy_def(&def, "public");
+
+        let routes = collect_http_routes(&def, "public", &pods, &service_def);
+
+        assert_eq!(routes.len(), 2);
+        let api = routes.iter().find(|r| r.prefix == "/api").unwrap();
+        let mut upstreams = api.upstreams.clone();
+        upstreams.sort();
+        assert_eq!(
+            upstreams,
+            vec!["[fd00:1:2:3::2]:3000", "[fd00:1:2:4::2]:4000"]
+        );
+        let idle = routes.iter().find(|r| r.prefix == "/idle").unwrap();
+        assert!(
+            idle.upstreams.is_empty(),
+            "a prefix with no running pod is still emitted"
+        );
+    }
 }

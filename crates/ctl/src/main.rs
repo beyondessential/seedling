@@ -147,7 +147,7 @@ enum Command {
         #[arg(long)]
         app: Option<String>,
     },
-    /// Clear all active faults for an app
+    /// Clear all active faults for an app, or for `_system` or `seedling`
     ClearFaults { app: String },
     /// Container restart history and the crash-loop rate derived from it
     Restarts {
@@ -307,9 +307,15 @@ async fn main() {
         resolved_auth = ClientAuth::Fingerprint(fp);
     } else {
         let kh_path = known_hosts::KnownHosts::default_path();
+        // spec: CLI#server-trust
+        // Refused rather than read as empty, which would ask to trust a server
+        // afresh and then overwrite every entry the file held.
         let mut kh = known_hosts::KnownHosts::load(&kh_path).unwrap_or_else(|e| {
-            tracing::warn!("could not read {}: {e}", kh_path.display());
-            known_hosts::KnownHosts::empty(kh_path.clone())
+            eprintln!(
+                "cannot read the known hosts file {}: {e}",
+                kh_path.display()
+            );
+            std::process::exit(1);
         });
 
         let fp = OiClient::probe_fingerprint(endpoint_addr)

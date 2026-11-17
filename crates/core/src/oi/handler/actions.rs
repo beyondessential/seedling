@@ -38,7 +38,11 @@ pub(crate) struct CancelActionParams {
 /// Request cancellation of the currently-active operation for `app`.
 // spec: OPS#cancellation
 // spec: ACI#cancellation
-pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
+pub(crate) fn cancel_action(
+    state: &Arc<OiState>,
+    params: CancelActionParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let app_name = &params.app;
     let outcome = state.scheduler.lock().request_cancel(app_name);
     match outcome {
@@ -81,7 +85,12 @@ pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) ->
             };
             match stuck_phase {
                 Some(AppPhase::Installing) => {
-                    lifecycle::set_phase_and_persist(state, app_name, AppPhase::Uninstalling);
+                    lifecycle::set_phase_and_persist(
+                        state,
+                        app_name,
+                        AppPhase::Uninstalling,
+                        Some(Arc::clone(&ctx.events.actor)),
+                    );
                     tracing::warn!(
                         app = %app_name,
                         "no active operation but phase was Installing; transitioning to Uninstalling for teardown"
@@ -113,7 +122,7 @@ impl VolumeLookup for StateVolumeLookup<'_> {
 /// Map a [`ParamValidationError`] into the OI error envelope. Volume
 /// not-found gets a distinct code; everything else is
 /// `requirements_invalid`.
-fn validation_error_to_oi(e: ParamValidationError) -> OiError {
+pub(crate) fn validation_error_to_oi(e: ParamValidationError) -> OiError {
     let code = match e {
         ParamValidationError::VolumeNotFound { .. } => ErrorCode::NotFound,
         _ => ErrorCode::RequirementsInvalid,
@@ -178,12 +187,10 @@ pub(crate) fn invoke_action(
             )));
         }
 
+        // spec: ACN#shells
+        // Shells and actions have separate namespaces: a shell of the same
+        // name does not stand in the way of the action.
         let def = entry.app.def.load();
-        if def.shells.contains_key(action_name.as_str()) {
-            return Err(OiError::not_found(format!(
-                "'{action_name}' is a shell action; use /shells/start"
-            )));
-        }
         // spec: ACN#start-action
         if action_name == "start" {
             return Err(OiError::not_found(
@@ -226,6 +233,7 @@ pub(crate) fn invoke_action(
             current_generation,
             "operator",
             &phase_handle,
+            Some(Arc::clone(&ctx.events.actor)),
         );
         let op_id = match &result {
             ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
@@ -246,7 +254,7 @@ pub(crate) fn invoke_action(
                 app_name.clone(),
                 action_name.clone(),
                 op_id,
-                action_params,
+                lifecycle::OperationParams::Requested(action_params),
                 current_generation,
                 current_generation,
                 "operator".to_owned(),
@@ -256,6 +264,11 @@ pub(crate) fn invoke_action(
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))
         }
         ScheduleResult::Queued => {
+            // spec: OPS#concurrency
+            lifecycle::persist_queued(
+                state,
+                &crate::runtime::barrier::OperationId(op_id_str.clone()),
+            )?;
             tracing::info!(app = %app_name, action = %action_name, schedule = "queued", "invoke_action");
             Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))
         }
@@ -275,6 +288,10 @@ pub(crate) fn invoke_action(
         ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is being uninstalled: {app_name}"),
+        )),
+        // spec: OPS#unreadable-operation-state
+        ScheduleResult::Rejected(RejectReason::OperationStateUnreadable) => Err(OiError::internal(
+            "the persisted operation state cannot be read, so no operation can start",
         )),
     }
 }
@@ -385,6 +402,32 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(code, "requirements_invalid");
+    }
+
+    // spec: ACN#shells
+    #[test]
+    fn an_action_that_shares_a_shells_name_can_be_invoked() {
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({
+                "app": "demo",
+                "script": r#"
+                    app.deployment("web").image("docker.io/library/nginx:1.29");
+                    app.on_action("tools", |rt, p| {});
+                    app.on_shell("tools", |rt, shell, p| { shell.error("no"); });
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let result = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "tools" }),
+            )
+            .expect("the action is reachable under the shell's name");
+        assert_eq!(result["schedule"], "accepted");
     }
 
     // spec: ACI#cancellation

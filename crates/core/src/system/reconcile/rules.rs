@@ -6,25 +6,25 @@ use std::{
 use ipnet::Ipv6Net;
 use seedling_protocol::names::{AppName, ExternalServiceName, ServiceRef};
 
-use super::RunningPod;
+use super::{RunningPod, site_proxy::SiteIngressSnapshot};
 use crate::{
     defs::{
         app::AppDef,
         resource::{Resource, ResourceKind},
+        service::{BoundService, ServicePort},
     },
     runtime::{
         InstanceRegistry,
         external_service_mappings::ExternalServiceSnapshot,
         registry::RegistryError,
+        site_ingress_attachments::AttachmentProtocol,
+        site_ingresses::TlsProvider,
         site_services::{
             SiteServiceProtocol,
             resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
         },
     },
-    system::{
-        translate::proxy::instance_ipv6,
-        types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
-    },
+    system::types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
 };
 
 /// Per-app map from `(service_name, service_port, proto)` to `Vec<(pod_ip, pod_port)>`.
@@ -176,11 +176,14 @@ pub(super) fn build_ingress_rules(
         let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port.get()));
 
         // spec: PRX#plaintext-ingresses
-        // Forward only the transports the ingress actually serves. UDP is
-        // needed for DTLS, and for HTTP/3 on an HTTPS ingress; a plaintext
-        // HTTP ingress serves neither, so it forwards TCP only.
+        // spec: INFRA#ingress-redirection
+        // Forward only the transports the ingress actually serves. A DTLS
+        // ingress serves UDP alone; an HTTPS ingress serves HTTP/3 over UDP
+        // as well as TCP; a plaintext HTTP ingress, and any other, TCP alone.
         let serves_quic = def.tls && def.http_terminate.is_some();
-        let proto = if def.dtls || serves_quic {
+        let proto = if def.dtls {
+            ForwardProto::Udp
+        } else if serves_quic {
             ForwardProto::Both
         } else {
             ForwardProto::Tcp
@@ -206,6 +209,51 @@ pub(super) fn build_ingress_rules(
     rules
 }
 
+/// The redirection of each site ingress attachment's port to the proxy: UDP
+/// for a `udp` attachment, otherwise TCP, and UDP as well for an `http` or
+/// `http2` attachment on a site ingress that terminates TLS. A site ingress
+/// that has lost its source is not served, so its ports are not redirected.
+// spec: INFRA#ingress-redirection
+pub(super) fn build_site_ingress_rules(
+    snapshot: &SiteIngressSnapshot,
+    caddy_ip: Ipv6Addr,
+    caddy_v4: Option<Ipv4Addr>,
+) -> Vec<IngressRule> {
+    let mut by_port: std::collections::BTreeMap<u16, (bool, bool)> =
+        std::collections::BTreeMap::new();
+    for ingress in snapshot.ingresses.iter().filter(|i| !i.stale) {
+        let terminates_tls = !matches!(ingress.tls_provider, TlsProvider::None);
+        for att in snapshot
+            .attachments
+            .iter()
+            .filter(|a| a.site_ingress == ingress.name)
+        {
+            let (tcp, udp) = match att.protocol {
+                AttachmentProtocol::Udp => (false, true),
+                AttachmentProtocol::Tcp => (true, false),
+                AttachmentProtocol::Http | AttachmentProtocol::Http2 => (true, terminates_tls),
+            };
+            let claimed = by_port.entry(att.port).or_default();
+            claimed.0 |= tcp;
+            claimed.1 |= udp;
+        }
+    }
+
+    by_port
+        .into_iter()
+        .map(|(port, (tcp, udp))| IngressRule {
+            external_port: port,
+            proto: match (tcp, udp) {
+                (true, true) => ForwardProto::Both,
+                (false, true) => ForwardProto::Udp,
+                _ => ForwardProto::Tcp,
+            },
+            caddy_v6: SocketAddr::new(IpAddr::V6(caddy_ip), port),
+            caddy_v4: caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), port)),
+        })
+        .collect()
+}
+
 /// Result of computing DNAT rules: the rules themselves, plus the set of
 /// services that are running entirely on unhealthy backends per
 /// `LCY#routing-pool`. Callers file a `service_degraded` fault
@@ -221,7 +269,7 @@ pub(super) fn build_service_dnat_rules(
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &AppName,
-    snapshot: &ExternalServiceSnapshot,
+    snapshot: Option<&ExternalServiceSnapshot>,
     backends_by_app: &HashMap<AppName, AppBackendMap>,
     resolve_ctx: &ResolveCtx<'_>,
 ) -> Result<ServiceDnatBuild, RegistryError> {
@@ -234,7 +282,7 @@ pub(super) fn build_service_dnat_rules(
     for ((svc_name, svc_port, proto), backend_list) in &backends {
         let svc_instance =
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
-        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+        let service_ip = registry.service_address(node_prefix, &svc_instance)?;
 
         rules.push(ServiceDnatRule {
             service_ip,
@@ -244,11 +292,19 @@ pub(super) fn build_service_dnat_rules(
         });
     }
 
-    // spec: SITE#external-mappings external-service bindings are
-    // resolved through the operator-configured mapping table: the slot gets
-    // its own stable service IP, backends come from either the target app's
-    // service or from the site service's endpoints.
-    for (ext_name, svc_port, proto) in collect_external_bindings(running_pods) {
+    // spec: SITE#external-mappings
+    // spec: SVC#external-services
+    // An external service's mounted ports are resolved through the
+    // operator-configured mapping table: the slot gets its own stable service
+    // IP, backends come from either the target app's service or from the
+    // site service's endpoints.
+    // spec: SITE#unreadable-site-services
+    // Without the mappings and site services an external service's rules are
+    // unknown, and the caller withholds the rules.
+    for (ext_name, svc_port, proto) in collect_external_mounts(running_pods) {
+        let Some(snapshot) = snapshot else {
+            continue;
+        };
         let Some(target) = snapshot.mappings.get(&(app_name.clone(), ext_name.clone())) else {
             continue;
         };
@@ -265,7 +321,7 @@ pub(super) fn build_service_dnat_rules(
             ResourceKind::ExternalService,
             Some(ext_name.as_str()),
         )?;
-        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+        let service_ip = registry.service_address(node_prefix, &svc_instance)?;
         rules.push(ServiceDnatRule {
             service_ip,
             service_port: svc_port,
@@ -280,72 +336,37 @@ pub(super) fn build_service_dnat_rules(
     })
 }
 
-/// Walk a running app's pods and collect its external-service bindings as
-/// `(slot name, service port, transport protocol)` triples, de-duplicated so
-/// we emit at most one DNAT rule per slot+port+proto.
-fn collect_external_bindings(
+/// The Service Ports a running pod mounts.
+fn pod_service_mounts(pod: &RunningPod) -> Vec<ServicePort> {
+    match &pod.resource {
+        Resource::Deployment(dep) => dep.def.lock().pod.lock().service_mounts.clone(),
+        Resource::Job(job) => job.def.lock().pod.lock().service_mounts.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// Walk a running app's pods and collect the external-service ports they
+/// mount as `(slot name, service port, transport protocol)` triples,
+/// de-duplicated so we emit at most one DNAT rule per slot+port+proto. A
+/// mount names no protocol, so each mounted port is collected for both.
+// spec: SVC#external-services
+fn collect_external_mounts(
     running_pods: &[RunningPod],
 ) -> std::collections::HashSet<(ExternalServiceName, u16, ForwardProto)> {
     let mut out = std::collections::HashSet::new();
-
     for pod in running_pods {
-        let (http, tcp, udp) = match &pod.resource {
-            Resource::Deployment(dep) => {
-                let def = dep.def.lock();
-                let pod_def = def.pod.lock();
-                (
-                    pod_def.http_bindings.clone(),
-                    pod_def.tcp_bindings.clone(),
-                    pod_def.udp_bindings.clone(),
-                )
-            }
-            Resource::Job(job) => {
-                let def = job.def.lock();
-                let pod_def = def.pod.lock();
-                (
-                    pod_def.http_bindings.clone(),
-                    pod_def.tcp_bindings.clone(),
-                    pod_def.udp_bindings.clone(),
-                )
-            }
-            _ => continue,
-        };
-
-        for b in &http {
-            if b.route.http.service.is_external() {
-                out.insert((
-                    ExternalServiceName::new_unchecked(
-                        b.route.http.service.name().as_str().to_owned(),
-                    ),
-                    b.route.http.port.get(),
-                    ForwardProto::Tcp,
-                ));
-            }
-        }
-        for b in &tcp {
-            if b.service_port.service.is_external() {
-                out.insert((
-                    ExternalServiceName::new_unchecked(
-                        b.service_port.service.name().as_str().to_owned(),
-                    ),
-                    b.service_port.port.get(),
-                    ForwardProto::Tcp,
-                ));
-            }
-        }
-        for b in &udp {
-            if b.service_port.service.is_external() {
-                out.insert((
-                    ExternalServiceName::new_unchecked(
-                        b.service_port.service.name().as_str().to_owned(),
-                    ),
-                    b.service_port.port.get(),
-                    ForwardProto::Udp,
-                ));
+        for sp in pod_service_mounts(pod) {
+            if let BoundService::External(ext) = &sp.service {
+                for proto in [ForwardProto::Tcp, ForwardProto::Udp] {
+                    out.insert((
+                        ExternalServiceName::new_unchecked(ext.name.as_str().to_owned()),
+                        sp.port.get(),
+                        proto,
+                    ));
+                }
             }
         }
     }
-
     out
 }
 
@@ -410,25 +431,18 @@ fn protocols_match(site_proto: SiteServiceProtocol, fwd_proto: ForwardProto) -> 
 }
 
 // spec: INFRA#mount-endpoint-addressing
-pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
+pub(super) fn build_mount_rules(
+    running_pods: &[RunningPod],
+    app_name: &AppName,
+    snapshot: Option<&ExternalServiceSnapshot>,
+    backends_by_app: &HashMap<AppName, AppBackendMap>,
+    resolve_ctx: &ResolveCtx<'_>,
+) -> Vec<MountRule> {
     let backend_map = collect_service_backends(running_pods).filtered;
     let mut rules = Vec::new();
 
     for pod in running_pods {
-        let service_mounts = match &pod.resource {
-            Resource::Deployment(dep) => {
-                let def = dep.def.lock();
-                let pod_def = def.pod.lock();
-                pod_def.service_mounts.clone()
-            }
-            Resource::Job(job) => {
-                let def = job.def.lock();
-                let pod_def = def.pod.lock();
-                pod_def.service_mounts.clone()
-            }
-            _ => continue,
-        };
-
+        let service_mounts = pod_service_mounts(pod);
         if service_mounts.is_empty() {
             continue;
         }
@@ -436,12 +450,37 @@ pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
         let mount_addr = crate::system::translate::proxy::node_mount_addr(&pod.pod_prefix);
 
         for sp in &service_mounts {
-            let svc_name = sp.service.name().as_str();
             // Emit a mount rule for each protocol that has backends for this
             // (service, port) pair.  Most mounts are TCP but UDP is valid too.
             for proto in [ForwardProto::Tcp, ForwardProto::Udp] {
-                let key = (svc_name.to_owned(), sp.port.get(), proto);
-                let svc_backends = backend_map.get(&key).cloned().unwrap_or_default();
+                let svc_backends = match &sp.service {
+                    BoundService::App(svc) => backend_map
+                        .get(&(svc.name.as_str().to_owned(), sp.port.get(), proto))
+                        .cloned()
+                        .unwrap_or_default(),
+                    // spec: SVC#external-services
+                    // spec: SITE#unreadable-site-services — unknown without
+                    // the snapshot, and the caller withholds the rules.
+                    BoundService::External(ext) => snapshot
+                        .and_then(|snapshot| {
+                            let target = snapshot.mappings.get(&(
+                                app_name.clone(),
+                                ExternalServiceName::new_unchecked(ext.name.as_str().to_owned()),
+                            ))?;
+                            Some((snapshot, target))
+                        })
+                        .map(|(snapshot, target)| {
+                            resolve_external_backends(
+                                target,
+                                sp.port.get(),
+                                proto,
+                                snapshot,
+                                backends_by_app,
+                                resolve_ctx,
+                            )
+                        })
+                        .unwrap_or_default(),
+                };
                 if svc_backends.is_empty() {
                     continue;
                 }
@@ -490,6 +529,79 @@ mod tests {
             has_ipv6_egress: true,
             resolver,
         }
+    }
+
+    // spec: SVC#external-services
+    // spec: INFRA#mount-endpoint-addressing
+    #[test]
+    fn a_mounted_external_service_reaches_its_mapped_endpoint() {
+        let app_def = crate::tests::run_test_script_app(
+            r#"
+            let db = app.external_service("database");
+            app.deployment("web").image("ghcr.io/example/web:1").mount(db.port(5432));
+        "#,
+        )
+        .def
+        .load_full();
+        let web = app_def
+            .resources
+            .iter()
+            .find(|(id, _)| id.name.as_str() == "web")
+            .map(|(_, r)| r.clone())
+            .unwrap();
+        let app = AppName::new_unchecked("demo");
+        let pod = RunningPod {
+            instance: crate::runtime::identity::ResourceInstance::new_singleton(
+                app.clone(),
+                ResourceKind::Deployment,
+                "web",
+            ),
+            pod_prefix: "fd00:1:2:3::/64".parse().unwrap(),
+            pod_ip: ipv6("fd00:1:2:3::2"),
+            resource: web,
+            observed_healthy: true,
+        };
+
+        let site = SiteServiceName::new("postgres-prod").unwrap();
+        let mut snap = snapshot_with_site(
+            site.as_str(),
+            vec![SiteServiceEndpoint {
+                service_port: 5432,
+                protocol: SiteServiceProtocol::Tcp,
+                remote_host: "fd5e::1".into(),
+                remote_port: 6432,
+            }],
+        );
+        snap.mappings.insert(
+            (app.clone(), ExternalServiceName::new_unchecked("database")),
+            ServiceRef::Site { name: site },
+        );
+        let resolver = empty_resolver();
+        let pods = [pod];
+
+        let mounts = build_mount_rules(&pods, &app, Some(&snap), &HashMap::new(), &ctx(&resolver));
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].mount_port, 5432);
+        assert_eq!(mounts[0].backends, vec![(ipv6("fd5e::1"), 6432)]);
+
+        let registry = crate::runtime::registry::EphemeralInstanceRegistry::new();
+        let dnat = build_service_dnat_rules(
+            &"fd00:1::/48".parse().unwrap(),
+            &registry,
+            &pods,
+            &app,
+            Some(&snap),
+            &HashMap::new(),
+            &ctx(&resolver),
+        )
+        .unwrap();
+        let tcp = dnat
+            .rules
+            .iter()
+            .find(|r| r.proto == ForwardProto::Tcp)
+            .expect("the external service's address routes to its endpoint");
+        assert_eq!(tcp.service_port, 5432);
+        assert_eq!(tcp.backends, vec![(ipv6("fd5e::1"), 6432)]);
     }
 
     #[test]
@@ -738,6 +850,73 @@ mod tests {
             .collect()
     }
 
+    fn site_ingress(
+        name: &str,
+        tls: TlsProvider,
+        stale: bool,
+    ) -> crate::runtime::site_ingresses::SiteIngressDef {
+        crate::runtime::site_ingresses::SiteIngressDef {
+            name: seedling_protocol::names::SiteIngressName::new(name).unwrap(),
+            hostname: format!("{name}.example.com"),
+            description: None,
+            source: crate::runtime::site_ingresses::SiteIngressSource::Manual,
+            tls_provider: tls,
+            stale,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        }
+    }
+
+    fn attachment(
+        site: &str,
+        port: u16,
+        protocol: AttachmentProtocol,
+    ) -> crate::runtime::site_ingress_attachments::SiteIngressAttachment {
+        crate::runtime::site_ingress_attachments::SiteIngressAttachment {
+            site_ingress: seedling_protocol::names::SiteIngressName::new(site).unwrap(),
+            port,
+            protocol,
+            target: crate::runtime::site_ingress_attachments::AttachmentTarget::Redirect {
+                url: "https://example.com".to_owned(),
+                code: 307,
+                preserve_path: false,
+            },
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        }
+    }
+
+    // spec: INFRA#ingress-redirection
+    #[test]
+    fn a_site_ingress_attachments_port_is_redirected_by_its_protocols() {
+        let snapshot = SiteIngressSnapshot {
+            ingresses: vec![
+                site_ingress("tls", TlsProvider::Acme, false),
+                site_ingress("plain", TlsProvider::None, false),
+                site_ingress("gone", TlsProvider::Acme, true),
+            ],
+            attachments: vec![
+                attachment("tls", 8443, AttachmentProtocol::Http),
+                attachment("tls", 5353, AttachmentProtocol::Udp),
+                attachment("tls", 5432, AttachmentProtocol::Tcp),
+                attachment("plain", 8080, AttachmentProtocol::Http2),
+                attachment("gone", 9000, AttachmentProtocol::Http),
+            ],
+        };
+
+        let rules: Vec<_> = build_site_ingress_rules(&snapshot, ipv6("fd5e::ff"), None)
+            .into_iter()
+            .map(|r| (r.external_port, r.proto))
+            .collect();
+        assert_eq!(
+            rules,
+            vec![
+                (5353, ForwardProto::Udp),
+                (5432, ForwardProto::Tcp),
+                (8080, ForwardProto::Tcp),
+                (8443, ForwardProto::Both),
+            ]
+        );
+    }
+
     // spec: PRX#plaintext-ingresses
     #[test]
     fn tls_http_ingress_forwards_tcp_and_udp() {
@@ -774,5 +953,17 @@ mod tests {
             vec![ForwardProto::Tcp],
             "a plaintext HTTP ingress serves no UDP, so none should be forwarded"
         );
+    }
+
+    // spec: INFRA#ingress-redirection
+    #[test]
+    fn a_dtls_ingress_redirects_udp_alone() {
+        let def = appdef_from(
+            r#"
+            let svc = app.service("voip");
+            svc.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+        "#,
+        );
+        assert_eq!(ingress_protos(&def), vec![ForwardProto::Udp]);
     }
 }

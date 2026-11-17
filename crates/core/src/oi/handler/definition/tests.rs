@@ -525,7 +525,7 @@ fn a_validator_defining_a_resource_rejects() {
         )
         .unwrap_err();
     assert_eq!(code, "validation_failed");
-    assert!(message.contains("must not define resources"), "{message}");
+    assert!(message.contains("must not change the app"), "{message}");
 }
 
 // spec: APPS#update
@@ -741,6 +741,7 @@ fn the_plan_reports_validator_rejections_for_a_proposed_definition() {
         json!({ "app": "web", "name": "version", "value": "v2.11" }),
     )
     .unwrap();
+    oi.install("web");
     publish(&oi, "b", &[("app.seed.rhai", DEF_B.as_bytes())]);
     let plan = oi
         .call(
@@ -766,6 +767,42 @@ fn the_plan_reports_validator_rejections_for_a_proposed_definition() {
         json!({ "app": "web", "proposed_reference": "registry.example.com/x/y:1" }),
     ));
     assert_eq!(code, "registry_not_allowed");
+}
+
+// spec: PRM#change-planning
+#[test]
+fn the_plan_lists_no_handler_for_an_app_that_is_not_installed_or_a_value_that_does_not_change() {
+    let oi = TestOi::new();
+    oi.call("/apps/create", json!({ "app": "web", "script": DEF_A }))
+        .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "web", "name": "version", "value": "v2.12" }),
+    )
+    .unwrap();
+    publish(&oi, "b", &[("app.seed.rhai", DEF_B.as_bytes())]);
+    let plan = |oi: &TestOi, value: &str| {
+        oi.call(
+            "/apps/plan",
+            json!({
+                "app": "web",
+                "proposed_reference": format!("{REPO}:b"),
+                "proposed_params": [{ "name": "version", "value": value }],
+            }),
+        )
+        .unwrap()["on_change_would_fire"]
+            .clone()
+    };
+
+    assert_eq!(plan(&oi, "v2.13"), json!([]), "not installed: nothing runs");
+
+    oi.install("web");
+    assert_eq!(
+        plan(&oi, "v2.12"),
+        json!([]),
+        "the stored value is no change"
+    );
+    assert_eq!(plan(&oi, "v2.13"), json!(["version"]));
 }
 
 // spec: FLT#app-faults

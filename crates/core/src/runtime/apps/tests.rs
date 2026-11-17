@@ -82,6 +82,8 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         tick_notify: Arc::new(Notify::new()),
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
         current_generation: 0,
+        install_seq: None,
+        start_pending: Default::default(),
     }
 }
 
@@ -268,7 +270,7 @@ fn reload_after_secret_param_set_populates_stored() {
     )
     .expect("upsert secret");
 
-    let loaded = load_all_params_for_app(&db, &cipher, &app("myapp"));
+    let loaded = load_all_params_for_app(&db, &cipher, &app("myapp")).expect("load");
     let (app_def, err) = evaluate_script(
         &app("myapp"),
         script,
@@ -311,7 +313,7 @@ fn load_params_for_app_alone_misses_secrets() {
         "plaintext-only loader must not surface secrets (confirms the trap)"
     );
 
-    let merged = load_all_params_for_app(&db, &cipher, &app("myapp"));
+    let merged = load_all_params_for_app(&db, &cipher, &app("myapp")).expect("load");
     assert_eq!(
         merged.get("apikey").map(String::as_str),
         Some("sekret"),
@@ -598,7 +600,7 @@ fn transition_phase_updates_shared_state_and_db() {
     let entry = make_entry("myapp", None);
     AppRegistry::persist_app(&db, &entry).expect("persist");
 
-    transition_phase(&entry.phase, AppPhase::Installing, &db, &app("myapp"), "");
+    transition_phase(&entry.phase, AppPhase::Installing, &db, &app("myapp")).expect("persist");
 
     assert_eq!(*entry.phase.lock(), AppPhase::Installing);
     let (installed, uninstalling, installing): (bool, bool, bool) = db
@@ -610,6 +612,22 @@ fn transition_phase_updates_shared_state_and_db() {
         )
         .expect("row");
     assert_eq!((installed, uninstalling, installing), (false, false, true));
+}
+
+// spec: ACI#uninstall
+#[test]
+fn a_phase_that_cannot_be_persisted_is_not_observable() {
+    let db = Db::open_in_memory().expect("open");
+    let entry = make_entry("myapp", None);
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+    db.conn
+        .execute_batch("DROP TABLE registered_apps;")
+        .expect("break the table");
+
+    transition_phase(&entry.phase, AppPhase::Uninstalling, &db, &app("myapp"))
+        .expect_err("the write fails");
+
+    assert_ne!(*entry.phase.lock(), AppPhase::Uninstalling);
 }
 
 // spec: APPS#generations
@@ -726,6 +744,46 @@ fn failed_reload_keeps_the_previous_definition() {
     assert!(entry.script_error.is_some());
 }
 
+// spec: AUTO#clamping
+#[test]
+fn a_reload_that_moves_a_deployments_bounds_clamps_its_stored_scale() {
+    let script = r#"
+        let top = app.param("top");
+        let high = if top.is_set() { parse_int(top.value()) } else { 10 };
+        app.deployment("web").image("docker.io/library/nginx:1.29").scale(1..=high);
+    "#;
+    let registry = RwLock::new(AppRegistry::new());
+    registry
+        .write()
+        .register(
+            app("myapp"),
+            bundle_of(script),
+            Source::unknown_push(),
+            Arc::new(Notify::new()),
+            &crate::ScriptLimits::default(),
+        )
+        .unwrap();
+    let db = crate::runtime::db::DbHandle::from_db(Db::open_in_memory().expect("open"));
+    db.call(|db| scaling::save_scaling_decision(db, &app("myapp"), "web", 8))
+        .unwrap();
+    let cipher = Arc::new(crate::runtime::secrets::Cipher::for_tests());
+
+    let outcome = reload(
+        &registry,
+        &db,
+        &cipher,
+        &app("myapp"),
+        &BTreeMap::from([("top".to_owned(), "4".to_owned())]),
+        &crate::ScriptLimits::default(),
+    );
+
+    assert!(outcome.is_applied());
+    let stored = db
+        .call(|db| scaling::load_scaling_decision(db, &app("myapp"), "web"))
+        .unwrap();
+    assert_eq!(stored, Some(4), "lowered to the new upper bound");
+}
+
 // spec: APPS#update
 #[test]
 fn reload_of_unknown_app_is_noop() {
@@ -796,4 +854,103 @@ fn reload_runs_no_validators() {
     .expect("load registry");
     let loaded = registry.get("myapp").expect("registered");
     assert!(loaded.script_error.is_none(), "{:?}", loaded.script_error);
+}
+
+// spec: ING#claims-across-apps
+#[test]
+fn installs_are_ordered_as_they_complete_and_the_order_survives_a_reload() {
+    let db = Db::open_in_memory().expect("open");
+    for name in ["alpha", "bravo"] {
+        let generation =
+            generations::register_script(&db, &app(name), trivial_script()).expect("register");
+        let mut entry = make_entry(name, None);
+        entry.current_generation = generation;
+        AppRegistry::persist_app(&db, &entry).expect("persist");
+    }
+
+    let bravo = AppRegistry::record_install_completed(&db, &app("bravo")).unwrap();
+    let alpha = AppRegistry::record_install_completed(&db, &app("alpha")).unwrap();
+    assert!(bravo < alpha, "bravo completed first");
+
+    let reloaded = AppRegistry::load_from_db(
+        &db,
+        &crate::runtime::secrets::Cipher::for_tests(),
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(reloaded.get("bravo").unwrap().install_seq, Some(bravo));
+    assert_eq!(reloaded.get("alpha").unwrap().install_seq, Some(alpha));
+}
+
+// spec: PARAM#values
+#[test]
+fn a_param_table_that_cannot_be_read_fails_the_load_rather_than_reading_as_unset() {
+    let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    upsert_param(&db, &app("myapp"), &param("greeting"), "hello").expect("upsert");
+
+    db.conn
+        .execute_batch("DROP TABLE secret_params;")
+        .expect("drop");
+    assert!(
+        load_all_params_for_app(&db, &cipher, &app("myapp")).is_err(),
+        "the plaintext half must not stand in for both"
+    );
+}
+
+fn evaluated(script: &str) -> App {
+    let (app, err) = evaluate_script(
+        &app("myapp"),
+        script,
+        &BTreeMap::new(),
+        &crate::ScriptLimits::default(),
+    );
+    assert!(err.is_none(), "{err:?}");
+    app
+}
+
+// spec: SEC#migration
+#[test]
+fn a_param_moves_between_storages_as_its_secret_flag_changes() {
+    let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let name = app("myapp");
+    upsert_param(&db, &name, &param("token"), "the-value").expect("upsert");
+
+    let secret = evaluated(r#"app.param("token").secret(true);"#);
+    migrate_param_storage(&db, &cipher, &name, &secret, true);
+    assert!(load_params_for_app(&db, &name).unwrap().is_empty());
+    assert!(secret_params::is_stored_secret(&db, &name, &param("token")).unwrap());
+
+    let plain = evaluated(r#"app.param("token").secret(false);"#);
+    migrate_param_storage(&db, &cipher, &name, &plain, true);
+    assert_eq!(
+        load_params_for_app(&db, &name)
+            .unwrap()
+            .get("token")
+            .map(String::as_str),
+        Some("the-value")
+    );
+    assert!(!secret_params::is_stored_secret(&db, &name, &param("token")).unwrap());
+}
+
+// spec: SEC#migration
+#[test]
+fn a_definition_that_threw_part_way_moves_no_value_out_of_secret_storage() {
+    let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let name = app("myapp");
+    secret_params::upsert_secret_param(
+        &db,
+        &cipher,
+        &name,
+        &param("token"),
+        &secrecy::SecretString::new("the-value".to_owned().into()),
+    )
+    .expect("upsert");
+
+    let declared_only = evaluated(r#"app.param("token");"#);
+    migrate_param_storage(&db, &cipher, &name, &declared_only, false);
+    assert!(secret_params::is_stored_secret(&db, &name, &param("token")).unwrap());
 }

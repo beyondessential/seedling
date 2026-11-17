@@ -40,6 +40,12 @@ pub enum ObserveError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("volume storage at {}: {source}", path.display()))]
+    Storage {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -50,9 +56,7 @@ fn pod_network_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
 }
 
-fn unit_name(instance: &ResourceInstance) -> String {
-    format!("seedling-{}.service", instance.display_name)
-}
+use crate::system::actuator::unit_name;
 
 // ---------------------------------------------------------------------------
 // Observer
@@ -134,6 +138,35 @@ impl Observer {
         }
 
         Ok(facts)
+    }
+
+    /// Inspect a volume instance nothing declares, which leaves nothing to
+    /// say where its storage is: it is present while storage stands at either
+    /// the tmpfs path or the volume-store name its recorded identity gives it.
+    // spec: OBS#volumes
+    // spec: TRD#teardown
+    pub fn observe_undeclared_volume(
+        &self,
+        instance: &ResourceInstance,
+    ) -> Result<Vec<(ObservationFact, SystemTime)>, ObserveError> {
+        let now = SystemTime::now();
+        let vol_name = crate::runtime::identity::VolumeName::of_instance(instance);
+        let mut present = false;
+        for path in [
+            crate::system::actuator::tmpfs_volume_path(&instance.display_name),
+            self.driver.volume_store.path(&vol_name),
+        ] {
+            // A path that cannot be looked at is not one with nothing there.
+            present |= path.try_exists().context(StorageSnafu { path: &path })?;
+        }
+        Ok(vec![(
+            if present {
+                ObservationFact::VolumePresent
+            } else {
+                ObservationFact::VolumeMissing
+            },
+            now,
+        )])
     }
 
     // spec: OBS#containers
@@ -218,6 +251,9 @@ impl Observer {
                     ContainerHealth::Unhealthy => {
                         facts.push((ObservationFact::ContainerUnhealthy, now));
                     }
+                    ContainerHealth::Starting => {
+                        facts.push((ObservationFact::ContainerHealthStarting, now));
+                    }
                     ContainerHealth::None if s.status == ContainerStatus::Running => {
                         // No health check configured — a running container is
                         // implicitly healthy and therefore Ready.
@@ -258,17 +294,18 @@ impl Observer {
 /// the supervisor's vocabulary.
 // spec: AUTO#restart-pacing
 // `start-limit-hit` is systemd's "I gave up" signal — the unit has burned
-// through `StartLimitBurst` restarts within `StartLimitIntervalSec`. It is
-// reported alongside `failed` and is distinct from a transient failure
-// because no further automatic recovery will happen.
+// through `StartLimitBurst` restarts within `StartLimitIntervalSec`. It is the
+// unit's result, not its sub-state (which reads `failed`), and is distinct
+// from a transient failure because no further automatic recovery will happen.
 fn unit_fact(unit_state: Option<&UnitState>) -> ObservationFact {
     match unit_state {
         None => ObservationFact::UnitGone,
-        Some(s) if matches!(s.active, ActiveState::Failed) && s.sub == "start-limit-hit" => {
+        Some(s) if s.result.as_deref() == Some("start-limit-hit") => {
             ObservationFact::UnitStartLimitHit
         }
         Some(s) => match s.active {
-            ActiveState::Inactive | ActiveState::Deactivating => ObservationFact::UnitInactive,
+            ActiveState::Inactive => ObservationFact::UnitInactive,
+            ActiveState::Deactivating => ObservationFact::UnitDeactivating,
             ActiveState::Active => ObservationFact::UnitActive,
             // spec: AUTO#restart-pacing
             // `activating` covers both the unit's first start and the
@@ -302,6 +339,13 @@ mod tests {
             sub: sub.to_owned(),
             restarts: None,
             ..Default::default()
+        }
+    }
+
+    fn unit_with_result(active: ActiveState, sub: &str, result: &str) -> UnitState {
+        UnitState {
+            result: Some(result.to_owned()),
+            ..unit(active, sub)
         }
     }
 
@@ -343,14 +387,50 @@ mod tests {
     #[test]
     fn giving_up_is_distinguished_from_failing() {
         assert!(matches!(
-            unit_fact(Some(&unit(ActiveState::Failed, "start-limit-hit"))),
+            unit_fact(Some(&unit_with_result(
+                ActiveState::Failed,
+                "failed",
+                "start-limit-hit"
+            ))),
             ObservationFact::UnitStartLimitHit
         ));
         assert!(matches!(
-            unit_fact(Some(&unit(ActiveState::Failed, "failed"))),
+            unit_fact(Some(&unit_with_result(
+                ActiveState::Failed,
+                "failed",
+                "exit-code"
+            ))),
             ObservationFact::UnitFailed
         ));
+        assert!(
+            matches!(
+                unit_fact(Some(&unit(ActiveState::Failed, "start-limit-hit"))),
+                ObservationFact::UnitFailed
+            ),
+            "the sub-state does not carry it"
+        );
         assert!(matches!(unit_fact(None), ObservationFact::UnitGone));
+    }
+
+    // spec: LINUX#exit-status
+    // A stopping unit has not given its result; an inactive or gone one has
+    // reported success, and that is recorded.
+    #[test]
+    fn only_a_unit_that_has_finished_reports_success() {
+        let deactivating = unit_fact(Some(&unit(ActiveState::Deactivating, "stop-sigterm")));
+        assert!(matches!(deactivating, ObservationFact::UnitDeactivating));
+        assert!(deactivating.to_obs_kinds().is_empty());
+        for finished in [
+            unit_fact(Some(&unit(ActiveState::Inactive, "dead"))),
+            unit_fact(None),
+        ] {
+            let kinds: Vec<_> = finished
+                .to_obs_kinds()
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect();
+            assert_eq!(kinds, vec!["unit_inactive"]);
+        }
     }
 
     fn unit_spec(name: &str) -> TransientUnitSpec {
@@ -383,13 +463,17 @@ mod tests {
         std::fs::create_dir_all(&volumes).expect("volumes dir");
         let container = Arc::new(StubContainerRuntime::new(volumes));
         let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+        let backends = crate::system::backends::Backends::working(
+            Arc::clone(&container) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&process) as Arc<dyn ProcessManager>,
+        );
         let system = Arc::new(System {
-            container: Arc::clone(&container) as Arc<dyn ContainerRuntime>,
-            process: Arc::clone(&process) as Arc<dyn ProcessManager>,
+            container: backends.container(),
+            process: backends.process(),
             proxy: Arc::new(StubNetworkProxy),
             data_plane: Arc::new(StubDataPlane),
             volume_store: VolumeStore::new(dir.path(), false).expect("volume store"),
-            degraded: None,
+            backends,
         });
         (system, process, dir)
     }

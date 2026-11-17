@@ -22,7 +22,13 @@ pub struct AuditWriter {
 impl AuditWriter {
     // spec: AUD#storage
     pub fn open(path: &Path) -> io::Result<Self> {
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            // Only a directory made here is this log's to give a mode: an
+            // existing one, such as `/var/log` itself, belongs to the host and
+            // is not reset on every open.
             fs::create_dir_all(parent)?;
             fs::set_permissions(parent, fs::Permissions::from_mode(0o750))?;
         }
@@ -68,6 +74,114 @@ impl AuditWriter {
     }
 }
 
+/// Where audit entries go, and what the runtime knows of its failing to write
+/// them.
+///
+/// The log is opened again before each entry for as long as it is not open, so
+/// a log that cannot be opened at start is written as soon as it can be.
+// spec: AUD#write-failures
+pub struct AuditSink {
+    path: PathBuf,
+    writer: Option<AuditWriter>,
+    /// Events not written since the log last took one.
+    unwritten: u64,
+    /// Whether `audit_log_unavailable` may be filed and so may need clearing.
+    /// Unknown after a restart, so the first successful write clears it.
+    fault_may_be_active: bool,
+}
+
+impl AuditSink {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            writer: None,
+            unwritten: 0,
+            fault_may_be_active: true,
+        }
+    }
+
+    fn fault_key() -> crate::runtime::faults::FaultKey {
+        crate::runtime::faults::FaultKey::app_wide(
+            &AppName::new_unchecked("seedling"),
+            "audit_log_unavailable",
+        )
+    }
+
+    // spec: AUD#write-failures
+    /// Open the log before any entry arrives, so a log that cannot be opened
+    /// holds the fault from the start rather than from the first entry.
+    pub fn open(&mut self, db: &DbHandle) {
+        match AuditWriter::open(&self.path) {
+            Ok(writer) => {
+                self.writer = Some(writer);
+                self.cleared(db);
+            }
+            Err(e) => self.failed(&e, db),
+        }
+    }
+
+    fn cleared(&mut self, db: &DbHandle) {
+        self.unwritten = 0;
+        if self.fault_may_be_active {
+            self.fault_may_be_active = false;
+            db.call(|db| {
+                let _ = crate::runtime::faults::clear_fault_by_key(db, &Self::fault_key());
+            });
+        }
+    }
+
+    fn failed(&mut self, e: &io::Error, db: &DbHandle) {
+        self.fault_may_be_active = true;
+        let description = format!(
+            "the audit log {} cannot be written: {e}; {} events have gone unwritten while this fault was active",
+            self.path.display(),
+            self.unwritten
+        );
+        db.call(move |db| {
+            let key = Self::fault_key();
+            let filed = crate::runtime::faults::file_once(
+                db,
+                &key,
+                &crate::runtime::faults::FaultMeta::default(),
+                &description,
+            );
+            match filed {
+                Ok(false) => {
+                    let _ = crate::runtime::faults::update_description(db, &key, &description);
+                }
+                Ok(true) => {}
+                Err(e) => error!("cannot file audit_log_unavailable: {e}"),
+            }
+        });
+    }
+
+    // spec: AUD#entries
+    // spec: AUD#write-failures
+    /// Write one entry, opening the log first if it is not open, and report the
+    /// outcome through the fault.
+    pub fn record(&mut self, event: &OiEvent, db: &DbHandle) {
+        let outcome = match self.writer.take() {
+            Some(writer) => Ok(writer),
+            None => AuditWriter::open(&self.path),
+        }
+        .and_then(|mut writer| {
+            writer.write_event(event)?;
+            Ok(writer)
+        });
+        match outcome {
+            Ok(writer) => {
+                self.writer = Some(writer);
+                self.cleared(db);
+            }
+            Err(e) => {
+                error!(path = %self.path.display(), "failed to write audit event: {e}");
+                self.unwritten += 1;
+                self.failed(&e, db);
+            }
+        }
+    }
+}
+
 // spec: AUD#entries
 pub fn spawn_audit_task(
     path: PathBuf,
@@ -75,22 +189,11 @@ pub fn spawn_audit_task(
     db: DbHandle,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut writer = match AuditWriter::open(&path) {
-            Ok(w) => w,
-            Err(e) => {
-                error!(path = %path.display(), "failed to open audit log: {e}");
-                return;
-            }
-        };
-
+        let mut sink = AuditSink::new(path);
+        sink.open(&db);
         loop {
             match rx.recv().await {
-                Ok(event) => {
-                    if let Err(e) = writer.write_event(&event) {
-                        // spec: AUD#write-failures
-                        error!(path = %path.display(), "failed to write audit event: {e}");
-                    }
-                }
+                Ok(event) => sink.record(&event, &db),
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // spec: AUD#write-failures
                     warn!(dropped = n, "audit log receiver lagged, events lost");
@@ -135,6 +238,68 @@ mod tests {
             generation: 1,
             actor: None,
         }
+    }
+
+    // spec: AUD#write-failures
+    #[test]
+    fn an_audit_log_that_cannot_be_opened_files_a_fault_counting_events_and_clears_once_it_opens() {
+        let dir = TempDir::new().unwrap();
+        // A directory where the file belongs, so it cannot be opened for writing.
+        let path = dir.path().join("audit.log");
+        fs::create_dir(&path).unwrap();
+        let db = DbHandle::open_in_memory().unwrap();
+        let mut sink = AuditSink::new(path.clone());
+        let held = |db: &DbHandle| -> Vec<String> {
+            db.call(|db| {
+                crate::runtime::faults::list_active_faults(
+                    db,
+                    Some(&AppName::new_unchecked("seedling")),
+                )
+                .unwrap()
+                .into_iter()
+                .filter(|f| f.kind == "audit_log_unavailable")
+                .map(|f| f.description)
+                .collect()
+            })
+        };
+
+        sink.open(&db);
+        assert_eq!(
+            held(&db).len(),
+            1,
+            "a log that cannot be opened holds the fault before any entry"
+        );
+        sink.record(&test_event("a"), &db);
+        sink.record(&test_event("b"), &db);
+        let faults = held(&db);
+        assert_eq!(faults.len(), 1, "one fault, whatever the count: {faults:?}");
+        assert!(faults[0].contains("2 events"), "{}", faults[0]);
+
+        // The obstruction goes; the next entry opens the log and writes.
+        fs::remove_dir(&path).unwrap();
+        sink.record(&test_event("c"), &db);
+        assert!(
+            held(&db).is_empty(),
+            "the fault must clear on the next write"
+        );
+        assert!(fs::read_to_string(&path).unwrap().contains("\"app\":\"c\""));
+    }
+
+    // spec: AUD#storage
+    #[test]
+    fn an_existing_parent_directory_keeps_its_mode_and_a_new_one_is_made_private() {
+        let dir = TempDir::new().unwrap();
+        let existing = dir.path().join("shared");
+        fs::create_dir(&existing).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o755)).unwrap();
+
+        AuditWriter::open(&existing.join("audit.log")).unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&existing), 0o755, "an existing directory was reset");
+
+        let fresh = dir.path().join("made-here");
+        AuditWriter::open(&fresh.join("audit.log")).unwrap();
+        assert_eq!(mode(&fresh), 0o750);
     }
 
     #[test]

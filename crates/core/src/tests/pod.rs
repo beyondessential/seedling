@@ -50,6 +50,44 @@ fn pod_mount_serviceport() {
     }
 }
 
+// spec: POD#service-mounts
+#[test]
+fn mounting_a_second_service_port_on_the_same_number_throws_and_keeps_the_first() {
+    let err = run_test_script_err(
+        r#"
+        app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .mount(app.service("primary").port(5432))
+            .mount(app.service("replica").port(5432));
+    "#,
+    );
+    assert!(
+        err.to_string().contains("already mounts port 5432"),
+        "{err}"
+    );
+
+    let app = run_test_script_app(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        web.mount(app.service("primary").port(5432));
+        try { web.mount(app.service("replica").port(5432)); } catch {}
+    "#,
+    );
+    let def = app.def.load();
+    let id = def
+        .resources
+        .keys()
+        .find(|id| id.kind == ResourceKind::Deployment && &*id.name == "web")
+        .unwrap();
+    let defs::resource::Resource::Deployment(dep) = &def.resources[id] else {
+        panic!("expected Deployment");
+    };
+    let dep_def = dep.def.lock();
+    let pod = dep_def.pod.lock();
+    assert_eq!(pod.service_mounts.len(), 1);
+    assert_eq!(pod.service_mounts[0].service.name().as_str(), "primary");
+}
+
 // spec: POD#port-bindings
 // spec: HTTP#routes
 #[test]

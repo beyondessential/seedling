@@ -90,12 +90,18 @@ impl std::error::Error for ParamValidationError {}
 pub fn reject_reserved_keys(
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), ParamValidationError> {
-    for key in params.keys() {
-        if key.ends_with("_volume") || key.ends_with("_filename") {
-            return Err(ParamValidationError::ReservedKey { key: key.clone() });
-        }
+    reject_reserved(params.keys())
+}
+
+/// Refuse the first of `keys` that is reserved for the runtime.
+// spec: ACN#param-delivery
+pub fn reject_reserved<'a>(
+    mut keys: impl Iterator<Item = &'a String>,
+) -> Result<(), ParamValidationError> {
+    match keys.find(|key| key.ends_with("_volume") || key.ends_with("_filename")) {
+        Some(key) => Err(ParamValidationError::ReservedKey { key: key.clone() }),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Run the same field-by-field requirements check the install path
@@ -155,13 +161,10 @@ pub fn validate_volume_params<L: VolumeLookup>(
     for name in volume_names {
         let key = name.as_str();
         let val = match params.get(key) {
-            Some(serde_json::Value::String(s)) => s.clone(),
-            Some(_) => {
-                return Err(ParamValidationError::VolumeNotString {
-                    key: key.to_owned(),
-                });
-            }
-            None => {
+            // An empty value is an absent one, whether it was left empty or
+            // is the empty string a form submitted for a param it left blank.
+            Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+            Some(serde_json::Value::String(_)) | None => {
                 let def = schema.get(name).expect("schema entry");
                 if def.required {
                     return Err(ParamValidationError::VolumeMissing {
@@ -169,6 +172,11 @@ pub fn validate_volume_params<L: VolumeLookup>(
                     });
                 }
                 continue;
+            }
+            Some(_) => {
+                return Err(ParamValidationError::VolumeNotString {
+                    key: key.to_owned(),
+                });
             }
         };
         let site_name =
@@ -271,8 +279,16 @@ mod tests {
 
     use seedling_protocol::names::ParamName;
 
-    use super::{ParamValidationError, apply_schema};
+    use super::{ParamValidationError, VolumeLookup, apply_schema, validate_volume_params};
     use crate::defs::install::{ParamDef, ParamKind};
+
+    struct NoVolumes;
+
+    impl VolumeLookup for NoVolumes {
+        fn site_volume_exists(&self, _: &seedling_protocol::names::SiteVolumeName) -> bool {
+            false
+        }
+    }
 
     fn text_with_default(default: &str) -> ParamDef {
         ParamDef {
@@ -334,5 +350,32 @@ mod tests {
         params.insert("name".to_owned(), serde_json::json!("given"));
         apply_schema(&sch, &mut params).expect("a string is fine");
         assert_eq!(params["name"], serde_json::json!("given"));
+    }
+
+    // spec: ACN#volume-params
+    // spec: ACN#param-schemas
+    // An empty optional volume param is an absent one: it named a volume
+    // called "", which is not a volume name, and the invocation was refused.
+    #[test]
+    fn an_empty_optional_volume_param_is_absent() {
+        let def = |required| ParamDef {
+            kind: ParamKind::Volume,
+            required,
+            default_value: None,
+            description: None,
+            secret: None,
+        };
+        let mut params = serde_json::Map::new();
+        params.insert("data".to_owned(), serde_json::json!(""));
+
+        validate_volume_params(&schema("data", def(false)), &params, &NoVolumes)
+            .expect("empty and optional is absent");
+        assert_eq!(
+            validate_volume_params(&schema("data", def(true)), &params, &NoVolumes),
+            Err(ParamValidationError::VolumeMissing {
+                key: "data".to_owned()
+            }),
+            "empty and required is missing"
+        );
     }
 }

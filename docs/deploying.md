@@ -52,6 +52,16 @@ On first install the daemon starts immediately with sensible defaults
 (`--data-dir /var/lib/seedling`). Workloads keep running while the daemon is
 restarted, so upgrades (`apt-get upgrade`) are non-disruptive.
 
+### Garbage collection
+
+The daemon deletes stale operational records, and removes images that nothing has
+used for 30 days, once per collection interval (`--gc-interval-secs`, default
+3600). Retention is set with `--gc-retain-action-log-secs` (24 hours),
+`--gc-retain-cleared-faults-secs` (7 days), `--gc-retain-completed-operations-secs`
+(7 days), `--gc-retain-unscheduled-instances-secs` (10 minutes) and
+`--gc-retain-restart-records` (the 50 most recent restart records of each
+resource instance).
+
 ## Known host issue: AppArmor denies container signals
 
 On hosts where AppArmor mediates signals between the container stack's
@@ -312,8 +322,10 @@ seedling-ctl tls certs retry app.example.com   # start a new cycle now
 ```
 
 A Canopy-only hostname that no app with a Canopy type declares cannot be asked
-about, and is faulted with `canopy_certificate_failed`, as is any hostname whose
-request keeps failing while it has no usable certificate. If Canopy revokes a
+about, and is faulted with `canopy_certificate_failed` even while a certificate
+serves it. So is a hostname whose last answer from Canopy rejected the signing
+request, and any hostname whose request keeps failing while it has no usable
+certificate. If Canopy revokes a
 certificate or condemns its key, Seedling stops serving it, makes a new key and
 asks again, and the hostname passes to the next strategy meanwhile.
 

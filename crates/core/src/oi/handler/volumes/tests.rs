@@ -7,6 +7,14 @@ fn register_app(oi: &TestOi, name: &str, script: &str) {
         .expect("app registration succeeds");
 }
 
+fn make_site_volume(oi: &TestOi, name: &str) {
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": name, "kind": "managed" }),
+    )
+    .unwrap();
+}
+
 fn site_volume_names(oi: &TestOi) -> Vec<String> {
     let list = oi.call("/volumes/site/list", json!({})).unwrap();
     list.as_array()
@@ -14,6 +22,26 @@ fn site_volume_names(oi: &TestOi) -> Vec<String> {
         .iter()
         .map(|v| v["name"].as_str().unwrap().to_owned())
         .collect()
+}
+
+/// A snapshot site volume's record, for a host that cannot make a real one.
+fn record_snapshot(oi: &TestOi, name: &str) {
+    use crate::runtime::site_volumes::{self, SiteVolumeDef, SiteVolumeKind};
+    use seedling_protocol::names::{SiteVolumeName, VolumeRef};
+
+    let def = SiteVolumeDef {
+        name: SiteVolumeName::new(name).unwrap(),
+        kind: SiteVolumeKind::Snapshot {
+            source: VolumeRef::Site {
+                name: SiteVolumeName::new("origin").unwrap(),
+            },
+        },
+        created_at: jiff::Timestamp::now().to_string(),
+    };
+    oi.state
+        .db
+        .call(move |db| site_volumes::create(db, &def))
+        .unwrap();
 }
 
 fn held_volumes(oi: &TestOi) -> Vec<Value> {
@@ -115,7 +143,7 @@ fn delete_missing_site_volume_is_rejected() {
     let (code, _) = oi
         .call("/volumes/site/delete", json!({ "name": "no-such" }))
         .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
+    assert_eq!(code, "not_found");
 }
 
 // spec: ACTU#held-volumes
@@ -150,7 +178,7 @@ fn restore_held_rejects_missing_id_and_name_collision() {
             json!({ "id": "00000000-0000-0000-0000-000000000000" }),
         )
         .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
+    assert_eq!(code, "not_found");
     assert!(msg.contains("no held volume"), "{msg}");
 
     oi.call(
@@ -199,7 +227,7 @@ fn held_volume_delete_confirms_removal() {
             json!({ "id": "00000000-0000-0000-0000-000000000000" }),
         )
         .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
+    assert_eq!(code, "not_found");
 }
 
 // spec: SITE#site-volume-snapshots
@@ -230,7 +258,7 @@ fn snapshot_source_validation() {
             json!({ "name": "snap-one", "source": "ghost-app/data" }),
         )
         .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
+    assert_eq!(code, "not_found");
     assert!(msg.contains("ghost-app/data"), "{msg}");
 }
 
@@ -245,7 +273,7 @@ fn promote_requires_existing_snapshot_source() {
             json!({ "source": "no-such", "name": "fresh" }),
         )
         .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
+    assert_eq!(code, "not_found");
     assert!(msg.contains("no site volume"), "{msg}");
 
     oi.call(
@@ -305,10 +333,36 @@ fn app_and_exported_volume_lists_reflect_registered_apps() {
     assert_eq!(exported[0]["app"], "vol-app");
 }
 
+// spec: IDN#reserved-names
+#[test]
+fn a_mapping_cannot_be_made_under_a_name_operation_volumes_use() {
+    let oi = TestOi::new();
+    register_app(&oi, "consumer", r#"app.external_volume("backing");"#);
+    make_site_volume(&oi, "store");
+    let (code, _) = oi
+        .call(
+            "/volumes/external/map",
+            json!({
+                "app": "consumer",
+                "external_name": "seedling-op-abcd1234-data",
+                "target": { "kind": "site", "name": "store" },
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+}
+
 // spec: SITE#external-mappings
 #[test]
 fn external_volume_mapping_map_remap_unmap_flow() {
     let oi = TestOi::new();
+    register_app(&oi, "consumer", "");
+    register_app(
+        &oi,
+        "producer",
+        r#"app.volume("data").exported(#{ description: "shared" }); app.volume("private");"#,
+    );
+    make_site_volume(&oi, "store");
 
     let mapped = oi
         .call(
@@ -365,7 +419,7 @@ fn external_volume_mapping_map_remap_unmap_flow() {
             json!({ "app": "consumer", "external_name": "backing" }),
         )
         .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
+    assert_eq!(code, "not_found");
 
     let (code, _) = oi
         .call(
@@ -377,7 +431,7 @@ fn external_volume_mapping_map_remap_unmap_flow() {
             }),
         )
         .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
+    assert_eq!(code, "not_found");
 }
 
 #[test]
@@ -389,6 +443,7 @@ fn declared_external_volumes_guard_unmap() {
     );
 
     register_app(&oi, "db-user", r#"app.external_volume("db-files");"#);
+    make_site_volume(&oi, "pgdata");
 
     let declared = oi.call("/volumes/external/declared", json!({})).unwrap();
     let declared = declared.as_array().unwrap();
@@ -414,29 +469,6 @@ fn declared_external_volumes_guard_unmap() {
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("declared by app"), "{msg}");
-}
-
-// spec: IDN#reserved-names
-// The daemon deletes every site volume under `backup-snap-` at startup, so an
-// operator volume created under that prefix was destroyed on the next restart.
-#[test]
-fn reserved_prefix_is_rejected_at_creation() {
-    let oi = TestOi::new();
-    let (code, message) = oi
-        .call(
-            "/volumes/site/create",
-            json!({ "name": "backup-snap-archive", "kind": "managed" }),
-        )
-        .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
-    assert!(message.contains("reserved"), "message: {message}");
-
-    // A name that merely contains the prefix is the operator's.
-    oi.call(
-        "/volumes/site/create",
-        json!({ "name": "my-backup-snap-thing", "kind": "managed" }),
-    )
-    .expect("only the claimed prefix is reserved");
 }
 
 /// btrfs snapshots *into* a destination that already exists rather than
@@ -474,6 +506,8 @@ fn promoting_onto_a_name_already_taken_is_refused() {
         json!({ "name": "data", "kind": "managed" }),
     )
     .unwrap();
+
+    record_snapshot(&oi, "some-snapshot");
 
     let (code, msg) = oi
         .call(
@@ -532,8 +566,8 @@ fn storage_standing_at_the_name_with_no_record_is_refused_rather_than_reused() {
     );
 }
 
-/// Storage removed by hand, by a disk recovery, or by the startup sweep of
-/// leftover snapshots leaves a row with nothing behind it. There is nothing
+/// Storage removed by hand or by a disk recovery leaves a row with nothing
+/// behind it. There is nothing
 /// to hold, so there is nothing stopping the deletion.
 // spec: ACTU#held-volumes
 #[test]
@@ -626,4 +660,494 @@ fn taking_a_site_volume_name_excludes_another_request_taking_the_same_one() {
     });
 
     assert_eq!(site_volume_names(&oi), vec!["contended".to_owned()]);
+}
+
+// spec: VOLM#restoring-a-held-volume
+// spec: SITE#site-volumes
+// A restore brings the site volume into being with its own event, and the
+// runtime does not emit a creation event for it as well.
+#[test]
+fn restoring_a_held_volume_emits_no_site_volume_creation_event() {
+    let oi = TestOi::new();
+    make_site_volume(&oi, "keep-me");
+    oi.call("/volumes/site/delete", json!({ "name": "keep-me" }))
+        .unwrap();
+    let held_id = held_volumes(&oi)[0]["id"].clone();
+
+    let mut events = oi.state.event_tx.subscribe();
+    oi.call("/volumes/held/restore", json!({ "id": held_id }))
+        .unwrap();
+
+    let mut seen = Vec::new();
+    while let Ok(e) = events.try_recv() {
+        seen.push(
+            serde_json::to_value(&e).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    assert!(seen.contains(&"HeldVolumeRestored".to_owned()), "{seen:?}");
+    assert!(!seen.contains(&"SiteVolumeCreated".to_owned()), "{seen:?}");
+}
+
+// spec: VOLM#requests
+// A restore whose data cannot be moved leaves the volume held and nothing
+// recorded under the target name.
+#[test]
+fn a_restore_that_cannot_move_the_data_leaves_the_volume_held_and_unrecorded() {
+    let oi = TestOi::new();
+    make_site_volume(&oi, "keep-me");
+    oi.call("/volumes/site/delete", json!({ "name": "keep-me" }))
+        .unwrap();
+    let held = held_volumes(&oi);
+    let id: seedling_protocol::names::HeldVolumeId =
+        held[0]["id"].as_str().unwrap().parse().unwrap();
+
+    // The held data is gone from where its record says, so the move fails.
+    let data = oi.state.driver.volume_store.held_path(&id).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
+
+    let (code, _) = oi
+        .call("/volumes/held/restore", json!({ "id": id }))
+        .unwrap_err();
+    assert_eq!(code, "internal");
+    assert_eq!(held_volumes(&oi).len(), 1, "still held");
+    assert!(site_volume_names(&oi).is_empty(), "no record was left");
+    assert!(!oi.state.driver.volume_store.site_exists("keep-me"));
+}
+
+// spec: VOLM#listing-held-volumes
+#[test]
+fn a_held_volume_record_that_cannot_be_read_fails_the_list_and_is_not_skipped() {
+    let oi = TestOi::new();
+    make_site_volume(&oi, "alpha");
+    oi.call("/volumes/site/delete", json!({ "name": "alpha" }))
+        .unwrap();
+    let id = held_volumes(&oi)[0]["id"].as_str().unwrap().to_owned();
+    let held_dir = oi
+        .state
+        .driver
+        .volume_store
+        .volumes_dir()
+        .parent()
+        .unwrap()
+        .join("held-volumes");
+    std::fs::write(held_dir.join(format!("{id}.meta.json")), "{ not json").unwrap();
+
+    let (code, _) = oi.call("/volumes/held/list", json!({})).unwrap_err();
+    assert_eq!(code, "internal");
+    let (code, _) = oi
+        .call("/volumes/held/delete", json!({ "id": id }))
+        .unwrap_err();
+    assert_eq!(code, "internal", "a record that exists is not 'not found'");
+}
+
+// spec: VOLM#listing-held-volumes
+#[test]
+fn held_volumes_are_listed_by_app_then_volume_name_then_id() {
+    let oi = TestOi::new();
+    for name in ["zeta", "alpha", "mid"] {
+        make_site_volume(&oi, name);
+        oi.call("/volumes/site/delete", json!({ "name": name }))
+            .unwrap();
+    }
+    let names: Vec<String> = held_volumes(&oi)
+        .iter()
+        .map(|h| h["volume_name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["alpha", "mid", "zeta"]);
+}
+
+// spec: VOLM#creating-a-site-volume
+#[test]
+fn a_managed_site_volume_with_a_host_path_is_refused() {
+    let oi = TestOi::new();
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/create",
+            json!({ "name": "store", "kind": "managed", "host_path": "/srv/store" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("host_path"), "{msg}");
+    assert!(site_volume_names(&oi).is_empty());
+}
+
+// spec: VOLM#creating-a-site-volume
+// spec: VOLM#requests
+// Storage that cannot be made leaves no record behind.
+#[test]
+fn a_managed_site_volume_whose_storage_cannot_be_made_leaves_no_record() {
+    let oi = TestOi::new();
+    let volumes = oi.state.driver.volume_store.volumes_dir().to_owned();
+    // A file where the volumes directory belongs makes the storage fail.
+    std::fs::remove_dir_all(&volumes).unwrap();
+    std::fs::write(&volumes, "").unwrap();
+
+    let (code, _) = oi
+        .call(
+            "/volumes/site/create",
+            json!({ "name": "store", "kind": "managed" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "internal");
+    assert!(site_volume_names(&oi).is_empty());
+}
+
+// spec: VOLM#snapshotting-a-volume
+#[test]
+fn snapshot_sources_are_checked_before_the_host_is() {
+    let oi = TestOi::new();
+    let (code, _) = oi
+        .call(
+            "/volumes/site/snapshot",
+            json!({ "name": "snap", "source": "_site/ghost" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "bound", "kind": "bind", "host_path": "/srv/bound" }),
+    )
+    .unwrap();
+    let (code, _) = oi
+        .call(
+            "/volumes/site/snapshot",
+            json!({ "name": "snap", "source": "_site/bound" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+
+    record_snapshot(&oi, "snapped");
+    let (code, _) = oi
+        .call(
+            "/volumes/site/snapshot",
+            json!({ "name": "snap", "source": "_site/snapped" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+
+    // A managed site volume that is not stored as a BTRFS subvolume.
+    make_site_volume(&oi, "managed");
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/snapshot",
+            json!({ "name": "snap", "source": "_site/managed" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("BTRFS subvolume"), "{msg}");
+    assert!(
+        !msg.contains("data directory"),
+        "the refusal is about the volume, not where the data directory is: {msg}"
+    );
+    assert!(!oi.state.driver.volume_store.site_exists("snap"));
+}
+
+// spec: VOLM#promoting-a-snapshot
+#[test]
+fn promotion_on_a_host_not_on_btrfs_is_refused_without_touching_storage() {
+    let oi = TestOi::new();
+    record_snapshot(&oi, "snapped");
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/promote",
+            json!({ "source": "snapped", "name": "fresh" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("BTRFS"), "{msg}");
+    assert!(!oi.state.driver.volume_store.site_exists("fresh"));
+    assert_eq!(site_volume_names(&oi), vec!["snapped"]);
+}
+
+// spec: VOLM#snapshotting-a-volume
+// A history that cannot be read is not "no volume".
+#[test]
+fn an_unreadable_volume_history_is_internal_not_not_found() {
+    let oi = TestOi::new();
+    oi.state
+        .db
+        .call(|db| db.conn.execute_batch("DROP TABLE resource_instances;"))
+        .unwrap();
+    let (code, _) = oi
+        .call(
+            "/volumes/site/snapshot",
+            json!({ "name": "snap", "source": "ghost-app/data" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "internal");
+}
+
+// spec: VOLM#deleting-a-site-volume
+// spec: SITE#site-volumes
+#[test]
+fn a_site_volume_a_mapping_targets_cannot_be_deleted() {
+    let oi = TestOi::new();
+    register_app(&oi, "consumer", "");
+    make_site_volume(&oi, "store");
+    oi.call(
+        "/volumes/external/map",
+        json!({
+            "app": "consumer",
+            "external_name": "backing",
+            "target": { "kind": "site", "name": "store" },
+        }),
+    )
+    .unwrap();
+
+    let (code, msg) = oi
+        .call("/volumes/site/delete", json!({ "name": "store" }))
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("consumer") && msg.contains("backing"), "{msg}");
+    assert_eq!(site_volume_names(&oi), vec!["store"]);
+    assert!(held_volumes(&oi).is_empty(), "nothing was held");
+
+    oi.call(
+        "/volumes/external/unmap",
+        json!({ "app": "consumer", "external_name": "backing" }),
+    )
+    .unwrap();
+    oi.call("/volumes/site/delete", json!({ "name": "store" }))
+        .unwrap();
+}
+
+// spec: VOLM#mapping-an-external-volume
+#[test]
+fn mapping_checks_the_app_the_target_and_duplicates() {
+    let oi = TestOi::new();
+    let map = |app: &str, target: Value| {
+        oi.call(
+            "/volumes/external/map",
+            json!({ "app": app, "external_name": "backing", "target": target }),
+        )
+    };
+    let site = |name: &str| json!({ "kind": "site", "name": name });
+
+    let (code, _) = map("ghost", site("store")).unwrap_err();
+    assert_eq!(code, "not_found", "an app that is not registered");
+
+    register_app(&oi, "consumer", "");
+    let (code, _) = map("consumer", site("store")).unwrap_err();
+    assert_eq!(
+        code, "requirements_invalid",
+        "a site volume that is not there"
+    );
+
+    register_app(
+        &oi,
+        "producer",
+        r#"app.volume("data").exported(#{ description: "shared" }); app.volume("private");"#,
+    );
+    for (volume, why) in [("missing", "undeclared"), ("private", "not exported")] {
+        let (code, msg) = map(
+            "consumer",
+            json!({ "kind": "app", "app": "producer", "volume": volume }),
+        )
+        .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{why}: {msg}");
+    }
+    let (code, _) = map(
+        "consumer",
+        json!({ "kind": "app", "app": "ghost", "volume": "data" }),
+    )
+    .unwrap_err();
+    assert_eq!(
+        code, "requirements_invalid",
+        "a target app that is not registered"
+    );
+
+    make_site_volume(&oi, "store");
+    map("consumer", site("store")).unwrap();
+    let (code, _) = map("consumer", site("store")).unwrap_err();
+    assert_eq!(code, "requirements_invalid", "a name the app already maps");
+
+    // A name the definition does not declare is accepted.
+    assert_eq!(
+        oi.call("/volumes/external/list", json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+// spec: VOLM#remapping-an-external-volume
+#[test]
+fn remapping_checks_its_target() {
+    let oi = TestOi::new();
+    register_app(&oi, "consumer", "");
+    make_site_volume(&oi, "store");
+    oi.call(
+        "/volumes/external/map",
+        json!({
+            "app": "consumer",
+            "external_name": "backing",
+            "target": { "kind": "site", "name": "store" },
+        }),
+    )
+    .unwrap();
+
+    let (code, _) = oi
+        .call(
+            "/volumes/external/remap",
+            json!({
+                "app": "consumer",
+                "external_name": "backing",
+                "target": { "kind": "site", "name": "ghost" },
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    let list = oi.call("/volumes/external/list", json!({})).unwrap();
+    assert_eq!(list[0]["target"]["name"], "store", "unchanged");
+}
+
+// spec: VOLM#unmapping-an-external-volume
+// spec: SITE#external-mappings
+#[test]
+fn unmapping_begins_a_reconciliation_iteration() {
+    let oi = TestOi::new();
+    register_app(&oi, "consumer", "");
+    make_site_volume(&oi, "store");
+    oi.call(
+        "/volumes/external/map",
+        json!({
+            "app": "consumer",
+            "external_name": "backing",
+            "target": { "kind": "site", "name": "store" },
+        }),
+    )
+    .unwrap();
+    // Drain the wake-up the map left.
+    oi.block_on(oi.state.tick_notify.notified());
+
+    oi.call(
+        "/volumes/external/unmap",
+        json!({ "app": "consumer", "external_name": "backing" }),
+    )
+    .unwrap();
+    oi.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            oi.state.tick_notify.notified(),
+        )
+        .await
+        .expect("an iteration was asked for")
+    });
+}
+
+// spec: RT#volume-writes
+#[test]
+fn the_operation_writer_resolves_external_volumes_through_the_host_mappings() {
+    let oi = TestOi::new();
+    register_app(&oi, "consumer", r#"app.external_volume("backing");"#);
+    make_site_volume(&oi, "store");
+    let writer = crate::oi::handler::actions::lifecycle::make_volume_writer(&oi.state).unwrap();
+
+    assert_eq!(
+        writer.resolve_external("consumer", "backing").unwrap(),
+        None,
+        "unmapped resolves to nothing"
+    );
+
+    let map = |app: &str, read_only: bool| {
+        oi.call(
+            "/volumes/external/map",
+            json!({
+                "app": app,
+                "external_name": "backing",
+                "target": { "kind": "site", "name": "store" },
+                "read_only": read_only,
+            }),
+        )
+        .unwrap();
+    };
+    map("consumer", false);
+    let resolved = writer
+        .resolve_external("consumer", "backing")
+        .unwrap()
+        .expect("the mapping resolves");
+    assert!(!resolved.read_only);
+    assert!(resolved.host_path.ends_with("site-store"), "{resolved:?}");
+
+    register_app(&oi, "reader", r#"app.external_volume("backing");"#);
+    map("reader", true);
+    assert!(
+        writer
+            .resolve_external("reader", "backing")
+            .unwrap()
+            .unwrap()
+            .read_only
+    );
+}
+
+// spec: RT#volume-writes
+// spec: ACTU#volume-creation-and-seeding
+#[test]
+fn the_operation_writer_creates_and_seeds_a_missing_named_volume_before_writing() {
+    use crate::runtime::{barrier::VolumeWriteTarget, identity::VolumeName};
+
+    let oi = TestOi::new();
+    let writer = crate::oi::handler::actions::lifecycle::make_volume_writer(&oi.state).unwrap();
+    let target = VolumeWriteTarget::NamedVolume {
+        name: "cfg".to_owned(),
+        tmpfs: false,
+        writes: vec![("/seeded".to_owned(), bytes::Bytes::from_static(b"declared"))],
+    };
+    oi.block_on(async move {
+        tokio::spawn(async move { writer.write("consumer", target, "/written", b"by the action") })
+            .await
+    })
+    .unwrap()
+    .expect("the write lands");
+
+    let dir = oi
+        .state
+        .driver
+        .volume_store
+        .path(&VolumeName::for_app("consumer", "cfg"));
+    assert_eq!(std::fs::read(dir.join("seeded")).unwrap(), b"declared");
+    assert_eq!(
+        std::fs::read(dir.join("written")).unwrap(),
+        b"by the action"
+    );
+}
+
+// spec: RT#volume-writes
+// spec: ACTU#volume-creation-and-seeding
+#[test]
+fn the_operation_writer_leaves_existing_named_volume_storage_unseeded() {
+    use crate::runtime::{barrier::VolumeWriteTarget, identity::VolumeName};
+
+    let oi = TestOi::new();
+    let name = VolumeName::for_app("consumer", "cfg");
+    oi.block_on(oi.state.driver.volume_store.create(&name))
+        .expect("storage is created");
+    let writer = crate::oi::handler::actions::lifecycle::make_volume_writer(&oi.state).unwrap();
+    let target = VolumeWriteTarget::NamedVolume {
+        name: "cfg".to_owned(),
+        tmpfs: false,
+        writes: vec![("/seeded".to_owned(), bytes::Bytes::from_static(b"declared"))],
+    };
+    oi.block_on(async move {
+        tokio::spawn(async move { writer.write("consumer", target, "/written", b"by the action") })
+            .await
+    })
+    .unwrap()
+    .expect("the write lands");
+
+    let dir = oi.state.driver.volume_store.path(&name);
+    assert!(
+        !dir.join("seeded").exists(),
+        "present storage is not seeded"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("written")).unwrap(),
+        b"by the action"
+    );
 }

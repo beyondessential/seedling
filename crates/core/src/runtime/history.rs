@@ -95,6 +95,75 @@ pub fn display_names_for_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<Str
     rows.collect()
 }
 
+/// The display names of the resources recorded for every app but `app`: the
+/// identities a unit under `app`'s name prefix is ruled out by.
+// spec: TRD#uninstall-scope
+pub fn display_names_of_other_apps(db: &Db, app: &AppName) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT DISTINCT display_name FROM resource_instances WHERE app != ?1")?;
+    let rows = stmt.query_map(params![app], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
+/// Every resource instance recorded for `app`.
+// spec: TRD#teardown
+pub fn instances_for_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<ResourceInstance>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT id, kind, name, is_scaled, display_name
+         FROM resource_instances
+         WHERE app = ?1
+         ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map(params![app], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut instances = Vec::new();
+    for row in rows {
+        let (id_hex, kind, name, is_scaled, display_name) = row?;
+        let id = InstanceId::from_hex(&id_hex).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(0, "id".to_string(), rusqlite::types::Type::Text)
+        })?;
+        instances.push(ResourceInstance {
+            id,
+            app: app.clone(),
+            kind: parse_resource_kind(&kind)?,
+            name,
+            variant: if is_scaled != 0 {
+                InstanceVariant::Scaled
+            } else {
+                InstanceVariant::Singleton
+            },
+            display_name,
+        });
+    }
+    Ok(instances)
+}
+
+/// Whether every instance recorded for `app` whose kind has a lifecycle is
+/// `Unscheduled`, which is when its teardown has completed.
+///
+/// An instance whose lifecycle cannot be read is an error, never an
+/// instance that is done.
+// spec: TRD#teardown
+pub fn teardown_complete(db: &Db, app: &AppName) -> rusqlite::Result<bool> {
+    for instance in instances_for_app(db, app)? {
+        if !crate::runtime::barrier::oracle::has_lifecycle(instance.kind) {
+            continue;
+        }
+        if read_lifecycle(db, &instance)?.0 != LifecycleState::Unscheduled {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 // spec: IDN#instance-identity
 pub fn find_instances_for_group(
     db: &Db,
@@ -142,6 +211,17 @@ pub fn find_instances_for_group(
 // spec: GC#instance-retirement
 pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
     let hex = id.to_hex();
+    // spec: GC#instance-retirement
+    // The instance's active faults are cleared first, each with its event,
+    // so none is deleted without the clear being announced. A clear that
+    // fails leaves every record in place.
+    let active: Vec<_> = crate::runtime::faults::list_active_faults(db, None)?
+        .into_iter()
+        .filter(|f| f.instance_id.as_deref() == Some(hex.as_str()))
+        .collect();
+    for fault in &active {
+        crate::runtime::faults::clear_fault(db, &fault.id, &fault.app)?;
+    }
     db.atomically(|db| {
         db.conn.execute(
             "DELETE FROM world_observations WHERE instance_id = ?1",
@@ -161,12 +241,16 @@ pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
 
 /// Drop every registry row for `app`, once nothing of it is desired: its
 /// uninstall has finished, or it is being deregistered. Observations left
-/// behind are pruned as orphans.
+/// behind are pruned as orphans. The anonymous volumes recorded with the
+/// instances go with them.
 pub fn delete_instances_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usize> {
-    db.conn.execute(
-        "DELETE FROM resource_instances WHERE app = ?1",
-        params![app],
-    )
+    db.atomically(|db| {
+        crate::runtime::anonymous_volumes::delete_for_app(db, app)?;
+        db.conn.execute(
+            "DELETE FROM resource_instances WHERE app = ?1",
+            params![app],
+        )
+    })
 }
 
 // spec: IDN#instance-identity
@@ -288,6 +372,78 @@ pub fn query_observations(
         })
     })?;
     rows.collect()
+}
+
+/// Hold an external volume's lifecycle state as its app's desired state has
+/// it. The time of the last change moves only when the state does.
+// spec: LCY#external-volumes
+pub fn set_external_volume_state(
+    db: &Db,
+    instance: &ResourceInstance,
+    state: LifecycleState,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT INTO external_volume_states (instance_id, state, changed_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT (instance_id) DO UPDATE SET
+             state = excluded.state,
+             changed_at = excluded.changed_at
+         WHERE state != excluded.state",
+        params![instance.id.to_hex(), format!("{state:?}"), now_ms()],
+    )?;
+    Ok(())
+}
+
+/// An external volume's lifecycle state and when it last changed: `Pending`
+/// until the desired state has been held for it.
+// spec: LCY#external-volumes
+fn external_volume_state(
+    db: &Db,
+    instance: &ResourceInstance,
+) -> rusqlite::Result<(LifecycleState, Option<SystemTime>)> {
+    use rusqlite::OptionalExtension as _;
+    let row: Option<(String, i64)> = db
+        .conn
+        .query_row(
+            "SELECT state, changed_at FROM external_volume_states WHERE instance_id = ?1",
+            params![instance.id.to_hex()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((state, changed_at)) = row else {
+        return Ok((LifecycleState::Pending, None));
+    };
+    let state = match state.as_str() {
+        "Ready" => LifecycleState::Ready,
+        "Unscheduled" => LifecycleState::Unscheduled,
+        other => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                format!("unknown external volume state {other:?}").into(),
+            ));
+        }
+    };
+    let at = UNIX_EPOCH + std::time::Duration::from_millis(changed_at.max(0) as u64);
+    Ok((state, Some(at)))
+}
+
+/// An instance's current lifecycle state and the time of its last transition,
+/// or an error where what it derives from cannot be read, which is neither an
+/// empty history nor any state.
+///
+/// An external volume's comes from the desired state; every other instance's
+/// from its observation history.
+// spec: LCY#derivation
+pub fn read_lifecycle(
+    db: &Db,
+    instance: &ResourceInstance,
+) -> rusqlite::Result<(LifecycleState, Option<SystemTime>)> {
+    if instance.kind == ResourceKind::ExternalVolume {
+        return external_volume_state(db, instance);
+    }
+    let observations = query_observations(db, instance)?;
+    Ok(crate::runtime::barrier::oracle::derive_state_with_transition_time(instance, &observations))
 }
 
 // spec: HIST#observations
@@ -426,6 +582,24 @@ pub fn interrupt_incomplete_autonomous_operations(db: &Db) -> rusqlite::Result<u
     )
 }
 
+/// The ids of the most recent observations recorded for `instance_id`, oldest
+/// first: what the runtime had observed of it when it decided to act.
+// spec: HIST#operation-provenance
+pub fn recent_observation_ids(
+    db: &Db,
+    instance_id: InstanceId,
+    limit: usize,
+) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT id FROM (
+             SELECT id FROM world_observations WHERE instance_id = ?1
+             ORDER BY id DESC LIMIT ?2
+         ) ORDER BY id ASC",
+    )?;
+    stmt.query_map(params![instance_id.to_hex(), limit as i64], |r| r.get(0))?
+        .collect()
+}
+
 pub fn query_autonomous_operations(
     db: &Db,
     resource_id: InstanceId,
@@ -495,8 +669,8 @@ pub fn insert_action_log_entry(
         "INSERT OR REPLACE INTO action_log
              (recorded_at, operation_id, app, action_name, call_index, call_kind,
               resources, barrier_state, barrier_deadline, barrier_satisfied,
-              barrier_started_at, extra, barriers)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              barrier_started_at, extra, barriers, begun)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             now_ms(),
             operation_id.0,
@@ -511,6 +685,7 @@ pub fn insert_action_log_entry(
             barrier_started_at,
             entry.extra,
             barriers_json,
+            entry.begun,
         ],
     )?;
     Ok(())
@@ -523,7 +698,7 @@ pub fn load_action_log(
 ) -> rusqlite::Result<Vec<ActionLogEntry>> {
     let mut stmt = db.conn.prepare(
         "SELECT call_index, call_kind, resources, barrier_state, barrier_deadline,
-                barrier_satisfied, barrier_started_at, extra, barriers
+                barrier_satisfied, barrier_started_at, extra, barriers, begun
          FROM action_log
          WHERE operation_id = ?1
          ORDER BY call_index ASC",
@@ -539,6 +714,7 @@ pub fn load_action_log(
         let barrier_started_at: Option<i64> = row.get(6)?;
         let extra: Option<String> = row.get(7)?;
         let barriers_json: Option<String> = row.get(8)?;
+        let begun: bool = row.get(9)?;
 
         let call_kind = match call_kind_str.as_str() {
             "Start" => CallKind::Start,
@@ -549,6 +725,7 @@ pub fn load_action_log(
             "Signal" => CallKind::Signal,
             "Write" => CallKind::Write,
             "Exec" => CallKind::Exec,
+            "Restart" => CallKind::Restart,
             "SubAction" => CallKind::SubAction,
             other => {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -600,6 +777,7 @@ pub fn load_action_log(
             resources,
             barriers,
             extra,
+            begun,
         })
     })?;
 
@@ -635,8 +813,15 @@ pub fn save_current_operation(
     cipher: &crate::runtime::secrets::Cipher,
     op: &CurrentOperation,
     params: &serde_json::Map<String, serde_json::Value>,
+    volume_bindings: &OperationVolumeBindings,
 ) -> Result<(), OperationPersistError> {
     let plaintext = serde_json::to_string(params).map_err(OperationPersistError::Json)?;
+    // spec: OPS#operation-scoped-volumes
+    let volume_bindings = if volume_bindings.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(volume_bindings).map_err(OperationPersistError::Json)?)
+    };
     let ciphertext = cipher
         .encrypt(&secrecy::SecretString::new(plaintext.into()))
         .map_err(OperationPersistError::Cipher)?;
@@ -653,15 +838,16 @@ pub fn save_current_operation(
             // which is exactly how this kind of bug arrives.
             "INSERT INTO current_operation
                 (singleton, operation_id, app, action_name,
-                 source_generation, target_generation, params_ciphertext)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                 source_generation, target_generation, params_ciphertext, volume_bindings)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(singleton) DO UPDATE SET
                 operation_id = excluded.operation_id,
                 app = excluded.app,
                 action_name = excluded.action_name,
                 source_generation = excluded.source_generation,
                 target_generation = excluded.target_generation,
-                params_ciphertext = excluded.params_ciphertext",
+                params_ciphertext = excluded.params_ciphertext,
+                volume_bindings = excluded.volume_bindings",
             params![
                 op.operation_id.0,
                 op.app,
@@ -669,6 +855,7 @@ pub fn save_current_operation(
                 op.source_generation as i64,
                 op.target_generation as i64,
                 ciphertext,
+                volume_bindings,
             ],
         )
         .map_err(OperationPersistError::Db)?;
@@ -705,6 +892,33 @@ pub fn load_current_operation_params(
     let map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(plaintext.expose_secret()).map_err(OperationPersistError::Json)?;
     Ok(Some(map))
+}
+
+/// An operation's volume bindings, keyed by each binding's generated name.
+pub type OperationVolumeBindings =
+    std::collections::HashMap<String, crate::defs::volume::OperationVolumeBinding>;
+
+/// The volume bindings persisted with the current operation; empty when there
+/// is no operation or it bound no volume.
+// spec: OPS#operation-scoped-volumes
+pub fn load_current_operation_volume_bindings(
+    db: &Db,
+) -> Result<OperationVolumeBindings, OperationPersistError> {
+    let stored = db
+        .conn
+        .query_row(
+            "SELECT volume_bindings FROM current_operation WHERE singleton = 1",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(OperationPersistError::Db(other)),
+        })?;
+    match stored {
+        Some(json) => serde_json::from_str(&json).map_err(OperationPersistError::Json),
+        None => Ok(OperationVolumeBindings::new()),
+    }
 }
 
 #[derive(Debug)]
@@ -753,6 +967,147 @@ pub fn load_current_operation(db: &Db) -> rusqlite::Result<Option<CurrentOperati
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Queued operations
+// ---------------------------------------------------------------------------
+
+/// Persist a queued request, with its parameters protected under the secret
+/// key as a persisted operation's are.
+// spec: OPS#concurrency
+pub fn save_queued_operation(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+    op: &crate::runtime::scheduler::QueuedOperation,
+) -> Result<(), OperationPersistError> {
+    let plaintext = serde_json::to_string(&op.params).map_err(OperationPersistError::Json)?;
+    let ciphertext = cipher
+        .encrypt(&secrecy::SecretString::new(plaintext.into()))
+        .map_err(OperationPersistError::Cipher)?;
+    let actor = op
+        .actor
+        .as_deref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(OperationPersistError::Json)?;
+    db.conn.execute(
+        "INSERT INTO queued_operations
+            (operation_id, app, action, trigger, source_generation, target_generation,
+             params_ciphertext, actor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            op.operation_id.0,
+            op.app,
+            op.action,
+            op.trigger,
+            op.source_generation as i64,
+            op.target_generation as i64,
+            ciphertext,
+            actor,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Remove a queued request's record, because it has started or been refused.
+// spec: OPS#concurrency
+pub fn clear_queued_operation(db: &Db, operation_id: &OperationId) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "DELETE FROM queued_operations WHERE operation_id = ?1",
+        [&operation_id.0],
+    )?;
+    Ok(())
+}
+
+/// Every persisted queued request, in the order it was made.
+///
+/// A record that cannot be read fails the whole read rather than being
+/// skipped: a queue missing a request is not the queue that was persisted.
+// spec: OPS#concurrency
+pub fn load_queued_operations(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+) -> Result<Vec<crate::runtime::scheduler::QueuedOperation>, OperationPersistError> {
+    use secrecy::ExposeSecret;
+    let mut stmt = db.conn.prepare(
+        "SELECT operation_id, app, action, trigger, source_generation, target_generation,
+                params_ciphertext, actor
+           FROM queued_operations ORDER BY seq",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, AppName>(1)?,
+            row.get::<_, ActionName>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, Vec<u8>>(6)?,
+            row.get::<_, Option<String>>(7)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, app, action, trigger, source, target, ciphertext, actor) = row?;
+        let plaintext = cipher
+            .decrypt(&ciphertext)
+            .map_err(OperationPersistError::Cipher)?;
+        let params =
+            serde_json::from_str(plaintext.expose_secret()).map_err(OperationPersistError::Json)?;
+        let actor = actor
+            .map(|a| serde_json::from_str(&a))
+            .transpose()
+            .map_err(OperationPersistError::Json)?
+            .map(std::sync::Arc::new);
+        out.push(crate::runtime::scheduler::QueuedOperation {
+            app,
+            action,
+            operation_id: OperationId(id),
+            params,
+            source_generation: source as u64,
+            target_generation: target as u64,
+            trigger,
+            actor,
+        });
+    }
+    Ok(out)
+}
+
+/// What the runtime persisted about lifecycle operations when it stopped.
+pub struct PersistedOperationState {
+    /// The operation that was in progress, if any.
+    pub current: Option<CurrentOperation>,
+    /// Whether a cancel was persisted for `current`; false when there is none.
+    pub cancel_requested: bool,
+    /// The requests that were waiting, in the order they were made.
+    pub queued: Vec<crate::runtime::scheduler::QueuedOperation>,
+}
+
+/// Read the persisted operation, whether a cancel was persisted for it, and
+/// the persisted queue, or say which could not be read.
+///
+/// All three are read or none is answered for: acting on a part of the state
+/// would treat what could not be read as absent.
+// spec: OPS#unreadable-operation-state
+pub fn read_operation_state(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+) -> Result<PersistedOperationState, String> {
+    let current =
+        load_current_operation(db).map_err(|e| format!("the persisted operation: {e}"))?;
+    let cancel_requested = if current.is_some() {
+        load_cancel_requested(db).map_err(|e| format!("the persisted cancel: {e}"))?
+    } else {
+        false
+    };
+    let queued = load_queued_operations(db, cipher)
+        .map_err(|e| format!("the persisted operation queue: {e}"))?;
+    Ok(PersistedOperationState {
+        current,
+        cancel_requested,
+        queued,
+    })
 }
 
 pub fn clear_current_operation(db: &Db) -> rusqlite::Result<()> {

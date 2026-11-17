@@ -11,6 +11,7 @@ use super::{
     ingress::Ingress,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
+use crate::runtime::identity::InstanceId;
 pub use proxy::{
     BalanceSettings, CompressDecl, CompressSettings, DEFAULT_REDIRECT_CODE, Encoding,
     GroupedHeaderOps, HeaderName, HeaderOp, HeaderRules, HeaderSettings, LbPolicy, ProxySettings,
@@ -18,6 +19,8 @@ pub use proxy::{
     ResolvedBalance, ResolvedCompress, ResolvedRateLimit, ResolvedRouteProxy, RouteRedirect,
     default_content_types, resolve,
 };
+
+pub(crate) use proxy::{check_route_balances, redirect_code};
 
 mod proxy;
 
@@ -43,14 +46,16 @@ pub struct Service {
     /// register the created `Ingress` into `app_def.resources`.
     pub(super) app_def: Option<Weak<arc_swap::ArcSwap<AppDef>>>,
     pub frozen: bool,
+    /// The identity an anonymous Service holds for its lifetime; `None` for a named one.
+    // spec: IDN#anonymous-instances
+    pub anon_id: Option<InstanceId>,
 }
 
 impl super::Freezable for Service {
     // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
-        // Anonymous services use an empty name as a sentinel (see app/service.rs);
-        // they remain mutable inside the action that creates them.
-        self.frozen || (!self.name.is_empty() && is_in_action_closure())
+        // An anonymous service stays mutable inside the action that creates it.
+        self.frozen || (self.anon_id.is_none() && is_in_action_closure())
     }
 }
 
@@ -76,6 +81,14 @@ impl Service {
             def: Default::default(),
             app_def: None,
             frozen: false,
+            anon_id: None,
+        }
+    }
+
+    pub fn anonymous(anon_id: InstanceId) -> Self {
+        Self {
+            anon_id: Some(anon_id),
+            ..Self::new(ResourceName::new(String::new()))
         }
     }
 
@@ -88,6 +101,7 @@ impl Service {
             def: Default::default(),
             app_def: Some(app_def),
             frozen: false,
+            anon_id: None,
         }
     }
 }
@@ -100,7 +114,8 @@ impl CustomType for Service {
             .with_fn(
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
+                    // An instance method: it declares nothing on the service,
+                    // so a frozen static service in the action context offers it.
                     let port = Port::new(port)?;
                     Ok(ServicePort {
                         service: this.clone().into(),
@@ -113,10 +128,16 @@ impl CustomType for Service {
                 "http",
                 |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    this.def.lock().http.get_or_insert_default();
+                    let port = Port::from_u16(80);
+                    this.def
+                        .lock()
+                        .http
+                        .get_or_insert_default()
+                        .ports
+                        .insert(port.get());
                     Ok(HttpService {
                         service: this.clone().into(),
-                        port: Port::from_u16(80),
+                        port,
                     })
                 },
             )
@@ -125,7 +146,12 @@ impl CustomType for Service {
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
-                    this.def.lock().http.get_or_insert_default();
+                    this.def
+                        .lock()
+                        .http
+                        .get_or_insert_default()
+                        .ports
+                        .insert(port.get());
                     Ok(HttpService {
                         service: this.clone().into(),
                         port,
@@ -203,7 +229,7 @@ pub(crate) fn declare_ingress(
     // neither conflict-checked nor registered: it would be a handle nothing
     // routes to.
     // spec: ING#declaration
-    if service.name.is_empty() {
+    if service.anon_id.is_some() {
         return Err("ingress() is not available on an anonymous service".into());
     }
     let port = Port::new(port)?;
@@ -414,6 +440,9 @@ pub struct HttpServiceDef {
     /// registering the prefix is how the service knows which routes exist
     /// without having to walk the pods that bind them.
     pub routes: std::collections::BTreeMap<String, RouteDecl>,
+    /// Every Service Port the service is viewed on as an HTTP service.
+    // spec: PRX#route-emission
+    pub ports: std::collections::BTreeSet<u16>,
 }
 
 /// What one declared prefix is, and what was declared on it.
@@ -533,10 +562,29 @@ impl CustomType for HttpService {
             .with_fn(
                 "route",
                 |this: &mut Self, prefix: &str| -> Result<HttpServiceRoute, Box<EvalAltResult>> {
+                    super::app::ensure_not_validating()?;
                     if prefix.is_empty() || !prefix.starts_with('/') {
                         return Err(
                             "route prefix must be a non-empty string starting with '/'".into()
                         );
+                    }
+                    // spec: HTTP#routes
+                    // The prefix reaches the proxy's matcher, where a brace
+                    // opens a placeholder and a control character has no
+                    // business in a path.
+                    if let Some(bad) = prefix
+                        .chars()
+                        .find(|c| *c == '{' || (c.is_ascii_control() && *c != '\t'))
+                    {
+                        return Err(format!(
+                            "route prefix must not contain {}",
+                            if bad == '{' {
+                                "'{'".to_owned()
+                            } else {
+                                format!("the control character U+{:04X}", bad as u32)
+                            }
+                        )
+                        .into());
                     }
                     // Canonical from here on: every map key, clash check and
                     // matcher downstream reads this spelling, so they agree on
@@ -929,10 +977,16 @@ impl CustomType for ExternalService {
                 "http",
                 |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    this.def.lock().http.get_or_insert_default();
+                    let port = Port::from_u16(80);
+                    this.def
+                        .lock()
+                        .http
+                        .get_or_insert_default()
+                        .ports
+                        .insert(port.get());
                     Ok(HttpService {
                         service: this.clone().into(),
-                        port: Port::from_u16(80),
+                        port,
                     })
                 },
             )
@@ -941,7 +995,12 @@ impl CustomType for ExternalService {
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
-                    this.def.lock().http.get_or_insert_default();
+                    this.def
+                        .lock()
+                        .http
+                        .get_or_insert_default()
+                        .ports
+                        .insert(port.get());
                     Ok(HttpService {
                         service: this.clone().into(),
                         port,

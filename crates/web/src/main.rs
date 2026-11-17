@@ -72,9 +72,11 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_HTTP_PORT, conflicts_with = "listen")]
     http_port: u16,
 
-    /// WebTransport listener port (used with --interface). Conflicts with --listen.
-    #[arg(long, default_value_t = DEFAULT_WT_PORT, conflicts_with = "listen")]
-    wt_port: u16,
+    /// WebTransport listener port (used with --interface). The web interface
+    /// does not start when it is given with an address the WebTransport
+    /// listener binds explicitly.
+    #[arg(long)]
+    wt_port: Option<u16>,
 
     // spec: WEB#tailscale-identity
     /// Trust Tailscale identity headers for authentication.
@@ -215,6 +217,53 @@ fn advertised_wt_port(addrs: &[SocketAddr]) -> Result<u16, String> {
     Ok(first)
 }
 
+/// How the daemon is verified: by the pinned fingerprint it was given, or,
+/// only where asked and only in a debug build, not at all. Given neither, the
+/// web interface does not start.
+// spec: WEB#daemon-connection
+fn choose_daemon_pin(
+    file: Option<PathBuf>,
+    fingerprint: Option<String>,
+    trust_any: bool,
+) -> Result<DaemonPin, String> {
+    if let Some(path) = file {
+        Ok(DaemonPin::File(path))
+    } else if trust_any {
+        tracing::warn!("--daemon-trust-any: skipping daemon key verification");
+        Ok(DaemonPin::Fixed(ClientAuth::TrustAny))
+    } else if let Some(fp) = fingerprint {
+        Ok(DaemonPin::Fixed(ClientAuth::Fingerprint(fp)))
+    } else {
+        Err("--daemon-fingerprint or --daemon-fingerprint-file is required".to_owned())
+    }
+}
+
+/// Refuse `--wt-port` alongside an address the WebTransport listener binds
+/// explicitly, which carries its own port: it would be a port nothing is bound
+/// to. Those addresses are `--wt-listen`, and `--listen` while the listener
+/// binds the shared addresses, that is, while neither `--wt-interface` nor
+/// `--wt-listen` is given.
+// spec: WEB#listen-addresses
+fn check_wt_port(
+    wt_port: Option<u16>,
+    listen: &[SocketAddr],
+    wt_interface: &[String],
+    wt_listen: &[SocketAddr],
+) -> Result<(), String> {
+    if wt_port.is_none() {
+        return Ok(());
+    }
+    let shared = wt_interface.is_empty() && wt_listen.is_empty();
+    if !wt_listen.is_empty() || (shared && !listen.is_empty()) {
+        return Err(
+            "--wt-port cannot be given with an address the WebTransport listener binds \
+             explicitly (--wt-listen, or --listen while it binds the shared addresses)"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 fn wt_bind_sources<'a>(
     interface: &'a [String],
     listen: &'a [SocketAddr],
@@ -289,11 +338,17 @@ async fn main() {
     );
     // Only interface-derived addresses take this port; explicit addresses
     // carry their own.
-    let wt_bind_port = if wt_listen.is_empty() {
-        args.wt_port
-    } else {
-        DEFAULT_WT_PORT
-    };
+    check_wt_port(
+        args.wt_port,
+        &args.listen,
+        &args.wt_interface,
+        &args.wt_listen,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    });
+    let wt_bind_port = args.wt_port.unwrap_or(DEFAULT_WT_PORT);
     let wt_addrs = resolve_bind_addrs(wt_interface, wt_listen, wt_bind_port).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
@@ -323,20 +378,15 @@ async fn main() {
 
     // spec: WEB#daemon-connection — a fingerprint file takes precedence and is resolved per
     // attempt; otherwise the pin is fixed at startup.
-    let daemon_pin = if let Some(path) = args.daemon_fingerprint_file {
-        DaemonPin::File(path)
-    } else if trust_any {
-        tracing::warn!("--daemon-trust-any: skipping daemon key verification");
-        DaemonPin::Fixed(ClientAuth::TrustAny)
-    } else if let Some(fp) = args.daemon_fingerprint {
-        DaemonPin::Fixed(ClientAuth::Fingerprint(fp))
-    } else if cfg!(debug_assertions) {
-        tracing::warn!("no --daemon-fingerprint; trusting any daemon key (debug build)");
-        DaemonPin::Fixed(ClientAuth::TrustAny)
-    } else {
-        eprintln!("error: --daemon-fingerprint or --daemon-fingerprint-file is required");
+    let daemon_pin = choose_daemon_pin(
+        args.daemon_fingerprint_file,
+        args.daemon_fingerprint,
+        trust_any,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("error: {e}");
         std::process::exit(1);
-    };
+    });
 
     let key_file = args.key_file.unwrap_or_else(DaemonConn::default_key_path);
 
@@ -422,6 +472,23 @@ mod bind_tests {
     use super::*;
 
     // spec: WEB#listen-addresses
+    #[test]
+    fn wt_port_is_refused_with_an_address_the_wt_listener_binds_explicitly() {
+        let addr: Vec<SocketAddr> = vec!["127.0.0.1:1".parse().unwrap()];
+        let iface = vec!["lo".to_owned()];
+        let none_a: Vec<SocketAddr> = vec![];
+        let none_i: Vec<String> = vec![];
+
+        assert!(check_wt_port(Some(9000), &none_a, &none_i, &addr).is_err());
+        assert!(check_wt_port(Some(9000), &addr, &none_i, &none_a).is_err());
+        // A WebTransport-specific interface means --listen is not what it binds.
+        assert!(check_wt_port(Some(9000), &addr, &iface, &none_a).is_ok());
+        assert!(check_wt_port(Some(9000), &none_a, &iface, &none_a).is_ok());
+        assert!(check_wt_port(Some(9000), &none_a, &none_i, &none_a).is_ok());
+        assert!(check_wt_port(None, &addr, &none_i, &addr).is_ok());
+    }
+
+    // spec: WEB#listen-addresses
     // WebTransport falls back to the shared HTTP interfaces/addresses only when
     // no WT-specific ones are given; either WT override takes precedence so it
     // can be exposed where an HTTP proxy can't reach.
@@ -478,6 +545,13 @@ mod daemon_pin_tests {
             Some(ClientAuth::Fingerprint(fp)) => assert_eq!(fp, "deadbeef"),
             _ => panic!("expected a Fingerprint auth"),
         }
+    }
+
+    // spec: WEB#daemon-connection
+    #[test]
+    fn no_fingerprint_means_the_web_interface_does_not_start_even_in_a_debug_build() {
+        assert!(choose_daemon_pin(None, None, false).is_err());
+        assert!(choose_daemon_pin(None, Some("ab".into()), false).is_ok());
     }
 
     // spec: WEB#daemon-connection

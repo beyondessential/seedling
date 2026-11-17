@@ -81,8 +81,8 @@ function renderResolverBadge(
       label = "failed";
       color = "error";
     } else if (entry.aaaa.length > 0 || entry.a.length > 0) {
-      if (entry.degraded_family) {
-        label = `${entry.degraded_family} failing`;
+      if (entry.failed_families.length > 0) {
+        label = `${entry.failed_families.join(" and ")} failing`;
         color = "warning";
       } else {
         label = "resolved";
@@ -361,7 +361,7 @@ function MapExternalServiceDialog({
   prefill?: { app: string; name: string };
 }) {
   const { execute, loading, error, clearError } = useOiAction();
-  const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
+  const { data: appServices, error: appServicesError } = useOiQuery<AppService[]>("/services/app/list", {});
 
   const isRemap = existing != null;
   const isFixed = isRemap || prefill != null;
@@ -417,6 +417,7 @@ function MapExternalServiceDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
+          {appServicesError && <OiErrorAlert error={appServicesError} />}
           {isFixed ? (
             <TextField
               label="App / Slot"
@@ -601,7 +602,7 @@ export default function Services() {
     error: declaredError,
     refetch: refetchDeclared,
   } = useOiQuery<DeclaredExternalService[]>("/services/external/declared", {});
-  const { data: resolverStatus } = useOiQuery<SiteServiceResolverStatus>(
+  const { data: resolverStatus, error: resolverError } = useOiQuery<SiteServiceResolverStatus>(
     "/services/site/resolver-status",
     {},
   );
@@ -891,6 +892,7 @@ export default function Services() {
             </OutlinedActionButton>
           </Box>
           {declaredError && <OiErrorAlert error={declaredError} />}
+          {resolverError && <OiErrorAlert error={resolverError} />}
           {mappingsError && <OiErrorAlert error={mappingsError} />}
           {(declaredLoading || mappingsLoading) && !declared && (
             <CircularProgress size={20} />
@@ -950,7 +952,7 @@ export default function Services() {
                                   <EditIcon sx={{ fontSize: 16 }} />
                                 </IconActionButton>
                                 <IconActionButton
-                                  safety="write"
+                                  safety="dangerous"
                                   tooltip="Unmap"
                                   onClick={() => void unmap(d.app, d.name)}
                                 >

@@ -15,7 +15,7 @@ use crate::runtime::barrier::{
 
 /// An engine, scope and app evaluating no particular definition.
 pub fn setup(limits: &crate::ScriptLimits) -> (Engine, Scope<'static>, defs::app::App) {
-    crate::setup_language(limits, Default::default())
+    crate::setup_language(limits, Default::default()).expect("the scope builds")
 }
 
 mod action;
@@ -57,7 +57,8 @@ pub fn run_test_script_in(
     let bundle = std::sync::Arc::new(
         crate::runtime::definition::Bundle::from_files(all).expect("a valid test bundle"),
     );
-    let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default(), bundle);
+    let (engine, mut scope, app) =
+        crate::setup_language(&crate::ScriptLimits::default(), bundle).expect("the scope builds");
     let ast = run_script(&engine, &mut scope, source)?;
     Ok((engine, scope, app, ast))
 }
@@ -70,6 +71,31 @@ pub fn run_test_script_app(source: &str) -> defs::app::App {
 pub fn run_test_script_err(source: &str) -> Box<rhai::EvalAltResult> {
     let (engine, mut scope, _app) = setup(&crate::ScriptLimits::default());
     run_script(&engine, &mut scope, source).expect_err("script should fail")
+}
+
+/// Assert that `register`, with `HANDLER` replaced by a named pointer to the
+/// script function `handler`, throws an error naming `method`, its `fn`
+/// argument, the closure it expects and the function supplied, whether the
+/// pointer is spelled `Fn("handler")` or `handler`.
+pub fn assert_named_handler_rejected(method: &str, register: &str) {
+    for handler in [r#"Fn("handler")"#, "handler"] {
+        let source = format!(
+            "fn handler(a, b, c) {{}}\n{}",
+            register.replace("HANDLER", handler)
+        );
+        let err = run_test_script_err(&source).to_string();
+        for expected in [
+            format!("`{method}`"),
+            "`fn`".to_owned(),
+            "closure".to_owned(),
+            "`handler`".to_owned(),
+        ] {
+            assert!(
+                err.contains(&expected),
+                "{handler} passed to {method} should throw naming {expected}, got: {err}"
+            );
+        }
+    }
 }
 
 /// The hooks and operation-scoped state one action run differs by.
@@ -200,7 +226,8 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
     // Re-run the script with the TLS capture active to recover FnPtrs,
     // exactly as run_operation does. FnPtrs are never stored persistently.
     let (actions, shells, install, param_changes) = {
-        let (mut fresh_scope, fresh_app) = defs::scope(Default::default());
+        let (mut fresh_scope, fresh_app) =
+            defs::scope(Default::default()).expect("the scope builds");
         fresh_app.def.rcu(|old| {
             let mut new_def = (**old).clone();
             new_def.name = app.def.load().name.clone();
@@ -360,7 +387,8 @@ fn eval_merged(
     call_source: &str,
 ) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
     let call_ast = engine.compile(call_source)?;
-    let merged = script_ast.merge(&call_ast);
+    // The script's functions only: its statements already ran, as in replay.
+    let merged = script_ast.clone_functions_only().merge(&call_ast);
     engine.eval_ast_with_scope(scope, &merged)
 }
 

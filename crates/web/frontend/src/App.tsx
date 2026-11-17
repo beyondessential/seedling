@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, RouterProvider, type RouteObject } from "react-router-dom";
 import ErrorPage from "./components/ErrorPage";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { SafetyModeProvider } from "./components/SafetyModeProvider";
@@ -25,7 +25,7 @@ import TemplateDetail from "./routes/TemplateDetail";
 import Templates from "./routes/Templates";
 import Volumes from "./routes/Volumes";
 
-const router = createBrowserRouter([
+export const routes: RouteObject[] = [
   { path: "/login", element: <Login />, errorElement: <ErrorPage /> },
   {
     element: <ProtectedRoute />,
@@ -53,7 +53,9 @@ const router = createBrowserRouter([
       { path: "infra/:component/logs", element: <InfraLogs /> },
     ],
   },
-]);
+];
+
+const router = createBrowserRouter(routes);
 
 export default function App() {
   return (

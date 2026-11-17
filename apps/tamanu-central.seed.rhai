@@ -236,7 +236,7 @@ let portal_svc = if portal_on.call() {
 
 configure_server.call(app.deployment("api"))
     .description("API servers")
-    .scale(1..api_max_replicas.call())
+    .scale(1..=api_max_replicas.call())
     .arg(["startApi"])
     .http(3000, web_svc.route("/api"))
     .http(3000, web_svc.route("/v1"));

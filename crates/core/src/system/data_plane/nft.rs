@@ -176,15 +176,7 @@ pub(super) fn dnat_ip4(addr: String, port: u16) -> Statement<'static> {
 
 pub(super) fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
     let ext_port = rule.external_port as u32;
-
-    let make_v6 = |proto: &'static str, dnat: Statement<'static>| {
-        vec![
-            match_nfproto(NFPROTO_IPV6),
-            match_fib_daddr_local(),
-            match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
-            dnat,
-        ]
-    };
+    let mut rules = ingress_rule_stmts_v6(rule);
 
     let make_v4 = |proto: &'static str, dnat: Statement<'static>| {
         vec![
@@ -194,22 +186,6 @@ pub(super) fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'stati
             dnat,
         ]
     };
-
-    let ip6 = match rule.caddy_v6.ip() {
-        IpAddr::V6(ip) => ip.to_string(),
-        IpAddr::V4(ip) => format!("::ffff:{ip}"),
-    };
-    let dnat6 = dnat_ip6(ip6, rule.caddy_v6.port());
-
-    let mut rules = Vec::new();
-    match rule.proto {
-        ForwardProto::Tcp => rules.push(make_v6("tcp", dnat6)),
-        ForwardProto::Udp => rules.push(make_v6("udp", dnat6)),
-        ForwardProto::Both => {
-            rules.push(make_v6("tcp", dnat6.clone()));
-            rules.push(make_v6("udp", dnat6));
-        }
-    }
 
     if let Some(v4) = &rule.caddy_v4 {
         let ip4 = match v4.ip() {
@@ -230,6 +206,31 @@ pub(super) fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'stati
     rules
 }
 
+fn ingress_rule_stmts_v6(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
+    let ext_port = rule.external_port as u32;
+
+    let make_v6 = |proto: &'static str, dnat: Statement<'static>| {
+        vec![
+            match_nfproto(NFPROTO_IPV6),
+            match_fib_daddr_local(),
+            match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
+            dnat,
+        ]
+    };
+
+    let ip6 = match rule.caddy_v6.ip() {
+        IpAddr::V6(ip) => ip.to_string(),
+        IpAddr::V4(ip) => format!("::ffff:{ip}"),
+    };
+    let dnat6 = dnat_ip6(ip6, rule.caddy_v6.port());
+
+    match rule.proto {
+        ForwardProto::Tcp => vec![make_v6("tcp", dnat6)],
+        ForwardProto::Udp => vec![make_v6("udp", dnat6)],
+        ForwardProto::Both => vec![make_v6("tcp", dnat6.clone()), make_v6("udp", dnat6)],
+    }
+}
+
 /// Produces `fib daddr type == "local"` — matches packets whose destination
 /// is a local address (loopback `::1`, or any of the host's own addresses).
 /// Used in the `output` chain to catch host-originated traffic aimed at
@@ -248,11 +249,12 @@ pub(super) fn match_fib_daddr_local() -> Statement<'static> {
 
 /// Output-chain counterpart to [`ingress_rule_stmts`].
 ///
-/// Identical DNAT targets, restricted to locally-destined packets
-/// (`fib daddr type local`) so that host processes connecting to ingress
-/// ports on `::1`, `127.0.0.1`, or the host's own addresses are redirected.
+/// The same ports, protocols and IPv6 DNAT target, restricted to
+/// locally-destined packets (`fib daddr type local`) so that host processes
+/// connecting to ingress ports on `::1` or the host's own IPv6 addresses are
+/// redirected. IPv4 traffic from the host is not redirected.
 pub(super) fn output_ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
-    ingress_rule_stmts(rule)
+    ingress_rule_stmts_v6(rule)
 }
 
 pub(super) fn mount_rule_stmts(rule: &MountRule) -> Vec<Vec<Statement<'static>>> {

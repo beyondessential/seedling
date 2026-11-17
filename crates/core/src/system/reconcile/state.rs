@@ -5,20 +5,22 @@ use std::{collections::BTreeMap, time::Duration};
 use seedling_protocol::names::AppName;
 use tracing::{error, warn};
 
-use super::{AppSnapshot, Reconciler};
+use super::{AppSnapshot, Reconciler, faults::AcquisitionError};
 use crate::{
     defs::resource::ResourceKind,
     runtime::{
         AppPhase,
         apps::{AppEntry, AppRegistry},
         barrier::oracle::derive_lifecycle_state,
-        gc::{KnownDesiredState, gc_unscheduled_instances},
+        gc::{KnownDesiredState, gc_unscheduled_instances, is_torn_down},
+        health::{InstanceHealth, declares_healthcheck, read_health},
         history::{
             delete_instance, find_instances_for_group, insert_observation, query_observations,
+            read_lifecycle,
         },
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
-        tls::env::{RuntimeHoldings, runtime_holdings},
+        tls::env::{RuntimeHoldings, latest_acquisition_errors, runtime_holdings},
     },
 };
 
@@ -29,6 +31,16 @@ use crate::{
 // spec: FLT#certificate-faults
 const CERT_ACQUISITION_DEADLINE: Duration = Duration::from_secs(180);
 
+/// What the observation of one ingress's certificates found.
+struct IngressCerts {
+    instance: ResourceInstance,
+    /// A certificate was observed for every hostname.
+    all_observed: bool,
+    /// Hostnames with no certificate observed past the deadline, with no
+    /// acquisition in progress.
+    failing: Vec<String>,
+}
+
 /// Input to the DB lookup performed in emit_state_changes.
 #[derive(Clone)]
 struct DesiredGroup {
@@ -36,7 +48,11 @@ struct DesiredGroup {
     kind: ResourceKind,
     res_name: Option<String>,
     kind_str: String,
+    declares_healthcheck: bool,
 }
+
+/// The resource groups whose instances could not be listed.
+type UnreadGroups = HashSet<(AppName, ResourceKind, Option<String>)>;
 
 /// One group per resource, from a stream of per-instance entries.
 ///
@@ -46,11 +62,11 @@ struct DesiredGroup {
 /// N² entries for one resource, and a client driven by the event feed saw
 /// the same `resource_state_changed` repeated once per replica.
 fn dedupe_groups(
-    raw: impl Iterator<Item = (AppName, ResourceKind, Option<String>)>,
+    raw: impl Iterator<Item = (AppName, ResourceKind, Option<String>, bool)>,
 ) -> Vec<DesiredGroup> {
     let mut seen: HashSet<(AppName, ResourceKind, Option<String>)> = HashSet::new();
     let mut groups = Vec::new();
-    for (app, kind, res_name) in raw {
+    for (app, kind, res_name, declares_healthcheck) in raw {
         if !seen.insert((app.clone(), kind, res_name.clone())) {
             continue;
         }
@@ -58,7 +74,8 @@ fn dedupe_groups(
             app,
             kind,
             res_name,
-            kind_str: format!("{kind:?}").to_lowercase(),
+            kind_str: kind.type_name().to_owned(),
+            declares_healthcheck,
         });
     }
     groups
@@ -69,62 +86,133 @@ fn dedupe_groups(
 struct StateEntry {
     app: AppName,
     kind_str: String,
-    res_name: String,
+    res_name: Option<String>,
     hex: String,
     inst_id: InstanceId,
-    state: LifecycleState,
+    /// `None` while the instance's observation history cannot be read: its
+    /// state is undetermined, not Pending.
+    // spec: LCY#derivation
+    state: Option<LifecycleState>,
+    /// `None` while the observations the health derives from cannot be read:
+    /// the health is undetermined, not absent.
+    // spec: APPS#resources
+    health: Option<Option<InstanceHealth>>,
 }
 
 impl Reconciler {
     pub(super) fn emit_state_changes(&mut self, apps: &[AppSnapshot]) {
         let groups = dedupe_groups(apps.iter().flat_map(|app| {
-            app.desired.resources.iter().map(move |dr| {
+            let declared = app.desired.resources.iter().map(move |dr| {
                 (
                     app.name.clone(),
                     dr.instance.kind,
                     dr.instance.name.as_deref().map(str::to_owned),
+                    declares_healthcheck(&dr.definition),
                 )
-            })
+            });
+            // An undeclared instance declares no healthcheck.
+            let undeclared = app.desired.undeclared.iter().map(move |instance| {
+                (
+                    app.name.clone(),
+                    instance.kind,
+                    instance.name.as_deref().map(str::to_owned),
+                    false,
+                )
+            });
+            declared.chain(undeclared)
         }));
 
-        let entries: Vec<StateEntry> = self.db.call(move |db| {
-            let mut out = Vec::new();
-            for g in &groups {
-                let instances = find_instances_for_group(db, &g.app, g.kind, g.res_name.as_deref())
-                    .unwrap_or_default();
-                for inst in instances {
-                    let hex = inst.id.to_hex();
-                    let obs = query_observations(db, &inst).unwrap_or_default();
-                    let state = derive_lifecycle_state(&inst, &obs);
-                    out.push(StateEntry {
-                        app: g.app.clone(),
-                        kind_str: g.kind_str.clone(),
-                        res_name: g.res_name.as_deref().unwrap_or("").to_owned(),
-                        hex,
-                        inst_id: inst.id,
-                        state,
-                    });
+        let (entries, unread_groups): (Vec<StateEntry>, UnreadGroups) =
+            self.db.call(move |db| {
+                let mut out = Vec::new();
+                let mut unread = HashSet::new();
+                for g in &groups {
+                    let instances =
+                        match find_instances_for_group(db, &g.app, g.kind, g.res_name.as_deref()) {
+                            Ok(instances) => instances,
+                            Err(e) => {
+                                warn!(app = %g.app, error = %e, "state changes: could not list a resource's instances");
+                                unread.insert((g.app.clone(), g.kind, g.res_name.clone()));
+                                continue;
+                            }
+                        };
+                    for inst in instances {
+                        let hex = inst.id.to_hex();
+                        let state = match read_lifecycle(db, &inst) {
+                            Ok((state, _)) => Some(state),
+                            Err(e) => {
+                                warn!(app = %g.app, instance = %inst.display_name, error = %e, "state changes: could not read what its lifecycle state derives from");
+                                None
+                            }
+                        };
+                        let health = match read_health(db, &inst, g.declares_healthcheck) {
+                            Ok(health) => Some(health),
+                            Err(e) => {
+                                warn!(app = %g.app, instance = %inst.display_name, error = %e, "state changes: could not read what its health derives from");
+                                None
+                            }
+                        };
+                        out.push(StateEntry {
+                            app: g.app.clone(),
+                            kind_str: g.kind_str.clone(),
+                            res_name: g.res_name.clone(),
+                            hex,
+                            inst_id: inst.id,
+                            state,
+                            health,
+                        });
+                    }
                 }
-            }
-            out
-        });
+                (out, unread)
+            });
 
         let mut new_states = BTreeMap::new();
 
         for entry in &entries {
             let key = (entry.app.clone(), entry.hex.clone());
+            let Some(state) = entry.state else {
+                // Undetermined: no event, and the last known state stands.
+                if let Some(&prev) = self.prev_states.get(&key) {
+                    new_states.insert(key, prev);
+                }
+                continue;
+            };
             if let Some(&prev) = self.prev_states.get(&key)
-                && prev != entry.state
+                && prev != state
             {
                 self.event_tx.resource_state_changed(
                     &entry.app,
                     &entry.kind_str,
-                    &entry.res_name,
+                    entry.res_name.as_deref(),
                     &entry.hex,
-                    &format!("{:?}", entry.state),
+                    &format!("{state:?}"),
                 );
             }
-            new_states.insert(key, entry.state);
+            new_states.insert(key, state);
+        }
+
+        // spec: APPS#resources
+        let mut new_health = BTreeMap::new();
+        for entry in &entries {
+            let key = (entry.app.clone(), entry.hex.clone());
+            let Some(health) = entry.health else {
+                if let Some(&prev) = self.prev_health.get(&key) {
+                    new_health.insert(key, prev);
+                }
+                continue;
+            };
+            if let Some(&prev) = self.prev_health.get(&key)
+                && prev != health
+            {
+                self.event_tx.instance_health_changed(
+                    &entry.app,
+                    &entry.kind_str,
+                    entry.res_name.as_deref(),
+                    &entry.hex,
+                    health.map(InstanceHealth::name),
+                );
+            }
+            new_health.insert(key, health);
         }
 
         // For desired resources that had no DB instances yet, mark Pending.
@@ -132,13 +220,30 @@ impl Reconciler {
             for dr in &app.desired.resources {
                 let inst_hex = dr.instance.id.to_hex();
                 let key = (app.name.clone(), inst_hex.clone());
-                if !entries.iter().any(|e| e.inst_id == dr.instance.id) {
-                    new_states.insert(key, LifecycleState::Pending);
+                if entries.iter().any(|e| e.inst_id == dr.instance.id) {
+                    continue;
+                }
+                let group = (
+                    app.name.clone(),
+                    dr.instance.kind,
+                    dr.instance.name.as_deref().map(str::to_owned),
+                );
+                if unread_groups.contains(&group) {
+                    if let Some(&prev) = self.prev_states.get(&key) {
+                        new_states.insert(key.clone(), prev);
+                    }
+                    if let Some(&prev) = self.prev_health.get(&key) {
+                        new_health.insert(key, prev);
+                    }
+                } else {
+                    new_states.insert(key.clone(), LifecycleState::Pending);
+                    new_health.insert(key, None);
                 }
             }
         }
 
         self.prev_states = new_states;
+        self.prev_health = new_health;
     }
 
     // spec: OBS#ingresses
@@ -183,9 +288,23 @@ impl Reconciler {
         self.warm_cert_first_seen
             .retain(|h, _| active_hostnames.contains(h));
 
-        let mut observations = match &path {
-            Some(path) => crate::system::caddy::observe_certs(path, &targets),
-            None => Vec::new(),
+        let (proxy_valid, proxy_not_valid, _undetermined) = match &path {
+            Some(path) => {
+                let seen =
+                    crate::system::caddy::observe_certs(path, &targets, jiff::Timestamp::now());
+                let valid: std::collections::BTreeSet<String> = seen
+                    .observations
+                    .iter()
+                    .filter_map(|(_, _, payload)| {
+                        payload
+                            .get("hostname")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                    .collect();
+                (valid, seen.not_valid, seen.undetermined)
+            }
+            None => Default::default(),
         };
 
         // A certificate the runtime holds is served to the proxy by the daemon
@@ -194,62 +313,122 @@ impl Reconciler {
         // from, which also applies the validity window the endpoint does.
         let hostnames: Vec<String> = active_hostnames.iter().cloned().collect();
         let leaf_facts = self.leaf_facts.clone();
-        let RuntimeHoldings { served, ordering } = self
+        let RuntimeHoldings { served, .. } = self
             .db
             .call(move |db| runtime_holdings(db, &hostnames, &leaf_facts));
-        // What could not be read is not what is not held: the deadline below
-        // is for a certificate that is not being acquired, and a store that
-        // could not be asked says nothing of that.
-        let runtime_known = served.is_some() && ordering.is_some();
+        let runtime_known = served.is_some();
         let served = served.unwrap_or_default();
-        let ordering = ordering.unwrap_or_default();
+
+        // Whether a usable certificate is served for each hostname, where that
+        // can be told: served by the runtime, or held by the proxy inside its
+        // validity window, or definitely neither. A store or a cache that could
+        // not be read leaves the hostname out, since unknown is not unserved.
+        let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
+        let mut usable: BTreeMap<&str, bool> = BTreeMap::new();
         for (instance, hostname) in &targets {
-            if served.contains(hostname) {
-                observations.push((
-                    instance.clone(),
-                    "cert_valid",
-                    serde_json::json!({ "hostname": hostname }),
-                ));
+            let payload = serde_json::json!({ "hostname": hostname });
+            if served.contains(hostname) || proxy_valid.contains(hostname) {
+                usable.insert(hostname, true);
+                observations.push((instance.clone(), "cert_valid", payload));
+            } else if runtime_known && proxy_not_valid.contains(hostname) {
+                usable.insert(hostname, false);
+                observations.push((instance.clone(), "cert_not_valid", payload));
             }
         }
 
-        let observed_hostnames: std::collections::BTreeSet<String> = observations
-            .iter()
-            .filter_map(|(_, _, payload)| {
-                payload
-                    .get("hostname")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            })
-            .collect();
-
+        // The status, and whether an acquisition is in progress, come from the
+        // one decision the runtime makes for the hostname.
+        let facts = self
+            .tls_coordinator
+            .as_ref()
+            .and_then(|coordinator| coordinator.hostname_facts());
+        if let Some(facts) = &facts {
+            for (instance, hostname) in &targets {
+                if let Some(status) = facts.get(hostname).and_then(|f| f.status) {
+                    observations.push((
+                        instance.clone(),
+                        status.observation_kind(),
+                        serde_json::json!({ "hostname": hostname, "status": status.as_str() }),
+                    ));
+                }
+            }
+        }
+        // An ingress fails when any of its hostnames does, and recovers only
+        // once a certificate is observed for every one of them.
+        let mut ingresses: BTreeMap<String, IngressCerts> = BTreeMap::new();
         for (instance, hostname) in &targets {
-            if observed_hostnames.contains(hostname) {
-                self.warm_cert_first_seen.remove(hostname);
-                self.clear_resource_fault(instance, "cert_acquisition_failed");
-            } else if path.is_none() || !runtime_known {
-                // The proxy's cache, or the runtime's own store, could not be
-                // read, so whether a certificate is held for this hostname is
-                // unknown. Unknown is not absent, and faulting a hostname that is
-                // being served perfectly well would report a transient read
+            let entry = ingresses
+                .entry(instance.id.to_hex())
+                .or_insert_with(|| IngressCerts {
+                    instance: instance.clone(),
+                    all_observed: true,
+                    failing: Vec::new(),
+                });
+            match usable.get(hostname.as_str()) {
+                Some(true) => {
+                    self.warm_cert_first_seen.remove(hostname);
+                    continue;
+                }
+                Some(false) => entry.all_observed = false,
+                // Whether a usable certificate is served could not be read, so
+                // the hostname is neither failing nor served: faulting one that
+                // is being served perfectly well would report a transient read
                 // failure as the hostname's problem.
-                continue;
-            } else if ordering.contains(hostname) {
-                // An order that is open is an acquisition in progress, and it
-                // can take longer than the proxy's own ordering does: the
-                // deadline is for an acquisition that is not happening.
-                continue;
-            } else if let Some(first) = self.warm_cert_first_seen.get(hostname)
+                None => {
+                    entry.all_observed = false;
+                    continue;
+                }
+            }
+            // The deadline is for an acquisition that is not happening: an
+            // issuance running, an order open or one due is in progress, and
+            // so is the proxy's own ordering. Where that cannot be read it is
+            // not known to be absent either.
+            let in_progress = facts
+                .as_ref()
+                .and_then(|facts| facts.get(hostname))
+                .and_then(|f| f.in_progress);
+            if in_progress == Some(false)
+                && let Some(first) = self.warm_cert_first_seen.get(hostname)
                 && now.duration_since(*first) >= CERT_ACQUISITION_DEADLINE
             {
-                self.file_resource_fault(
-                    instance,
-                    "cert_acquisition_failed",
-                    &format!(
-                        "TLS certificate for {hostname} not observed valid after {}s",
-                        CERT_ACQUISITION_DEADLINE.as_secs()
-                    ),
-                );
+                entry.failing.push(hostname.clone());
+            }
+        }
+
+        let failing_hostnames: Vec<String> = ingresses
+            .values()
+            .flat_map(|i| i.failing.iter().cloned())
+            .collect();
+        let errors = if failing_hostnames.is_empty() {
+            Ok(BTreeMap::new())
+        } else {
+            let hostnames = failing_hostnames.clone();
+            self.db
+                .call(move |db| latest_acquisition_errors(db, &hostnames))
+        };
+        if let Err(e) = &errors {
+            warn!(error = %e, "warm_certs: cannot read the latest acquisition errors");
+        }
+
+        for ingress in ingresses.values() {
+            if ingress.all_observed {
+                self.clear_resource_fault(&ingress.instance, "cert_acquisition_failed");
+            } else if !ingress.failing.is_empty() {
+                let failing: Vec<(String, AcquisitionError)> = ingress
+                    .failing
+                    .iter()
+                    .map(|hostname| {
+                        let error = match &errors {
+                            Ok(errors) => match errors.get(hostname) {
+                                Some(error) => AcquisitionError::Recorded(error.clone()),
+                                None => AcquisitionError::None,
+                            },
+                            Err(_) => AcquisitionError::Unreadable,
+                        };
+                        (hostname.clone(), error)
+                    })
+                    .collect();
+                self.file_cert_acquisition_fault(&ingress.instance, &failing);
             }
         }
 
@@ -274,29 +453,27 @@ impl Reconciler {
                     continue;
                 }
                 let instance = dr.instance.clone();
-                let (state, has_observations, has_terminal_obs) = self.db.call(move |db| {
-                    let obs = query_observations(db, &instance).unwrap_or_default();
+                let read = self.db.call(move |db| {
+                    let obs = query_observations(db, &instance)?;
                     let has_obs = !obs.is_empty();
-                    // spec: GC#demoted-instances
-                    // Multiple observations recorded in a single tick may share
-                    // a timestamp, in which case `query_observations` returns
-                    // them in undefined order and `derive_lifecycle_state` can
-                    // wedge at Pending even though terminal observations exist.
-                    // Treat the presence of any terminal observation as proof
-                    // that the actuator successfully tore the instance down.
-                    let has_terminal = obs.iter().any(|o| {
-                        matches!(
-                            o.obs_kind.as_str(),
-                            "container_removed" | "network_cleaned_up"
-                        )
-                    });
-                    (
-                        derive_lifecycle_state(&instance, &obs),
-                        has_obs,
-                        has_terminal,
-                    )
+                    let state = derive_lifecycle_state(&instance, &obs);
+                    Ok::<_, rusqlite::Error>((state, has_obs, is_torn_down(state, &obs)))
                 });
-                let eligible = retire_eligible(state, has_observations, has_terminal_obs);
+                // A history that cannot be read is not an empty one: the
+                // instance stays until it can be.
+                let (state, has_observations, torn_down) = match read {
+                    Ok(read) => read,
+                    Err(e) => {
+                        tracing::warn!(
+                            app = %app.name,
+                            instance = %dr.instance.display_name,
+                            error = %e,
+                            "could not read an excess instance's observation history; not retiring it"
+                        );
+                        continue;
+                    }
+                };
+                let eligible = retire_eligible(torn_down, has_observations);
                 if !eligible {
                     if matches!(
                         state,
@@ -320,7 +497,7 @@ impl Reconciler {
                             instance = %dr.instance.display_name,
                             ?state,
                             has_observations,
-                            has_terminal_obs,
+                            torn_down,
                             "retired excess instance"
                         );
                     }
@@ -374,34 +551,93 @@ impl Reconciler {
     }
 
     // spec: OBS#recording
+    // The observation kinds that answer one question about an instance and are
+    // never observed together, so that recording one of them makes the others
+    // news again: a health result that flips back, or a unit that fails again
+    // after recovering, differs from the last fact recorded and is recorded
+    // afresh. Kinds that are observed side by side, such as a container's
+    // creation and its running, are not here: each would displace the other
+    // on every tick.
+    pub(super) fn contradicting_kinds(kind: &str) -> &'static [&'static str] {
+        match kind {
+            "health_check_pass" | "health_check_fail" | "health_check_starting" => &[
+                "health_check_pass",
+                "health_check_fail",
+                "health_check_starting",
+            ],
+            "backend_healthy" | "backend_lost" => &["backend_healthy", "backend_lost"],
+            "cert_valid" | "cert_not_valid" => &["cert_valid", "cert_not_valid"],
+            "cert_status_blocked"
+            | "cert_status_expired"
+            | "cert_status_error"
+            | "cert_status_pending"
+            | "cert_status_active"
+            | "cert_status_none" => &[
+                "cert_status_blocked",
+                "cert_status_expired",
+                "cert_status_error",
+                "cert_status_pending",
+                "cert_status_active",
+                "cert_status_none",
+            ],
+            "unit_failed" | "unit_start_limit_hit" | "unit_inactive" => {
+                &["unit_failed", "unit_start_limit_hit", "unit_inactive"]
+            }
+            _ => &[],
+        }
+    }
+
+    // spec: OBS#recording
     // spec: HIST#observations
     // `batch` is collected from probing real podman/systemd state during the
     // current tick — every entry persisted here corresponds to a check or
     // event actually observed, never a synthesised or expected value.
+    ///
+    /// Returns the observations of `batch` that are on record, whether written
+    /// now or before.
     pub(super) fn persist_obs(
         &mut self,
         batch: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
-    ) {
+    ) -> HashSet<(InstanceId, &'static str)> {
+        let mut recorded = HashSet::new();
         for (instance, kind, payload) in batch {
-            if !self.written_obs.insert((instance.id, kind)) {
+            let id = instance.id;
+            if !self.written_obs.insert((id, kind)) {
                 tracing::trace!(
                     instance = %instance.display_name,
                     obs = kind,
                     "persist_obs: skipping already-written observation"
                 );
+                recorded.insert((id, kind));
                 continue;
             }
-            if let Err(e) = self
+            match self
                 .db
                 .call(move |db| insert_observation(db, &instance, kind, &payload))
             {
-                error!(
-                    error = %e,
-                    obs = kind,
-                    "reconciler: failed to persist observation"
-                );
+                Ok(()) => {
+                    recorded.insert((id, kind));
+                    // spec: OBS#recording
+                    for other in Self::contradicting_kinds(kind) {
+                        if *other != kind {
+                            self.written_obs.remove(&(id, other));
+                        }
+                    }
+                }
+                Err(e) => {
+                    // spec: OBS#recording
+                    // Not recorded, so not marked as recorded: the next tick
+                    // observes it again and writes it.
+                    self.written_obs.remove(&(id, kind));
+                    error!(
+                        error = %e,
+                        obs = kind,
+                        "reconciler: failed to persist observation"
+                    );
+                }
             }
         }
+        recorded
     }
 }
 
@@ -440,8 +676,8 @@ fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDes
 }
 
 // spec: GC#demoted-instances
-fn retire_eligible(state: LifecycleState, has_observations: bool, has_terminal_obs: bool) -> bool {
-    matches!(state, LifecycleState::Unscheduled) || !has_observations || has_terminal_obs
+fn retire_eligible(torn_down: bool, has_observations: bool) -> bool {
+    torn_down || !has_observations
 }
 
 #[cfg(test)]
@@ -456,6 +692,21 @@ mod tests {
         AppName::new(s).expect("app name")
     }
 
+    // spec: OBS#recording
+    // spec: OBS#ingresses
+    #[test]
+    fn a_certificate_fact_that_changes_back_is_recorded_again() {
+        use crate::system::reconcile::Reconciler;
+        for kind in ["cert_valid", "cert_not_valid"] {
+            let group = Reconciler::contradicting_kinds(kind);
+            assert!(group.contains(&"cert_valid") && group.contains(&"cert_not_valid"));
+        }
+        for status in ["blocked", "expired", "error", "pending", "active", "none"] {
+            let kind = format!("cert_status_{status}");
+            assert_eq!(Reconciler::contradicting_kinds(&kind).len(), 6, "{kind}");
+        }
+    }
+
     // spec: EVT#event-types
     // `desired.resources` has one entry per instance, so a deployment scaled
     // to 3 produced 3 identical groups; each then expanded to all 3
@@ -463,9 +714,24 @@ mod tests {
     #[test]
     fn instances_of_one_resource_collapse_to_a_single_group() {
         let raw = vec![
-            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
-            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
-            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+                false,
+            ),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+                false,
+            ),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+                false,
+            ),
         ];
         let groups = dedupe_groups(raw.into_iter());
         assert_eq!(groups.len(), 1);
@@ -477,61 +743,87 @@ mod tests {
     #[test]
     fn distinct_resources_stay_distinct() {
         let raw = vec![
-            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+                false,
+            ),
             (
                 app("web"),
                 ResourceKind::Deployment,
                 Some("worker".to_owned()),
+                false,
             ),
-            (app("web"), ResourceKind::Service, Some("api".to_owned())),
+            (
+                app("web"),
+                ResourceKind::Service,
+                Some("api".to_owned()),
+                false,
+            ),
             (
                 app("other"),
                 ResourceKind::Deployment,
                 Some("api".to_owned()),
+                false,
             ),
-            (app("web"), ResourceKind::Volume, None),
+            (app("web"), ResourceKind::Volume, None, false),
         ];
         assert_eq!(dedupe_groups(raw.into_iter()).len(), 5);
     }
     use super::*;
 
-    // spec: GC#demoted-instances
-    #[test]
-    fn unscheduled_state_is_eligible() {
-        assert!(retire_eligible(LifecycleState::Unscheduled, true, false));
+    fn eligible(kinds: &[&str]) -> bool {
+        let resource = crate::runtime::identity::ResourceInstance::new_singleton(
+            app("web"),
+            ResourceKind::Deployment,
+            "api",
+        );
+        let obs: Vec<_> = kinds
+            .iter()
+            .enumerate()
+            .map(|(i, kind)| crate::runtime::history::WorldObservation {
+                id: i as i64,
+                recorded_at: i as i64,
+                resource: resource.clone(),
+                obs_kind: (*kind).to_owned(),
+                payload: serde_json::Value::Null,
+            })
+            .collect();
+        let state = crate::runtime::barrier::oracle::derive_lifecycle_state(&resource, &obs);
+        retire_eligible(is_torn_down(state, &obs), !obs.is_empty())
     }
 
     // spec: GC#demoted-instances
     #[test]
-    fn no_observations_is_eligible() {
-        assert!(retire_eligible(LifecycleState::Pending, false, false));
+    fn a_torn_down_instance_is_eligible() {
+        assert!(eligible(&["container_running", "container_removed"]));
     }
 
     // spec: GC#demoted-instances
     #[test]
-    fn pending_with_terminal_observation_is_eligible() {
-        // The observation-derivation can wedge at Pending when same-tick
-        // observations have ambiguous ordering. A terminal observation is the
-        // ground-truth signal that actuation completed.
-        assert!(retire_eligible(LifecycleState::Pending, true, true));
+    fn an_instance_with_no_observations_is_eligible() {
+        assert!(eligible(&[]));
     }
 
+    // spec: GC#demoted-instances
     #[test]
-    fn pending_with_only_partial_observations_is_not_eligible() {
-        // Instance still actuating: observations exist but none terminal yet.
-        assert!(!retire_eligible(LifecycleState::Pending, true, false));
+    fn an_instance_still_actuating_is_not_eligible() {
+        assert!(!eligible(&["container_created"]));
+        assert!(!eligible(&["container_created", "container_running"]));
     }
 
+    // spec: GC#demoted-instances
+    // A removal observed in an earlier cycle says nothing of an instance that
+    // has started again since.
     #[test]
-    fn running_is_not_eligible() {
-        // An excess instance currently observed running needs its actuator
-        // pass first; retiring before stop would orphan the unit.
-        assert!(!retire_eligible(LifecycleState::Running, true, false));
-    }
-
-    #[test]
-    fn ready_is_not_eligible() {
-        assert!(!retire_eligible(LifecycleState::Ready, true, false));
+    fn an_instance_that_started_a_later_cycle_is_not_eligible() {
+        assert!(!eligible(&[
+            "container_running",
+            "container_removed",
+            "container_created",
+            "container_running",
+        ]));
     }
 
     fn register(reg: &mut AppRegistry, name: &str, phase: AppPhase) {
@@ -572,14 +864,15 @@ mod tests {
                     .map(|i| entry(i, false))
                     .chain(excess.iter().map(|i| entry(i, true)))
                     .collect(),
+                undeclared: Vec::new(),
             },
             steady: true,
             app_def: Default::default(),
             phase: AppPhase::Installed,
             phase_handle: std::sync::Arc::new(parking_lot::Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
-            current_generation: 1,
             app_priority: Default::default(),
+            install_seq: Some(1),
         }
     }
 

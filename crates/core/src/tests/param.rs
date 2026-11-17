@@ -78,6 +78,38 @@ fn on_change_two_arg_closure_registers() {
 
 // spec: PARAM#change-handlers
 #[test]
+fn on_change_zero_arg_closure_registers() {
+    let app = run_test_script_app(r#"app.param("domain").on_change(|| {});"#);
+    assert!(app.def.load().param_changes.contains("domain"));
+}
+
+// spec: PARAM#change-handlers
+#[test]
+fn on_change_without_a_closure_throws() {
+    let err = run_test_script_err(r#"app.param("domain").on_change(42);"#);
+    assert!(err.to_string().contains("on_change"), "{err}");
+}
+
+// spec: PARAM#change-handlers
+#[test]
+fn on_change_with_a_named_function_throws() {
+    crate::tests::assert_named_handler_rejected(
+        "on_change",
+        r#"app.param("domain").on_change(HANDLER);"#,
+    );
+}
+
+// spec: PARAM#validators
+#[test]
+fn validate_with_a_named_function_throws() {
+    crate::tests::assert_named_handler_rejected(
+        "validate",
+        r#"app.param("domain").validate(HANDLER);"#,
+    );
+}
+
+// spec: PARAM#change-handlers
+#[test]
 fn on_change_different_params_each_register() {
     let app = run_test_script_app(
         r#"
@@ -121,7 +153,8 @@ fn stored_param_is_set_returns_true() {
     use std::collections::BTreeMap;
 
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     {
         let mut stored = BTreeMap::new();
         stored.insert("hostname".to_owned(), "injected.example.com".to_owned());
@@ -149,7 +182,8 @@ fn stored_param_is_set_returns_true() {
 #[test]
 fn unset_param_value_falls_back_to_default_value() {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     crate::tests::run_script(
         &engine,
         &mut scope,
@@ -172,7 +206,8 @@ fn stored_value_overrides_default_value() {
     use std::collections::BTreeMap;
 
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     {
         let mut stored = BTreeMap::new();
         stored.insert("max-connections".to_owned(), "500".to_owned());
@@ -193,7 +228,8 @@ fn stored_value_overrides_default_value() {
 #[test]
 fn unset_param_without_default_still_throws() {
     let (engine, mut scope, _app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     let res = crate::tests::run_script(
         &engine,
         &mut scope,
@@ -212,7 +248,8 @@ fn unset_param_without_default_still_throws() {
 #[test]
 fn unset_param_is_set_returns_false() {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     // No stored values pre-populated.
     crate::tests::run_script(
         &engine,
@@ -256,7 +293,8 @@ fn param_used_in_closure_captures_injected_value() {
     stored.insert("version".to_owned(), "2.0".to_owned());
 
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     *app.stored.lock() = stored;
 
     let ast = crate::tests::run_script(
@@ -608,4 +646,87 @@ fn param_schema_random_kind_with_secret_true_is_secret() {
     let schema = def.params.get("auth-secret").expect("param declared");
     assert_eq!(schema.secret, Some(true));
     assert!(schema.is_secret());
+}
+
+// spec: PARAM#validators
+// spec: APP#validator-immutability
+// Only declarations threw in a validator, so a builder call on a captured
+// handle, or any other method that changes the app, went through.
+#[test]
+fn a_validator_cannot_change_the_app_or_its_resources() {
+    let (engine, mut scope, _app, _ast) = run_test_script(
+        r#"
+        let dep = app.deployment("api");
+        let job = app.job("migrate");
+        let svc = app.service("web");
+        let svc_http = svc.http(80);
+        let vol = app.volume("data");
+        let ext_vol = app.external_volume("shared");
+        let ext_svc = app.external_service("upstream");
+        let ing = svc.ingress("example.com", 443);
+        let declared = app.param("declared");
+        let act = app.on_action("mutate", |rt, p| {});
+    "#,
+    );
+    let _frame = crate::defs::app::ValidatorFrame::enter();
+
+    for statement in [
+        r#"app.deployment("other")"#,
+        r#"app.deployment("api")"#,
+        r#"app.job("other")"#,
+        r#"app.service("other")"#,
+        r#"app.volume("other")"#,
+        r#"app.external_volume("other")"#,
+        r#"app.external_service("other")"#,
+        r#"app.param("undeclared")"#,
+        r#"app.description("changed")"#,
+        r#"app.canopy_type("tamanu-central")"#,
+        r#"app.on_action("other", |rt, p| {})"#,
+        r#"app.on_start(|rt, p| {})"#,
+        r#"app.on_shell("other", |s, p| {})"#,
+        r#"app.on_install(|rt, p| {})"#,
+        r#"dep.image("registry.example/api:1")"#,
+        r#"dep.scale(2)"#,
+        r#"dep.env("KEY", "value")"#,
+        r#"dep.arg("--flag")"#,
+        r#"dep.command("run")"#,
+        r#"dep.mount("/data", vol)"#,
+        r#"dep.stop_signal("SIGTERM")"#,
+        r#"dep.description("changed")"#,
+        r#"job.image("registry.example/migrate:1")"#,
+        r#"job.deadline(60)"#,
+        r#"svc.http(8080)"#,
+        r#"svc.description("changed")"#,
+        r#"svc.ingress("other.example.com", 443)"#,
+        r#"svc.exported()"#,
+        r#"svc_http.route("/api")"#,
+        r#"svc_http.ingress("another.example.com", 443)"#,
+        r#"vol.description("changed")"#,
+        r#"vol.tmpfs()"#,
+        r#"ext_vol.description("changed")"#,
+        r#"ext_svc.description("changed")"#,
+        r#"ing.description("changed")"#,
+        r#"declared.description("changed")"#,
+        r#"declared.required(true)"#,
+        r#"declared.default_value("x")"#,
+        r#"declared.secret(true)"#,
+        r#"declared.kind("text")"#,
+        r#"declared.on_change(|rt, old, now| {})"#,
+        r#"declared.validate(|v, all| {})"#,
+        r#"act.on_schedule("0 0 * * *")"#,
+    ] {
+        let err = engine
+            .eval_with_scope::<rhai::Dynamic>(&mut scope, statement)
+            .expect_err(statement);
+        assert!(
+            err.to_string().contains("a validator must not change"),
+            "{statement}: {err}"
+        );
+    }
+
+    // Reading is not changing.
+    let is_set = engine
+        .eval_with_scope::<bool>(&mut scope, r#"app.param("declared").is_set()"#)
+        .expect("a validator may look up a declared parameter");
+    assert!(!is_set);
 }

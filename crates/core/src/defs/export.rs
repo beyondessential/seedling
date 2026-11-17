@@ -1,8 +1,6 @@
 use rhai::{EvalAltResult, Map};
 
-/// Shared options carried by `spec: VOL#export` and
-/// `spec: SVC#export`. New fields should be optional so old
-/// callers keep compiling.
+/// Shared options carried by an exported volume and an exported service.
 #[derive(Debug, Clone, Default)]
 pub struct ExportOptions {
     pub description: Option<String>,
@@ -12,18 +10,15 @@ impl ExportOptions {
     /// Parse the `#{ description?: string }` map accepted by both the
     /// `volume.exported(options)` and `service.exported(options)` BSL
     /// builder methods.
+    // spec: VOL#export
+    // spec: SVC#export
     pub fn from_rhai_map(options: Map) -> Result<Self, Box<EvalAltResult>> {
-        let description = if let Some(desc) = options.get("description") {
-            Some(
-                desc.clone()
-                    .into_string()
-                    .map_err(|e| -> Box<EvalAltResult> {
-                        format!("export description must be a string: {e}").into()
-                    })?,
-            )
-        } else {
-            None
-        };
+        super::take::reject_unknown_keys("exported options", &options, &["description"])?;
+        let description = options
+            .get("description")
+            .cloned()
+            .map(|desc| super::take::take_string("export description", desc))
+            .transpose()?;
         Ok(Self { description })
     }
 }

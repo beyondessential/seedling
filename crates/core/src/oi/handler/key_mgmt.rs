@@ -30,7 +30,7 @@ pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
     let rows = state
         .db
         .call(crate::oi::auth::list_keys)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     let result: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(fp, label, added_at)| {
@@ -56,7 +56,7 @@ pub(crate) fn authorize_key(state: &OiState, params: AuthorizeKeyParams) -> Hand
         .call(move |db| {
             crate::oi::auth::authorize_key(db, &trusted_keys, &fingerprint_for_db, &label)
         })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     tracing::info!(fingerprint = %fingerprint, label = %params.label, "authorized key");
     Ok(json!({}))
 }
@@ -73,7 +73,7 @@ pub(crate) fn revoke_key(state: &OiState, params: RevokeKeyParams) -> HandlerRes
     let removed = state
         .db
         .call(move |db| crate::oi::auth::revoke_key(db, &trusted_keys, &fingerprint_for_db))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     if removed {
         tracing::info!(fingerprint = %fingerprint, "revoked key");
         Ok(json!({}))

@@ -6,7 +6,13 @@ use serde_json::json;
 use tokio::sync::Semaphore;
 use tracing::Instrument;
 
-use seedling_protocol::{OI_ALPN, actor::Actor, events::EventSenderWithActor, keys};
+use seedling_protocol::{
+    OI_ALPN,
+    actor::Actor,
+    error::{ErrorCode, OiError},
+    events::EventSenderWithActor,
+    keys,
+};
 
 use super::{
     auth::{SeedlingClientVerifier, TrustedKeys},
@@ -61,12 +67,60 @@ fn build_tls_config(
     Ok(tls_config)
 }
 
-fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
+pub(crate) fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
     let id = conn.peer_identity()?;
     let certs = id
         .downcast::<Vec<rustls_pki_types::CertificateDer<'static>>>()
         .ok()?;
     certs.first().map(|c| keys::fingerprint(c.as_ref()))
+}
+
+/// The actor a control request names, or `None` when it names none.
+///
+/// A malformed `actor` is refused rather than replaced: attributing the
+/// request to someone the client did not name would record a fiction.
+// spec: WIRE#actor-attribution
+fn request_actor(request: &serde_json::Value) -> Result<Option<Actor>, OiError> {
+    let Some(actor) = request.get("actor") else {
+        return Ok(None);
+    };
+    let invalid = |why: String| OiError::new(ErrorCode::RequirementsInvalid, why);
+    let members = actor
+        .as_object()
+        .ok_or_else(|| invalid("actor must be an object".to_owned()))?;
+    let member = |name: &str| -> Result<Option<String>, OiError> {
+        match members.get(name) {
+            None => Ok(None),
+            Some(serde_json::Value::String(s)) => Ok(Some(s.clone())),
+            Some(_) => Err(invalid(format!("actor.{name} must be a string"))),
+        }
+    };
+    Ok(Some(Actor {
+        kind: member("kind")?,
+        id: member("id")?,
+        display: member("display")?,
+        session: member("session")?,
+    }))
+}
+
+/// The actor a request is attributed to: the one it names, or else the one
+/// its client's identity gives.
+// spec: WIRE#actor-attribution
+fn resolve_actor(
+    state: &OiState,
+    conn: &quinn::Connection,
+    request: &serde_json::Value,
+) -> Result<Arc<Actor>, OiError> {
+    Ok(match request_actor(request)? {
+        Some(actor) => Arc::new(actor),
+        None => synthesise_actor(state, extract_client_fp(conn).as_deref()),
+    })
+}
+
+/// Serialise an error response.
+fn error_response(e: &OiError) -> Vec<u8> {
+    serde_json::to_vec(&json!({ "error": { "code": e.code, "message": e.message } }))
+        .expect("response serialisation never fails")
 }
 
 // spec: WIRE#actor-attribution
@@ -331,28 +385,9 @@ async fn handle_bidi_stream(
     stream_semaphore: Arc<Semaphore>,
 ) {
     // spec: WIRE#stream-limit
-    let stream_permit = match stream_semaphore.try_acquire() {
-        Ok(permit) => permit,
-        Err(_) => {
-            tracing::warn!(
-                "stream concurrency limit reached; rejecting stream \
-                 (adjust with --max-streams)"
-            );
-            state
-                .event_tx
-                .server_busy("stream concurrency limit reached");
-            let resp = json!({
-                "error": {
-                    "code": "server_busy",
-                    "message": "stream concurrency limit reached; retry after a delay",
-                }
-            });
-            let bytes = serde_json::to_vec(&resp).expect("response serialisation never fails");
-            let _ = send.write_all(&bytes).await;
-            let _ = send.finish();
-            return;
-        }
-    };
+    // Taken before the opening line is read, so the stream counts from when it
+    // opens; the line is still read, since its kind decides how it is refused.
+    let stream_permit = stream_semaphore.try_acquire().ok();
 
     let (line, leftover) = match read_json_line(&mut recv, 64 * 1024).await {
         Ok(v) => v,
@@ -370,12 +405,39 @@ async fn handle_bidi_stream(
 
     tracing::trace!(line = %String::from_utf8_lossy(&line).trim_end(), "bidi stream dispatch");
 
-    // spec: WIRE#port-forward-data — forward data stream, identified by the "forward" key.
-    if let Some(forward_id) = first_obj
+    let forward_id = first_obj
         .get("forward")
         .and_then(|v| v.as_str())
-        .map(str::to_owned)
-    {
+        .map(str::to_owned);
+
+    // spec: WIRE#stream-limit
+    let Some(stream_permit) = stream_permit else {
+        tracing::warn!(
+            "stream concurrency limit reached; rejecting stream \
+             (adjust with --max-streams)"
+        );
+        state
+            .event_tx
+            .server_busy("stream concurrency limit reached");
+        if forward_id.is_some() {
+            // spec: FWD#tcp-tunnelling
+            seedling_protocol::relay::abort_forward_stream(&mut send, &mut recv);
+            return;
+        }
+        let resp = json!({
+            "error": {
+                "code": "server_busy",
+                "message": "stream concurrency limit reached; retry after a delay",
+            }
+        });
+        let bytes = serde_json::to_vec(&resp).expect("response serialisation never fails");
+        let _ = send.write_all(&bytes).await;
+        let _ = send.finish();
+        return;
+    };
+
+    // spec: WIRE#port-forward-data — forward data stream, identified by the "forward" key.
+    if let Some(forward_id) = forward_id {
         drop(stream_permit);
         handle_forward_stream((send, recv), forward_id, leftover, state).await;
         return;
@@ -451,19 +513,21 @@ async fn handle_bidi_stream(
             }
         };
 
-        let rx = match crate::system::journal::spawn_log_reader(opts) {
-            Ok(rx) => rx,
-            Err(e) => {
-                tracing::error!("failed to open journal: {e}");
-                let resp = serde_json::to_vec(&json!({
-                    "error": { "code": "server_busy", "message": format!("journal: {e}") }
-                }))
-                .expect("serialisation");
-                let _ = send.write_all(&resp).await;
-                let _ = send.finish();
-                return;
-            }
-        };
+        let rx =
+            match tokio::task::block_in_place(|| crate::system::journal::spawn_log_reader(opts)) {
+                Ok(rx) => rx,
+                Err(e) => {
+                    tracing::error!("failed to open journal: {e}");
+                    // spec: LOG#log-stream-request
+                    let resp = error_response(&OiError::new(
+                        ErrorCode::Internal,
+                        format!("cannot open the host's log store: {e}"),
+                    ));
+                    let _ = send.write_all(&resp).await;
+                    let _ = send.finish();
+                    return;
+                }
+            };
 
         let response = serde_json::to_vec(&json!({ "result": {} })).expect("serialisation");
         if let Err(e) = send.write_all(&response).await {
@@ -485,17 +549,40 @@ async fn handle_bidi_stream(
         return;
     }
 
+    // spec: SHL#session-events
+    // spec: FWD#forward-events
+    // A session request is the stream's opening line alone, and the events of
+    // the session it opens carry its actor.
+    let is_session = matches!(
+        maybe_method.as_deref(),
+        Some("/shells/start" | "/volumes/shell" | "/forwards/start")
+    );
+    let session_events = if is_session {
+        match resolve_actor(&state, &conn, &first_obj) {
+            Ok(actor) => Some(EventSenderWithActor::new(state.event_tx.clone(), actor)),
+            Err(refusal) => {
+                let mut response = error_response(&refusal);
+                response.push(b'\n');
+                let _ = send.write_all(&response).await;
+                let _ = send.finish();
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     // spec: SHL#concurrency
-    if maybe_method.as_deref() == Some("/shells/start") {
+    if let (Some("/shells/start"), Some(events)) = (maybe_method.as_deref(), &session_events) {
         drop(stream_permit);
-        open_shell_session(conn, send, recv, leftover, line, state).await;
+        open_shell_session(conn, send, recv, leftover, line, state, events.clone()).await;
         return;
     }
 
     // spec: SHL#volume-shells
-    if maybe_method.as_deref() == Some("/volumes/shell") {
+    if let (Some("/volumes/shell"), Some(events)) = (maybe_method.as_deref(), &session_events) {
         drop(stream_permit);
-        open_volume_shell_session(conn, send, recv, leftover, line, state).await;
+        open_volume_shell_session(conn, send, recv, leftover, line, state, events.clone()).await;
         return;
     }
 
@@ -518,25 +605,45 @@ async fn handle_bidi_stream(
 
     // spec: FWD#requesting-a-forward — /forwards/start keeps the control stream open for the
     // duration of the forward; it must be handled outside the normal req/resp path.
-    if maybe_method.as_deref() == Some("/forwards/start") {
+    if let (Some("/forwards/start"), Some(events)) = (maybe_method.as_deref(), &session_events) {
         drop(stream_permit);
-        forward_port_session(conn, send, recv, line, state).await;
+        forward_port_session(conn, send, recv, line, state, events.clone()).await;
         return;
     }
 
+    // spec: WIRE#control-requests
+    // The opening line was read up to its first line feed or a cap, so the
+    // request is only whole once the rest of the stream is read.
+    let rest = match recv
+        .read_to_end(MAX_REQUEST_SIZE.saturating_sub(line.len()))
+        .await
+    {
+        Ok(rest) => rest,
+        Err(e) => {
+            let refusal = OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("request cannot be read whole, or exceeds {MAX_REQUEST_SIZE} bytes: {e}"),
+            );
+            let _ = send.write_all(&error_response(&refusal)).await;
+            let _ = send.finish();
+            return;
+        }
+    };
+    let buf = [line, rest].concat();
+
     // spec: WIRE#actor-attribution — extract actor from request or synthesise from client identity.
-    let client_fp = extract_client_fp(&conn);
-    let actor = first_obj
-        .get("actor")
-        .and_then(|v| serde_json::from_value::<Actor>(v.clone()).ok())
-        .map(Arc::new)
-        .unwrap_or_else(|| synthesise_actor(&state, client_fp.as_deref()));
+    let request = serde_json::from_slice::<serde_json::Value>(&buf).unwrap_or_default();
+    let actor = match resolve_actor(&state, &conn, &request) {
+        Ok(actor) => actor,
+        Err(refusal) => {
+            let _ = send.write_all(&error_response(&refusal)).await;
+            let _ = send.finish();
+            return;
+        }
+    };
     let ctx = RequestCtx {
         events: EventSenderWithActor::new(state.event_tx.clone(), actor),
     };
-
-    let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
-    let buf = [line, rest].concat();
 
     // spec: RLY#offers — registering an offer needs the connection it arrived on,
     // so these are dispatched here rather than through the shared table. Done
@@ -689,11 +796,15 @@ mod connection_tests {
     };
     use serde_json::json;
 
-    use super::{DEFAULT_MAX_STREAMS, build_tls_config, handle_connection};
+    use super::{DEFAULT_MAX_STREAMS, MAX_REQUEST_SIZE, build_tls_config, handle_connection};
     use crate::oi::{state::OiState, test_support::TestOi};
 
     /// Run the real connection handler against a real endpoint.
     fn spawn_server(state: Arc<OiState>) -> SocketAddr {
+        spawn_server_with_streams(state, DEFAULT_MAX_STREAMS)
+    }
+
+    fn spawn_server_with_streams(state: Arc<OiState>, max_streams: usize) -> SocketAddr {
         let key = SigningKey::generate(&mut ThreadRng::default());
         let spki = keys::spki_der(&key);
         let tls = build_tls_config(&key, spki, Arc::clone(&state.trusted_keys))
@@ -707,7 +818,7 @@ mod connection_tests {
         let addr = endpoint.local_addr().expect("local addr");
 
         tokio::spawn(async move {
-            let semaphore = Arc::new(tokio::sync::Semaphore::new(DEFAULT_MAX_STREAMS));
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(max_streams));
             while let Some(incoming) = endpoint.accept().await {
                 let state = Arc::clone(&state);
                 let semaphore = Arc::clone(&semaphore);
@@ -798,6 +909,82 @@ mod connection_tests {
                 0,
                 "an offer must not outlive the connection that made it"
             );
+        });
+    }
+
+    /// Send `request` raw on a fresh control stream and return the response.
+    async fn raw_request(client: &OiClient, request: &[u8]) -> serde_json::Value {
+        let (mut send, mut recv) = client.open_bi().await.expect("open stream");
+        send.write_all(request).await.expect("write");
+        let _ = send.finish();
+        let response = recv.read_to_end(1 << 20).await.expect("read response");
+        serde_json::from_slice(&response).expect("a JSON response")
+    }
+
+    // spec: WIRE#actor-attribution
+    // spec: WIRE#control-requests
+    #[test]
+    fn a_malformed_actor_or_an_oversized_request_is_requirements_invalid() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let identity = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            for actor in [json!("someone"), json!({ "kind": 7 }), json!(null)] {
+                let request =
+                    json!({ "method": "/server/ping", "actor": actor, "params": {} }).to_string();
+                let response = raw_request(&client, format!("{request}\n").as_bytes()).await;
+                assert_eq!(
+                    response["error"]["code"], "requirements_invalid",
+                    "{actor}: {response}"
+                );
+            }
+
+            let padding = "x".repeat(MAX_REQUEST_SIZE);
+            let request = json!({ "method": "/server/ping", "params": { "pad": padding } });
+            let response = raw_request(&client, request.to_string().as_bytes()).await;
+            assert_eq!(
+                response["error"]["code"], "requirements_invalid",
+                "{response}"
+            );
+
+            let ok = raw_request(&client, b"{\"method\":\"/server/ping\"}\n").await;
+            assert!(ok.get("result").is_some(), "{ok}");
+        });
+    }
+
+    // spec: WIRE#stream-limit
+    // spec: FWD#tcp-tunnelling
+    #[test]
+    fn at_the_stream_limit_a_forward_stream_is_reset_and_a_request_is_busy() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let identity = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
+            let addr = spawn_server_with_streams(Arc::clone(&oi.state), 0);
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let busy = raw_request(&client, b"{\"method\":\"/server/ping\"}\n").await;
+            assert_eq!(busy["error"]["code"], "server_busy", "{busy}");
+
+            let (mut send, mut recv) = client.open_bi().await.expect("open stream");
+            send.write_all(b"{\"forward\":\"00000000-0000-0000-0000-000000000000\"}\n")
+                .await
+                .expect("write the opening line");
+            match recv.read_to_end(1 << 16).await {
+                Err(quinn::ReadToEndError::Read(quinn::ReadError::Reset(code))) => {
+                    assert_eq!(code, quinn::VarInt::from_u32(0));
+                }
+                other => panic!("a forward data stream is reset, not answered: {other:?}"),
+            }
         });
     }
 
@@ -917,6 +1104,113 @@ mod connection_tests {
                 "the client must be able to tell a refusal from a breakage: {err}"
             );
             assert_eq!(oi.state.canopy.count(), 0);
+        });
+    }
+
+    // spec: SHL#volume-shells
+    #[test]
+    fn a_volume_shells_started_event_names_the_volumes_it_is_registered_under() {
+        use seedling_protocol::events::OiEvent;
+
+        let oi = TestOi::new();
+        for name in ["data", "logs"] {
+            oi.call(
+                "/volumes/site/create",
+                json!({ "name": name, "kind": "managed" }),
+            )
+            .unwrap();
+        }
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            oi.state
+                .container_runtime
+                .pull_image(crate::oi::shells::VOLUME_SHELL_IMAGE)
+                .await
+                .unwrap();
+            let mut events = oi.state.event_tx.subscribe();
+
+            let identity = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let (mut send, _recv) = client.open_bi().await.expect("a stream");
+            let mut line = serde_json::to_vec(&json!({
+                "method": "/volumes/shell",
+                "params": {
+                    "volumes": [
+                        { "kind": "site", "name": "data" },
+                        { "kind": "site", "name": "logs" },
+                    ],
+                    "rows": 24,
+                    "cols": 80,
+                },
+            }))
+            .unwrap();
+            line.push(b'\n');
+            send.write_all(&line).await.expect("the request is sent");
+
+            let started = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(OiEvent::ShellStarted { app, name, .. }) = events.recv().await {
+                        break (app.to_string(), name.to_string());
+                    }
+                }
+            })
+            .await
+            .expect("a ShellStarted event");
+            assert_eq!(started, ("_volumes".to_owned(), "data, logs".to_owned()));
+        });
+    }
+
+    // spec: SHL#volume-shells
+    #[test]
+    fn volume_shell_mounts_whose_display_names_clash_are_refused() {
+        let oi = TestOi::new();
+        for name in ["data", "logs"] {
+            oi.call(
+                "/volumes/site/create",
+                json!({ "name": name, "kind": "managed" }),
+            )
+            .unwrap();
+        }
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let identity = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let (mut send, mut recv) = client.open_bi().await.expect("a stream");
+            let mut line = serde_json::to_vec(&json!({
+                "method": "/volumes/shell",
+                "params": {
+                    "volumes": [
+                        { "kind": "site", "name": "data" },
+                        { "kind": "site", "name": "logs" },
+                        { "kind": "site", "name": "data" },
+                    ],
+                    "rows": 24,
+                    "cols": 80,
+                },
+            }))
+            .unwrap();
+            line.push(b'\n');
+            send.write_all(&line).await.expect("the request is sent");
+            let response = tokio::time::timeout(Duration::from_secs(5), recv.read_to_end(1 << 16))
+                .await
+                .expect("a response")
+                .expect("read the response");
+            let response: serde_json::Value =
+                serde_json::from_slice(&response).expect("a JSON response");
+            assert_eq!(
+                response["error"]["code"], "requirements_invalid",
+                "{response}"
+            );
         });
     }
 

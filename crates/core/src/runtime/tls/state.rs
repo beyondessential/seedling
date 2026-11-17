@@ -100,7 +100,8 @@ pub fn managed_ingresses(registry: &AppRegistry) -> Vec<ManagedIngress> {
         for resource in def.resources.values() {
             if let Resource::Ingress(ing) = resource {
                 let ing_def = ing.def.lock();
-                if ing_def.tls {
+                // spec: TLS#managed-hostname
+                if ing_def.tls || ing_def.dtls {
                     out.push(ManagedIngress {
                         app: entry.name.clone(),
                         ingress_name: ing.name.as_str().to_owned(),
@@ -122,12 +123,31 @@ pub fn managed_ingresses(registry: &AppRegistry) -> Vec<ManagedIngress> {
 pub struct ProxyCert {
     pub not_before: Option<i64>,
     pub not_after: Option<i64>,
-    /// The issuer's name for its directory in the proxy's cache: `local` for its
-    /// internal CA, otherwise the host of the ACME directory.
+    /// The name of the issuer's directory in the proxy's cache: `local` for its
+    /// internal CA, otherwise the ACME directory's URL as the cache spells it.
+    /// [`proxy_issuer`] gives the host.
     pub issuer_kind: String,
     /// The issuer as the certificate itself gives it.
     pub issuer: Option<String>,
     pub self_signed: bool,
+}
+
+/// The `proxy_issuer` of a certificate the proxy holds: `local` for its internal
+/// CA, otherwise the host of the URL of the ACME directory that issued it.
+///
+/// The proxy's cache names the directory by its URL with the scheme dropped and
+/// each `/` made a hyphen, so the host is what that name has up to the last
+/// label that holds a dot.
+// spec: TLSM#hostname-view
+pub fn proxy_issuer(cache_directory: &str) -> String {
+    if cache_directory == "local" {
+        return cache_directory.to_owned();
+    }
+    let parts: Vec<&str> = cache_directory.split('-').collect();
+    match parts.iter().rposition(|part| part.contains('.')) {
+        Some(host_end) => parts[..=host_end].join("-"),
+        None => cache_directory.to_owned(),
+    }
 }
 
 /// What the proxy's cache holds for a hostname, when it could be read.
@@ -406,6 +426,9 @@ pub struct ChainDecision {
     pub proxy: Option<ProxyHolding>,
     /// Why the responsible strategy last failed to produce a certificate.
     pub last_error: Option<String>,
+    /// The last answer Canopy gave for the hostname rejected the runtime's
+    /// signing request.
+    pub csr_rejected: bool,
 }
 
 /// The least of a certificate's lifetime the proxy is left to renew in, so that
@@ -539,6 +562,173 @@ impl NextSource {
             Self::Fallback => "fallback",
         }
     }
+}
+
+/// A managed hostname's certificate status.
+// spec: TLS#certificate-status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertStatus {
+    Blocked,
+    Expired,
+    Error,
+    Pending,
+    Active,
+    None,
+}
+
+impl CertStatus {
+    /// The kind of the observation that records this status for an ingress.
+    // spec: OBS#ingresses
+    pub fn observation_kind(self) -> &'static str {
+        match self {
+            Self::Blocked => "cert_status_blocked",
+            Self::Expired => "cert_status_expired",
+            Self::Error => "cert_status_error",
+            Self::Pending => "cert_status_pending",
+            Self::Active => "cert_status_active",
+            Self::None => "cert_status_none",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Blocked => "blocked",
+            Self::Expired => "expired",
+            Self::Error => "error",
+            Self::Pending => "pending",
+            Self::Active => "active",
+            Self::None => "none",
+        }
+    }
+}
+
+/// Whether a certificate the proxy holds is inside its validity window, or
+/// `None` where its dates are not both known and the known one does not settle
+/// it.
+fn proxy_cert_in_window(cert: &ProxyCert, now: i64) -> Option<bool> {
+    let started = cert.not_before.map(|nb| nb <= now);
+    let unexpired = cert.not_after.map(|na| na >= now);
+    match (started, unexpired) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    }
+}
+
+/// Whether a usable certificate is served for the hostname: the stored one the
+/// lookup would answer with if it is inside its validity window, and otherwise
+/// the one the proxy holds. `None` where that cannot be read.
+// spec: TLS#certificate-status
+pub fn usable_served(snap: &Snapshot, st: &HostnameState<'_>) -> Option<bool> {
+    let now = snap.now;
+    if st
+        .active_cert
+        .is_some_and(|c| c.not_after.is_none_or(|na| na >= now))
+    {
+        return Some(true);
+    }
+    match snap.env.proxy.get(&st.hostname) {
+        Some(ProxyHolding::Holds(cert)) => proxy_cert_in_window(cert, now),
+        Some(ProxyHolding::Nothing) => Some(false),
+        Some(ProxyHolding::Unreadable) | None => None,
+    }
+}
+
+/// Whether an acquisition is in progress for the hostname, or `None` where
+/// that cannot be read.
+// spec: TLS#certificate-status
+pub fn acquisition_in_progress(snap: &Snapshot, st: &HostnameState<'_>) -> Option<bool> {
+    let hostname = st.hostname.as_str();
+    let running = snap
+        .attempts
+        .iter()
+        .any(|a| a.hostname == hostname && a.outcome == AttemptOutcome::Pending);
+    let order_open = snap
+        .chain_rows
+        .iter()
+        .any(|r| r.hostname == hostname && r.row.open_order_since.is_some());
+    if running || order_open || st.force_retry_at.is_some() {
+        return Some(true);
+    }
+    match &st.decision {
+        Decision::Default => None,
+        Decision::IssueNow { .. } => Some(true),
+        Decision::Blocked { .. }
+        | Decision::NoContactEmail
+        | Decision::Debounced { .. }
+        | Decision::Scheduled { .. } => Some(false),
+        Decision::Chain(c) => match &c.cycle {
+            chain::Cycle::Idle { .. } => Some(false),
+            chain::Cycle::Running(r) if r.responsible == Strategy::Canopy => {
+                Some(c.act == ChainAct::AskCanopy)
+            }
+            // The proxy carries this strategy out, and orders only while it
+            // holds nothing usable.
+            chain::Cycle::Running(_) => match &c.proxy {
+                Some(ProxyHolding::Holds(cert)) => {
+                    proxy_cert_in_window(cert, snap.now).map(|usable| !usable)
+                }
+                Some(ProxyHolding::Nothing) => Some(true),
+                Some(ProxyHolding::Unreadable) | None => None,
+            },
+        },
+    }
+}
+
+/// Whether the latest attempt to obtain a certificate failed and the runtime is
+/// waiting to try again, or cannot attempt one until a condition changes.
+fn attempts_failing(st: &HostnameState<'_>) -> bool {
+    match &st.decision {
+        Decision::NoContactEmail | Decision::Debounced { .. } => true,
+        Decision::Chain(c) => {
+            matches!(
+                c.act,
+                ChainAct::CannotAskCanopy | ChainAct::Debounced { .. }
+            ) || matches!(&c.cycle, chain::Cycle::Running(r)
+                    if r.responsible == Strategy::Canopy && c.last_error.is_some())
+        }
+        Decision::Default
+        | Decision::Blocked { .. }
+        | Decision::Scheduled { .. }
+        | Decision::IssueNow { .. } => false,
+    }
+}
+
+/// The hostname's certificate status: the first of `blocked`, `expired`,
+/// `error`, `pending`, `active` and `none` whose meaning holds, or `None` where
+/// whether a usable certificate is served, or an acquisition is in progress,
+/// cannot be read.
+// spec: TLS#certificate-status
+pub fn certificate_status(snap: &Snapshot, st: &HostnameState<'_>) -> Option<CertStatus> {
+    let served = usable_served(snap, st)?;
+    let in_progress = acquisition_in_progress(snap, st)?;
+    let now = snap.now;
+
+    if st.retry_block.is_some() {
+        return Some(CertStatus::Blocked);
+    }
+    let expired = !served
+        && (st
+            .active_cert
+            .is_some_and(|c| c.not_after.is_some_and(|na| na < now))
+            || matches!(
+                snap.env.proxy.get(&st.hostname),
+                Some(ProxyHolding::Holds(c)) if c.not_after.is_some_and(|na| na < now)
+            ));
+    if expired {
+        return Some(CertStatus::Expired);
+    }
+    if attempts_failing(st) {
+        return Some(CertStatus::Error);
+    }
+    if in_progress {
+        return Some(CertStatus::Pending);
+    }
+    Some(if served {
+        CertStatus::Active
+    } else {
+        CertStatus::None
+    })
 }
 
 /// Compute the unified state for `hostname` from a loaded snapshot.
@@ -817,13 +1007,6 @@ fn decide(
             force_retry,
             settings,
         ),
-        // spec: SITE#tailscale-discovery
-        // Tailscale-issued certs are managed by the local Tailscale
-        // facility; the runtime fetches a fresh pair on demand and
-        // doesn't run the ACME state machine for them. The Coordinator
-        // dispatch path that does the actual fetch is wired separately;
-        // this branch keeps the decision pipeline exhaustive.
-        Some(TlsPolicy::Tailscale) => Decision::Default,
     }
 }
 
@@ -840,6 +1023,7 @@ struct ChainContext {
     serving: Option<(chain::Serving, ServingSource)>,
     row: Option<chain::Row>,
     last_error: Option<String>,
+    csr_rejected: bool,
     /// The proxy's cache holds something for this hostname that could not be
     /// read. Not a certificate, and not an absence either.
     proxy_unreadable: bool,
@@ -925,6 +1109,7 @@ impl ChainContext {
             serving,
             row: chain_row.map(|r| r.row.clone()),
             last_error: chain_row.and_then(|r| r.last_error.clone()),
+            csr_rejected: chain_row.is_some_and(|r| r.csr_rejected),
             proxy: snap.env.proxy.get(hostname).cloned(),
             proxy_unreadable: matches!(
                 snap.env.proxy.get(hostname),
@@ -1066,6 +1251,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         serving: ctx.serving.map(|(_, source)| source),
         proxy: ctx.proxy.clone(),
         last_error: ctx.last_error.clone(),
+        csr_rejected: ctx.csr_rejected,
     }))
 }
 
@@ -1630,6 +1816,7 @@ mod tests {
                 retry_not_before: Some(2000),
             },
             last_error: Some("refused".to_owned()),
+            csr_rejected: false,
             updated_at: 1000,
         }
     }
@@ -2210,6 +2397,7 @@ mod tests {
                 retry_not_before: Some(3840),
             },
             last_error: Some("refused".to_owned()),
+            csr_rejected: false,
             updated_at: 240,
         }];
         let st = compute_state(&s, "host.example.com");
@@ -2240,6 +2428,7 @@ mod tests {
                 retry_not_before: None,
             },
             last_error: Some("revoked".to_owned()),
+            csr_rejected: false,
             updated_at: 240,
         }];
 

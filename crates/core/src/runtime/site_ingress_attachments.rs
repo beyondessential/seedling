@@ -227,6 +227,57 @@ pub fn attach(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// What [`set_target`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Attached {
+    /// There was no attachment on the `(port, protocol)`, and one was added.
+    Added,
+    /// There was one, and its target was replaced; its `created_at` stands.
+    Updated,
+    /// It already had the target, and nothing changed.
+    Unchanged,
+    /// No site ingress has the name.
+    NoIngress,
+}
+
+/// Give the `(port, protocol)` of a site ingress the attachment's target, adding
+/// the attachment or replacing the target of the one there, as one step.
+///
+/// Replacing keeps the attachment's `created_at`, which decides ingress
+/// conflicts.
+// spec: INGM#attachments
+pub fn set_target(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<Attached> {
+    if crate::runtime::site_ingresses::get(db, &att.site_ingress)?.is_none() {
+        return Ok(Attached::NoIngress);
+    }
+    match get(db, &att.site_ingress, att.port, att.protocol)? {
+        None => {
+            attach(db, att)?;
+            Ok(Attached::Added)
+        }
+        Some(existing) if existing.target == att.target => Ok(Attached::Unchanged),
+        Some(_) => {
+            update(db, att)?;
+            Ok(Attached::Updated)
+        }
+    }
+}
+
+/// Remove an attachment and give what was removed, `None` where there was none.
+// spec: INGM#attachments
+pub fn detach_returning(
+    db: &Db,
+    site_ingress: &SiteIngressName,
+    port: u16,
+    protocol: AttachmentProtocol,
+) -> rusqlite::Result<Option<SiteIngressAttachment>> {
+    let existing = get(db, site_ingress, port, protocol)?;
+    if existing.is_some() {
+        detach(db, site_ingress, port, protocol)?;
+    }
+    Ok(existing)
+}
+
 pub fn update(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<bool> {
     let cols = target_columns(&att.target);
     let count = db.conn.execute(
