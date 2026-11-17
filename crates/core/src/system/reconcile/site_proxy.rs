@@ -161,6 +161,7 @@ fn resolve_attachment(
                 match resolve_forward_upstream(
                     app,
                     service,
+                    att.protocol,
                     apps,
                     running_pods_by_app,
                     node_prefix,
@@ -249,6 +250,7 @@ fn resolve_attachment(
             match resolve_forward_upstream(
                 app,
                 service,
+                att.protocol,
                 apps,
                 running_pods_by_app,
                 node_prefix,
@@ -284,6 +286,7 @@ fn resolve_attachment(
 fn resolve_forward_upstream(
     target_app: &AppName,
     target_service: &seedling_protocol::names::AppServiceName,
+    protocol: AttachmentProtocol,
     apps: &[AppSnapshot],
     running_pods_by_app: &std::collections::HashMap<AppName, Vec<super::RunningPod>>,
     node_prefix: &Ipv6Net,
@@ -312,11 +315,9 @@ fn resolve_forward_upstream(
         .map_err(|e| format!("registry lookup for {target_app}/{svc_name_str} failed: {e}"))?;
     let service_ip = instance_ipv6(node_prefix, &svc_instance);
 
-    // Find the listening pod port for this service (matches
-    // `super::proxy::find_upstream_port`'s strategy). When no binding is
-    // declared we fall back to a sentinel so the operator sees an obvious
-    // failure rather than a silent 502.
-    let upstream_port = scan_apps_for_service_port(snapshot, svc_name_str)
+    // A service no pod binds for the attachment's transport leaves the
+    // attachment out, reported as unresolved, rather than serving a 502.
+    let upstream_port = scan_apps_for_service_port(snapshot, svc_name_str, protocol)
         .ok_or_else(|| format!("no pod binding found for {target_app}/{svc_name_str}"))?;
 
     // spec: PRX#route-emission
@@ -359,40 +360,73 @@ fn resolve_forward_upstream(
     })
 }
 
-fn scan_apps_for_service_port(snapshot: &AppSnapshot, service_name: &str) -> Option<u16> {
-    for resource in snapshot.app_def.resources.values() {
-        let result = match resource {
+/// The forwarded port of an attachment of `protocol` to `service_name`: the
+/// service port of the first binding of it a pod of the app makes, looking in
+/// the Deployments and then the Jobs, each in byte order of name.
+// spec: SITE#attachments
+fn scan_apps_for_service_port(
+    snapshot: &AppSnapshot,
+    service_name: &str,
+    protocol: AttachmentProtocol,
+) -> Option<u16> {
+    let mut deployments = Vec::new();
+    let mut jobs = Vec::new();
+    for (id, resource) in &snapshot.app_def.resources {
+        match resource {
+            Resource::Deployment(_) => deployments.push((id.name.as_str(), resource)),
+            Resource::Job(_) => jobs.push((id.name.as_str(), resource)),
+            _ => {}
+        }
+    }
+    deployments.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    jobs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    deployments
+        .into_iter()
+        .chain(jobs)
+        .find_map(|(_, resource)| match resource {
             Resource::Deployment(dep) => {
                 let def = dep.def.lock();
                 let pod = def.pod.lock();
-                pod_first_port(&pod, service_name)
+                pod_first_port(&pod, service_name, protocol)
             }
             Resource::Job(job) => {
                 let def = job.def.lock();
                 let pod = def.pod.lock();
-                pod_first_port(&pod, service_name)
+                pod_first_port(&pod, service_name, protocol)
             }
             _ => None,
-        };
-        if let Some(p) = result {
-            return Some(p);
-        }
-    }
-    None
+        })
 }
 
-fn pod_first_port(pod: &crate::defs::pod::PodDef, service_name: &str) -> Option<u16> {
-    for b in &pod.tcp_bindings {
-        if b.service_port.service.name().as_str() == service_name {
-            return Some(b.service_port.port.get());
+/// The service port of the pod's first binding of `service_name` for an
+/// attachment of `protocol`: its port bindings of the attachment's transport,
+/// in the order the script made them, then, but never for UDP, its HTTP route
+/// bindings.
+// spec: SITE#attachments
+fn pod_first_port(
+    pod: &crate::defs::pod::PodDef,
+    service_name: &str,
+    protocol: AttachmentProtocol,
+) -> Option<u16> {
+    let port_bindings = match protocol {
+        AttachmentProtocol::Udp => &pod.udp_bindings,
+        AttachmentProtocol::Tcp | AttachmentProtocol::Http | AttachmentProtocol::Http2 => {
+            &pod.tcp_bindings
         }
+    };
+    if let Some(b) = port_bindings
+        .iter()
+        .find(|b| b.service_port.service.name().as_str() == service_name)
+    {
+        return Some(b.service_port.port.get());
     }
-    for b in &pod.http_bindings {
-        if b.route.http.service.name().as_str() == service_name {
-            return Some(b.route.http.port.get());
-        }
+    if protocol == AttachmentProtocol::Udp {
+        return None;
     }
-    None
+    pod.http_bindings
+        .iter()
+        .find(|b| b.route.http.service.name().as_str() == service_name)
+        .map(|b| b.route.http.port.get())
 }
 
 /// (hostname, port) tuples that the proxy config rejected because both an
@@ -785,6 +819,54 @@ mod tests {
 
     fn site(name: &str) -> SiteIngressName {
         SiteIngressName::new(name).unwrap()
+    }
+
+    fn snapshot(script: &str) -> AppSnapshot {
+        let name = AppName::new("demo").unwrap();
+        let (app, err) = crate::runtime::apps::evaluate_script(
+            &name,
+            script,
+            &std::collections::BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "test script must evaluate: {err:?}");
+        AppSnapshot {
+            name,
+            desired: Default::default(),
+            steady: true,
+            app_def: (*app.def.load_full()).clone(),
+            phase: crate::runtime::AppPhase::Installed,
+            phase_handle: std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::runtime::AppPhase::Installed,
+            )),
+            warm_cert_hostnames: Default::default(),
+            app_priority: Default::default(),
+            install_seq: Some(1),
+        }
+    }
+
+    // spec: SITE#attachments
+    #[test]
+    fn the_forwarded_port_is_found_by_the_attachments_transport() {
+        let app = snapshot(
+            r#"
+            let dns = app.service("dns");
+            let web = app.service("web").http(80);
+            app.job("aaa").image("docker.io/library/busybox:1").tcp(1, dns.port(5999));
+            app.deployment("ccc").image("docker.io/library/nginx:1").udp(2, dns.port(5353));
+            app.deployment("bbb").image("docker.io/library/nginx:1")
+                .http(8080, web.route("/"))
+                .tcp(3, dns.port(5300));
+        "#,
+        );
+        let port = |service, protocol| scan_apps_for_service_port(&app, service, protocol);
+
+        // Deployments before Jobs, and a UDP attachment takes a UDP binding.
+        assert_eq!(port("dns", AttachmentProtocol::Tcp), Some(5300));
+        assert_eq!(port("dns", AttachmentProtocol::Udp), Some(5353));
+        // An HTTP route binding serves a TCP transport, never UDP.
+        assert_eq!(port("web", AttachmentProtocol::Http), Some(80));
+        assert_eq!(port("web", AttachmentProtocol::Udp), None);
     }
 
     // spec: ING#claims-across-apps
