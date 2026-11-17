@@ -457,6 +457,45 @@ pub fn clear_operation_cleanup_stalled(
     }
 }
 
+/// The host fault held while the runtime cannot read the records of the
+/// dynamic resources previous runs left to tear down.
+// spec: FLT#host-faults
+pub const DYNAMIC_RESOURCES_UNREADABLE: &str = "dynamic_resources_unreadable";
+
+fn dynamic_resources_unreadable_key() -> FaultKey {
+    FaultKey::app_wide(
+        &AppName::new_unchecked("_system"),
+        DYNAMIC_RESOURCES_UNREADABLE,
+    )
+}
+
+/// Hold [`DYNAMIC_RESOURCES_UNREADABLE`], logging an error alongside.
+// spec: FLT#host-faults
+// spec: SUSP#abandoned-replay
+pub fn hold_dynamic_resources_unreadable(db: &crate::runtime::db::Db, why: &str) {
+    tracing::error!("cannot read the dynamic resources left to tear down: {why}");
+    let description = format!(
+        "the records of the dynamic resources previous runs left to tear down cannot be read: {why}"
+    );
+    if let Err(e) = file_once(
+        db,
+        &dynamic_resources_unreadable_key(),
+        &FaultMeta::default(),
+        &description,
+    ) {
+        tracing::warn!("could not file {DYNAMIC_RESOURCES_UNREADABLE}: {e}");
+    }
+}
+
+/// Clear [`DYNAMIC_RESOURCES_UNREADABLE`] once those records are read.
+// spec: FLT#host-faults
+// spec: SUSP#abandoned-replay
+pub fn clear_dynamic_resources_unreadable(db: &crate::runtime::db::Db) {
+    if let Err(e) = clear_fault_by_key(db, &dynamic_resources_unreadable_key()) {
+        tracing::warn!("could not clear {DYNAMIC_RESOURCES_UNREADABLE}: {e}");
+    }
+}
+
 /// The kinds of fault under which the runtime stops acting on the fault's
 /// subject until it clears.
 // spec: FLT#withholding-faults

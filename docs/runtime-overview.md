@@ -119,6 +119,7 @@ While they are not all gone a minute after the cleanup began, or while their rec
 A dynamic resource record is forgotten only once its resource is gone; one that cannot be read keeps the cleanup waiting rather than reading as nothing to clean up.
 At startup the runtime tears down the dynamic resources previous runs recorded, other than those of an operation it replays, from their records alone.
 Any it cannot tear down, or whose records it cannot read, it goes on tearing down in the background at a back-off doubling from two seconds to five minutes, holding the same fault for their operations once a minute has passed.
+While it cannot read those records it holds the host fault `dynamic_resources_unreadable`, cleared on its next read of them.
 
 ### Action Composition
 

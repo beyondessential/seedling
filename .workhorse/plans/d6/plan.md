@@ -199,3 +199,4 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - [x] `rt.start` fails when the dynamic resource cannot be recorded, rather than starting something nothing knows of.
 - [x] The unused `deregistering` error code and app status are removed.
 - [x] `operation_cleanup_stalled` is held while an ended operation's dynamic resources are not torn down a minute on, or their records cannot be read, at the end of an operation and for those startup tears down, which now goes on tearing down in the background.
+- [x] `dynamic_resources_unreadable` is held while the startup teardown cannot read the records previous runs left, and cleared on its next read of them.

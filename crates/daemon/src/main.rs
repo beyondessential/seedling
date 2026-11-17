@@ -1136,12 +1136,17 @@ async fn abandon_spared_resources(
             Some(seedling_core::runtime::dynamic_teardown::tear_down(driver, db, records).await)
         }
         Ok(_) => Some(Vec::new()),
+        // spec: SUSP#abandoned-replay
+        // spec: FLT#host-faults
+        // Held until the background teardown next reads every record.
         Err(e) => {
-            tracing::error!(
-                operation_id = %operation_id,
-                "could not list the resources spared for an abandoned replay; \
-                 reading them again in the background: {e}"
+            let why = format!(
+                "the resources spared for abandoned replay {operation_id}: {e}; \
+                 reading them again in the background"
             );
+            db.call(move |db| {
+                seedling_core::runtime::faults::hold_dynamic_resources_unreadable(db, &why);
+            });
             None
         }
     }
@@ -1230,8 +1235,13 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
                 .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
                 .collect()
         });
+        // spec: SUSP#abandoned-replay
+        // spec: FLT#host-faults
         let left = match records {
             Ok(records) => {
+                oi_state
+                    .db
+                    .call(seedling_core::runtime::faults::clear_dynamic_resources_unreadable);
                 if !records.is_empty() {
                     tracing::warn!(
                         count = records.len(),
@@ -1253,10 +1263,10 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
                 Some(left)
             }
             Err(e) => {
-                tracing::error!(
-                    "could not read the orphaned dynamic resources; \
-                     reading them again in the background: {e}"
-                );
+                let why = format!("{e}; reading them again in the background");
+                oi_state.db.call(move |db| {
+                    seedling_core::runtime::faults::hold_dynamic_resources_unreadable(db, &why);
+                });
                 None
             }
         };

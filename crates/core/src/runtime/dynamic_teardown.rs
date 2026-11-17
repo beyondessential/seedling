@@ -257,7 +257,8 @@ fn live_operations(scheduler: &Mutex<Scheduler>) -> HashSet<String> {
 ///
 /// `left` holds the records that were not torn down, or is `None` where the
 /// records could not be read, in which case every record of an operation that
-/// is neither running nor queued is read again and torn down.
+/// is neither running nor queued is read again and torn down, with
+/// `dynamic_resources_unreadable` held until the read succeeds.
 ///
 /// Back-off: a [`RetryGate`] doubling from two seconds to five minutes.
 /// Every failure, of a read or of a teardown, is taken as transient, and
@@ -291,29 +292,26 @@ pub async fn keep_tearing_down(
                     }
                 });
             }
-            Some(_) => {}
-            None if started.elapsed() >= STALL_AFTER => {
-                tracing::error!(
-                    "the records of the dynamic resources to tear down still cannot be read; \
-                     still trying"
-                );
-            }
-            None => {}
+            Some(_) | None => {}
         }
         gate.record_failure(std::time::Instant::now());
         tokio::time::sleep(gate.delay()).await;
 
         let records = match left.take() {
             Some(records) => records,
+            // spec: SUSP#abandoned-replay
+            // spec: FLT#host-faults
             None => match db.call(list_dynamic_resources) {
                 Ok(all) => {
+                    db.call(faults::clear_dynamic_resources_unreadable);
                     let live = live_operations(&scheduler);
                     all.into_iter()
                         .filter(|r| !live.contains(&r.operation_id))
                         .collect()
                 }
                 Err(e) => {
-                    tracing::warn!("could not read the dynamic resources to tear down: {e}");
+                    let why = e.to_string();
+                    db.call(move |db| faults::hold_dynamic_resources_unreadable(db, &why));
                     continue;
                 }
             },

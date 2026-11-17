@@ -191,6 +191,7 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `site_services_unreadable` | the runtime cannot read the [site services or the external service mappings](site-resources.md#unreadable-site-services) | the runtime next reads them | condition |
 | `schedules_unreadable` | the runtime cannot read the [schedule records](scheduled-actions.md#schedule-records) at all | the runtime next reads them | condition |
 | `operation_state_unreadable` | the runtime cannot read the [persisted operation, its cancel, or the persisted queue](operations.md#unreadable-operation-state) | the read succeeds | condition |
+| `dynamic_resources_unreadable` | the runtime cannot read the records of the [dynamic resources](suspension.md#abandoned-replay) that previous runs left to tear down | the runtime next reads them | condition |
 | `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running, or the resolver is stopped because no app is installed or installing | condition |
 | `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | for a failed bring-up, an iteration finds the proxy healthy; for a rejected upgrade, an upgrade succeeds; in either case, the proxy is stopped because no app is installed or installing | condition |
 | `routes_failed` | applying the host's routes fails | the routes are next applied | condition |

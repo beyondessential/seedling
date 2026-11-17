@@ -141,9 +141,24 @@ fn a_dynamic_resource_left_by_a_teardown_is_torn_down_again_holding_the_fault_me
     );
 }
 
+/// How many `dynamic_resources_unreadable` faults are active.
+fn unreadable(h: &Harness) -> usize {
+    h.db.call(|db| {
+        faults::list_active_faults(db, None)
+            .unwrap()
+            .into_iter()
+            .filter(|f| {
+                f.kind == faults::DYNAMIC_RESOURCES_UNREADABLE && f.app.as_str() == "_system"
+            })
+            .count()
+    })
+}
+
 // spec: OPS#completion
 // spec: SUSP#abandoned-replay
-// Records the startup teardown could not read were left for the next start.
+// spec: FLT#host-faults
+// Records the startup teardown could not read were left for the next start,
+// with nothing telling an operator.
 #[test]
 fn dynamic_resources_whose_records_could_not_be_read_are_read_again_and_torn_down() {
     let h = harness();
@@ -171,12 +186,14 @@ fn dynamic_resources_whose_records_could_not_be_read_are_read_again_and_torn_dow
             () = &mut keep => panic!("the teardown ended without reading the records"),
             () = tokio::time::sleep(TEN_MINUTES) => {}
         }
+        assert_eq!(unreadable(&h), 1, "held while the records cannot be read");
         rename("hidden_dynamic_resources", "dynamic_resources");
         tokio::time::timeout(TEN_MINUTES, keep)
             .await
             .expect("the teardown ends once the records are read and torn down");
     });
     assert_eq!(records(&h), 0);
+    assert_eq!(unreadable(&h), 0, "cleared once the records are read");
 }
 
 // spec: OPS#completion

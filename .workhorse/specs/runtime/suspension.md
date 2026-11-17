@@ -127,6 +127,7 @@ Where the replay does not then start, for any reason, the runtime MUST tear down
 
 The runtime MUST forget only the records of resources it has torn down.
 The runtime MUST keep a record it could not read, and a record whose resource it could not tear down or could not confirm was gone.
+While it cannot read those records, the runtime MUST hold a [`dynamic_resources_unreadable`](faults.md#host-faults) fault and keep trying to read them.
 
 > [!NOTE]
 > A resource spared for a replay that never happens is recorded against an operation nothing will claim, and the next start spares it again on the same reasoning.
