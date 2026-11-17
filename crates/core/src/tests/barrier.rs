@@ -1618,6 +1618,52 @@ fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
     );
 }
 
+// spec: AUTO#scale
+#[test]
+fn an_action_addresses_no_replica_of_a_deployment_scaled_to_zero() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .scale(0..=4);
+        app.on_start(|rt, _param| {
+            rt.stop(app.deployment("web"));
+        });
+    "#,
+    );
+
+    let db = crate::runtime::db::DbHandle::open_in_memory().expect("in-memory db");
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = Arc::new(
+        crate::runtime::registry::DbInstanceRegistry::new(db.clone()),
+    );
+
+    let r = run_pass_with_db(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+        Some(db),
+    );
+    assert!(matches!(r, OperationResult::Completed), "{r:?}");
+
+    let entries = log.load().expect("log loads");
+    let stopped = entries
+        .iter()
+        .find(|e| matches!(e.call_kind, crate::runtime::barrier::CallKind::Stop))
+        .expect("the stop call is recorded");
+    assert!(
+        stopped.resources.is_empty(),
+        "a deployment at an effective scale of 0 resolved to {} instances",
+        stopped.resources.len()
+    );
+}
+
 // spec: RT#started
 // spec: COL#query-methods
 #[test]

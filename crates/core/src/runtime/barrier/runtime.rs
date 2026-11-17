@@ -723,21 +723,18 @@ impl RuntimeInstance {
     /// Without a database there are no stored decisions to read, so the
     /// lower bound is the answer rather than a failure.
     ///
-    /// The floor of one holds whatever the bounds say, as it did before
-    /// effective scale was consulted here. It is not what keeps a barrier
-    /// from waiting on nothing — a group holding no resources now returns
-    /// at once — so it stands only to leave `scale(0..n)` resolving as it
-    /// always has.
+    /// An effective scale of zero resolves to no instances, as reconciliation
+    /// holds the deployment at none.
+    // spec: AUTO#scale
     fn effective_scale(&self, deployment: &str, low: u16, high: u16) -> Result<u16, RegistryError> {
         let Some(db) = &self.db else {
-            return Ok(low.max(1));
+            return Ok(low);
         };
         let app = self.app_name.clone();
         let deployment = deployment.to_owned();
-        let effective = db.call(move |db| {
+        Ok(db.call(move |db| {
             crate::runtime::scaling::effective_scale(db, &app, &deployment, low, high)
-        })?;
-        Ok(effective.max(1))
+        })?)
     }
 
     /// Extract ResourceInstance values from a Rhai Dynamic argument.
