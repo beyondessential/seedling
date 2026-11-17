@@ -557,6 +557,34 @@ async fn actuate_one_pod(
     if (obs.unit_start_limit_hit || crash_looped.contains(&dr.instance.id))
         && dr.desired == LifecycleState::Ready
     {
+        // spec: AUTO#restart-pacing
+        // The supervisor's own restarts are prevented too: a unit it is
+        // bringing back up after a failure, or one whose container is gone
+        // while the unit stays up, is stopped so no restart is pending.
+        let restart_pending = !obs.is_running && (obs.unit_activating || obs.unit_active);
+        if restart_pending {
+            let rule = "instance has an active crash_loop fault and the supervisor would restart it; \
+                        AUTO#restart-pacing requires every automatic restart be prevented";
+            let Some(op) =
+                autonomous_ops::record(db, &dr.instance, "stop_crash_looping_unit", rule)
+            else {
+                return Some(obs.result);
+            };
+            let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
+                Ok(()) => "ok".to_owned(),
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        error = %e,
+                        "pods: stopping a crash-looping unit failed"
+                    );
+                    let msg = e.to_string();
+                    result.stop_failure = Some((dr.instance.clone(), msg.clone()));
+                    format!("error: {msg}")
+                }
+            };
+            op.complete(&outcome);
+        }
         return Some(obs.result);
     }
 

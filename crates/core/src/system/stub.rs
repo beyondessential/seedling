@@ -560,6 +560,21 @@ impl StubProcessManager {
         }
     }
 
+    /// Simulate the supervisor pausing before an automatic restart: the
+    /// container has exited and the unit is activating again.
+    pub fn simulate_auto_restart_pause(&self, unit: &str) {
+        let container_name = unit.strip_suffix(".service").unwrap_or(unit).to_owned();
+        self.container
+            .state
+            .lock()
+            .containers
+            .remove(&container_name);
+        if let Some(u) = self.state.lock().units.get_mut(unit) {
+            u.state = ActiveState::Activating;
+            u.sub = "auto-restart".to_owned();
+        }
+    }
+
     /// Set the counter directly, for the reset case: systemd zeroes
     /// `NRestarts` when a unit is recreated or its failed state is cleared.
     pub fn set_restart_counter(&self, unit: &str, count: u32) {

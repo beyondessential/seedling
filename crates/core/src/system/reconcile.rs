@@ -1440,21 +1440,23 @@ impl Reconciler {
         // fault table, so re-derive it each tick: the suppression then
         // survives a daemon restart, and an operator clearing the fault takes
         // effect on the very next tick.
-        self.crash_looped = self.db.call(|db| {
-            let mut out = HashSet::new();
-            let Ok(active) = crate::runtime::faults::list_active_faults(db, None) else {
-                return out;
-            };
-            for f in active {
-                if f.kind == "crash_loop"
-                    && let Some(hex) = f.instance_id.as_deref()
-                    && let Some(id) = InstanceId::from_hex(hex)
-                {
-                    out.insert(id);
-                }
-            }
-            out
+        // A fault table that cannot be read is not one without crash loops:
+        // the set last read stands, so no suppression lifts on a failed read.
+        let crash_looped = self.db.call(|db| {
+            crate::runtime::faults::list_active_faults(db, None).map(|active| {
+                active
+                    .into_iter()
+                    .filter(|f| f.kind == "crash_loop")
+                    .filter_map(|f| f.instance_id.as_deref().and_then(InstanceId::from_hex))
+                    .collect::<HashSet<_>>()
+            })
         });
+        match crash_looped {
+            Ok(set) => self.crash_looped = set,
+            Err(e) => error!(
+                "cannot read the active crash_loop faults; the suppression last read stands: {e}"
+            ),
+        }
 
         // spec: DNS#resolver-lifecycle
         // The resolver is running and healthy before any workload container
@@ -4457,6 +4459,88 @@ mod tests {
                 retain_restart_records: 50,
             },
         )
+    }
+
+    // spec: AUTO#restart-pacing
+    #[test]
+    fn a_crash_looping_instance_the_supervisor_would_restart_is_stopped() {
+        use crate::system::{
+            ContainerRuntime, ProcessManager,
+            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+            types::ActiveState,
+            volume_store::VolumeStore,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let volumes = dir.path().join("stub-volumes");
+        std::fs::create_dir_all(&volumes).unwrap();
+        let container = Arc::new(StubContainerRuntime::new(volumes));
+        let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+        let backends = crate::system::backends::Backends::working(
+            Arc::clone(&container) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&process) as Arc<dyn ProcessManager>,
+        );
+        let system = Arc::new(System {
+            container: backends.container(),
+            process: backends.process(),
+            proxy: Arc::new(StubNetworkProxy),
+            data_plane: Arc::new(StubDataPlane),
+            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+            backends,
+        });
+        let oi = crate::oi::test_support::TestOi::with_driver(system);
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"app.deployment("web").image("docker.io/library/nginx:1.30");"#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let reconciler = test_reconciler(&oi);
+        let (apps, _) = reconciler.snapshot_all_apps();
+        let app = apps.iter().find(|a| a.name.as_str() == "demo").unwrap();
+        let actuate = |crash_looped: &HashSet<InstanceId>| {
+            oi.block_on(pods::observe_and_actuate(
+                &reconciler.observer,
+                &reconciler.actuator,
+                &reconciler.driver,
+                &reconciler.db,
+                &app.desired,
+                app.app_priority,
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                crash_looped,
+            ))
+        };
+        oi.block_on(container.pull_image("docker.io/library/nginx:1.30"))
+            .unwrap();
+        let _ = actuate(&HashSet::new());
+        let instance = app.desired.resources[0].instance.clone();
+        let unit = crate::system::actuator::unit_name(&instance);
+        let state = |oi: &crate::oi::test_support::TestOi| {
+            oi.block_on(process.unit_state(&unit))
+                .unwrap()
+                .map(|s| s.active)
+        };
+        assert_eq!(state(&oi), Some(ActiveState::Active), "started");
+
+        process.simulate_auto_restart_pause(&unit);
+        let _ = actuate(&HashSet::from([instance.id]));
+
+        assert_ne!(
+            state(&oi),
+            Some(ActiveState::Activating),
+            "the supervisor's pending restart is cancelled"
+        );
+        assert!(
+            oi.block_on(container.inspect(&instance.display_name))
+                .unwrap()
+                .is_none(),
+            "and nothing started it again"
+        );
     }
 
     // spec: APPS#resources
