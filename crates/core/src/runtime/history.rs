@@ -211,6 +211,17 @@ pub fn find_instances_for_group(
 // spec: GC#instance-retirement
 pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
     let hex = id.to_hex();
+    // spec: GC#instance-retirement
+    // The instance's active faults are cleared first, each with its event,
+    // so none is deleted without the clear being announced. A clear that
+    // fails leaves every record in place.
+    let active: Vec<_> = crate::runtime::faults::list_active_faults(db, None)?
+        .into_iter()
+        .filter(|f| f.instance_id.as_deref() == Some(hex.as_str()))
+        .collect();
+    for fault in &active {
+        crate::runtime::faults::clear_fault(db, &fault.id, &fault.app)?;
+    }
     db.atomically(|db| {
         db.conn.execute(
             "DELETE FROM world_observations WHERE instance_id = ?1",

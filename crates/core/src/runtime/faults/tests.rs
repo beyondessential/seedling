@@ -558,3 +558,44 @@ fn sync_never_touches_kinds_outside_its_scope() {
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].kind, "resolver_failed");
 }
+
+// spec: GC#instance-retirement
+#[test]
+fn retiring_an_instance_clears_its_active_faults_with_their_events() {
+    let db = Db::open_in_memory().expect("open");
+    init_test_events();
+    let mut rx = EVENT_TX.get().unwrap().subscribe();
+    let instance = crate::runtime::identity::ResourceInstance::new_singleton(
+        app("retired"),
+        crate::defs::resource::ResourceKind::Deployment,
+        "web",
+    );
+    crate::runtime::history::insert_instance(&db, &instance).unwrap();
+    let hex = instance.id.to_hex();
+    let id = file_fault(
+        &db,
+        &app("retired"),
+        Some("deployment"),
+        Some("web"),
+        Some(&hex),
+        "health_check_failed",
+        "boom",
+    )
+    .expect("file");
+
+    crate::runtime::history::delete_instance(&db, instance.id).expect("retire");
+
+    let mut found = false;
+    while let Ok(event) = rx.try_recv() {
+        if let seedling_protocol::events::OiEvent::FaultCleared { id: eid, .. } = event
+            && eid == id
+        {
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "expected a FaultCleared event for the retired instance's fault"
+    );
+}
