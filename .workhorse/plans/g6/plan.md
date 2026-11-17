@@ -14,7 +14,10 @@ What remains is DTLS, whose datagrams reach the Service still encrypted.
 - Terminating DTLS in the daemon: proxy-held certificates would have to be read out of the proxy's storage, and the Rust DTLS libraries are thinner.
 - Removing `Terminate.Dtls` from the language until a terminator exists.
 
+- Sessions are capped by the proxy's source ports toward one Service (one address, so one port per session). That cap is shared with every L4 ingress already, and sits far above what one site's clients need, so the proxy stays single-address. A wider port range in the proxy's namespace, or more proxy source addresses, are the levers if a host ever needs more.
+- Whether the Service sees the client's address is not this card's: it is left to PROXY protocol work.
+
 ## Open
 
-- How long an idle DTLS session is kept, and how sessions map to upstream UDP flows.
-- Whether the Service sees the client's address.
+- How long an idle DTLS session is kept.
+- Whether a session survives a change of client address through connection IDs.

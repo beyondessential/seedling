@@ -96,6 +96,26 @@ An ingress with a termination MUST reject traffic that is not of the protocol it
 
 An ingress on which `tls()` is never called MUST forward TCP connections to its Service unmodified, and MUST NOT forward UDP traffic.
 
+### DTLS sessions
+
+The runtime MUST carry the plaintext datagrams of each DTLS session to the Service on a UDP flow of the session's own, whose source port differs from that of every other session's flow open to the Service.
+The runtime MUST deliver a datagram the Service sends on a session's flow to that session's client, inside the session.
+
+> [!NOTE]
+> A flow per session lets the Service tell its clients apart by source port, as it would if they reached it over plain UDP.
+
+The runtime MUST NOT complete a DTLS handshake before the client has shown, by the protocol's cookie exchange, that it receives datagrams at the address it sends from.
+The runtime MUST open a session's flow to the Service only once the session's handshake has completed.
+
+When no flow to the Service can be opened for a new session, the runtime MUST refuse that session, and MUST continue to serve the sessions already open.
+
+> [!NOTE]
+> Each open session holds a source port toward its Service, so the sessions one Service can have open at once are bounded by the ports available to the proxy.
+> Requiring the cookie exchange and a completed handshake first keeps a client sending from addresses it does not hold from spending those ports.
+
+A session MUST end when its client closes it.
+When a session ends, the runtime MUST close its flow to the Service.
+
 ### Terminate
 
 `Terminate` is an [enum](overview.md#enums) of the protocols an ingress terminates.
