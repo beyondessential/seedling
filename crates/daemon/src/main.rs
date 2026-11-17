@@ -12,13 +12,13 @@ use parking_lot::RwLock;
 use seedling_core::{
     oi::{self, server::DEFAULT_MAX_STREAMS, state::OiState},
     runtime::{
-        AppRegistry, InstanceRegistry, Scheduler, audit,
+        AppRegistry, InstanceId, InstanceRegistry, Scheduler, audit,
         db::{Db, DbHandle},
         gc::{DEFAULT_RETAIN_RESTART_RECORDS, GcConfig, InstanceGcConfig},
         registry::DbInstanceRegistry,
     },
     system::{
-        System,
+        System, actuator,
         host_probes::{Fact, HostConstants, HostProbes, HostSource},
         nat64::should_activate_nat64,
         netinfo::{detect_ipv4_egress, detect_ipv6_egress},
@@ -1228,6 +1228,34 @@ fn tear_down_dynamic_resources(
                         torn_down = false;
                     }
                 }
+                // spec: ACTU#deployment-and-job-instances
+                // The anonymous volumes created for the instance go with it,
+                // found by the identity they were recorded against.
+                match InstanceId::from_hex(&record.instance_id) {
+                    Some(id) => {
+                        if let Err(e) = actuator::remove_anonymous_volumes(
+                            &driver_ref,
+                            db,
+                            id,
+                            &[],
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                instance = %record.display_name,
+                                "could not remove the anonymous volumes: {e}"
+                            );
+                            torn_down = false;
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            instance_id = %record.instance_id,
+                            "the recorded instance id does not parse, so its anonymous volumes cannot be found"
+                        );
+                        torn_down = false;
+                    }
+                }
                 torn_down
             })
         });
@@ -1853,9 +1881,9 @@ mod tests {
         insert_dynamic_resources(
             &db,
             &[
-                ("inst-a", "op-abandoned"),
-                ("inst-b", "op-abandoned"),
-                ("inst-c", "op-other"),
+                (INST_A, "op-abandoned"),
+                (INST_B, "op-abandoned"),
+                (INST_C, "op-other"),
             ],
         );
 
@@ -1863,9 +1891,61 @@ mod tests {
 
         assert_eq!(
             recorded_instances(&db),
-            vec!["inst-c".to_owned()],
+            vec![INST_C.to_owned()],
             "the abandoned operation's resources are forgotten, another operation's are not"
         );
+    }
+
+    // spec: ACTU#deployment-and-job-instances
+    // A resource startup tears down is known by its recorded identity alone,
+    // so the anonymous volumes created for it were left behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_abandoned_replay_removes_the_anonymous_volumes_of_the_resources_it_was_spared() {
+        use seedling_core::runtime::InstanceId;
+        use seedling_core::runtime::anonymous_volumes::{self, AnonymousVolume};
+        use seedling_core::runtime::db::DbHandle;
+        use seedling_core::system::System;
+        use seedling_protocol::names::AppName;
+
+        let data_dir = tempfile::tempdir().expect("temp data dir");
+        let (driver, _caddy_admin) =
+            System::setup_stubbed(data_dir.path(), false).expect("stub system");
+        let db = DbHandle::open_in_memory().expect("in-memory db");
+        insert_dynamic_resources(&db, &[(INST_A, "op-abandoned")]);
+        let volume = AnonymousVolume {
+            name: "seedling-anon-0000000a-vol-0".to_owned(),
+            tmpfs: false,
+        };
+        let instance = seedling_core::runtime::ResourceInstance {
+            id: InstanceId::from_hex(INST_A).unwrap(),
+            app: AppName::new("demo").unwrap(),
+            kind: seedling_core::defs::resource::ResourceKind::Job,
+            name: None,
+            variant: seedling_core::runtime::InstanceVariant::Singleton,
+            display_name: INST_A.to_owned(),
+        };
+        let recorded = volume.clone();
+        db.call(move |db| anonymous_volumes::record(db, &instance, &[recorded]))
+            .expect("record the volume");
+        driver
+            .container
+            .create_volume(&volume.name, false)
+            .await
+            .expect("create the volume");
+
+        super::abandon_spared_resources(&driver, &db, "op-abandoned");
+
+        assert!(
+            !driver.container.volume_exists(&volume.name).await.unwrap(),
+            "the volume went with its pod"
+        );
+        let id = InstanceId::from_hex(INST_A).unwrap();
+        assert!(
+            db.call(move |db| anonymous_volumes::recorded_for(db, id))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(recorded_instances(&db).is_empty());
     }
 
     // spec: SUSP#abandoned-replay
@@ -1884,19 +1964,21 @@ mod tests {
             System::setup_unavailable(data_dir.path(), false).expect("unavailable system");
         let db = DbHandle::open_in_memory().expect("in-memory db");
 
-        insert_dynamic_resources(
-            &db,
-            &[("inst-a", "op-abandoned"), ("inst-b", "op-abandoned")],
-        );
+        insert_dynamic_resources(&db, &[(INST_A, "op-abandoned"), (INST_B, "op-abandoned")]);
 
         super::abandon_spared_resources(&driver, &db, "op-abandoned");
 
         assert_eq!(
             recorded_instances(&db),
-            vec!["inst-a".to_owned(), "inst-b".to_owned()],
+            vec![INST_A.to_owned(), INST_B.to_owned()],
             "a teardown that did not happen must not be recorded as one that did"
         );
     }
+
+    /// Instance ids as the runtime records them.
+    const INST_A: &str = "0000000000000000000000000000000a";
+    const INST_B: &str = "0000000000000000000000000000000b";
+    const INST_C: &str = "0000000000000000000000000000000c";
 
     fn insert_dynamic_resources(db: &seedling_core::runtime::db::DbHandle, rows: &[(&str, &str)]) {
         let rows: Vec<(String, String)> = rows

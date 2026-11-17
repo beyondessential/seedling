@@ -37,8 +37,8 @@ mod pod;
 pub(crate) use pod::unit_name;
 mod pull;
 
-use pod::{ContainerVolume, collect_container_volumes, map_on_exit};
-pub use pod::{TMPFS_VOLUMES_DIR, tmpfs_volume_path};
+pub use pod::{TMPFS_VOLUMES_DIR, remove_anonymous_volumes, tmpfs_volume_path};
+use pod::{anonymous_volumes, collect_container_volumes, map_on_exit};
 use pull::PullState;
 
 // ---------------------------------------------------------------------------
@@ -100,12 +100,35 @@ pub enum ActuateError {
         source: crate::runtime::registry::RegistryError,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("anonymous volume record: {source}"))]
+    AnonymousVolumeRecord {
+        source: rusqlite::Error,
+        backtrace: snafu::Backtrace,
+    },
     // spec: FLT#workload-faults
     #[snafu(display("external volume '{name}' is not mapped"))]
     ExternalVolumeNotMapped {
         name: String,
         backtrace: snafu::Backtrace,
     },
+}
+
+/// Remove the directory holding a tmpfs volume's data, not a stand-in for
+/// it. A directory that is not there is not an error.
+// spec: ACTU#volume-storage
+async fn remove_tmpfs_dir(host_path: &Path) -> Result<(), ActuateError> {
+    // spec: ACTU#storage-confinement — a symlink wearing the name is refused
+    // rather than unlinked, so a stop never reports a cleanup that removed
+    // only a link.
+    if super::confined::owned_dir_async(host_path)
+        .await
+        .context(VolumeWriteSnafu { path: host_path })?
+        && let Err(e) = tokio::fs::remove_dir_all(host_path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(VolumeWriteSnafu { path: host_path }.into_error(e));
+    }
+    Ok(())
 }
 
 // spec: VOL#write-paths
@@ -585,34 +608,28 @@ impl Actuator {
     ) -> Result<(), ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
-                let anon_volumes: Vec<ContainerVolume> = {
+                let declared = {
                     let def = dep.def.lock();
                     let pod = def.pod.lock();
-                    collect_container_volumes(
+                    anonymous_volumes(&collect_container_volumes(
                         &pod,
                         instance,
                         Some(self.driver.volume_store.volumes_dir()),
-                    )
-                    .into_iter()
-                    .filter(|v| v.remove_on_stop)
-                    .collect()
+                    ))
                 };
-                self.stop_pod_instance(instance, &anon_volumes).await
+                self.stop_pod_instance(instance, &declared).await
             }
             Resource::Job(job) => {
-                let anon_volumes: Vec<ContainerVolume> = {
+                let declared = {
                     let def = job.def.lock();
                     let pod = def.pod.lock();
-                    collect_container_volumes(
+                    anonymous_volumes(&collect_container_volumes(
                         &pod,
                         instance,
                         Some(self.driver.volume_store.volumes_dir()),
-                    )
-                    .into_iter()
-                    .filter(|v| v.remove_on_stop)
-                    .collect()
+                    ))
                 };
-                self.stop_pod_instance(instance, &anon_volumes).await
+                self.stop_pod_instance(instance, &declared).await
             }
             Resource::Volume(vol) => {
                 let tmpfs = vol.def.lock().tmpfs;
@@ -649,20 +666,7 @@ impl Actuator {
         // spec: ACTU#volume-storage
         // Remove the directory holding the data, not a stand-in for it: the
         // tmpfs backing under /run is reclaimed once the directory is gone.
-        let host_path = tmpfs_volume_path(&instance.display_name);
-        // spec: ACTU#storage-confinement — a symlink wearing the name is
-        // refused rather than unlinked, so a stop never reports a cleanup that
-        // removed only a link.
-        if crate::system::confined::owned_dir_async(&host_path)
-            .await
-            .context(VolumeWriteSnafu {
-                path: host_path.clone(),
-            })?
-            && let Err(e) = tokio::fs::remove_dir_all(&host_path).await
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(VolumeWriteSnafu { path: host_path }.into_error(e));
-        }
+        remove_tmpfs_dir(&tmpfs_volume_path(&instance.display_name)).await?;
         // Earlier releases stood a podman tmpfs-driver volume up beside the
         // directory. Reap it on the way past, by the exact name those releases
         // gave it.

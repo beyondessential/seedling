@@ -241,12 +241,16 @@ pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
 
 /// Drop every registry row for `app`, once nothing of it is desired: its
 /// uninstall has finished, or it is being deregistered. Observations left
-/// behind are pruned as orphans.
+/// behind are pruned as orphans. The anonymous volumes recorded with the
+/// instances go with them.
 pub fn delete_instances_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usize> {
-    db.conn.execute(
-        "DELETE FROM resource_instances WHERE app = ?1",
-        params![app],
-    )
+    db.atomically(|db| {
+        crate::runtime::anonymous_volumes::delete_for_app(db, app)?;
+        db.conn.execute(
+            "DELETE FROM resource_instances WHERE app = ?1",
+            params![app],
+        )
+    })
 }
 
 // spec: IDN#instance-identity

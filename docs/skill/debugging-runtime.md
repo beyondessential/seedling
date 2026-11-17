@@ -164,7 +164,8 @@ it. The logic lives in `src/runtime/desired.rs`:
   definition no longer declares (dropped by an update, or created
   anonymously by an operation). Those undeclared instances are torn down
   from their recorded identity alone: a pod's unit, container and network
-  by name, and a volume's storage at both its tmpfs path and its
+  by name, with the anonymous volumes recorded against it (table
+  `anonymous_volumes`), and a volume's storage at both its tmpfs path and its
   volume-store name, holding whichever stands. The uninstall
   completes, and the recorded instances are forgotten, only once every
   recorded instance whose kind has a lifecycle is `Unscheduled`. While the

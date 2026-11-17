@@ -3,6 +3,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod action_params;
+pub mod anonymous_volumes;
 pub mod apps;
 pub mod audit;
 pub mod autonomous_ops;

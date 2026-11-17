@@ -4611,6 +4611,207 @@ mod tests {
         assert!(!network_exists(&oi, &network));
     }
 
+    /// An anonymous Job mounting an anonymous volume, as an action closure
+    /// creates one, and the volume's name.
+    fn anonymous_job_with_anonymous_volume() -> (Resource, String) {
+        let progress = Arc::new(parking_lot::RwLock::new(None));
+        let result = crate::tests::run_action_with(
+            r#"
+            app.on_action("work", |rt, _param| {
+                let scratch = app.volume();
+                rt.start(app.job().image("docker.io/library/busybox:1.37").mount("/scratch", scratch));
+            });
+            "#,
+            &[],
+            "work",
+            None,
+            crate::tests::ActionHooks {
+                active_progress: Some(Arc::clone(&progress)),
+                ..Default::default()
+            },
+        );
+        assert!(
+            matches!(result, crate::runtime::OperationResult::Completed),
+            "{result:?}"
+        );
+        let job = progress
+            .read()
+            .as_ref()
+            .and_then(|p| p.dynamic_defs.values().next().cloned())
+            .expect("the closure started a job");
+        let volume = {
+            let Resource::Job(def) = &job else {
+                panic!("{job:?}")
+            };
+            let def = def.def.lock();
+            let pod = def.pod.lock();
+            let container = pod.container.lock();
+            container
+                .volume_mounts
+                .values()
+                .find_map(|mount| match mount {
+                    crate::defs::container::VolumeMount::Volume(v) => v.anon_id.clone(),
+                    _ => None,
+                })
+                .expect("the job mounts an anonymous volume")
+        };
+        (job, volume)
+    }
+
+    /// Hold `instance` in `app`'s operation progress with `definition`, at
+    /// `Ready` or, where `stopped`, at `Unscheduled`.
+    fn hold_in_operation(
+        oi: &crate::oi::test_support::TestOi,
+        app: &str,
+        instance: &crate::runtime::identity::ResourceInstance,
+        definition: Resource,
+        stopped: bool,
+    ) {
+        let mut progress = crate::runtime::OperationProgress::new();
+        if stopped {
+            progress.stopped(instance.clone());
+            progress.dynamic_defs.insert(instance.clone(), definition);
+        } else {
+            progress.started_dynamic(instance.clone(), definition);
+        }
+        let registry = oi.state.registry.read();
+        *registry.get(app).unwrap().active_progress.write() = Some(progress);
+    }
+
+    /// Run the pods phase `ticks` times.
+    fn run_pods(oi: &crate::oi::test_support::TestOi, reconciler: &mut Reconciler, ticks: usize) {
+        for _ in 0..ticks {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            let pod_updates = oi.block_on(phases::run_pods_phase(
+                &reconciler.observer,
+                &reconciler.actuator,
+                &reconciler.driver,
+                &reconciler.db,
+                &apps,
+                &reconciler.written_obs,
+                &reconciler.started_jobs,
+                &reconciler.completed_jobs,
+                &reconciler.crash_looped,
+            ));
+            reconciler.ingest_pod_results(&apps, pod_updates);
+        }
+    }
+
+    fn volume_exists(oi: &crate::oi::test_support::TestOi, volume: &str) -> bool {
+        oi.block_on(oi.state.driver.container.volume_exists(volume))
+            .unwrap()
+    }
+
+    fn anonymous_volumes_recorded(
+        oi: &crate::oi::test_support::TestOi,
+        instance: &crate::runtime::identity::ResourceInstance,
+    ) -> Vec<String> {
+        let id = instance.id;
+        oi.state.db.call(move |db| {
+            crate::runtime::anonymous_volumes::recorded_for(db, id)
+                .unwrap()
+                .into_iter()
+                .map(|volume| volume.name)
+                .collect()
+        })
+    }
+
+    /// Install `app`, and run an anonymous Job mounting an anonymous volume as
+    /// an operation of it does, returning the Job's instance and the volume.
+    fn run_anonymous_job_with_anonymous_volume(
+        oi: &crate::oi::test_support::TestOi,
+        reconciler: &mut Reconciler,
+        app: &str,
+    ) -> (crate::runtime::identity::ResourceInstance, String) {
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": app, "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+        )
+        .unwrap();
+        oi.install(app);
+        let job = record(oi, app, crate::defs::resource::ResourceKind::Job, None);
+        let (definition, volume) = anonymous_job_with_anonymous_volume();
+        oi.block_on(
+            oi.state
+                .driver
+                .container
+                .pull_image("docker.io/library/busybox:1.37"),
+        )
+        .unwrap();
+        hold_in_operation(oi, app, &job, definition, false);
+        run_pods(oi, reconciler, 1);
+        assert!(
+            oi.block_on(
+                oi.state
+                    .driver
+                    .process
+                    .unit_state(&crate::system::actuator::unit_name(&job))
+            )
+            .unwrap()
+            .is_some(),
+            "the job was started"
+        );
+        assert!(volume_exists(oi, &volume), "with its anonymous volume");
+        assert_eq!(anonymous_volumes_recorded(oi, &job), vec![volume.clone()]);
+        (job, volume)
+    }
+
+    // spec: ACTU#deployment-and-job-instances
+    // At the end of an operation its dynamic pods are stopped through a stand-in
+    // carrying no configuration, so the stop could not see the anonymous
+    // volumes the pod's definition mounted, and left their storage behind.
+    #[test]
+    fn an_operation_created_pods_anonymous_volume_is_removed_when_the_operation_ends() {
+        let (oi, _containers, _dir) = with_stub_containers();
+        let mut reconciler = test_reconciler(&oi);
+        let (job, volume) = run_anonymous_job_with_anonymous_volume(&oi, &mut reconciler, "app");
+
+        // As the end-of-operation cleanup holds an operation's dynamic pods.
+        let stand_in = crate::runtime::desired::undeclared_pod(&job).unwrap();
+        hold_in_operation(&oi, "app", &job, stand_in, true);
+        run_pods(&oi, &mut reconciler, 3);
+
+        assert!(!network_exists(
+            &oi,
+            &format!("seedling-{}", job.display_name)
+        ));
+        assert!(!volume_exists(&oi, &volume), "the volume went with its pod");
+        assert!(anonymous_volumes_recorded(&oi, &job).is_empty());
+    }
+
+    // spec: ACTU#deployment-and-job-instances
+    // spec: TRD#teardown
+    // An uninstall stops a pod an operation left standing from its recorded
+    // identity, which carried nothing of the anonymous volumes created for it.
+    #[test]
+    fn an_uninstall_removes_the_anonymous_volume_of_a_pod_an_operation_created() {
+        let (oi, _containers, _dir) = with_stub_containers();
+        let mut reconciler = test_reconciler(&oi);
+        let (job, volume) = run_anonymous_job_with_anonymous_volume(&oi, &mut reconciler, "app");
+
+        // The operation ended without its cleanup stopping the job.
+        *oi.state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .active_progress
+            .write() = None;
+        oi.call("/apps/uninstall", serde_json::json!({ "app": "app" }))
+            .unwrap();
+        // The stub supervisor keeps a stopped unit loaded, where systemd
+        // unloads a stopped transient unit, so the uninstall itself does not
+        // complete here; the pod's teardown is what is under test.
+        tear_down(&oi, &mut reconciler, "app");
+
+        assert!(!network_exists(
+            &oi,
+            &format!("seedling-{}", job.display_name)
+        ));
+        assert!(!volume_exists(&oi, &volume), "the volume went with its pod");
+        assert!(anonymous_volumes_recorded(&oi, &job).is_empty());
+    }
+
     // spec: PRIO#unreadable-priorities
     #[test]
     fn an_app_whose_stored_priority_cannot_be_read_is_held_back_with_a_fault() {
