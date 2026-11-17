@@ -1710,6 +1710,7 @@ impl Reconciler {
 
             let proxy_build = phases::compute_proxy_config(
                 &apps,
+                app_coverage,
                 site_ingress_snapshot.as_ref(),
                 &running_pods_by_app,
                 &self.node_prefix,
@@ -1740,9 +1741,10 @@ impl Reconciler {
                     conflicts: ingress_conflicts,
                     unresolved_site_attachments,
                 } = proxy_build;
-                let proxy_coverage = proxy_coverage.and(app_coverage);
-                // spec: SITE#unreadable-site-ingresses — `None` when the
-                // site ingresses could not be read: neither filed nor cleared.
+                // spec: SITE#unreadable-site-ingresses
+                // spec: FLT#filing-and-clearing
+                // `None` when the build is partial, an app or the site
+                // ingresses missing from it: neither filed nor cleared.
                 if let Some(ingress_conflicts) = &ingress_conflicts {
                     // spec: SITE#ingress-conflicts
                     self.reconcile_ingress_conflicts(ingress_conflicts);
@@ -4582,6 +4584,7 @@ mod tests {
             );
             let proxy = phases::compute_proxy_config(
                 &apps,
+                Coverage::Complete,
                 site,
                 &HashMap::new(),
                 &node_prefix,
@@ -4638,6 +4641,105 @@ mod tests {
             proxy.unresolved_site_attachments.map(|u| u.len()),
             Some(0),
             "the removed attachment's fault clears"
+        );
+    }
+
+    // spec: FLT#filing-and-clearing
+    // spec: ING#claims-across-apps
+    // spec: RCN#applying-absolute-state
+    // An app held back from a tick used to be read as claiming nothing, so the
+    // conflict faults were converged without it: its own cleared, and an app it
+    // outranks had its cleared too, as though it had won the port.
+    #[test]
+    fn an_app_held_back_from_a_tick_keeps_the_ingress_conflicts_as_they_were() {
+        const SCRIPT: &str = r#"
+            let web = app.service("web").exported().http(80);
+            web.ingress("shop.example.com", 443).tls(Terminate.Https, Output.Http1);
+            app.deployment("web")
+                .image("docker.io/library/nginx:1.29")
+                .http(80, web.route("/"));
+        "#;
+        let oi = crate::oi::test_support::TestOi::new();
+        for app in ["first", "second"] {
+            oi.call(
+                "/apps/create",
+                serde_json::json!({ "app": app, "script": SCRIPT }),
+            )
+            .unwrap();
+            oi.install(app);
+        }
+        let mut reconciler = test_reconciler(&oi);
+        let node_prefix = oi.state.node_prefix;
+        let mut evaluate = || {
+            let (apps, dropped) = reconciler.snapshot_all_apps();
+            let site = oi.state.db.call(site_proxy::load).unwrap();
+            let build = phases::compute_proxy_config(
+                &apps,
+                Coverage::of(dropped),
+                Some(&site),
+                &HashMap::new(),
+                &node_prefix,
+                &*reconciler.registry,
+                None,
+                &std::collections::BTreeMap::new(),
+            );
+            if let Some(conflicts) = &build.conflicts {
+                reconciler.reconcile_ingress_conflicts(conflicts);
+            }
+            build
+        };
+        let hold_back = |app: Option<&'static str>| {
+            oi.state.db.call(move |db| {
+                db.conn.execute("DELETE FROM app_priorities", []).unwrap();
+                if let Some(app) = app {
+                    db.conn
+                        .execute(
+                            "INSERT INTO app_priorities (app, priority, updated_at) \
+                             VALUES (?1, 'urgent', '')",
+                            [app],
+                        )
+                        .unwrap();
+                }
+            });
+        };
+        let conflict = vec![(
+            "ingress_conflict".to_owned(),
+            "shop.example.com:443".to_owned(),
+        )];
+
+        let build = evaluate();
+        assert!(build.conflicts.is_some());
+        assert_eq!(
+            active_kinds(&oi, "second"),
+            conflict,
+            "the later install loses"
+        );
+        assert!(active_kinds(&oi, "first").is_empty());
+
+        hold_back(Some("second"));
+        let build = evaluate();
+        assert!(build.conflicts.is_none() && build.unresolved_site_attachments.is_none());
+        assert_eq!(
+            active_kinds(&oi, "second"),
+            conflict,
+            "the held-back app's conflict is not resolved by its absence"
+        );
+
+        hold_back(Some("first"));
+        evaluate();
+        assert_eq!(
+            active_kinds(&oi, "second"),
+            conflict,
+            "the app installed first still holds the port while it is held back"
+        );
+
+        hold_back(None);
+        *oi.state.registry.read().get("first").unwrap().phase.lock() = AppPhase::NotInstalled;
+        let build = evaluate();
+        assert!(build.conflicts.is_some());
+        assert!(
+            active_kinds(&oi, "second").is_empty(),
+            "evaluated again with the conflict gone, the fault clears"
         );
     }
 

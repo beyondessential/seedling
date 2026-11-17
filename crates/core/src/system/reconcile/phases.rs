@@ -297,9 +297,10 @@ pub(super) fn compute_nftables_rules(
 
 pub(super) struct ProxyBuildResult {
     pub config: crate::system::types::ProxyConfig,
-    /// `Partial` when an app's ingresses could not be built, or the site
-    /// ingresses could not be read. Their virtual hosts and L4 routes are
-    /// absent from `config`, which replaces the proxy's whole configuration.
+    /// `Partial` when an app was held back from the tick, an app's ingresses
+    /// could not be built, or the site ingresses could not be read. Their
+    /// virtual hosts and L4 routes are absent from `config`, which replaces
+    /// the proxy's whole configuration.
     pub coverage: Coverage,
     pub observations: Vec<(
         crate::runtime::identity::ResourceInstance,
@@ -314,15 +315,17 @@ pub(super) struct ProxyBuildResult {
     /// Site-ingress / app-ingress collisions on the same `(hostname, port)`
     /// detected this tick. The reconciler files faults on both parties for
     /// new conflicts and clears them when a `(host, port)` drops out of the
-    /// set. Both sides are dropped from the proxy config. `None` when the
-    /// site ingresses could not be read, so no conflict can be decided.
+    /// set. Both sides are dropped from the proxy config. `None` unless
+    /// `coverage` is complete: an app or site ingress missing from the build
+    /// is absent rather than unclaimed, so no conflict can be decided.
     // spec: SITE#ingress-conflicts
     // spec: SITE#unreadable-site-ingresses
     pub conflicts: Option<super::site_proxy::ConflictReport>,
     /// Site-ingress attachments that couldn't be resolved this tick (target
     /// app/service missing, unsupported protocol, etc). Each entry produces
     /// a `site_ingress_target_missing` fault under the `_system` app. `None`
-    /// when the site ingresses could not be read.
+    /// unless `coverage` is complete: the target of an attachment may be an
+    /// app missing from the build.
     pub unresolved_site_attachments: Option<Vec<super::site_proxy::UnresolvedAttachment>>,
 }
 
@@ -393,8 +396,15 @@ pub(super) fn warm_cert_targets(
     out
 }
 
+/// `app_coverage` says whether `apps` holds every app contributing to the
+/// proxy, or the tick held some back.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one of the tick's snapshots the build reads"
+)]
 pub(super) fn compute_proxy_config(
     apps: &[AppSnapshot],
+    app_coverage: Coverage,
     site_snapshot: Option<&site_proxy::SiteIngressSnapshot>,
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
@@ -548,6 +558,16 @@ pub(super) fn compute_proxy_config(
             .map(|entry| entry.route),
     );
 
+    // spec: FLT#filing-and-clearing
+    // spec: RCN#applying-absolute-state
+    // An app held back from the tick, or whose ingresses could not be built,
+    // is absent from the claims rather than claiming nothing: its own
+    // conflicts would read as resolved, another app would win a port it does
+    // not hold, and an attachment forwarding to it would read as having no
+    // target. So nothing is concluded about those faults, as for a withheld
+    // apply.
+    let coverage = Coverage::of(dropped).and(app_coverage);
+    let decided = coverage.is_complete();
     ProxyBuildResult {
         config: finish_proxy_config(
             build_proxy_config(&combined_forwards, &site_redirect_pairs),
@@ -556,11 +576,11 @@ pub(super) fn compute_proxy_config(
             cert_endpoint_url,
             renewal_ratios,
         ),
-        coverage: Coverage::of(dropped),
+        coverage,
         observations,
         ready_observations,
-        conflicts: Some(conflicts),
-        unresolved_site_attachments: Some(surviving_site_data.unresolved),
+        conflicts: decided.then_some(conflicts),
+        unresolved_site_attachments: decided.then_some(surviving_site_data.unresolved),
     }
 }
 

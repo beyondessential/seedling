@@ -301,6 +301,13 @@ left out:
 
 A conflict on one port never affects other ports on the same hostname.
 
+While an app is held back from reconciliation (its desired state, its
+stopped resources or its priority cannot be read, or its ingresses
+cannot be built), its claims are unknown rather than absent, and the
+proxy configuration is not applied. The `ingress_conflict` and
+`site_ingress_target_missing` faults are left as they are until every
+app's claims are known again.
+
 ### Loopback hairpin NAT
 
 When host-originated traffic to `localhost:80` is DNAT'd to Caddy in
