@@ -170,19 +170,17 @@ pub(super) fn classify_site_service_endpoints(
         let mut unresolvable: BTreeSet<String> = BTreeSet::new();
         let mut unroutable: BTreeSet<(String, UnroutableReason)> = BTreeSet::new();
         for ep in endpoints {
-            match resolve_endpoint(&ep.remote_host, resolve_ctx) {
-                ResolveOutcome::Routable(_) => {}
-                ResolveOutcome::Unroutable { reason } => {
-                    unroutable.insert((ep.remote_host.clone(), reason));
-                }
-                ResolveOutcome::Unresolved { .. } => {
-                    // Only fault when the resolver has actually given up
-                    // on this host. "Not yet in the cache" right after
-                    // startup is normal and shouldn't fault.
-                    if unresolved_hosts.contains(&ep.remote_host) {
-                        unresolvable.insert(ep.remote_host.clone());
-                    }
-                }
+            // spec: SITE#endpoint-addressing
+            // Five unanswered lookups in a row make an endpoint unresolvable
+            // whether or not answers kept from before still route it; "not
+            // yet in the cache" right after startup is not a fault.
+            if unresolved_hosts.contains(&ep.remote_host) {
+                unresolvable.insert(ep.remote_host.clone());
+            }
+            if let ResolveOutcome::Unroutable { reason } =
+                resolve_endpoint(&ep.remote_host, resolve_ctx)
+            {
+                unroutable.insert((ep.remote_host.clone(), reason));
             }
         }
         if !unresolvable.is_empty() {

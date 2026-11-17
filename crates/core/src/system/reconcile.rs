@@ -588,6 +588,14 @@ impl Reconciler {
     /// and the host has no IPv6 egress, which it is taken to lack while that is
     /// undetermined.
     // spec: NAT64#dns64
+    /// Whether site service endpoints are routed as for a host with IPv6
+    /// egress: only once it is determined that the host has it, as the
+    /// resolver synthesises for undetermined egress.
+    // spec: SITE#endpoint-addressing
+    fn routes_with_ipv6_egress(&self) -> bool {
+        self.host_probes.ipv6_egress.determined().unwrap_or(false)
+    }
+
     fn force_dns64_for(&self, probes: &crate::system::host_probes::HostProbes) -> bool {
         self.nat64_active && !probes.ipv6_egress.determined().unwrap_or(false)
     }
@@ -1560,7 +1568,7 @@ impl Reconciler {
         // spec: SITE#endpoint-addressing
         let site_resolver_clone = self.site_resolver.clone();
         let nat64_active = self.nat64_active;
-        let has_ipv6_egress = !self.force_dns64_translation;
+        let has_ipv6_egress = self.routes_with_ipv6_egress();
         let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
         let make_resolve_ctx = || -> ResolveCtx<'_> {
             let resolver_ref: &dyn crate::runtime::site_services::resolve::HostnameLookup =
@@ -3592,6 +3600,30 @@ mod tests {
         }
     }
 
+    // spec: SITE#endpoint-addressing
+    #[test]
+    fn site_endpoints_route_as_without_ipv6_egress_unless_it_is_determined() {
+        use crate::system::host_probes::{Fact, HostProbes};
+
+        let oi = crate::oi::test_support::TestOi::new();
+        let probes = |ipv6: Fact<bool>| {
+            HostProbes::new(
+                Arc::new(ProbesThatSettle(std::sync::atomic::AtomicBool::new(false))),
+                Some(Fact::Determined(false)),
+                Fact::Determined(true),
+                ipv6,
+                Fact::Determined("UTC".to_owned()),
+            )
+        };
+        let undetermined =
+            test_reconciler(&oi).with_host_probes(probes(Fact::Undetermined("no routes".into())));
+        assert!(!undetermined.routes_with_ipv6_egress());
+        let without = test_reconciler(&oi).with_host_probes(probes(Fact::Determined(false)));
+        assert!(!without.routes_with_ipv6_egress());
+        let with = test_reconciler(&oi).with_host_probes(probes(Fact::Determined(true)));
+        assert!(with.routes_with_ipv6_egress());
+    }
+
     // spec: NAT64#detection
     // spec: NAT64#ipv6-egress
     // spec: CONST#determining-host-constants
@@ -4677,6 +4709,45 @@ mod tests {
             1,
             "the healthy app still contributes its route"
         );
+    }
+
+    // spec: SITE#endpoint-addressing
+    #[test]
+    fn an_endpoint_is_unresolvable_after_five_unanswered_lookups_whatever_it_kept() {
+        use crate::runtime::site_services::{
+            SiteServiceEndpoint, SiteServiceProtocol, resolve::StaticHostnameLookup,
+        };
+
+        let name = seedling_protocol::names::SiteServiceName::new("shared-db").unwrap();
+        let mut snapshot =
+            crate::runtime::external_service_mappings::ExternalServiceSnapshot::default();
+        snapshot.site_endpoints.insert(
+            name.clone(),
+            vec![SiteServiceEndpoint {
+                service_port: 5432,
+                protocol: SiteServiceProtocol::Tcp,
+                remote_host: "db.example".to_owned(),
+                remote_port: 5432,
+            }],
+        );
+        // The answer from before the lookups started going unanswered.
+        let mut lookup = StaticHostnameLookup::new();
+        lookup.insert("db.example", &["2001:db8::5"], &[], false);
+        let resolve_ctx = ResolveCtx {
+            nat64_active: false,
+            has_ipv6_egress: true,
+            resolver: &lookup,
+        };
+
+        let unresolved = HashSet::from(["db.example".to_owned()]);
+        let set = phases::classify_site_service_endpoints(&snapshot, &resolve_ctx, &unresolved);
+        assert_eq!(
+            set.unresolvable.get(&name),
+            Some(&vec!["db.example".to_owned()])
+        );
+
+        let set = phases::classify_site_service_endpoints(&snapshot, &resolve_ctx, &HashSet::new());
+        assert!(set.unresolvable.is_empty());
     }
 
     // spec: RCN#applying-absolute-state
