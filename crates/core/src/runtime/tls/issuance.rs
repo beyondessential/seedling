@@ -167,6 +167,41 @@ pub struct HostnameFacts {
 struct ChainState {
     managed: Vec<state::ManagedIngress>,
     snapshot: state::Snapshot,
+    /// The hostnames that take a Tailscale certificate.
+    tailscale: std::collections::BTreeSet<String>,
+}
+
+/// Where a hostname stands as to the proxy's own ordering.
+// spec: CHAIN#proxy-strategies
+#[derive(Debug, Clone)]
+pub enum ProxyStanding {
+    /// On a strategy chain, decided as the decision says.
+    Chain(Box<ChainDecision>),
+    /// On no chain: an ACME DNS-01 policy matches it, or it takes a Tailscale
+    /// certificate.
+    NoChain,
+}
+
+/// The hostnames of the site ingresses whose certificates come from Tailscale.
+// spec: TLS#tailscale-certificates
+fn tailscale_hostnames(
+    db: &crate::runtime::db::Db,
+) -> rusqlite::Result<std::collections::BTreeSet<String>> {
+    Ok(site_ingresses::list(db)?
+        .into_iter()
+        .filter(|ing| {
+            !ing.stale
+                && matches!(
+                    &ing.source,
+                    SiteIngressSource::Discovered {
+                        provider: DiscoveryProvider::Tailscale,
+                        ..
+                    }
+                )
+                && matches!(ing.tls_provider, SiteTlsProvider::Tailscale)
+        })
+        .map(|ing| ing.hostname)
+        .collect())
 }
 
 impl Coordinator {
@@ -244,6 +279,34 @@ impl Coordinator {
             Err(e) => {
                 tracing::warn!(%hostname, error = %e, "cannot start the cycle an operator retry asked for");
             }
+        }
+    }
+
+    /// Whether `hostname` is on a chain, with its decision, or on no chain.
+    ///
+    /// `None` when that cannot be said: the state could not be read, the facts
+    /// a chain rests on were not gathered, or the hostname is not one the
+    /// runtime manages.
+    // spec: CHAIN#default-chain
+    // spec: CHAIN#proxy-strategies
+    pub fn proxy_standing(&self, hostname: &str) -> Option<ProxyStanding> {
+        let state = self.chain_state()?;
+        if state.tailscale.contains(hostname) {
+            return Some(ProxyStanding::NoChain);
+        }
+        let st = state::compute_state(&state.snapshot, hostname);
+        if st
+            .policy
+            .is_some_and(|p| matches!(p.policy, TlsPolicy::AcmeDns { .. }))
+        {
+            return Some(ProxyStanding::NoChain);
+        }
+        if !state.managed.iter().any(|m| m.hostname == hostname) {
+            return None;
+        }
+        match st.decision {
+            Decision::Chain(c) => Some(ProxyStanding::Chain(c)),
+            _ => None,
         }
     }
 
@@ -363,14 +426,21 @@ impl Coordinator {
             return Some(Arc::clone(state));
         }
         let (managed, env) = self.environment.get()?.gather()?;
-        let snapshot = match self.db.call(move |db| state::Snapshot::load(db, env)) {
-            Ok(snapshot) => snapshot,
+        let loaded = self.db.call(move |db| {
+            Ok::<_, rusqlite::Error>((state::Snapshot::load(db, env)?, tailscale_hostnames(db)?))
+        });
+        let (snapshot, tailscale) = match loaded {
+            Ok(loaded) => loaded,
             Err(e) => {
                 tracing::warn!(error = %e, "cannot read the TLS state to decide a chain");
                 return None;
             }
         };
-        let state = Arc::new(ChainState { managed, snapshot });
+        let state = Arc::new(ChainState {
+            managed,
+            snapshot,
+            tailscale,
+        });
         *cached = Some((std::time::Instant::now(), Arc::clone(&state)));
         Some(state)
     }
@@ -432,31 +502,9 @@ impl Coordinator {
     // spec: TLS#tailscale-certificates
     fn dispatch_to_tailscale(&self, hostname: &str) -> Result<bool> {
         let host = hostname.to_owned();
-        let matched = self
-            .db
-            .call(move |db| -> rusqlite::Result<bool> {
-                for ing in site_ingresses::list(db)? {
-                    if ing.hostname != host {
-                        continue;
-                    }
-                    if ing.stale {
-                        continue;
-                    }
-                    let is_tailscale = matches!(
-                        &ing.source,
-                        SiteIngressSource::Discovered {
-                            provider: DiscoveryProvider::Tailscale,
-                            ..
-                        }
-                    ) && matches!(ing.tls_provider, SiteTlsProvider::Tailscale);
-                    if is_tailscale {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            })
-            .map_err(|source| CoordinatorError::Storage { source })?;
-        Ok(matched)
+        self.db
+            .call(move |db| Ok(tailscale_hostnames(db)?.contains(&host)))
+            .map_err(|source| CoordinatorError::Storage { source })
     }
 
     /// Tailscale-side counterpart to the ACME flow: open an attempt row,
