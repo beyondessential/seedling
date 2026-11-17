@@ -19,7 +19,7 @@
 
 use std::ops::RangeInclusive;
 
-use rhai::{Dynamic, EvalAltResult};
+use rhai::{Dynamic, EvalAltResult, FnPtr};
 
 // spec: BSL#arguments — every helper below converts or throws; none
 // coerces, defaults, or drops. Per-builder rules keep their own annotations
@@ -104,6 +104,22 @@ pub fn take_array_of<T: std::any::Any + Clone>(
             })
         })
         .collect()
+}
+
+/// Pass `value` through if it is an anonymous closure, or throw naming the
+/// argument `arg` of `method` and the function supplied in its place.
+///
+/// A handler argument is typed as a closure; `Fn("name")` and a bare script
+/// function name are named function pointers, not closures.
+pub fn take_closure(method: &str, arg: &str, value: FnPtr) -> Result<FnPtr, Box<EvalAltResult>> {
+    if value.is_anonymous() {
+        return Ok(value);
+    }
+    Err(format!(
+        "`{method}` argument `{arg}` must be a closure, got the function `{}`",
+        value.fn_name()
+    )
+    .into())
 }
 
 /// Refuse a map carrying a key other than `allowed`, naming the keys it does

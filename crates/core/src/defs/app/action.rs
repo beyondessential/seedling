@@ -4,7 +4,7 @@ use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, ParamName};
 
 use super::super::action::{Action, ActionDef};
-use super::super::take::{reject_unknown_keys, take_map};
+use super::super::take::{reject_unknown_keys, take_closure, take_map};
 use super::App;
 use crate::runtime::barrier::runtime::is_in_action_closure;
 
@@ -12,17 +12,16 @@ use crate::runtime::barrier::runtime::is_in_action_closure;
 // spec: ACN#action-declaration
 fn declare_action(
     this: &mut App,
+    method: &str,
     action_name: ActionName,
     closure: FnPtr,
     description: Option<String>,
     params: BTreeMap<ParamName, super::super::install::ParamDef>,
 ) -> Result<Action, Box<EvalAltResult>> {
+    // spec: BSL#arguments
+    let closure = take_closure(method, "fn", closure)?;
     super::ensure_not_validating()?;
-    super::ensure_not_in_action_closure(if action_name == "start" {
-        "on_start"
-    } else {
-        "on_action"
-    })?;
+    super::ensure_not_in_action_closure(method)?;
     if action_name == "install" {
         return Err(
             "the action name \"install\" is reserved for the install action; declare it with \
@@ -63,7 +62,14 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             |this: &mut App, name: &str, closure: FnPtr| -> Result<Action, Box<EvalAltResult>> {
                 let action_name: ActionName = ActionName::new(name)
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
-                declare_action(this, action_name, closure, None, BTreeMap::new())
+                declare_action(
+                    this,
+                    "on_action",
+                    action_name,
+                    closure,
+                    None,
+                    BTreeMap::new(),
+                )
             },
         )
         .with_fn(
@@ -84,7 +90,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 let desc = super::extract_description(&options)?;
                 // spec: ACN#param-schemas
                 let params = parse_action_params(&options)?;
-                declare_action(this, action_name, closure, desc, params)
+                declare_action(this, "on_action", action_name, closure, desc, params)
             },
         );
 
@@ -115,7 +121,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             "on_start",
             |this: &mut App, closure: FnPtr| -> Result<Action, Box<EvalAltResult>> {
                 let start_name = ActionName::new_unchecked("start");
-                declare_action(this, start_name, closure, None, BTreeMap::new())
+                declare_action(this, "on_start", start_name, closure, None, BTreeMap::new())
             },
         )
         .with_fn(
@@ -125,7 +131,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 reject_unknown_keys("on_start options", &options, &["description"])?;
                 let desc = super::extract_description(&options)?;
                 let start_name = ActionName::new_unchecked("start");
-                declare_action(this, start_name, closure, desc, BTreeMap::new())
+                declare_action(this, "on_start", start_name, closure, desc, BTreeMap::new())
             },
         );
 }

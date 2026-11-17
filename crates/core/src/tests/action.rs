@@ -539,3 +539,69 @@ fn an_env_entry_with_an_extra_key_throws() {
     );
     assert!(err.to_string().contains("unknown key"), "{err}");
 }
+
+// spec: ACN#action-declaration
+#[test]
+fn on_action_with_a_named_function_throws() {
+    assert_named_handler_rejected("on_action", r#"app.on_action("migrate", HANDLER);"#);
+    assert_named_handler_rejected(
+        "on_action",
+        r#"app.on_action("migrate", HANDLER, #{ description: "x" });"#,
+    );
+    assert_named_handler_rejected("on_action", r#"app.on_action("start", HANDLER);"#);
+}
+
+// spec: ACN#start-action
+#[test]
+fn on_start_with_a_named_function_throws() {
+    assert_named_handler_rejected("on_start", "app.on_start(HANDLER);");
+    assert_named_handler_rejected(
+        "on_start",
+        r#"app.on_start(HANDLER, #{ description: "x" });"#,
+    );
+}
+
+// spec: ACN#shells
+#[test]
+fn on_shell_with_a_named_function_throws() {
+    assert_named_handler_rejected("on_shell", r#"app.on_shell("bash", HANDLER);"#);
+    assert_named_handler_rejected(
+        "on_shell",
+        r#"app.on_shell("bash", HANDLER, #{ description: "x" });"#,
+    );
+}
+
+// spec: ACN#install-action
+#[test]
+fn on_install_with_a_named_function_throws() {
+    assert_named_handler_rejected("on_install", "app.on_install(HANDLER);");
+    assert_named_handler_rejected("on_install", "app.on_install(HANDLER, #{});");
+}
+
+// spec: ACN#action-declaration
+#[test]
+fn a_closure_wrapping_a_named_function_registers_and_runs() {
+    let (engine, mut scope, app, ast) = run_test_script(
+        r#"
+        fn handler(rt, param) { throw "handler ran"; }
+        app.on_action("migrate", |rt, param| handler(rt, param));
+        "#,
+    );
+    let log = InMemoryActionLog::new();
+    let result = run_operation(
+        action_context(
+            &engine,
+            &ast,
+            &app,
+            "migrate",
+            &log,
+            Arc::new(crate::runtime::TestWorldOracle::new()),
+            ActionHooks::default(),
+        ),
+        &mut scope,
+    );
+    assert!(
+        matches!(&result, OperationResult::Failed(e) if e.to_string().contains("handler ran")),
+        "the wrapped handler should have been called"
+    );
+}

@@ -4,7 +4,7 @@ use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ParamName, ShellName};
 
 use super::super::action::ShellDef;
-use super::super::take::reject_unknown_keys;
+use super::super::take::{reject_unknown_keys, take_closure};
 use super::App;
 
 /// Declare the shell `shell_name` on the app.
@@ -16,6 +16,8 @@ fn declare_shell(
     description: Option<String>,
     params: BTreeMap<ParamName, super::super::install::ParamDef>,
 ) -> Result<(), Box<EvalAltResult>> {
+    // spec: BSL#arguments
+    let closure = take_closure("on_shell", "fn", closure)?;
     super::ensure_not_validating()?;
     super::ensure_not_in_action_closure("on_shell")?;
     if this.def.load().shells.contains_key(&shell_name) {

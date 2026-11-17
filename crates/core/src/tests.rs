@@ -72,6 +72,31 @@ pub fn run_test_script_err(source: &str) -> Box<rhai::EvalAltResult> {
     run_script(&engine, &mut scope, source).expect_err("script should fail")
 }
 
+/// Assert that `register`, with `HANDLER` replaced by a named pointer to the
+/// script function `handler`, throws an error naming `method`, its `fn`
+/// argument, the closure it expects and the function supplied, whether the
+/// pointer is spelled `Fn("handler")` or `handler`.
+pub fn assert_named_handler_rejected(method: &str, register: &str) {
+    for handler in [r#"Fn("handler")"#, "handler"] {
+        let source = format!(
+            "fn handler(a, b, c) {{}}\n{}",
+            register.replace("HANDLER", handler)
+        );
+        let err = run_test_script_err(&source).to_string();
+        for expected in [
+            format!("`{method}`"),
+            "`fn`".to_owned(),
+            "closure".to_owned(),
+            "`handler`".to_owned(),
+        ] {
+            assert!(
+                err.contains(&expected),
+                "{handler} passed to {method} should throw naming {expected}, got: {err}"
+            );
+        }
+    }
+}
+
 /// The hooks and operation-scoped state one action run differs by.
 ///
 /// Everything a test does not name is the language-only default: no executor,

@@ -92,6 +92,24 @@ fn on_change_without_a_closure_throws() {
 
 // spec: PARAM#change-handlers
 #[test]
+fn on_change_with_a_named_function_throws() {
+    crate::tests::assert_named_handler_rejected(
+        "on_change",
+        r#"app.param("domain").on_change(HANDLER);"#,
+    );
+}
+
+// spec: PARAM#validators
+#[test]
+fn validate_with_a_named_function_throws() {
+    crate::tests::assert_named_handler_rejected(
+        "validate",
+        r#"app.param("domain").validate(HANDLER);"#,
+    );
+}
+
+// spec: PARAM#change-handlers
+#[test]
 fn on_change_different_params_each_register() {
     let app = run_test_script_app(
         r#"

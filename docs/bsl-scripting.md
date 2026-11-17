@@ -299,6 +299,9 @@ app.on_start(|rt, _param| {
 // Actions are available to operators via the UI or CLI.
 // The closure runs when an operator invokes the action.
 // `params` declares a validated schema; extra keys are passed through as-is.
+// Every handler (`on_action`, `on_start`, `on_shell`, `on_install`,
+// `on_change`, `validate`) must be a closure: passing a function by name, as
+// `handler` or `Fn("handler")`, throws. Wrap it instead: `|rt, param| handler(rt, param)`.
 app.on_action("migrate", |rt, param| {
     // Jobs defined inside actions are dynamic: created fresh per invocation.
     let job = app.job()

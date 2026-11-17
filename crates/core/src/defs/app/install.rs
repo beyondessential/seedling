@@ -4,7 +4,7 @@ use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
 use super::super::install::{InstallDef, ParamDef, ParamKind};
-use super::super::take::{reject_unknown_keys, take_bool, take_map, take_string};
+use super::super::take::{reject_unknown_keys, take_bool, take_closure, take_map, take_string};
 use super::App;
 
 /// Declare the app's install action.
@@ -14,6 +14,8 @@ fn declare_install(
     closure: FnPtr,
     requirements: BTreeMap<ParamName, ParamDef>,
 ) -> Result<(), Box<EvalAltResult>> {
+    // spec: BSL#arguments
+    let closure = take_closure("on_install", "fn", closure)?;
     super::ensure_not_validating()?;
     super::ensure_not_in_action_closure("on_install")?;
     if this.def.load().install.is_some() {

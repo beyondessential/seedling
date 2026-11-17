@@ -3,6 +3,7 @@ use seedling_protocol::names::ParamName;
 
 use super::app::{App, ensure_not_validating};
 use super::install::ParamKind;
+use super::take::take_closure;
 
 // spec: PARAM#declaration
 #[derive(Debug, Clone)]
@@ -46,6 +47,8 @@ impl CustomType for Param {
         builder.with_fn(
             "on_change",
             |this: &mut Self, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
+                // spec: BSL#arguments
+                let closure = take_closure("on_change", "fn", closure)?;
                 ensure_not_validating()?;
                 if crate::runtime::barrier::runtime::is_in_action_closure() {
                     return Err(format!(
@@ -79,6 +82,8 @@ impl CustomType for Param {
         builder.with_fn(
             "validate",
             |this: &mut Self, closure: FnPtr| -> Result<Self, Box<EvalAltResult>> {
+                // spec: BSL#arguments
+                let closure = take_closure("validate", "fn", closure)?;
                 ensure_not_validating()?;
                 if crate::runtime::barrier::runtime::is_in_action_closure() {
                     return Err(format!(
