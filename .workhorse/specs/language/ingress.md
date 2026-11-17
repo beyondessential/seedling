@@ -14,6 +14,7 @@ Applies to the BSL `Ingress` type, through which an app exposes one of its servi
 | DTLS | Datagram Transport Layer Security, in either DTLS 1.2 or DTLS 1.3 |
 | DTLS 1.2 | as defined by [RFC 6347](https://www.rfc-editor.org/rfc/rfc6347) |
 | DTLS 1.3 | as defined by [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) |
+| connection ID | an identifier carried in DTLS records that associates them with a session independently of the sender's address, as defined by [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) for DTLS 1.2 and [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) §9 for DTLS 1.3 |
 | HTTPS | HTTP over TLS, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) §4.2.2 |
 | HTTP/1.1 | as defined by [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) |
 | HTTP/2 | as defined by [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113); in cleartext, started with prior knowledge as in §3.3 |
@@ -114,7 +115,16 @@ When no flow to the Service can be opened for a new session, the runtime MUST re
 > Requiring the cookie exchange and a completed handshake first keeps a client sending from addresses it does not hold from spending those ports.
 
 A session MUST end when its client closes it.
+The runtime MUST end a session that has carried no datagram in either direction for an idle period, which SHOULD be at least five minutes.
 When a session ends, the runtime MUST close its flow to the Service.
+
+The runtime MUST support [connection IDs](#borrowed-terms) in both DTLS versions.
+A session whose client uses a connection ID MUST continue when the client's address or port changes, on the same flow to the Service.
+Before sending a session's datagrams to a client's changed address, the runtime MUST confirm that the client receives datagrams at that address.
+
+> [!NOTE]
+> A client moving between networks keeps its session rather than handshaking again, and the Service sees no change.
+> Confirming the new address keeps a party that rewrites a datagram's source from aiming the session's traffic at someone else.
 
 ### Terminate
 
