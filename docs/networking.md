@@ -90,7 +90,12 @@ the node prefix and the service's persisted instance ID:
     fd5e:XXYY:ZZWW:01UU:UUUU:UUUU:UUUU:UUUU/128
 
 where `01` is the Service kind discriminant and the remaining bytes are
-from the UUID.
+from the UUID. That derived address is the service's first choice: the
+address it takes is allocated and recorded in the database, so two services
+whose UUIDs agree on those bytes never share one. A service whose first
+choice is taken takes the next free address, moving only the low eight
+bytes, so it stays clear of pod networks and infrastructure addresses. The
+record goes with the service's instance.
 
 An `ip -6 route replace` installs a host route for each service:
 
