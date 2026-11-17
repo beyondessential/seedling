@@ -269,7 +269,7 @@ pub(super) fn build_service_dnat_rules(
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &AppName,
-    snapshot: &ExternalServiceSnapshot,
+    snapshot: Option<&ExternalServiceSnapshot>,
     backends_by_app: &HashMap<AppName, AppBackendMap>,
     resolve_ctx: &ResolveCtx<'_>,
 ) -> Result<ServiceDnatBuild, RegistryError> {
@@ -298,7 +298,13 @@ pub(super) fn build_service_dnat_rules(
     // operator-configured mapping table: the slot gets its own stable service
     // IP, backends come from either the target app's service or from the
     // site service's endpoints.
+    // spec: SITE#unreadable-site-services
+    // Without the mappings and site services an external service's rules are
+    // unknown, and the caller withholds the rules.
     for (ext_name, svc_port, proto) in collect_external_mounts(running_pods) {
+        let Some(snapshot) = snapshot else {
+            continue;
+        };
         let Some(target) = snapshot.mappings.get(&(app_name.clone(), ext_name.clone())) else {
             continue;
         };
@@ -428,7 +434,7 @@ fn protocols_match(site_proto: SiteServiceProtocol, fwd_proto: ForwardProto) -> 
 pub(super) fn build_mount_rules(
     running_pods: &[RunningPod],
     app_name: &AppName,
-    snapshot: &ExternalServiceSnapshot,
+    snapshot: Option<&ExternalServiceSnapshot>,
     backends_by_app: &HashMap<AppName, AppBackendMap>,
     resolve_ctx: &ResolveCtx<'_>,
 ) -> Vec<MountRule> {
@@ -453,13 +459,17 @@ pub(super) fn build_mount_rules(
                         .cloned()
                         .unwrap_or_default(),
                     // spec: SVC#external-services
+                    // spec: SITE#unreadable-site-services — unknown without
+                    // the snapshot, and the caller withholds the rules.
                     BoundService::External(ext) => snapshot
-                        .mappings
-                        .get(&(
-                            app_name.clone(),
-                            ExternalServiceName::new_unchecked(ext.name.as_str().to_owned()),
-                        ))
-                        .map(|target| {
+                        .and_then(|snapshot| {
+                            let target = snapshot.mappings.get(&(
+                                app_name.clone(),
+                                ExternalServiceName::new_unchecked(ext.name.as_str().to_owned()),
+                            ))?;
+                            Some((snapshot, target))
+                        })
+                        .map(|(snapshot, target)| {
                             resolve_external_backends(
                                 target,
                                 sp.port.get(),
@@ -569,7 +579,7 @@ mod tests {
         let resolver = empty_resolver();
         let pods = [pod];
 
-        let mounts = build_mount_rules(&pods, &app, &snap, &HashMap::new(), &ctx(&resolver));
+        let mounts = build_mount_rules(&pods, &app, Some(&snap), &HashMap::new(), &ctx(&resolver));
         assert_eq!(mounts.len(), 1);
         assert_eq!(mounts[0].mount_port, 5432);
         assert_eq!(mounts[0].backends, vec![(ipv6("fd5e::1"), 6432)]);
@@ -580,7 +590,7 @@ mod tests {
             &registry,
             &pods,
             &app,
-            &snap,
+            Some(&snap),
             &HashMap::new(),
             &ctx(&resolver),
         )

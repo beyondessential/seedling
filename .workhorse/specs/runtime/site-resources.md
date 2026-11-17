@@ -171,6 +171,16 @@ An endpoint event MUST identify the site service and the endpoint's `(service_po
 
 After each endpoint is added or removed, the runtime SHOULD begin a reconciliation loop iteration without waiting for the next one to fall due.
 
+### Unreadable site services
+
+While the runtime cannot read the site services or the external service mappings, it MUST hold a [`site_services_unreadable`](faults.md#host-faults) fault.
+In an iteration that cannot read them, the runtime MUST NOT apply the routes or the packet-filtering rules, as for an app whose contribution it cannot compute when [applying absolute state](reconciliation.md#applying-absolute-state).
+In such an iteration, the runtime MUST NOT file or clear a [`site_service_endpoint_unresolvable`](faults.md#ingress-and-service-faults) or `site_service_endpoint_unroutable` fault.
+In such an iteration, the runtime MUST NOT change the [lifecycle state](lifecycle.md#services) of an external service.
+
+> [!NOTE]
+> A site service or mapping that cannot be read and one that has been deleted look the same once applied, so the routes and the packet-filtering rules stay as last applied until they can be read again.
+
 ## Site ingresses
 
 A site ingress has a name, a hostname, an optional description, a TLS provisioning mode, a source, and zero or more attachments.

@@ -219,6 +219,13 @@ applies. They are non-blocking: a misbehaving endpoint reduces only
 its own site service's backend pool — it never affects other site
 services or any apps.
 
+While the site services or the external service mappings cannot be
+read, neither the routes nor the nftables rules are applied: both stay
+as last applied rather than withdrawing every external service's
+backends, and a `site_services_unreadable` fault is held on `_system`
+until a read succeeds. The two site service endpoint faults are left as
+they are meanwhile, and external services keep their lifecycle state.
+
 ## Ingress
 
 An Ingress exposes a service to external traffic. All ingress traffic

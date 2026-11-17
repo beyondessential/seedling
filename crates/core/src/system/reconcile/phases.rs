@@ -88,8 +88,10 @@ pub(super) struct RoutesBuild {
         &'static str,
         serde_json::Value,
     )>,
-    /// `Partial` when an app's routes could not be built. Its service routes
-    /// are absent from `routes`, which replaces the host's whole route set.
+    /// `Partial` when an app's routes could not be built, or the site
+    /// services and external service mappings could not be read. Their
+    /// routes are absent from `routes`, which replaces the host's whole route
+    /// set.
     pub coverage: Coverage,
 }
 
@@ -98,7 +100,7 @@ pub(super) fn compute_routes(
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
-    ext_snapshot: &ExternalServiceSnapshot,
+    ext_snapshot: Option<&ExternalServiceSnapshot>,
     resolve_ctx: &ResolveCtx<'_>,
 ) -> RoutesBuild {
     let mut all_routes = Vec::new();
@@ -136,7 +138,8 @@ pub(super) fn compute_routes(
     RoutesBuild {
         routes: all_routes,
         observations: all_obs,
-        coverage: Coverage::of(dropped),
+        // spec: SITE#unreadable-site-services
+        coverage: Coverage::of(dropped).and(Coverage::of_read(ext_snapshot)),
     }
 }
 
@@ -202,8 +205,9 @@ pub(super) struct NftablesBuild {
     pub rules: DataPlaneRules,
     pub degraded_services_by_app: HashMap<AppName, std::collections::BTreeSet<String>>,
     /// `Partial` when an app's rules could not be built, or the site
-    /// ingresses could not be read. Their rules are absent from `rules`,
-    /// which is applied wholesale.
+    /// ingresses, or the site services and external service mappings, could
+    /// not be read. Their rules are absent from `rules`, which is applied
+    /// wholesale.
     pub coverage: Coverage,
 }
 
@@ -218,7 +222,7 @@ pub(super) fn compute_nftables_rules(
     caddy_v4_addr: Option<Ipv4Addr>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
-    ext_snapshot: &ExternalServiceSnapshot,
+    ext_snapshot: Option<&ExternalServiceSnapshot>,
     resolve_ctx: &ResolveCtx<'_>,
     site_snapshot: Option<&site_proxy::SiteIngressSnapshot>,
 ) -> NftablesBuild {
@@ -273,17 +277,13 @@ pub(super) fn compute_nftables_rules(
     }
     // spec: INFRA#ingress-redirection
     // spec: SITE#unreadable-site-ingresses
-    let site_coverage = match site_snapshot {
-        Some(snapshot) => {
-            all_ingress.extend(rules::build_site_ingress_rules(
-                snapshot,
-                caddy_ip,
-                caddy_v4_addr,
-            ));
-            Coverage::Complete
-        }
-        None => Coverage::Partial,
-    };
+    if let Some(snapshot) = site_snapshot {
+        all_ingress.extend(rules::build_site_ingress_rules(
+            snapshot,
+            caddy_ip,
+            caddy_v4_addr,
+        ));
+    }
     NftablesBuild {
         rules: DataPlaneRules {
             ingress: all_ingress,
@@ -291,7 +291,11 @@ pub(super) fn compute_nftables_rules(
             service_dnat: all_service_dnat,
         },
         degraded_services_by_app: degraded_by_app,
-        coverage: Coverage::of(dropped).and(site_coverage),
+        // spec: SITE#unreadable-site-ingresses
+        // spec: SITE#unreadable-site-services
+        coverage: Coverage::of(dropped)
+            .and(Coverage::of_read(site_snapshot))
+            .and(Coverage::of_read(ext_snapshot)),
     }
 }
 

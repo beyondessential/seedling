@@ -37,7 +37,7 @@ pub(super) fn build(
     running_pods: &[RunningPod],
     app_name: &AppName,
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
-    ext_snapshot: &ExternalServiceSnapshot,
+    ext_snapshot: Option<&ExternalServiceSnapshot>,
     resolve_ctx: &ResolveCtx<'_>,
 ) -> Result<
     (
@@ -111,6 +111,14 @@ pub(super) fn build(
     // surfaces the misconfiguration via an empty-backends blackhole).
     for resource in snapshot.resources.values() {
         let Resource::ExternalService(ext) = resource else {
+            continue;
+        };
+        // spec: SITE#unreadable-site-services
+        // Without the mappings and site services an external service's
+        // backends are unknown rather than absent, so it has neither a route
+        // nor an observation: the caller withholds the routes, and its
+        // lifecycle state stays as it was.
+        let Some(ext_snapshot) = ext_snapshot else {
             continue;
         };
         let ext_name = ext.name.as_str();
@@ -390,7 +398,7 @@ mod tests {
             &[],
             &app_name,
             &HashMap::new(),
-            &snapshot,
+            Some(&snapshot),
             &ResolveCtx {
                 nat64_active: false,
                 has_ipv6_egress: true,

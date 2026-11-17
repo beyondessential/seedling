@@ -353,6 +353,15 @@ impl Coverage {
         }
     }
 
+    /// `Partial` when a snapshot every contribution draws on could not be
+    /// read, which `None` stands for.
+    fn of_read<T>(snapshot: Option<&T>) -> Self {
+        match snapshot {
+            Some(_) => Self::Complete,
+            None => Self::Partial,
+        }
+    }
+
     fn is_complete(self) -> bool {
         self == Self::Complete
     }
@@ -1608,19 +1617,10 @@ impl Reconciler {
 
         // --- Load external-service mapping + site-service endpoint
         // snapshot once per tick. ---
-        let ext_snapshot = self
-            .db
-            .call(
-                |db| match crate::runtime::external_service_mappings::ExternalServiceSnapshot::load(
-                    db,
-                ) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "external-service snapshot load failed; using empty");
-                        crate::runtime::external_service_mappings::ExternalServiceSnapshot::default()
-                    }
-                },
-            );
+        // spec: SITE#unreadable-site-services
+        // `None` is not "no site services or mappings": every consumer below
+        // withholds what it would otherwise conclude from them.
+        let ext_snapshot = self.load_external_services();
 
         // --- Build the per-tick site-service resolution context. The
         //     reconciler reads the resolver cache, NAT64 activation, and
@@ -1659,7 +1659,7 @@ impl Reconciler {
             &running_pods_by_app,
             &self.node_prefix,
             &*self.registry,
-            &ext_snapshot,
+            ext_snapshot.as_ref(),
             &make_resolve_ctx(),
         );
         let routes_coverage = routes_coverage.and(app_coverage);
@@ -1668,19 +1668,7 @@ impl Reconciler {
         // --- Classify site-service endpoint outcomes and reconcile the
         //     associated `site_service_endpoint_*` faults. ---
         // spec: SITE#endpoint-addressing
-        {
-            let unresolved_hosts: HashSet<String> = self
-                .site_resolver
-                .as_deref()
-                .map(|r| r.unresolved_hosts())
-                .unwrap_or_default();
-            let fault_set = phases::classify_site_service_endpoints(
-                &ext_snapshot,
-                &make_resolve_ctx(),
-                &unresolved_hosts,
-            );
-            self.reconcile_site_service_faults(fault_set);
-        }
+        self.converge_site_service_faults(ext_snapshot.as_ref(), &make_resolve_ctx());
 
         // --- Load site-ingress snapshot (DB-backed) once per tick. ---
         // spec: SITE#site-ingresses, SITE#attachments
@@ -1703,7 +1691,7 @@ impl Reconciler {
                 self.caddy_v4_addr,
                 &self.node_prefix,
                 &*self.registry,
-                &ext_snapshot,
+                ext_snapshot.as_ref(),
                 &make_resolve_ctx(),
                 site_ingress_snapshot.as_ref(),
             );
@@ -1837,7 +1825,7 @@ impl Reconciler {
                 ] {
                     if !coverage.is_complete() {
                         warn!(
-                            "an app is missing from this tick's {plane}; \
+                            "a contributor is missing from this tick's {plane}; \
                              holding the previous state rather than applying a reduced one"
                         );
                     }
@@ -1849,12 +1837,7 @@ impl Reconciler {
                 // particular the plane's fault must neither be filed nor
                 // cleared, and no readiness may be recorded.
                 let (routes_res, rules_res, proxy_res) = tokio::join!(
-                    async {
-                        match routes_coverage.is_complete() {
-                            true => Some(self.driver.data_plane.apply_routes(&all_routes).await),
-                            false => None,
-                        }
-                    },
+                    apply_routes_plane(&*self.driver.data_plane, &all_routes, routes_coverage),
                     apply_rules_plane(&*self.driver.data_plane, &dp_rules, rules_coverage),
                     apply_proxy_plane(&*self.driver.proxy, &proxy_config, proxy_coverage),
                 );
@@ -1942,17 +1925,20 @@ impl Reconciler {
             }
             None => {
                 // Caddy unavailable — still apply routes (they don't need
-                // caddy), unless this tick's route set is missing an app.
-                if routes_coverage.is_complete() {
-                    if let Err(e) = self.driver.data_plane.apply_routes(&all_routes).await {
+                // caddy), unless this tick's route set is missing a
+                // contributor.
+                match apply_routes_plane(&*self.driver.data_plane, &all_routes, routes_coverage)
+                    .await
+                {
+                    Some(Err(e)) => {
                         error!(error = %e, "routes: apply_routes failed");
                         self.file_system_fault(
                             "routes_failed",
                             &format!("apply_routes failed: {e}"),
                         );
-                    } else {
-                        self.clear_system_fault("routes_failed");
                     }
+                    Some(Ok(())) => self.clear_system_fault("routes_failed"),
+                    None => {}
                 }
             }
         }
@@ -1962,6 +1948,64 @@ impl Reconciler {
         self.sweep_unscheduled_instances(&apps);
 
         true
+    }
+
+    /// The site services and external service mappings, or `None` when they
+    /// cannot be read, holding `site_services_unreadable` for as long as they
+    /// cannot.
+    // spec: SITE#unreadable-site-services
+    // spec: FLT#host-faults
+    fn load_external_services(
+        &self,
+    ) -> Option<crate::runtime::external_service_mappings::ExternalServiceSnapshot> {
+        match self
+            .db
+            .call(crate::runtime::external_service_mappings::ExternalServiceSnapshot::load)
+        {
+            Ok(snapshot) => {
+                self.clear_system_fault("site_services_unreadable");
+                Some(snapshot)
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "could not read the site services or the external service mappings; \
+                     holding the routes and packet-filtering rules as last applied"
+                );
+                self.file_system_fault(
+                    "site_services_unreadable",
+                    &format!(
+                        "could not read the site services or the external service mappings, so \
+                         the routes and the packet-filtering rules are held as last applied \
+                         rather than withdrawing every external service. Error: {e}"
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// Converge the site service endpoint faults to this tick's
+    /// classification of the endpoints in `ext_snapshot`, or leave them as
+    /// they are when it is `None` because the site services could not be read.
+    // spec: SITE#endpoint-addressing
+    // spec: SITE#unreadable-site-services
+    fn converge_site_service_faults(
+        &mut self,
+        ext_snapshot: Option<&crate::runtime::external_service_mappings::ExternalServiceSnapshot>,
+        resolve_ctx: &ResolveCtx<'_>,
+    ) {
+        let Some(ext_snapshot) = ext_snapshot else {
+            return;
+        };
+        let unresolved_hosts: HashSet<String> = self
+            .site_resolver
+            .as_deref()
+            .map(|r| r.unresolved_hosts())
+            .unwrap_or_default();
+        let fault_set =
+            phases::classify_site_service_endpoints(ext_snapshot, resolve_ctx, &unresolved_hosts);
+        self.reconcile_site_service_faults(fault_set);
     }
 
     /// The site ingresses and their attachments, or `None` when they cannot
@@ -2860,6 +2904,20 @@ async fn apply_proxy_plane(
 ) -> Option<Result<(), super::BoxError>> {
     match coverage.is_complete() {
         true => Some(proxy.apply_config(config).await),
+        false => None,
+    }
+}
+
+/// Apply this tick's routes, or `None` when the build did not cover every
+/// contributor and the apply is withheld.
+// spec: RCN#applying-absolute-state
+async fn apply_routes_plane(
+    data_plane: &dyn super::DataPlane,
+    routes: &[crate::system::types::ServiceRoute],
+    coverage: Coverage,
+) -> Option<Result<(), super::BoxError>> {
+    match coverage.is_complete() {
+        true => Some(data_plane.apply_routes(routes).await),
         false => None,
     }
 }
@@ -4424,11 +4482,12 @@ mod tests {
         );
     }
 
-    /// Records the ingress ports of every rule set applied, and how many proxy
-    /// configurations were applied.
+    /// Records the ingress ports of every rule set applied, every route set
+    /// applied, and how many proxy configurations were applied.
     #[derive(Default)]
     struct RecordingPlanes {
         rules: parking_lot::Mutex<Vec<Vec<u16>>>,
+        routes: parking_lot::Mutex<Vec<Vec<crate::system::types::ServiceRoute>>>,
         proxy_applies: std::sync::atomic::AtomicUsize,
     }
 
@@ -4445,8 +4504,9 @@ mod tests {
 
         fn apply_routes<'a>(
             &'a self,
-            _routes: &'a [crate::system::types::ServiceRoute],
+            routes: &'a [crate::system::types::ServiceRoute],
         ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            self.routes.lock().push(routes.to_vec());
             Box::pin(async { Ok(()) })
         }
 
@@ -4578,7 +4638,7 @@ mod tests {
                 None,
                 &node_prefix,
                 &registry,
-                &external,
+                Some(&external),
                 &resolve_ctx,
                 site,
             );
@@ -4740,6 +4800,246 @@ mod tests {
         assert!(
             active_kinds(&oi, "second").is_empty(),
             "evaluated again with the conflict gone, the fault clears"
+        );
+    }
+
+    const SITE_SERVICE_APP_SCRIPT: &str = r#"
+        let db = app.external_service("database");
+        app.deployment("web").image("docker.io/library/nginx:1.29").mount(db.port(5432));
+    "#;
+
+    /// Map `app`'s `database` external service to a `shared-db` site service
+    /// with one endpoint at `remote_host`.
+    fn site_service_mapped_from(db: &crate::runtime::db::Db, app: &str, remote_host: &str) {
+        use crate::runtime::{
+            external_service_mappings::{self, ExternalServiceMapping},
+            site_services::{self, SiteServiceDef, SiteServiceEndpoint, SiteServiceProtocol},
+        };
+        use seedling_protocol::names::{ExternalServiceName, ServiceRef, SiteServiceName};
+
+        let name = SiteServiceName::new("shared-db").unwrap();
+        site_services::create(
+            db,
+            &SiteServiceDef {
+                name: name.clone(),
+                description: None,
+                endpoints: vec![SiteServiceEndpoint {
+                    service_port: 5432,
+                    protocol: SiteServiceProtocol::Tcp,
+                    remote_host: remote_host.to_owned(),
+                    remote_port: 5432,
+                }],
+                created_at: "2026-11-17T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        external_service_mappings::create(
+            db,
+            &ExternalServiceMapping {
+                app: AppName::new(app).unwrap(),
+                external_name: ExternalServiceName::new("database").unwrap(),
+                target: ServiceRef::Site { name },
+            },
+        )
+        .unwrap();
+    }
+
+    // spec: SITE#unreadable-site-services
+    // spec: FLT#host-faults
+    #[test]
+    fn site_services_unreadable_is_held_until_they_are_read() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "demo", "script": SITE_SERVICE_APP_SCRIPT }),
+        )
+        .unwrap();
+        oi.state
+            .db
+            .call(|db| site_service_mapped_from(db, "demo", "2001:db8::10"));
+        let reconciler = test_reconciler(&oi);
+        let held = |oi: &crate::oi::test_support::TestOi| {
+            active_kinds(oi, "_system")
+                .iter()
+                .any(|(kind, _)| kind == "site_services_unreadable")
+        };
+
+        rename_table(&oi, "site_service_endpoints", "hidden_endpoints");
+        assert!(
+            reconciler.load_external_services().is_none(),
+            "a failed read is not an empty one"
+        );
+        assert!(held(&oi), "filed while the site services cannot be read");
+
+        rename_table(&oi, "hidden_endpoints", "site_service_endpoints");
+        let snapshot = reconciler.load_external_services().expect("read");
+        assert_eq!(snapshot.mappings.len(), 1);
+        assert_eq!(snapshot.site_endpoints.len(), 1);
+        assert!(!held(&oi), "cleared on the next read");
+    }
+
+    // spec: SITE#unreadable-site-services
+    // spec: RCN#applying-absolute-state
+    // spec: LCY#services
+    // A failed read of the site services and external service mappings used
+    // to stand in an empty snapshot, so the iteration applied routes and rules
+    // with every external service's backends withdrawn, and observed each
+    // external service as having lost its backends.
+    #[test]
+    fn unreadable_site_services_withhold_the_routes_and_rules() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "demo", "script": SITE_SERVICE_APP_SCRIPT }),
+        )
+        .unwrap();
+        let apps = vec![snapshot_with_priorities(
+            "demo",
+            AppPriority::default(),
+            SITE_SERVICE_APP_SCRIPT,
+        )];
+        let registry = crate::runtime::registry::EphemeralInstanceRegistry::new();
+        let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
+        let resolve_ctx = ResolveCtx {
+            nat64_active: false,
+            has_ipv6_egress: true,
+            resolver: &empty_lookup,
+        };
+        let node_prefix: Ipv6Net = "fd5e:ed11:9000::/48".parse().unwrap();
+        let planes = RecordingPlanes::default();
+        let apply = |external: Option<
+            &crate::runtime::external_service_mappings::ExternalServiceSnapshot,
+        >| {
+            let routes = phases::compute_routes(
+                &apps,
+                &HashMap::new(),
+                &node_prefix,
+                &registry,
+                external,
+                &resolve_ctx,
+            );
+            let nft = phases::compute_nftables_rules(
+                &apps,
+                &HashMap::new(),
+                std::net::Ipv6Addr::LOCALHOST,
+                None,
+                &node_prefix,
+                &registry,
+                external,
+                &resolve_ctx,
+                Some(&site_proxy::SiteIngressSnapshot {
+                    ingresses: Vec::new(),
+                    attachments: Vec::new(),
+                }),
+            );
+            let routes_applied = oi
+                .block_on(apply_routes_plane(&planes, &routes.routes, routes.coverage))
+                .is_some();
+            let rules_applied = oi
+                .block_on(apply_rules_plane(&planes, &nft.rules, nft.coverage))
+                .is_some();
+            let external_observed = routes
+                .observations
+                .iter()
+                .any(|(instance, _, _)| instance.kind == ResourceKind::ExternalService);
+            (routes_applied, rules_applied, external_observed)
+        };
+        let external_backends = || -> Vec<std::net::Ipv6Addr> {
+            let routes = planes.routes.lock();
+            let last = routes.last().expect("a route set was applied");
+            last.iter()
+                .flat_map(|route| route.backends.iter().copied())
+                .collect()
+        };
+        let reconciler = test_reconciler(&oi);
+        oi.state
+            .db
+            .call(|db| site_service_mapped_from(db, "demo", "2001:db8::10"));
+        let (routes, rules, observed) = apply(reconciler.load_external_services().as_ref());
+        assert!(routes && rules && observed);
+        assert_eq!(
+            external_backends(),
+            ["2001:db8::10".parse::<std::net::Ipv6Addr>().unwrap()]
+        );
+
+        rename_table(&oi, "site_service_endpoints", "hidden_endpoints");
+        let (routes, rules, observed) = apply(reconciler.load_external_services().as_ref());
+        assert!(!routes && !rules, "both applies are withheld");
+        assert_eq!(planes.routes.lock().len(), 1, "no route set was applied");
+        assert_eq!(planes.rules.lock().len(), 1, "no rule set was applied");
+        assert!(
+            !observed,
+            "the external service is not observed as having lost its backends"
+        );
+
+        // Read and empty is an answer: the site service's backend is removed.
+        rename_table(&oi, "hidden_endpoints", "site_service_endpoints");
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch(
+                    "DELETE FROM external_service_mappings; DELETE FROM site_service_endpoints;",
+                )
+                .unwrap();
+        });
+        let (routes, rules, observed) = apply(reconciler.load_external_services().as_ref());
+        assert!(routes && rules && observed);
+        assert!(external_backends().is_empty());
+        assert_eq!(planes.rules.lock().len(), 2);
+    }
+
+    // spec: SITE#unreadable-site-services
+    // spec: SITE#endpoint-addressing
+    // A failed read of the site services used to stand in an empty snapshot,
+    // which classifies no endpoint as unroutable and so cleared every site
+    // service endpoint fault.
+    #[test]
+    fn unreadable_site_services_leave_the_endpoint_faults_as_they_were() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "demo", "script": SITE_SERVICE_APP_SCRIPT }),
+        )
+        .unwrap();
+        // An IPv4 literal is unroutable without NAT64.
+        oi.state
+            .db
+            .call(|db| site_service_mapped_from(db, "demo", "192.0.2.10"));
+        let mut reconciler = test_reconciler(&oi);
+        let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
+        let resolve_ctx = ResolveCtx {
+            nat64_active: false,
+            has_ipv6_egress: true,
+            resolver: &empty_lookup,
+        };
+        let unroutable = |oi: &crate::oi::test_support::TestOi| {
+            active_kinds(oi, "_system")
+                .iter()
+                .any(|(kind, _)| kind == "site_service_endpoint_unroutable")
+        };
+
+        let read = reconciler.load_external_services();
+        reconciler.converge_site_service_faults(read.as_ref(), &resolve_ctx);
+        assert!(unroutable(&oi));
+
+        rename_table(&oi, "site_service_endpoints", "hidden_endpoints");
+        let read = reconciler.load_external_services();
+        reconciler.converge_site_service_faults(read.as_ref(), &resolve_ctx);
+        assert!(
+            unroutable(&oi),
+            "not cleared while the site services cannot be read"
+        );
+
+        rename_table(&oi, "hidden_endpoints", "site_service_endpoints");
+        oi.state.db.call(|db| {
+            db.conn
+                .execute("DELETE FROM site_service_endpoints", [])
+                .unwrap();
+        });
+        let read = reconciler.load_external_services();
+        reconciler.converge_site_service_faults(read.as_ref(), &resolve_ctx);
+        assert!(
+            !unroutable(&oi),
+            "an endpoint read as removed clears its fault"
         );
     }
 
@@ -5187,7 +5487,7 @@ mod tests {
             &HashMap::new(),
             &"fd5e:ed11:9000::/48".parse().unwrap(),
             &registry,
-            &crate::runtime::external_service_mappings::ExternalServiceSnapshot::default(),
+            Some(&crate::runtime::external_service_mappings::ExternalServiceSnapshot::default()),
             &resolve_ctx,
         );
 
@@ -5265,7 +5565,7 @@ mod tests {
             &HashMap::new(),
             &"fd5e:ed11:9000::/48".parse().unwrap(),
             &registry,
-            &crate::runtime::external_service_mappings::ExternalServiceSnapshot::default(),
+            Some(&crate::runtime::external_service_mappings::ExternalServiceSnapshot::default()),
             &resolve_ctx,
         );
 
