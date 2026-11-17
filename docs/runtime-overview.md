@@ -112,6 +112,7 @@ Lifecycle operations are initiated by external events:
 
 See the scheduling rules above for how concurrent requests are handled.
 
+Each dynamic resource is recorded before `rt.start` places it in the desired state, and `rt.start` throws, starting nothing, when the record cannot be written: the record is what finds the resource again after a restart.
 When an operation ends, the runtime tears down the dynamic resources its closure created before the app's operation slot is freed.
 It waits for each to be torn down for as long as that takes, looking again at a back-off that ramps from two seconds to five minutes, and logs an error if they are not all gone after a minute.
 A dynamic resource record is forgotten only once its resource is gone; one that cannot be read keeps the cleanup waiting rather than reading as nothing to clean up.

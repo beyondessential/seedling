@@ -1047,33 +1047,46 @@ impl RuntimeInstance {
             });
         }
 
-        if let Some(ctx) = &self.ctx {
-            let mut g = ctx.lock();
-            for (instance, maybe_def) in &resources_with_defs {
-                if let Some(def) = maybe_def {
-                    g.dynamic_defs.insert(instance.clone(), def.clone());
-                }
-            }
-        }
-
+        // spec: APP#dynamic-resource-lifetime
+        // spec: SUSP#abandoned-replay
+        // Each dynamic resource is recorded before it is placed in the desired
+        // state: the record is all that finds it again after a restart, so a
+        // resource whose record cannot be written is not started.
         if let (Some(db), Some(ctx)) = (&self.db, &self.ctx) {
             let op_id = ctx.lock().operation_id.0.clone();
             for (instance, maybe_def) in &resources_with_defs {
                 if let Some(resource) = maybe_def {
-                    let instance = instance.clone();
+                    let recorded = instance.clone();
                     let op_id = op_id.clone();
                     // spec: BSL#descriptions
                     let description = resource.description();
                     if let Err(e) = db.call(move |db| {
                         crate::runtime::desired::insert_dynamic_resource(
                             db,
-                            &instance,
+                            &recorded,
                             &op_id,
                             description.as_deref(),
                         )
                     }) {
-                        tracing::warn!("failed to persist dynamic resource: {e}");
+                        tracing::error!(
+                            instance = %instance.display_name,
+                            "could not record a dynamic resource; not starting it: {e}"
+                        );
+                        return Err(format!(
+                            "could not record {} before starting it: {e}",
+                            instance.display_name
+                        )
+                        .into());
                     }
+                }
+            }
+        }
+
+        if let Some(ctx) = &self.ctx {
+            let mut g = ctx.lock();
+            for (instance, maybe_def) in &resources_with_defs {
+                if let Some(def) = maybe_def {
+                    g.dynamic_defs.insert(instance.clone(), def.clone());
                 }
             }
         }

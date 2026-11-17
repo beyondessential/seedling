@@ -536,3 +536,73 @@ fn the_cleanup_does_not_give_up_on_a_resource_that_is_slow_to_go() {
     });
     assert_eq!(dynamic_records(&oi, "op-1"), 0);
 }
+
+// spec: APP#dynamic-resource-lifetime
+// spec: SUSP#abandoned-replay
+// A record that could not be written was logged and the start went ahead, so
+// after a restart nothing knew the resource existed.
+#[test]
+fn rt_start_fails_when_the_dynamic_resource_cannot_be_recorded() {
+    const SCRIPT: &str = r#"
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.on_action("work", |rt, _p| {
+            rt.start(app.job().image("docker.io/library/busybox:1.37"));
+        });
+    "#;
+    let name = AppName::new("demo").unwrap();
+    let (app, err) = crate::runtime::apps::evaluate_script(
+        &name,
+        SCRIPT,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    );
+    assert!(err.is_none());
+    let db = DbHandle::open_in_memory().unwrap();
+    let operation_id = OperationId::new();
+    {
+        let (id, name) = (operation_id.0.clone(), name.clone());
+        db.call(move |db| {
+            let generation = generations::register_script(db, &name, SCRIPT).unwrap();
+            generations::attach_operation(db, &name, generation, &id).unwrap();
+            db.conn
+                .execute_batch("DROP TABLE dynamic_resources;")
+                .unwrap();
+        });
+    }
+    let tx = new_event_channel();
+    let op_ctx = tx.operation(
+        name,
+        ActionName::new("work").unwrap(),
+        operation_id.0.clone(),
+        1,
+        1,
+        None,
+    );
+    let progress = Arc::new(RwLock::new(None));
+    let ok = run_operation_loop(
+        &app,
+        db,
+        Ok(BoundParams {
+            params: serde_json::Map::new(),
+            bindings: HashMap::new(),
+        }),
+        Arc::clone(&progress),
+        Arc::new(Notify::new()),
+        &op_ctx,
+        &crate::ScriptLimits::default(),
+        Arc::new(Cipher::for_tests()),
+        Arc::new(CancelToken::new()),
+        None,
+        None,
+        None,
+    );
+
+    assert!(!ok, "the operation fails");
+    let progress = progress.read();
+    assert!(
+        progress
+            .as_ref()
+            .is_none_or(|p| p.dynamic_defs.is_empty() && p.is_empty()),
+        "nothing was placed in the desired state"
+    );
+}
