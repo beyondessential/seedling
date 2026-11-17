@@ -254,7 +254,7 @@ pub(crate) fn invoke_action(
                 app_name.clone(),
                 action_name.clone(),
                 op_id,
-                action_params,
+                lifecycle::OperationParams::Requested(action_params),
                 current_generation,
                 current_generation,
                 "operator".to_owned(),

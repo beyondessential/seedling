@@ -1028,7 +1028,9 @@ async fn main() {
                                 fire.app,
                                 fire.action,
                                 op_id,
-                                serde_json::Map::new(),
+                                seedling_core::oi::handler::actions::lifecycle::OperationParams::Requested(
+                                    serde_json::Map::new(),
+                                ),
                                 fire.generation,
                                 fire.generation,
                                 "schedule".to_owned(),
@@ -1541,7 +1543,10 @@ fn start_replay(
 ) -> bool {
     use seedling_core::runtime::{
         apps::AppPhase,
-        history::{clear_current_operation, load_current_operation_params},
+        history::{
+            clear_current_operation, load_current_operation_params,
+            load_current_operation_volume_bindings,
+        },
         scheduler::ScheduleResult,
     };
 
@@ -1573,14 +1578,20 @@ fn start_replay(
     // began. Every persisted lifecycle operation has params (empty map for
     // actions that take none), so a None here is an install-specific
     // failure mode that pre-dates the generalised persistence.
-    let params = {
+    // spec: OPS#operation-scoped-volumes
+    // The bindings its `<key>_volume` params name are read with them, and an
+    // operation whose bindings cannot be read is not replayed, as one whose
+    // params cannot be read is not.
+    let (params, volume_bindings) = {
         let cipher = Arc::clone(&state.cipher);
-        let loaded = state
-            .db
-            .call(move |db| load_current_operation_params(db, &cipher));
+        let loaded = state.db.call(move |db| {
+            let params = load_current_operation_params(db, &cipher)?;
+            let bindings = load_current_operation_volume_bindings(db)?;
+            Ok::<_, seedling_core::runtime::history::OperationPersistError>((params, bindings))
+        });
         match loaded {
-            Ok(Some(params)) => params,
-            Ok(None) => {
+            Ok((Some(params), bindings)) => (params, bindings),
+            Ok((None, _)) => {
                 if is_install {
                     tracing::error!(
                         app = %app_name,
@@ -1596,13 +1607,13 @@ fn start_replay(
                     action = %action_name,
                     "interrupted operation has no persisted params (legacy row); replaying with empty map"
                 );
-                serde_json::Map::new()
+                (serde_json::Map::new(), Default::default())
             }
             Err(e) => {
                 tracing::error!(
                     app = %app_name,
                     action = %action_name,
-                    "failed to decrypt interrupted operation params: {e}"
+                    "failed to read interrupted operation params: {e}"
                 );
                 if is_install {
                     seedling_core::oi::handler::actions::lifecycle::recover_unreplayable_install(
@@ -1698,7 +1709,10 @@ fn start_replay(
         app_name,
         action_name,
         op.operation_id,
-        params,
+        seedling_core::oi::handler::actions::lifecycle::OperationParams::Replayed {
+            params,
+            bindings: volume_bindings,
+        },
         op.source_generation,
         op.target_generation,
         "replay".to_owned(),

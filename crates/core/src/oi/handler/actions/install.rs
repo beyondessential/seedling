@@ -209,7 +209,7 @@ pub(crate) fn invoke_install(
                 app_name.clone(),
                 install_action,
                 op_id,
-                op_params,
+                super::lifecycle::OperationParams::Requested(op_params),
                 current_generation,
                 current_generation,
                 "operator".to_owned(),

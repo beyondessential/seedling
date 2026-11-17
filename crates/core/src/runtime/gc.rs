@@ -361,6 +361,7 @@ mod tests {
                 target_generation: 1,
             },
             &serde_json::Map::new(),
+            &Default::default(),
         )
         .unwrap();
 

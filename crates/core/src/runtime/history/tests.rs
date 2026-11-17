@@ -38,7 +38,14 @@ fn save_and_load_current_operation() {
         source_generation: 3,
         target_generation: 4,
     };
-    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
     assert_eq!(loaded.operation_id.0, "test-op-id");
     assert_eq!(loaded.app, "myapp");
@@ -66,7 +73,14 @@ fn clear_current_operation_removes_record() {
         source_generation: 1,
         target_generation: 1,
     };
-    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
     clear_current_operation(&db).unwrap();
     assert!(load_current_operation(&db).unwrap().is_none());
 }
@@ -85,7 +99,14 @@ fn cancel_requested_round_trips_through_db() {
         source_generation: 1,
         target_generation: 1,
     };
-    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
 
     // Fresh rows default to cancel_requested = false.
     assert!(!load_cancel_requested(&db).unwrap());
@@ -98,7 +119,14 @@ fn cancel_requested_round_trips_through_db() {
     // Non-matching op_id: no-op (a later op with a different id must not
     // inherit the cancel from a stale row).
     clear_current_operation(&db).unwrap();
-    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
     let flipped = set_cancel_requested(&db, &OperationId("other-op".into())).unwrap();
     assert!(!flipped);
     assert!(!load_cancel_requested(&db).unwrap());
@@ -108,6 +136,62 @@ fn cancel_requested_round_trips_through_db() {
     assert!(!load_cancel_requested(&db).unwrap());
     let flipped = set_cancel_requested(&db, &OperationId("op-c1".into())).unwrap();
     assert!(!flipped);
+}
+
+// spec: OPS#operation-scoped-volumes
+#[test]
+fn volume_bindings_persist_with_the_current_operation() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    assert!(
+        load_current_operation_volume_bindings(&db)
+            .unwrap()
+            .is_empty()
+    );
+
+    let op = CurrentOperation {
+        operation_id: OperationId("backup-op".into()),
+        app: app_name("myapp"),
+        action_name: action_name("backup"),
+        source_generation: 1,
+        target_generation: 1,
+    };
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "dest_volume".into(),
+        serde_json::json!("seedling-op-backupop-0"),
+    );
+    let bindings = OperationVolumeBindings::from([(
+        "seedling-op-backupop-0".to_owned(),
+        crate::defs::volume::OperationVolumeBinding {
+            host_path: "/srv/site/backups".into(),
+            read_only: true,
+        },
+    )]);
+    save_current_operation(&db, &cipher, &op, &params, &bindings).unwrap();
+    assert_eq!(
+        load_current_operation_volume_bindings(&db).unwrap(),
+        bindings
+    );
+
+    // A later save without bindings leaves none behind.
+    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
+    assert!(
+        load_current_operation_volume_bindings(&db)
+            .unwrap()
+            .is_empty()
+    );
+
+    db.conn
+        .execute(
+            "UPDATE current_operation SET volume_bindings = 'not json'",
+            [],
+        )
+        .unwrap();
+    assert!(
+        load_current_operation_volume_bindings(&db).is_err(),
+        "an unreadable record is not an empty one"
+    );
 }
 
 // spec: OPS#persistence, ACI#install-parameters
@@ -128,7 +212,7 @@ fn install_params_round_trip_through_cipher() {
     params.insert("passphrase".into(), serde_json::json!("hunter2"));
     params.insert("bucket".into(), serde_json::json!("my-backups"));
 
-    save_current_operation(&db, &cipher, &op, &params).unwrap();
+    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
 
     // Metadata loads via the normal path.
     let meta = load_current_operation(&db).unwrap().unwrap();
@@ -169,7 +253,7 @@ fn non_install_operation_params_round_trip() {
     params.insert("target_host".into(), serde_json::json!("db-1.internal"));
     params.insert("auth_token".into(), serde_json::json!("s3cr3t"));
 
-    save_current_operation(&db, &cipher, &op, &params).unwrap();
+    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
 
     let restored = load_current_operation_params(&db, &cipher)
         .unwrap()
@@ -191,7 +275,14 @@ fn empty_params_round_trip() {
         source_generation: 1,
         target_generation: 1,
     };
-    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
 
     // Empty params map round-trips through the cipher without losing
     // identity; replay restores it as an empty map, not as None.
@@ -221,8 +312,22 @@ fn save_overwrites_previous_current_operation() {
         source_generation: 1,
         target_generation: 1,
     };
-    save_current_operation(&db, &cipher, &op1, &serde_json::Map::new()).unwrap();
-    save_current_operation(&db, &cipher, &op2, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op1,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op2,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
     assert_eq!(loaded.operation_id.0, "op-2");
     assert_eq!(loaded.action_name, "stop");
@@ -804,12 +909,26 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
         target_generation: 1,
     };
 
-    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
     assert!(set_cancel_requested(&db, &OperationId("op-cancel".into())).unwrap());
     assert!(load_cancel_requested(&db).unwrap());
 
     // The same operation is re-saved, as the replay path does.
-    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
 
     assert!(
         load_cancel_requested(&db).unwrap(),
@@ -941,7 +1060,14 @@ fn the_persisted_operation_state_carries_a_persisted_cancel() {
         source_generation: 1,
         target_generation: 1,
     };
-    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
     assert!(!read_operation_state(&db, &cipher).unwrap().cancel_requested);
 
     assert!(set_cancel_requested(&db, &OperationId("op-cancelled".into())).unwrap());

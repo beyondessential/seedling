@@ -268,7 +268,7 @@ pub(crate) fn schedule_on_change(
                     app.clone(),
                     param_action,
                     op_id,
-                    serde_json::Map::new(),
+                    super::actions::lifecycle::OperationParams::Requested(serde_json::Map::new()),
                     source_generation,
                     generation,
                     "param_change".to_owned(),

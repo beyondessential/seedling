@@ -798,8 +798,15 @@ pub fn save_current_operation(
     cipher: &crate::runtime::secrets::Cipher,
     op: &CurrentOperation,
     params: &serde_json::Map<String, serde_json::Value>,
+    volume_bindings: &OperationVolumeBindings,
 ) -> Result<(), OperationPersistError> {
     let plaintext = serde_json::to_string(params).map_err(OperationPersistError::Json)?;
+    // spec: OPS#operation-scoped-volumes
+    let volume_bindings = if volume_bindings.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(volume_bindings).map_err(OperationPersistError::Json)?)
+    };
     let ciphertext = cipher
         .encrypt(&secrecy::SecretString::new(plaintext.into()))
         .map_err(OperationPersistError::Cipher)?;
@@ -816,15 +823,16 @@ pub fn save_current_operation(
             // which is exactly how this kind of bug arrives.
             "INSERT INTO current_operation
                 (singleton, operation_id, app, action_name,
-                 source_generation, target_generation, params_ciphertext)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                 source_generation, target_generation, params_ciphertext, volume_bindings)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(singleton) DO UPDATE SET
                 operation_id = excluded.operation_id,
                 app = excluded.app,
                 action_name = excluded.action_name,
                 source_generation = excluded.source_generation,
                 target_generation = excluded.target_generation,
-                params_ciphertext = excluded.params_ciphertext",
+                params_ciphertext = excluded.params_ciphertext,
+                volume_bindings = excluded.volume_bindings",
             params![
                 op.operation_id.0,
                 op.app,
@@ -832,6 +840,7 @@ pub fn save_current_operation(
                 op.source_generation as i64,
                 op.target_generation as i64,
                 ciphertext,
+                volume_bindings,
             ],
         )
         .map_err(OperationPersistError::Db)?;
@@ -868,6 +877,33 @@ pub fn load_current_operation_params(
     let map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(plaintext.expose_secret()).map_err(OperationPersistError::Json)?;
     Ok(Some(map))
+}
+
+/// An operation's volume bindings, keyed by each binding's generated name.
+pub type OperationVolumeBindings =
+    std::collections::HashMap<String, crate::defs::volume::OperationVolumeBinding>;
+
+/// The volume bindings persisted with the current operation; empty when there
+/// is no operation or it bound no volume.
+// spec: OPS#operation-scoped-volumes
+pub fn load_current_operation_volume_bindings(
+    db: &Db,
+) -> Result<OperationVolumeBindings, OperationPersistError> {
+    let stored = db
+        .conn
+        .query_row(
+            "SELECT volume_bindings FROM current_operation WHERE singleton = 1",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(OperationPersistError::Db(other)),
+        })?;
+    match stored {
+        Some(json) => serde_json::from_str(&json).map_err(OperationPersistError::Json),
+        None => Ok(OperationVolumeBindings::new()),
+    }
 }
 
 #[derive(Debug)]

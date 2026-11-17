@@ -238,7 +238,7 @@ impl CustomType for Volume {
 }
 
 /// An operation-scoped volume binding injected by the runtime before an action closure runs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OperationVolumeBinding {
     pub host_path: std::path::PathBuf,
     pub read_only: bool,

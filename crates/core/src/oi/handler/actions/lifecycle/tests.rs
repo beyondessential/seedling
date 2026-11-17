@@ -329,3 +329,79 @@ fn a_volume_param_that_cannot_be_bound_fails_the_dispatch_rather_than_being_skip
     assert!(empty.bindings.is_empty());
     assert!(!empty.params.contains_key("data"));
 }
+
+// spec: OPS#operation-scoped-volumes
+#[test]
+fn a_replayed_operation_binds_its_volumes_under_their_persisted_names() {
+    use crate::oi::test_support::TestOi;
+    use crate::runtime::scheduler::ScheduleResult;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        serde_json::json!({ "app": "demo", "script": r#"
+            app.deployment("web").image("docker.io/library/nginx:1.29");
+            app.on_action("fill", |rt, p| {
+                rt.write(app.external_volume(p["data_volume"]), "/marker", "replayed");
+            }, #{ params: #{ data: #{ kind: "volume", required: true } } });
+        "# }),
+    )
+    .unwrap();
+    oi.install("demo");
+
+    // As persisted by the interrupted run: the param names the binding, and
+    // no longer the site volume it was made from.
+    let dir = tempfile::tempdir().unwrap();
+    let binding = "seedling-op-interrupted-0".to_owned();
+    let mut params = serde_json::Map::new();
+    params.insert("data_volume".into(), serde_json::json!(binding));
+    let bindings = HashMap::from([(
+        binding,
+        crate::defs::volume::OperationVolumeBinding {
+            host_path: dir.path().to_owned(),
+            read_only: false,
+        },
+    )]);
+
+    let app = AppName::new("demo").unwrap();
+    let action = ActionName::new("fill").unwrap();
+    let operation_id = OperationId::new();
+    let admitted = oi.state.scheduler.lock().request_with_id(
+        &app,
+        &action,
+        params.clone(),
+        1,
+        1,
+        "replay",
+        operation_id.clone(),
+        None,
+    );
+    assert!(matches!(admitted, ScheduleResult::Accepted));
+    oi.block_on(async {
+        super::spawn_accepted_operation(
+            Arc::clone(&oi.state),
+            app,
+            action,
+            operation_id,
+            super::OperationParams::Replayed { params, bindings },
+            1,
+            1,
+            "replay".to_owned(),
+            None,
+        );
+        let ended = async {
+            while oi.state.scheduler.lock().active().is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), ended)
+            .await
+            .expect("the replay ends");
+    });
+
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("marker"))
+            .expect("the closure wrote through the binding"),
+        "replayed"
+    );
+}

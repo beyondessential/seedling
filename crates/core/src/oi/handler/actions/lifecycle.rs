@@ -233,6 +233,19 @@ fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Exe
     }))
 }
 
+/// The params an operation starts with.
+pub enum OperationParams {
+    /// As requested: volume params name site volumes and are bound at dispatch.
+    Requested(serde_json::Map<String, serde_json::Value>),
+    /// As persisted by an interrupted operation, with the bindings its
+    /// `<key>_volume` params name, which are established again as they were.
+    // spec: OPS#operation-scoped-volumes
+    Replayed {
+        params: serde_json::Map<String, serde_json::Value>,
+        bindings: crate::runtime::history::OperationVolumeBindings,
+    },
+}
+
 /// A dispatch's params with its volume params bound, and the bindings made.
 pub(crate) struct BoundParams {
     pub params: serde_json::Map<String, serde_json::Value>,
@@ -474,12 +487,19 @@ fn run_operation_loop(
         target_generation: op_ctx.target_generation,
     };
     let params_for_persist = params.clone();
+    let bindings_for_persist = operation_volume_bindings.clone();
     let cipher_for_persist = Arc::clone(&cipher);
     // spec: OPS#persistence
     // The closure does not run unless the operation is on record: a restart
     // could not otherwise replay it, and its params could not be recovered.
     if let Err(e) = db.call(move |db| {
-        save_current_operation(db, &cipher_for_persist, &record, &params_for_persist)
+        save_current_operation(
+            db,
+            &cipher_for_persist,
+            &record,
+            &params_for_persist,
+            &bindings_for_persist,
+        )
     }) {
         tracing::error!(
             app = %app_name,
@@ -983,7 +1003,7 @@ pub fn spawn_accepted_operation(
     app_name: AppName,
     action_name: ActionName,
     operation_id: OperationId,
-    params: serde_json::Map<String, serde_json::Value>,
+    params: OperationParams,
     source_generation: u64,
     target_generation: u64,
     trigger: String,
@@ -1067,7 +1087,13 @@ pub fn spawn_accepted_operation(
             .get(action_name.as_str())
             .map(|a| a.params.clone())
             .unwrap_or_default();
-        let bound = bind_volume_params(&state, &schema, params, &operation_id.0);
+        let bound = match params {
+            OperationParams::Requested(params) => {
+                bind_volume_params(&state, &schema, params, &operation_id.0)
+            }
+            // spec: OPS#operation-scoped-volumes
+            OperationParams::Replayed { params, bindings } => Ok(BoundParams { params, bindings }),
+        };
 
         let success = {
             let app_name = app_name.clone();
@@ -1133,7 +1159,7 @@ pub fn spawn_accepted_operation(
                 queued.app,
                 queued.action,
                 queued.operation_id,
-                queued.params,
+                OperationParams::Requested(queued.params),
                 queued.source_generation,
                 queued.target_generation,
                 queued.trigger,
@@ -1267,7 +1293,7 @@ pub fn restore_queue(
                     op.app,
                     op.action,
                     op.operation_id,
-                    op.params,
+                    OperationParams::Requested(op.params),
                     op.source_generation,
                     op.target_generation,
                     op.trigger,
@@ -1379,7 +1405,7 @@ pub fn initiate_start(
                 app_name.clone(),
                 start,
                 operation_id,
-                serde_json::Map::new(),
+                OperationParams::Requested(serde_json::Map::new()),
                 generation,
                 generation,
                 trigger.to_owned(),
