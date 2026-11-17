@@ -554,6 +554,13 @@ pub struct Reconciler {
     /// teardown; it is not filed again for that uninstall.
     // spec: TRD#uninstall-scope
     unidentifiable_units_filed: HashSet<AppName>,
+    /// Uninstalling apps whose recorded identities this iteration has read,
+    /// with no read of them failing so far. Their
+    /// `teardown_identities_unreadable` is cleared when the iteration ends, so
+    /// that a read failing later in the same iteration leaves it filed rather
+    /// than clearing it and filing it again.
+    // spec: TRD#uninstall-scope
+    teardown_identities_read: HashSet<AppName>,
 }
 
 /// Workload units that could belong to `app`, as candidates only: judged by
@@ -827,6 +834,7 @@ impl Reconciler {
             site_resolver,
             observe_failure_streaks: HashMap::new(),
             unidentifiable_units_filed: HashSet::new(),
+            teardown_identities_read: HashSet::new(),
         }
     }
 
@@ -1375,6 +1383,12 @@ impl Reconciler {
     // spec: FLT#filing-and-clearing
     #[tracing::instrument(skip_all, level = "debug")]
     pub async fn tick(&mut self) -> bool {
+        let more = self.iterate().await;
+        self.settle_teardown_identities_read();
+        more
+    }
+
+    async fn iterate(&mut self) -> bool {
         // spec: INFRA#unavailable-backends — when the daemon came up without a
         // working container runtime / process manager, every actuation would
         // just error against the unavailable backends. File the overarching
@@ -1400,6 +1414,7 @@ impl Reconciler {
         self.reconcile_stray_shells().await;
 
         let (apps, dropped_apps) = self.snapshot_all_apps();
+        self.note_teardown_identities_read(&apps);
 
         if apps.is_empty() {
             // spec: RCN#applying-absolute-state — an empty snapshot list
@@ -2582,6 +2597,36 @@ impl Reconciler {
         }
     }
 
+    /// Note that the recorded identities of each uninstalling app in `apps`
+    /// were read: an uninstalling app's desired state is its recorded
+    /// instances, so computing it read them.
+    // spec: TRD#uninstall-scope
+    fn note_teardown_identities_read(&mut self, apps: &[AppSnapshot]) {
+        self.teardown_identities_read.extend(
+            apps.iter()
+                .filter(|app| app.phase == AppPhase::Uninstalling)
+                .map(|app| app.name.clone()),
+        );
+    }
+
+    /// A read of `app`'s recorded identities during its teardown failed: hold
+    /// the fault, and keep this iteration's earlier reads from clearing it.
+    // spec: TRD#uninstall-scope
+    fn teardown_identities_unreadable(&mut self, app: &AppName, why: &str) {
+        self.teardown_identities_read.remove(app);
+        self.hold_teardown_identities_unreadable(app, why);
+    }
+
+    /// Clear `teardown_identities_unreadable` for each app whose recorded
+    /// identities this iteration read with no read of them failing. An app
+    /// whose identities it did not read keeps the fault as it was.
+    // spec: FLT#app-faults
+    fn settle_teardown_identities_read(&mut self) {
+        for app in std::mem::take(&mut self.teardown_identities_read) {
+            self.clear_app_fault(&app, "teardown_identities_unreadable");
+        }
+    }
+
     fn clear_app_fault(&self, app: &AppName, kind: &str) {
         let key = crate::runtime::faults::FaultKey::new(app, kind, "");
         if let Err(e) = self
@@ -2620,13 +2665,10 @@ impl Reconciler {
             let expected: HashSet<String> = match self.db.call(move |db| {
                 crate::runtime::history::display_names_for_app(db, &app_name_for_query)
             }) {
-                Ok(names) => {
-                    self.clear_app_fault(&app.name, "teardown_identities_unreadable");
-                    names
-                        .into_iter()
-                        .map(|display_name| format!("seedling-{display_name}.service"))
-                        .collect()
-                }
+                Ok(names) => names
+                    .into_iter()
+                    .map(|display_name| format!("seedling-{display_name}.service"))
+                    .collect(),
                 // Fail safe: an empty expected set makes every unit invisible,
                 // which would read as "teardown finished" and delete the
                 // registry rows while the units are still loaded. Wait for a
@@ -2637,7 +2679,7 @@ impl Reconciler {
                         "uninstall: could not load recorded instance names; \
                          not advancing teardown this tick: {e}"
                     );
-                    self.hold_teardown_identities_unreadable(&app.name, &e.to_string());
+                    self.teardown_identities_unreadable(&app.name, &e.to_string());
                     continue;
                 }
             };
@@ -2667,7 +2709,7 @@ impl Reconciler {
                             "uninstall: could not load the other apps' recorded identities; \
                              not advancing teardown this tick: {e}"
                         );
-                        self.hold_teardown_identities_unreadable(&app.name, &e.to_string());
+                        self.teardown_identities_unreadable(&app.name, &e.to_string());
                         continue;
                     }
                 };
@@ -2724,7 +2766,7 @@ impl Reconciler {
                                 "uninstall: could not read the lifecycle of the recorded \
                                  instances; not advancing teardown this tick: {e}"
                             );
-                            self.hold_teardown_identities_unreadable(&app.name, &e.to_string());
+                            self.teardown_identities_unreadable(&app.name, &e.to_string());
                             continue;
                         }
                     }
@@ -4120,6 +4162,191 @@ mod tests {
                 .any(|u| u.name == "seedling-app-orphan.service"),
             "what was not ruled out is left untouched"
         );
+    }
+
+    /// How many `teardown_identities_unreadable` faults have been filed for
+    /// `app`, and how many of those are active.
+    fn identities_unreadable(oi: &crate::oi::test_support::TestOi, app: &str) -> (i64, i64) {
+        let app = app.to_owned();
+        oi.state.db.call(move |db| {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(cleared_at IS NULL), 0) FROM faults
+                     WHERE app = ?1 AND kind = 'teardown_identities_unreadable'",
+                    [&app],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        })
+    }
+
+    /// The reads of the uninstalling apps' recorded identities that one
+    /// iteration makes, in its order: the snapshot, then the uninstall phase
+    /// with `running` the workloads still running.
+    fn teardown_iteration(
+        oi: &crate::oi::test_support::TestOi,
+        reconciler: &mut Reconciler,
+        running: &HashMap<AppName, Vec<RunningPod>>,
+    ) {
+        let (apps, _) = reconciler.snapshot_all_apps();
+        reconciler.note_teardown_identities_read(&apps);
+        oi.block_on(reconciler.run_uninstall_phase(&apps, running));
+        reconciler.settle_teardown_identities_read();
+    }
+
+    /// `instance` as a workload still running.
+    fn still_running(instance: &crate::runtime::identity::ResourceInstance) -> RunningPod {
+        RunningPod {
+            instance: instance.clone(),
+            pod_prefix: "fd00:1:2:3::/64".parse().unwrap(),
+            pod_ip: "fd00:1:2:3::2".parse().unwrap(),
+            resource: crate::runtime::desired::undeclared_pod(instance).unwrap(),
+            observed_healthy: true,
+        }
+    }
+
+    // spec: TRD#uninstall-scope
+    // spec: FLT#app-faults
+    // The uninstall phase does not run for an app while its workloads are
+    // still running, so a clear left to it held the fault through the whole
+    // of their stop.
+    #[test]
+    fn teardown_identities_unreadable_clears_on_the_next_read_while_workloads_still_run() {
+        use crate::defs::resource::ResourceKind::Deployment;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        let recorded = uninstalling(
+            &oi,
+            "app",
+            crate::oi::test_support::MINIMAL_SCRIPT,
+            &[(Deployment, "web")],
+        );
+        let mut reconciler = test_reconciler(&oi);
+        rename_table(&oi, "resource_instances", "hidden_resource_instances");
+        teardown_iteration(&oi, &mut reconciler, &HashMap::new());
+        assert_eq!(identities_unreadable(&oi, "app"), (1, 1));
+
+        rename_table(&oi, "hidden_resource_instances", "resource_instances");
+        let running = HashMap::from([(
+            AppName::new("app").unwrap(),
+            vec![still_running(&recorded[0])],
+        )]);
+        teardown_iteration(&oi, &mut reconciler, &running);
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::Uninstalling);
+        assert_eq!(
+            identities_unreadable(&oi, "app"),
+            (1, 0),
+            "the recorded identities were read"
+        );
+    }
+
+    // spec: TRD#uninstall-scope
+    // spec: FLT#app-faults
+    #[test]
+    fn an_iteration_clears_teardown_identities_unreadable_once_it_reads_the_identities() {
+        use crate::defs::resource::ResourceKind::Deployment;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        uninstalling(
+            &oi,
+            "app",
+            crate::oi::test_support::MINIMAL_SCRIPT,
+            &[(Deployment, "web")],
+        );
+        let mut reconciler = test_reconciler(&oi);
+        rename_table(&oi, "resource_instances", "hidden_resource_instances");
+        oi.block_on(reconciler.tick());
+        assert_eq!(identities_unreadable(&oi, "app"), (1, 1));
+
+        rename_table(&oi, "hidden_resource_instances", "resource_instances");
+        oi.block_on(reconciler.tick());
+        assert_eq!(identities_unreadable(&oi, "app"), (1, 0));
+    }
+
+    // spec: TRD#uninstall-scope
+    // spec: FLT#app-faults
+    #[test]
+    fn teardown_identities_unreadable_is_left_by_an_iteration_that_does_not_read_the_apps_identities()
+     {
+        use crate::defs::resource::ResourceKind::Deployment;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        uninstalling(
+            &oi,
+            "app",
+            crate::oi::test_support::MINIMAL_SCRIPT,
+            &[(Deployment, "web")],
+        );
+        let other = uninstalling(
+            &oi,
+            "other",
+            crate::oi::test_support::MINIMAL_SCRIPT,
+            &[(Deployment, "web")],
+        );
+        let mut reconciler = test_reconciler(&oi);
+        rename_table(&oi, "resource_instances", "hidden_resource_instances");
+        teardown_iteration(&oi, &mut reconciler, &HashMap::new());
+        assert_eq!(identities_unreadable(&oi, "app"), (1, 1));
+        assert_eq!(identities_unreadable(&oi, "other"), (1, 1));
+
+        rename_table(&oi, "hidden_resource_instances", "resource_instances");
+        // `app` is held back from the iteration before its desired state is
+        // computed, so its recorded identities are not read.
+        oi.state.db.call(|db| {
+            db.conn
+                .execute(
+                    "INSERT INTO app_priorities (app, priority, updated_at) VALUES ('app', 'urgent', '')",
+                    [],
+                )
+                .unwrap();
+        });
+        let running = HashMap::from([(
+            AppName::new("other").unwrap(),
+            vec![still_running(&other[0])],
+        )]);
+        teardown_iteration(&oi, &mut reconciler, &running);
+
+        assert_eq!(identities_unreadable(&oi, "other"), (1, 0));
+        assert_eq!(
+            identities_unreadable(&oi, "app"),
+            (1, 1),
+            "another app's read says nothing of this one's"
+        );
+    }
+
+    // spec: TRD#uninstall-scope
+    // spec: FLT#filing-and-clearing
+    // The snapshot reads the recorded instances, and the uninstall phase then
+    // fails to read their lifecycles. Clearing on the first read and filing on
+    // the second filed the fault afresh on every iteration.
+    #[test]
+    fn a_later_failed_read_in_the_same_iteration_keeps_teardown_identities_unreadable_filed() {
+        use crate::defs::resource::ResourceKind::Deployment;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        uninstalling(
+            &oi,
+            "app",
+            crate::oi::test_support::MINIMAL_SCRIPT,
+            &[(Deployment, "web")],
+        );
+        let mut reconciler = test_reconciler(&oi);
+        rename_table(&oi, "world_observations", "hidden_world_observations");
+
+        teardown_iteration(&oi, &mut reconciler, &HashMap::new());
+        teardown_iteration(&oi, &mut reconciler, &HashMap::new());
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::Uninstalling);
+        assert_eq!(
+            identities_unreadable(&oi, "app"),
+            (1, 1),
+            "one fault, held across the iterations"
+        );
+
+        rename_table(&oi, "hidden_world_observations", "world_observations");
+        teardown_iteration(&oi, &mut reconciler, &HashMap::new());
+        assert_eq!(identities_unreadable(&oi, "app").1, 0);
     }
 
     // spec: TRD#teardown
