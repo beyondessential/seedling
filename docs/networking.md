@@ -247,7 +247,8 @@ translator.
 
 Every ingress port gets nftables DNAT rules in the prerouting chain, and
 IPv6 ones in the output chain, that redirect traffic to Caddy. The ports
-are those of app ingresses and their HTTP redirects, and of the
+are those of app ingresses (UDP alone for a DTLS ingress; TCP, and UDP
+as well, for an HTTPS one; TCP otherwise) and their HTTP redirects, and of the
 attachments of site ingresses (UDP for a `udp` attachment; otherwise TCP,
 and UDP as well for an `http` or `http2` attachment on a site ingress that
 terminates TLS), except for a site ingress that has lost its source.
@@ -331,6 +332,12 @@ over IPv6:
       → Caddy matches Host, reverse-proxies to http://[<service_ip>]:80
       → nftables service DNAT: service_ip:80 → pod_ip:3000
       → pod receives on :3000
+
+A prefix a pod binds is routed straight to the binding pods. A service no
+pod binds a prefix of is served through a fallback route at `/`, whose
+upstream is the service address at the lowest port the service is viewed on
+with `service.http(port)`, or at the ingress's own port where it is viewed
+on none. An `http` or `http2` site ingress attachment routes the same way.
 
 Caddy runs one server per ingress port, so an ingress is reachable only on the
 port it was declared on: the same hostname on `:80` and `:8080` reaches two
