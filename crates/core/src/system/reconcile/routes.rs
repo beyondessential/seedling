@@ -19,7 +19,7 @@ use crate::{
         registry::RegistryError,
         site_services::resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
     },
-    system::{translate::proxy::instance_ipv6, types::ServiceRoute},
+    system::types::ServiceRoute,
 };
 
 // spec: AUTO#ingress-and-network-repair
@@ -61,7 +61,7 @@ pub(super) fn build(
         let _ = id; // name used directly; kind normalised below
         let svc_instance =
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
-        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+        let service_ip = registry.service_address(node_prefix, &svc_instance)?;
 
         let backends: Vec<Ipv6Addr> = running_pods
             .iter()
@@ -119,7 +119,7 @@ pub(super) fn build(
             ResourceKind::ExternalService,
             Some(ext_name),
         )?;
-        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+        let service_ip = registry.service_address(node_prefix, &svc_instance)?;
 
         let ext_name_typed = ExternalServiceName::new_unchecked(ext_name.to_owned());
         let target = ext_snapshot

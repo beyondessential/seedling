@@ -161,6 +161,8 @@ const SQL_V76: &str = include_str!("db/migrations/v76.sql");
 const SQL_V77: &str = include_str!("db/migrations/v77.sql");
 // spec: OPS#operation-scoped-volumes
 const SQL_V78: &str = include_str!("db/migrations/v78.sql");
+// spec: INFRA#service-addresses
+const SQL_V79: &str = include_str!("db/migrations/v79.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -546,6 +548,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 78,
         sql: SQL_V78,
+        custom_run: None,
+    },
+    Migration {
+        version: 79,
+        sql: SQL_V79,
         custom_run: None,
     },
 ];

@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, net::Ipv6Addr};
 
+use ipnet::Ipv6Net;
 use parking_lot::Mutex;
 use seedling_protocol::names::AppName;
 
@@ -113,6 +114,15 @@ pub trait InstanceRegistry: Send + Sync {
         kind: ResourceKind,
         name: Option<&str>,
     ) -> Result<Vec<ResourceInstance>, RegistryError>;
+
+    /// The address a service instance is reached at, allocating it one no
+    /// other service holds if it has none.
+    // spec: INFRA#service-addresses
+    fn service_address(
+        &self,
+        node_prefix: &Ipv6Net,
+        instance: &ResourceInstance,
+    ) -> Result<Ipv6Addr, RegistryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +143,7 @@ type InstanceRegistryKey = (AppName, ResourceKind, Option<String>);
 pub struct EphemeralInstanceRegistry {
     cache: Mutex<HashMap<InstanceRegistryKey, ResourceInstance>>,
     scaled_cache: Mutex<HashMap<InstanceRegistryKey, Vec<ResourceInstance>>>,
+    service_addresses: Mutex<crate::runtime::service_addresses::InMemory>,
 }
 
 impl EphemeralInstanceRegistry {
@@ -140,6 +151,7 @@ impl EphemeralInstanceRegistry {
         Self {
             cache: Mutex::new(HashMap::new()),
             scaled_cache: Mutex::new(HashMap::new()),
+            service_addresses: Mutex::default(),
         }
     }
 }
@@ -225,6 +237,17 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
         }
 
         Ok(result)
+    }
+
+    fn service_address(
+        &self,
+        node_prefix: &Ipv6Net,
+        instance: &ResourceInstance,
+    ) -> Result<Ipv6Addr, RegistryError> {
+        Ok(self
+            .service_addresses
+            .lock()
+            .address_of(node_prefix, instance))
     }
 }
 
@@ -369,5 +392,17 @@ impl InstanceRegistry for DbInstanceRegistry {
         Ok(self
             .db
             .call(move |db| history::find_instances_for_group(db, &app, kind, name.as_deref()))?)
+    }
+
+    fn service_address(
+        &self,
+        node_prefix: &Ipv6Net,
+        instance: &ResourceInstance,
+    ) -> Result<Ipv6Addr, RegistryError> {
+        let node_prefix = *node_prefix;
+        let instance = instance.clone();
+        Ok(self.db.call(move |db| {
+            crate::runtime::service_addresses::address_of(db, &node_prefix, &instance)
+        })?)
     }
 }

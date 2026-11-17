@@ -25,10 +25,7 @@ use crate::{
         identity::{InstanceVariant, ResourceInstance},
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
-    system::{
-        translate::{container::job_spec, proxy::instance_ipv6},
-        types::ExecHandle,
-    },
+    system::{translate::container::job_spec, types::ExecHandle},
 };
 
 /// The three streams of a shell session: the session stream the handshake and
@@ -799,7 +796,8 @@ impl AppShellHost {
                             ResourceKind::Service,
                             Some(sp.service.name().as_str()),
                         )?;
-                        let svc_ip = instance_ipv6(&state.node_prefix, &svc_instance);
+                        let svc_ip =
+                            mount_registry.service_address(&state.node_prefix, &svc_instance)?;
                         Ok((sp.port.get(), svc_ip, sp.port.get()))
                     })
                     .collect();

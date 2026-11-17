@@ -79,6 +79,10 @@ pub struct RedirectTarget {
 
 /// Derives the IPv6 address for a resource instance using the ULA encoding.
 ///
+/// For a service this is only its first choice: the address it is reached at
+/// is allocated and recorded by [`crate::runtime::service_addresses`], since a
+/// derivation is unique only to a probability.
+///
 /// Address layout: `fd5e:edXX:XXXX:KKUU:UUUU:UUUU:UUUU:UUUU/128`
 /// - Bytes  0–5 : node_prefix /48
 /// - Byte   6   : `ResourceKind` discriminant (`KK`)

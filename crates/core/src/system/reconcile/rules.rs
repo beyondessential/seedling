@@ -24,10 +24,7 @@ use crate::{
             resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
         },
     },
-    system::{
-        translate::proxy::instance_ipv6,
-        types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
-    },
+    system::types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
 };
 
 /// Per-app map from `(service_name, service_port, proto)` to `Vec<(pod_ip, pod_port)>`.
@@ -285,7 +282,7 @@ pub(super) fn build_service_dnat_rules(
     for ((svc_name, svc_port, proto), backend_list) in &backends {
         let svc_instance =
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
-        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+        let service_ip = registry.service_address(node_prefix, &svc_instance)?;
 
         rules.push(ServiceDnatRule {
             service_ip,
@@ -318,7 +315,7 @@ pub(super) fn build_service_dnat_rules(
             ResourceKind::ExternalService,
             Some(ext_name.as_str()),
         )?;
-        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+        let service_ip = registry.service_address(node_prefix, &svc_instance)?;
         rules.push(ServiceDnatRule {
             service_ip,
             service_port: svc_port,

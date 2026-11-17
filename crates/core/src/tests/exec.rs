@@ -189,8 +189,11 @@ fn rt_exec_rejects_scale_range_with_upper_above_one() {
 }
 
 // spec: RT#command-execution
+// spec: AUTO#scale
+// The range's upper bound of 1 is accepted; at its effective scale of 0 the
+// deployment has no container for the command to run in.
 #[test]
-fn rt_exec_accepts_zero_to_one_range() {
+fn rt_exec_accepts_zero_to_one_range_and_finds_no_container_at_scale_zero() {
     let exec = Arc::new(RecordingExecutor::default());
     let log = InMemoryActionLog::new();
     let result = run_action_with_executor(
@@ -206,11 +209,14 @@ fn rt_exec_accepts_zero_to_one_range() {
         Arc::clone(&exec),
         &log,
     );
+    let OperationResult::Failed(err) = result else {
+        panic!("a deployment at scale 0 has no container to run in, got {result:?}");
+    };
     assert!(
-        matches!(result, OperationResult::Completed),
-        "scale(0..1) must be accepted, got {result:?}"
+        err.to_string().contains("resolved to no instances"),
+        "refused for something other than having no instance: {err}"
     );
-    assert_eq!(exec.calls.lock().len(), 1);
+    assert!(exec.calls.lock().is_empty());
 }
 
 // spec: RT#command-execution

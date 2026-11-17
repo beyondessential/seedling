@@ -18,7 +18,6 @@ use crate::{
         AppPhase,
         registry::{DbInstanceRegistry, InstanceRegistry},
     },
-    system::translate::proxy::instance_ipv6,
 };
 
 // spec: FWD#requesting-a-forward
@@ -142,7 +141,14 @@ pub(crate) async fn forward_port_session(
                 return;
             }
         };
-        instance_ipv6(&state.node_prefix, &instance)
+        // spec: INFRA#service-addresses
+        match registry.service_address(&state.node_prefix, &instance) {
+            Ok(addr) => addr,
+            Err(e) => {
+                write_err(&mut send, "internal", &format!("registry error: {e}")).await;
+                return;
+            }
+        }
     };
 
     let conn_id = conn.stable_id();

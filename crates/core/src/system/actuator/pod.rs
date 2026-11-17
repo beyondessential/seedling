@@ -15,7 +15,6 @@ use crate::{
     system::{
         System,
         priority::WorkloadStanding,
-        translate::proxy::instance_ipv6,
         types::{ActiveState, TransientRestart, TransientUnitSpec},
     },
 };
@@ -268,7 +267,9 @@ impl Actuator {
                     ResourceKind::Service,
                     Some(sp.service.name().as_str()),
                 )?;
-                let service_ip = instance_ipv6(&self.node_prefix, &svc_instance);
+                let service_ip = self
+                    .registry
+                    .service_address(&self.node_prefix, &svc_instance)?;
                 Ok((sp.port.get(), service_ip, sp.port.get()))
             })
             .collect::<Result<Vec<_>, _>>()

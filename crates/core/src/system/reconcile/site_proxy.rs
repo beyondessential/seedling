@@ -18,7 +18,7 @@ use crate::{
         site_ingresses::{self, SiteIngressDef, TlsProvider},
     },
     system::{
-        translate::proxy::{RedirectTarget, ServiceUpstream, instance_ipv6},
+        translate::proxy::{RedirectTarget, ServiceUpstream},
         types::{L4Proto, L4Route},
     },
 };
@@ -313,7 +313,9 @@ fn resolve_forward_upstream(
     let svc_instance = registry
         .get_or_create_singleton(target_app, ResourceKind::Service, Some(svc_name_str))
         .map_err(|e| format!("registry lookup for {target_app}/{svc_name_str} failed: {e}"))?;
-    let service_ip = instance_ipv6(node_prefix, &svc_instance);
+    let service_ip = registry
+        .service_address(node_prefix, &svc_instance)
+        .map_err(|e| format!("address lookup for {target_app}/{svc_name_str} failed: {e}"))?;
 
     // A service no pod binds for the attachment's transport leaves the
     // attachment out, reported as unresolved, rather than serving a 502.

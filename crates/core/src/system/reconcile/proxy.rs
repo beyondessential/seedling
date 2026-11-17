@@ -16,7 +16,7 @@ use crate::{
         lifecycle::LifecycleState, registry::RegistryError,
     },
     system::{
-        translate::proxy::{HttpForwardRoute, HttpRedirectRoute, ServiceUpstream, instance_ipv6},
+        translate::proxy::{HttpForwardRoute, HttpRedirectRoute, ServiceUpstream},
         types::{L4Proto, L4Route, RouteProxy, RouteZone},
     },
 };
@@ -67,7 +67,7 @@ pub(super) fn collect(
 
         let svc_instance =
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
-        let service_ip = instance_ipv6(node_prefix, &svc_instance);
+        let service_ip = registry.service_address(node_prefix, &svc_instance)?;
 
         // The ingress's resource name is "<hostname>:<port>" (multiple
         // ingresses can hang off one service). The instance must be keyed

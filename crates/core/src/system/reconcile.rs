@@ -3176,6 +3176,17 @@ mod tests {
             }
             self.inner.find_all_instances(app, kind, name)
         }
+
+        fn service_address(
+            &self,
+            node_prefix: &Ipv6Net,
+            instance: &crate::runtime::identity::ResourceInstance,
+        ) -> Result<Ipv6Addr, RegistryError> {
+            if instance.app == self.broken {
+                return Err(RegistryError::message("registry unavailable"));
+            }
+            self.inner.service_address(node_prefix, instance)
+        }
     }
 
     fn snapshot_with_service(name: &str) -> AppSnapshot {
