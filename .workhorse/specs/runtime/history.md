@@ -85,7 +85,7 @@ The runtime MUST record in the action execution log each runtime call a lifecycl
 | time | when the runtime recorded the call |
 | operation | the identity of the lifecycle operation |
 | position | the call's position in the closure's sequence of calls |
-| call | the `rt` method called, such as `start`, `stop` or `warm_certs`, and the resources it named, or `Action.invoke` |
+| call | the `rt` method called, such as `start`, `stop` or `warm_certs`, and the resources it named, or `Action.invoke`, or `Guard.release` and the guard's call |
 | invocation | for an `Action.invoke` call, the called action's name and its validated parameter map |
 | barriers | each [barrier](suspension.md#barriers) the call reached: its resources, the lifecycle state it requires, and its deadline |
 | satisfied | for each barrier, whether it has been satisfied |

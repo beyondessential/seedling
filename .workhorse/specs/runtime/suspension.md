@@ -58,8 +58,8 @@ If the runtime restarts while an operation is in progress and decides to [replay
 
 The runtime MAY resume a suspended operation by a replay at any time, and not only after a restart.
 
-A script's action closures MUST NOT have side effects other than through `rt.*` and `Action.invoke` calls.
-Given the same resource graph and parameters, a closure MUST make the same sequence of `rt.*` and `Action.invoke` calls up to any barrier.
+A script's action closures MUST NOT have side effects other than through `rt.*`, `Guard.release` and `Action.invoke` calls.
+Given the same resource graph and parameters, a closure MUST make the same sequence of `rt.*`, `Guard.release` and `Action.invoke` calls up to any barrier.
 
 ### Positional replay
 

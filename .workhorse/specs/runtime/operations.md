@@ -114,7 +114,7 @@ A hold MUST end only when:
 
 - a later operation guards the resource;
 - an operator ends it, as [resource hold](../interface/app-control.md#resource-hold) specifies;
-- the app is uninstalled;
+- the app moves to `Uninstalling`;
 - the app's definition is updated to one that does not declare the resource.
 
 The runtime MUST store each hold durably, with the state it holds, before it clears the persisted operation.
