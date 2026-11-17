@@ -16,16 +16,14 @@ use crate::runtime::{
 #[must_use = "autonomous operation outcome must be recorded; call .complete()"]
 pub struct AutonomousOpHandle {
     db: DbHandle,
-    /// Row id of the inserted autonomous_operations entry, or `None` if
-    /// recording failed (in which case completion is a no-op). The
-    /// reconciler should not abort the actual operation just because the
-    /// log write failed — the system needs to keep converging.
-    id: Option<i64>,
+    /// Row id of the inserted autonomous_operations entry. An operation that
+    /// could not be recorded has no handle, and is not performed.
+    id: i64,
 }
 
 impl AutonomousOpHandle {
     pub fn complete(self, outcome: &str) {
-        let Some(id) = self.id else { return };
+        let id = self.id;
         let outcome = outcome.to_owned();
         self.db.call(move |db| {
             if let Err(e) = history::complete_autonomous_operation(db, id, &outcome) {
@@ -65,13 +63,17 @@ pub fn record(
     let op = operation.to_owned();
     let rule = rule.to_owned();
     let id = db.call(move |db| {
-        let observation_ids = history::recent_observation_ids(db, inst_id, PROVENANCE_OBSERVATIONS)
-            .unwrap_or_default();
-        let prov = Provenance {
-            observation_ids,
-            rule,
-        };
-        history::insert_autonomous_operation(db, inst_id, &op, &prov)
+        // spec: RCN#reconciliation-loop
+        // Observations that cannot be read leave the provenance unknown, not
+        // empty, so the operation is not on record and is not performed.
+        history::recent_observation_ids(db, inst_id, PROVENANCE_OBSERVATIONS)
+            .and_then(|observation_ids| {
+                let prov = Provenance {
+                    observation_ids,
+                    rule,
+                };
+                history::insert_autonomous_operation(db, inst_id, &op, &prov)
+            })
             .map_err(|e| {
                 tracing::warn!(
                     instance = %inst_display,
@@ -82,10 +84,7 @@ pub fn record(
             })
             .ok()
     })?;
-    Some(AutonomousOpHandle {
-        db: db.clone(),
-        id: Some(id),
-    })
+    Some(AutonomousOpHandle { db: db.clone(), id })
 }
 
 /// How long `instance` must wait before `operation` is repeated, from the
@@ -93,23 +92,23 @@ pub fn record(
 ///
 /// Repeats of one operation on one instance are spaced with a delay that grows
 /// with each, to a bound, so a container that exits at once is not restarted
-/// at full speed.
+/// at full speed. A log that cannot be read is an error rather than leave to
+/// proceed: the decision it holds cannot be made without it.
 // spec: HIST#autonomous-operations
+// spec: RCN#reconciliation-loop
 pub fn back_off(
     db: &DbHandle,
     instance: &ResourceInstance,
     operation: &str,
-) -> Option<std::time::Duration> {
+) -> rusqlite::Result<Option<std::time::Duration>> {
     let inst_id = instance.id;
-    let recent = db
-        .call(move |db| history::query_autonomous_operations(db, inst_id))
-        .ok()?;
-    crate::runtime::scheduler::should_back_off(
+    let recent = db.call(move |db| history::query_autonomous_operations(db, inst_id))?;
+    Ok(crate::runtime::scheduler::should_back_off(
         inst_id,
         operation,
         &recent,
         std::time::SystemTime::now(),
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -223,22 +222,53 @@ mod tests {
         let db = DbHandle::from_db(Db::open_in_memory().unwrap());
         let instance = dep("app", "web");
         assert!(
-            back_off(&db, &instance, "start").is_none(),
+            back_off(&db, &instance, "start").unwrap().is_none(),
             "the first goes ahead"
         );
 
         record(&db, &instance, "start", "r").unwrap().complete("ok");
-        let first = back_off(&db, &instance, "start").expect("the repeat waits");
+        let first = back_off(&db, &instance, "start")
+            .unwrap()
+            .expect("the repeat waits");
         record(&db, &instance, "start", "r").unwrap().complete("ok");
-        let second = back_off(&db, &instance, "start").expect("and waits longer");
+        let second = back_off(&db, &instance, "start")
+            .unwrap()
+            .expect("and waits longer");
         assert!(second > first, "{second:?} > {first:?}");
         assert!(
-            back_off(&db, &dep("app", "other"), "start").is_none(),
+            back_off(&db, &dep("app", "other"), "start")
+                .unwrap()
+                .is_none(),
             "another instance is not held back"
         );
         assert!(
-            back_off(&db, &instance, "stop").is_none(),
+            back_off(&db, &instance, "stop").unwrap().is_none(),
             "nor is another operation"
         );
+    }
+
+    // spec: RCN#reconciliation-loop
+    #[test]
+    fn an_unreadable_log_is_no_leave_to_proceed() {
+        let db = DbHandle::from_db(Db::open_in_memory().unwrap());
+        db.call(|db| {
+            db.conn
+                .execute_batch("DROP TABLE autonomous_operations;")
+                .unwrap()
+        });
+        assert!(back_off(&db, &dep("app", "web"), "start").is_err());
+    }
+
+    // spec: RCN#reconciliation-loop
+    // spec: HIST#operation-provenance
+    #[test]
+    fn an_operation_whose_provenance_cannot_be_read_is_not_recorded() {
+        let db = DbHandle::from_db(Db::open_in_memory().unwrap());
+        db.call(|db| {
+            db.conn
+                .execute_batch("DROP TABLE world_observations;")
+                .unwrap()
+        });
+        assert!(record(&db, &dep("app", "web"), "start", "rule").is_none());
     }
 }

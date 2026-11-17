@@ -658,15 +658,28 @@ async fn actuate_one_pod(
             // spec: HIST#autonomous-operations
             // Repeated starts of one instance are spaced, so one that exits
             // as soon as it starts is not restarted at full speed.
-            if !restart_at_once
-                && let Some(wait) = autonomous_ops::back_off(db, &dr.instance, "start")
-            {
-                tracing::debug!(
-                    instance = %dr.instance.display_name,
-                    wait_secs = wait.as_secs(),
-                    "pods: backing off a repeated start"
-                );
-                return Some(obs.result);
+            if !restart_at_once {
+                match autonomous_ops::back_off(db, &dr.instance, "start") {
+                    Ok(None) => {}
+                    Ok(Some(wait)) => {
+                        tracing::debug!(
+                            instance = %dr.instance.display_name,
+                            wait_secs = wait.as_secs(),
+                            "pods: backing off a repeated start"
+                        );
+                        return Some(obs.result);
+                    }
+                    // spec: RCN#reconciliation-loop
+                    // Whether to back off cannot be decided, so the start is
+                    // not performed this iteration.
+                    Err(e) => {
+                        error!(
+                            instance = %dr.instance.display_name,
+                            "pods: the autonomous operations log cannot be read, so the start waits: {e}"
+                        );
+                        return Some(obs.result);
+                    }
+                }
             }
             let Some(op) = autonomous_ops::record(db, &dr.instance, "start", rule) else {
                 return Some(obs.result);
