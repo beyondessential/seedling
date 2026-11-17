@@ -681,6 +681,21 @@ async fn actuate_one_pod(
                     }
                 }
             }
+            // spec: AUTO#recovery-restart
+            // spec: LCY#derivation
+            // Whether the start replaces a failed run is read before it is
+            // made: a history that cannot be read leaves the instance
+            // undetermined, and nothing is done to it this iteration.
+            let prior_run_failed = match db_run_failed(db, &dr.instance) {
+                Ok(failed) => failed,
+                Err(e) => {
+                    error!(
+                        instance = %dr.instance.display_name,
+                        "pods: the instance's history cannot be read, so it is not started: {e}"
+                    );
+                    return Some(obs.result);
+                }
+            };
             let Some(op) = autonomous_ops::record(db, &dr.instance, "start", rule) else {
                 return Some(obs.result);
             };
@@ -698,7 +713,7 @@ async fn actuate_one_pod(
                     // brings the instance back after it exited unexpectedly,
                     // whoever performs it. The unit's failure may not be
                     // recorded yet, so this tick's observation counts too.
-                    result.replaced_failed_run = obs.unit_failed || db_run_failed(db, &dr.instance);
+                    result.replaced_failed_run = obs.unit_failed || prior_run_failed;
                     "ok".to_owned()
                 }
                 Err(crate::system::actuator::ActuateError::ImageUnavailable {
@@ -807,12 +822,11 @@ async fn actuate_one_pod(
 
 /// Whether the instance's most recent recorded run ended in failure.
 // spec: AUTO#recovery-restart
-fn db_run_failed(db: &DbHandle, instance: &ResourceInstance) -> bool {
+fn db_run_failed(db: &DbHandle, instance: &ResourceInstance) -> rusqlite::Result<bool> {
     let instance = instance.clone();
     db.call(move |db| {
         crate::runtime::history::query_observations(db, &instance)
             .map(|o| crate::runtime::barrier::oracle::container_run_succeeded(&o) == Some(false))
-            .unwrap_or(false)
     })
 }
 
