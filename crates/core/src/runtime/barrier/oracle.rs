@@ -261,6 +261,31 @@ impl WorldStateOracle for DbWorldOracle {
 /// Returns the final `LifecycleState` and the `recorded_at` timestamp (ms) of
 /// the observation that caused the last state transition, or `None` if no
 /// transition ever occurred (i.e. state stayed `Pending`).
+/// Begin a new cycle from `Pending` when an instance at the end of one, in
+/// `Terminated` or `Unscheduled`, is observed being set up or running again:
+/// an observation that would take it to `Scheduled`, `Running` or `Ready`.
+///
+/// Any other observation leaves the ended cycle where it is. A unit observed
+/// inactive after its container was removed, or a stop recorded after the
+/// removal it caused was observed, is not the instance coming back, and
+/// starting a new cycle on it left a torn-down instance `Pending` for good.
+// spec: LCY#transitions
+fn start_new_cycle(
+    state: &mut LifecycleState,
+    transition_ms: &mut Option<i64>,
+    next: LifecycleState,
+) {
+    let ended = matches!(
+        state,
+        LifecycleState::Terminated | LifecycleState::Unscheduled
+    );
+    let setting_up = !next.has_reached(LifecycleState::Terminating);
+    if ended && setting_up {
+        *state = LifecycleState::Pending;
+        *transition_ms = None;
+    }
+}
+
 fn drive_observations(
     observations: &[WorldObservation],
     obs_to_state: impl Fn(&str) -> Option<LifecycleState>,
@@ -291,13 +316,7 @@ fn drive_observations_with(
             continue;
         };
 
-        // Terminated and Unscheduled are end-of-cycle states. Reset to
-        // Pending so that subsequent observations (from a container
-        // restart or a reinstall) start a fresh cycle.
-        if state == LifecycleState::Terminated || state == LifecycleState::Unscheduled {
-            state = LifecycleState::Pending;
-            transition_ms = None;
-        }
+        start_new_cycle(&mut state, &mut transition_ms, next);
 
         // Already at or past this state — idempotent, skip.
         if state.has_reached(next) {
@@ -440,11 +459,6 @@ fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleSt
     let mut transition_ms: Option<i64> = None;
 
     for obs in observations {
-        if state == LifecycleState::Terminated || state == LifecycleState::Unscheduled {
-            state = LifecycleState::Pending;
-            transition_ms = None;
-        }
-
         // spec: LCY#containers
         // Health demotion: Ready containers observed as unhealthy drop back to
         // Running, and only to Running — other states are unaffected.
@@ -465,6 +479,7 @@ fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleSt
             "container_removed" => LifecycleState::Unscheduled,
             _ => continue,
         };
+        start_new_cycle(&mut state, &mut transition_ms, next);
 
         if state.has_reached(next) {
             continue;

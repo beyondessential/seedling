@@ -213,6 +213,50 @@ fn auto_removed_short_lived_job_reaches_unscheduled() {
     assert_eq!(state, LifecycleState::Unscheduled);
 }
 
+// spec: LCY#transitions
+// The supervisor reports a stopped unit inactive after the container it ran
+// has been seen removed, which started a new cycle and left a torn-down
+// instance Pending for good.
+#[test]
+fn an_inactive_unit_after_removal_does_not_start_a_new_cycle() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(
+        &resource,
+        &[
+            obs("container_running"),
+            obs("stop_sent"),
+            obs("container_removed"),
+            obs("unit_inactive"),
+        ],
+    );
+    assert_eq!(state, LifecycleState::Unscheduled);
+}
+
+// spec: LCY#transitions
+// A pod whose container had already gone is seen removed before the stop
+// that cleans up what it left is recorded.
+#[test]
+fn a_stop_recorded_after_removal_does_not_start_a_new_cycle() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(&resource, &[obs("container_removed"), obs("stop_sent")]);
+    assert_eq!(state, LifecycleState::Unscheduled);
+}
+
+// spec: LCY#transitions
+#[test]
+fn a_container_running_again_after_removal_starts_a_new_cycle() {
+    let resource = dep("app", "web");
+    let state = derive_lifecycle_state(
+        &resource,
+        &[
+            obs("container_running"),
+            obs("container_removed"),
+            obs("container_running"),
+        ],
+    );
+    assert_eq!(state, LifecycleState::Running);
+}
+
 // spec: LCY#derivation
 #[test]
 fn unknown_obs_kind_is_ignored() {
