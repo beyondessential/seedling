@@ -107,6 +107,54 @@ impl AuditSink {
         )
     }
 
+    // spec: AUD#write-failures
+    /// Open the log before any entry arrives, so a log that cannot be opened
+    /// holds the fault from the start rather than from the first entry.
+    pub fn open(&mut self, db: &DbHandle) {
+        match AuditWriter::open(&self.path) {
+            Ok(writer) => {
+                self.writer = Some(writer);
+                self.cleared(db);
+            }
+            Err(e) => self.failed(&e, db),
+        }
+    }
+
+    fn cleared(&mut self, db: &DbHandle) {
+        self.unwritten = 0;
+        if self.fault_may_be_active {
+            self.fault_may_be_active = false;
+            db.call(|db| {
+                let _ = crate::runtime::faults::clear_fault_by_key(db, &Self::fault_key());
+            });
+        }
+    }
+
+    fn failed(&mut self, e: &io::Error, db: &DbHandle) {
+        self.fault_may_be_active = true;
+        let description = format!(
+            "the audit log {} cannot be written: {e}; {} events have gone unwritten while this fault was active",
+            self.path.display(),
+            self.unwritten
+        );
+        db.call(move |db| {
+            let key = Self::fault_key();
+            let filed = crate::runtime::faults::file_once(
+                db,
+                &key,
+                &crate::runtime::faults::FaultMeta::default(),
+                &description,
+            );
+            match filed {
+                Ok(false) => {
+                    let _ = crate::runtime::faults::update_description(db, &key, &description);
+                }
+                Ok(true) => {}
+                Err(e) => error!("cannot file audit_log_unavailable: {e}"),
+            }
+        });
+    }
+
     // spec: AUD#entries
     // spec: AUD#write-failures
     /// Write one entry, opening the log first if it is not open, and report the
@@ -123,35 +171,12 @@ impl AuditSink {
         match outcome {
             Ok(writer) => {
                 self.writer = Some(writer);
-                self.unwritten = 0;
-                if self.fault_may_be_active {
-                    self.fault_may_be_active = false;
-                    db.call(|db| {
-                        let _ = crate::runtime::faults::clear_fault_by_key(db, &Self::fault_key());
-                    });
-                }
+                self.cleared(db);
             }
             Err(e) => {
                 error!(path = %self.path.display(), "failed to write audit event: {e}");
                 self.unwritten += 1;
-                self.fault_may_be_active = true;
-                let description = format!(
-                    "the audit log {} cannot be written: {e}; {} events have gone unwritten while this fault was active",
-                    self.path.display(),
-                    self.unwritten
-                );
-                db.call(move |db| {
-                    let key = Self::fault_key();
-                    let filed = crate::runtime::faults::file_once(
-                        db,
-                        &key,
-                        &crate::runtime::faults::FaultMeta::default(),
-                        &description,
-                    );
-                    if matches!(filed, Ok(false)) {
-                        let _ = crate::runtime::faults::update_description(db, &key, &description);
-                    }
-                });
+                self.failed(&e, db);
             }
         }
     }
@@ -165,6 +190,7 @@ pub fn spawn_audit_task(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut sink = AuditSink::new(path);
+        sink.open(&db);
         loop {
             match rx.recv().await {
                 Ok(event) => sink.record(&event, &db),
@@ -237,6 +263,12 @@ mod tests {
             })
         };
 
+        sink.open(&db);
+        assert_eq!(
+            held(&db).len(),
+            1,
+            "a log that cannot be opened holds the fault before any entry"
+        );
         sink.record(&test_event("a"), &db);
         sink.record(&test_event("b"), &db);
         let faults = held(&db);
