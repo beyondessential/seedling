@@ -325,9 +325,7 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
     let health = vec![apps_check, faults_check, proxy, resolver];
     let healthy = overall_healthy(&health);
 
-    let active_faults = state
-        .db
-        .call(|db| faults::count_active_faults(db).unwrap_or(0));
+    let active_faults = active_fault_count(state);
 
     // A report that cannot say which apps there are fails rather than going
     // out without them: an absent application reads to Canopy as unreachable.
@@ -425,9 +423,19 @@ fn grade_apps(apps: &[(AppName, AppStatus)]) -> Value {
 
 // spec: CNR#machine-checks
 fn faults_check(state: &Arc<OiState>) -> Value {
-    let active = state
-        .db
-        .call(|db| faults::list_active_faults(db, None).unwrap_or_default());
+    // A fault table that cannot be read says nothing about whether a fault
+    // is active, so the check is broken rather than passed.
+    let active = match state.db.call(|db| faults::list_active_faults(db, None)) {
+        Ok(active) => active,
+        Err(e) => {
+            tracing::error!("cannot read the active faults for the Canopy report: {e}");
+            return check(
+                "health/faults",
+                Result_::Broken,
+                json!({ "reason": format!("the active faults cannot be read: {e}") }),
+            );
+        }
+    };
     if active.is_empty() {
         return check("health/faults", Result_::Passed, json!({ "count": 0 }));
     }
@@ -480,6 +488,19 @@ async fn component_check(state: &Arc<OiState>, name: &str, containers: &[&str]) 
 /// How many lifecycle operations are running. The scheduler runs one at a time,
 /// so this is zero or one; it is reported as a count because that is the shape
 /// the rest of the status surface uses.
+// spec: CNR#machine-detail
+/// The number of active faults, or `None` where it cannot be read, which the
+/// report carries as null rather than 0.
+fn active_fault_count(state: &Arc<OiState>) -> Option<i64> {
+    state.db.call(|db| match faults::count_active_faults(db) {
+        Ok(count) => Some(count),
+        Err(e) => {
+            tracing::error!("cannot count the active faults for the Canopy report: {e}");
+            None
+        }
+    })
+}
+
 fn active_operations(state: &Arc<OiState>) -> usize {
     usize::from(state.scheduler.lock().active().is_some())
 }
@@ -642,6 +663,21 @@ mod tests {
         ]);
         assert_eq!(result_of(&entry), "passed");
         assert_eq!(entry["total"], 4);
+    }
+
+    // spec: CNR#machine-detail
+    // spec: CNR#machine-checks
+    #[test]
+    fn unreadable_faults_are_a_null_count_and_a_broken_check() {
+        let oi = TestOi::new();
+        oi.state
+            .db
+            .call(|db| db.conn.execute_batch("DROP TABLE faults;").unwrap());
+
+        assert_eq!(active_fault_count(&oi.state), None);
+        let faults = faults_check(&oi.state);
+        assert_eq!(faults["result"], "broken");
+        assert!(faults["reason"].is_string());
     }
 
     // spec: CNR#machine-detail
