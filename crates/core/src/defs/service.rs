@@ -128,10 +128,16 @@ impl CustomType for Service {
                 "http",
                 |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    this.def.lock().http.get_or_insert_default();
+                    let port = Port::from_u16(80);
+                    this.def
+                        .lock()
+                        .http
+                        .get_or_insert_default()
+                        .ports
+                        .insert(port.get());
                     Ok(HttpService {
                         service: this.clone().into(),
-                        port: Port::from_u16(80),
+                        port,
                     })
                 },
             )
@@ -140,7 +146,12 @@ impl CustomType for Service {
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
-                    this.def.lock().http.get_or_insert_default();
+                    this.def
+                        .lock()
+                        .http
+                        .get_or_insert_default()
+                        .ports
+                        .insert(port.get());
                     Ok(HttpService {
                         service: this.clone().into(),
                         port,
@@ -429,6 +440,9 @@ pub struct HttpServiceDef {
     /// registering the prefix is how the service knows which routes exist
     /// without having to walk the pods that bind them.
     pub routes: std::collections::BTreeMap<String, RouteDecl>,
+    /// Every Service Port the service is viewed on as an HTTP service.
+    // spec: PRX#route-emission
+    pub ports: std::collections::BTreeSet<u16>,
 }
 
 /// What one declared prefix is, and what was declared on it.
@@ -963,10 +977,16 @@ impl CustomType for ExternalService {
                 "http",
                 |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    this.def.lock().http.get_or_insert_default();
+                    let port = Port::from_u16(80);
+                    this.def
+                        .lock()
+                        .http
+                        .get_or_insert_default()
+                        .ports
+                        .insert(port.get());
                     Ok(HttpService {
                         service: this.clone().into(),
-                        port: Port::from_u16(80),
+                        port,
                     })
                 },
             )
@@ -975,7 +995,12 @@ impl CustomType for ExternalService {
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
-                    this.def.lock().http.get_or_insert_default();
+                    this.def
+                        .lock()
+                        .http
+                        .get_or_insert_default()
+                        .ports
+                        .insert(port.get());
                     Ok(HttpService {
                         service: this.clone().into(),
                         port,

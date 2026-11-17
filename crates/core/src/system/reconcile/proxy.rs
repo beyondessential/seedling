@@ -5,7 +5,6 @@ use crate::{
     defs::{
         app::AppDef,
         ingress::IngressDef,
-        pod::PodDef,
         resource::{Resource, ResourceKind},
         service::{
             HttpServiceDef, ProxySettings, REDIRECT_OWNED_HEADER, RateLimitScope, RouteDecl,
@@ -70,8 +69,6 @@ pub(super) fn collect(
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
         let service_ip = instance_ipv6(node_prefix, &svc_instance);
 
-        let upstream_port = find_upstream_port(snapshot, svc_name, def.port.get());
-
         // The ingress's resource name is "<hostname>:<port>" (multiple
         // ingresses can hang off one service). The instance must be keyed
         // by the same name the AppDef uses, otherwise the status rollup
@@ -87,7 +84,9 @@ pub(super) fn collect(
             if def.tls || def.dtls {
                 certificate_hostnames.push(def.hostname.clone());
             }
-            let upstream_url = format!("[{}]:{}", service_ip, upstream_port);
+            // spec: ING#declaration
+            // Delivered to the Service at the ingress's own port number.
+            let upstream_url = format!("[{}]:{}", service_ip, def.port.get());
 
             // spec: ING#termination
             // A DTLS ingress accepts DTLS over UDP and nothing on TCP; one with
@@ -139,6 +138,7 @@ pub(super) fn collect(
         // Read from the service's own declaration rather than from the pods,
         // there being no pod behind a redirect to read it from.
         let redirects = collect_redirect_routes(service_def);
+        let service_port = service_def.fallback_port(def.port.get());
 
         pairs.push((
             def,
@@ -146,7 +146,7 @@ pub(super) fn collect(
                 routes,
                 redirects,
                 service_ip,
-                service_port: upstream_port,
+                service_port,
                 proxy: service_level_proxy(snapshot, svc_name, service_def),
             },
         ));
@@ -187,55 +187,6 @@ pub(super) fn collect(
     })
 }
 
-/// Scan all Deployment and Job pod definitions for the first TCP or HTTP
-/// binding that references `service_name`, and return the pod port.
-///
-/// Falls back to `fallback_port` (the ingress's declared port) when no
-/// binding is found.
-///
-/// # Port translation
-/// Service DNAT rules handle translation from service port to pod port,
-/// so the returned port is always the service-facing port.
-fn find_upstream_port(snapshot: &AppDef, service_name: &str, fallback_port: u16) -> u16 {
-    for resource in snapshot.resources.values() {
-        let result = match resource {
-            Resource::Deployment(dep) => {
-                let def = dep.def.lock();
-                let pod = def.pod.lock();
-                scan_pod_for_port(&pod, service_name)
-            }
-            Resource::Job(job) => {
-                let def = job.def.lock();
-                let pod = def.pod.lock();
-                scan_pod_for_port(&pod, service_name)
-            }
-            _ => None,
-        };
-
-        if let Some(port) = result {
-            return port;
-        }
-    }
-
-    fallback_port
-}
-
-fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
-    for b in &pod.tcp_bindings {
-        if b.service_port.service.name().as_str() == service_name {
-            return Some(b.service_port.port.get());
-        }
-    }
-
-    for b in &pod.http_bindings {
-        if b.route.http.service.name().as_str() == service_name {
-            return Some(b.route.http.port.get());
-        }
-    }
-
-    None
-}
-
 /// Everything the emitters need from one service's declaration.
 ///
 /// Read in a single pass under a single lock, and handed to each collector,
@@ -248,11 +199,21 @@ pub(super) struct ServiceProxyDef {
     pub service: ProxySettings,
     /// Every prefix the service declared, and what each is.
     pub routes: RouteMap,
+    /// The lowest Service Port the service is viewed on as an HTTP service.
+    pub lowest_http_port: Option<u16>,
 }
 
 type RouteMap = std::collections::BTreeMap<String, RouteDecl>;
 
 impl ServiceProxyDef {
+    /// The port of the fallback route's upstream: the lowest Service Port the
+    /// service is viewed on as an HTTP service, or the ingress's own port
+    /// where it is viewed on none.
+    // spec: PRX#route-emission
+    pub(super) fn fallback_port(&self, ingress_port: u16) -> u16 {
+        self.lowest_http_port.unwrap_or(ingress_port)
+    }
+
     /// What one prefix declared for itself, for resolution against the
     /// service's own values.
     fn settings(&self, prefix: &str) -> Option<&ProxySettings> {
@@ -266,6 +227,7 @@ pub(super) fn service_proxy_def(snapshot: &AppDef, service_name: &str) -> Servic
     let gather = |settings: ProxySettings, http: Option<&HttpServiceDef>| ServiceProxyDef {
         service: settings,
         routes: http.map(|h| h.routes.clone()).unwrap_or_default(),
+        lowest_http_port: http.and_then(|h| h.ports.first().copied()),
     };
     snapshot
         .resources
@@ -631,6 +593,86 @@ mod certificate_tests {
                 (5684, L4Proto::Udp, false),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod upstream_port_tests {
+    use super::*;
+    use crate::{runtime::EphemeralInstanceRegistry, tests::run_test_script_app};
+
+    fn collect_for(script: &str) -> ProxyBuildOutput {
+        let app = run_test_script_app(script);
+        collect(
+            &app.def.load(),
+            &DesiredState::default(),
+            &"fd5e:ed12:3456::/48".parse().unwrap(),
+            &EphemeralInstanceRegistry::new(),
+            &AppName::new_unchecked("demo"),
+            &[],
+        )
+        .expect("collects")
+    }
+
+    // spec: PRX#route-emission
+    #[test]
+    fn the_fallback_route_reaches_the_lowest_port_the_service_is_viewed_on_over_http() {
+        let out = collect_for(
+            r#"
+            let web = app.service("web");
+            web.http(9090);
+            web.http(8080).ingress("site.example.com", 443).tls(Terminate.Https, Output.Http1);
+            app.deployment("app").tcp(5432, web.port(7000));
+        "#,
+        );
+        let [(_, upstream)] = out.pairs.as_slice() else {
+            panic!("one HTTPS ingress, got {}", out.pairs.len());
+        };
+        assert!(upstream.routes.is_empty(), "no pod binds a prefix");
+        assert_eq!(upstream.service_port, 8080);
+    }
+
+    // spec: PRX#route-emission
+    #[test]
+    fn a_service_viewed_on_no_http_port_falls_back_to_the_ingress_port() {
+        let out = collect_for(
+            r#"
+            let web = app.service("web");
+            web.ingress("site.example.com", 8443).tls(Terminate.Https, Output.Http1);
+            app.deployment("app").tcp(5432, web.port(7000));
+        "#,
+        );
+        let [(_, upstream)] = out.pairs.as_slice() else {
+            panic!("one HTTPS ingress, got {}", out.pairs.len());
+        };
+        assert_eq!(upstream.service_port, 8443);
+    }
+
+    // spec: ING#declaration
+    #[test]
+    fn a_tls_dtls_or_unterminated_ingress_reaches_the_service_at_its_own_port() {
+        let out = collect_for(
+            r#"
+            let web = app.service("web");
+            web.http(80);
+            web.ingress("db.example.com", 5432).tls(Terminate.Tls, Output.Tcp);
+            web.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+            web.ingress("raw.example.com", 2222);
+            app.deployment("app").tcp(9999, web.port(7000));
+        "#,
+        );
+        let mut routes: Vec<(u16, String)> = out
+            .l4_routes
+            .iter()
+            .map(|r| (r.port, r.upstreams.join(",")))
+            .collect();
+        routes.sort();
+        for (port, upstream) in routes {
+            assert!(
+                upstream.ends_with(&format!("]:{port}")),
+                "the ingress on {port} reaches {upstream}"
+            );
+        }
     }
 }
 

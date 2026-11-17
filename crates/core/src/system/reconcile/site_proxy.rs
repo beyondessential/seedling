@@ -161,7 +161,7 @@ fn resolve_attachment(
                 match resolve_forward_upstream(
                     app,
                     service,
-                    att.protocol,
+                    att,
                     apps,
                     running_pods_by_app,
                     node_prefix,
@@ -250,7 +250,7 @@ fn resolve_attachment(
             match resolve_forward_upstream(
                 app,
                 service,
-                att.protocol,
+                att,
                 apps,
                 running_pods_by_app,
                 node_prefix,
@@ -286,7 +286,7 @@ fn resolve_attachment(
 fn resolve_forward_upstream(
     target_app: &AppName,
     target_service: &seedling_protocol::names::AppServiceName,
-    protocol: AttachmentProtocol,
+    att: &SiteIngressAttachment,
     apps: &[AppSnapshot],
     running_pods_by_app: &std::collections::HashMap<AppName, Vec<super::RunningPod>>,
     node_prefix: &Ipv6Net,
@@ -317,7 +317,7 @@ fn resolve_forward_upstream(
 
     // A service no pod binds for the attachment's transport leaves the
     // attachment out, reported as unresolved, rather than serving a 502.
-    let upstream_port = scan_apps_for_service_port(snapshot, svc_name_str, protocol)
+    let forwarded_port = scan_apps_for_service_port(snapshot, svc_name_str, att.protocol)
         .ok_or_else(|| format!("no pod binding found for {target_app}/{svc_name_str}"))?;
 
     // spec: PRX#route-emission
@@ -349,11 +349,21 @@ fn resolve_forward_upstream(
     // site ingress attached to the same service.
     let redirects = super::proxy::collect_redirect_routes(&service_def);
 
+    // spec: SITE#attachments
+    // spec: PRX#route-emission
+    // A TCP or UDP attachment's traffic reaches the forwarded port. An HTTP
+    // attachment's routes are the service's, as an app ingress's would be, so
+    // its fallback route's upstream is where an app ingress's would be.
+    let service_port = match att.protocol {
+        AttachmentProtocol::Tcp | AttachmentProtocol::Udp => forwarded_port,
+        AttachmentProtocol::Http | AttachmentProtocol::Http2 => service_def.fallback_port(att.port),
+    };
+
     Ok(ServiceUpstream {
         routes,
         redirects,
         service_ip,
-        service_port: upstream_port,
+        service_port,
         // Resolved against the app that declares the service, not the site,
         // so an attachment serves a route exactly as its own ingress would.
         proxy: super::proxy::service_level_proxy(&snapshot.app_def, svc_name_str, &service_def),
@@ -867,6 +877,58 @@ mod tests {
         // An HTTP route binding serves a TCP transport, never UDP.
         assert_eq!(port("web", AttachmentProtocol::Http), Some(80));
         assert_eq!(port("web", AttachmentProtocol::Udp), None);
+    }
+
+    // spec: PRX#route-emission
+    // spec: SITE#attachments
+    #[test]
+    fn an_http_attachments_fallback_route_reaches_where_an_app_ingress_would() {
+        let app = snapshot(
+            r#"
+            let web = app.service("web");
+            web.http(8080);
+            app.deployment("app").image("docker.io/library/nginx:1").tcp(1, web.port(7000));
+        "#,
+        );
+        let attachment = |port, protocol| SiteIngressAttachment {
+            site_ingress: site("edge"),
+            port,
+            protocol,
+            target: AttachmentTarget::Forward {
+                app: app.name.clone(),
+                service: seedling_protocol::names::AppServiceName::new("web").unwrap(),
+            },
+            created_at: String::new(),
+        };
+        let upstream_port = |att: SiteIngressAttachment| {
+            let AttachmentTarget::Forward {
+                app: target,
+                service,
+            } = &att.target
+            else {
+                unreachable!()
+            };
+            resolve_forward_upstream(
+                target,
+                service,
+                &att,
+                std::slice::from_ref(&app),
+                &Default::default(),
+                &"fd5e:ed12:3456::/48".parse().unwrap(),
+                &crate::runtime::EphemeralInstanceRegistry::new(),
+            )
+            .expect("resolves")
+            .service_port
+        };
+
+        assert_eq!(
+            upstream_port(attachment(443, AttachmentProtocol::Http)),
+            8080
+        );
+        assert_eq!(
+            upstream_port(attachment(4433, AttachmentProtocol::Tcp)),
+            7000
+        );
     }
 
     // spec: ING#claims-across-apps
