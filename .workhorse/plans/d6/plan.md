@@ -197,4 +197,4 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - [x] Teardown waits while the app still has anonymous-volume records, so a failed removal is retried rather than forgotten.
 - [x] Dynamic-resource cleanup at the end of an operation treats an unreadable list as an error and keeps trying at a capped back-off instead of giving up after a minute; no fault kind in the catalogue fits its stall, so it logs an error (spec decision needed).
 - [x] `rt.start` fails when the dynamic resource cannot be recorded, rather than starting something nothing knows of.
-- [ ] The unused `deregistering` error code and app status are removed.
+- [x] The unused `deregistering` error code and app status are removed.

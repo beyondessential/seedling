@@ -22,7 +22,6 @@ describe("statusColor", () => {
   it("maps quiescent states to default", () => {
     expect(statusColor("not_installed")).toBe("default");
     expect(statusColor("uninstalling")).toBe("default");
-    expect(statusColor("deregistering")).toBe("default");
   });
 });
 

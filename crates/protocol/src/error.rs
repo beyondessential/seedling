@@ -27,7 +27,6 @@ pub enum ErrorCode {
     ImageInUse,
     // spec: DEFN#registry-access
     RegistryNotAllowed,
-    Deregistering,
     ServerBusy,
     Internal,
     // spec: RLY#disabled-access
@@ -91,7 +90,6 @@ mod tests {
             (ErrorCode::FetchFailed, "fetch_failed"),
             (ErrorCode::ImageInUse, "image_in_use"),
             (ErrorCode::RegistryNotAllowed, "registry_not_allowed"),
-            (ErrorCode::Deregistering, "deregistering"),
             (ErrorCode::ServerBusy, "server_busy"),
             (ErrorCode::Internal, "internal"),
         ];

@@ -1699,7 +1699,6 @@ function ActionsSection({
     status !== "not_installed" &&
     status !== "installing" &&
     status !== "uninstalling" &&
-    status !== "deregistering" &&
     status !== "operating";
 
   if (actions.length === 0)
@@ -2572,8 +2571,7 @@ export default function AppDetail() {
         )}
         {data?.status !== "not_installed" &&
           data?.status !== "installing" &&
-          data?.status !== "uninstalling" &&
-          data?.status !== "deregistering" && (
+          data?.status !== "uninstalling" && (
             <OutlinedActionButton
               safety="dangerous"
               size="small"
