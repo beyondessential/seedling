@@ -413,8 +413,7 @@ fn undetermined_memory_fails_the_evaluation() {
         ..facts()
     };
     let err = crate::defs::scope_with(&undetermined, Default::default())
-        .err()
-        .expect("the evaluation fails");
+        .expect_err("the evaluation fails");
     assert!(err.contains("AVAILABLE_MEMORY"), "{err}");
 }
 
@@ -426,8 +425,7 @@ fn an_undetermined_node_name_fails_the_evaluation() {
         ..facts()
     };
     let err = crate::defs::scope_with(&undetermined, Default::default())
-        .err()
-        .expect("the evaluation fails");
+        .expect_err("the evaluation fails");
     assert!(err.contains("NODE_NAME"), "{err}");
 }
 
