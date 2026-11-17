@@ -9,7 +9,7 @@ use crate::{
     runtime::{
         autonomous_ops,
         db::DbHandle,
-        desired::{DesiredResource, DesiredState},
+        desired::{DesiredResource, DesiredState, undeclared_pod},
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
         priority::AppPriority,
@@ -1007,11 +1007,28 @@ pub(super) async fn observe_and_actuate(
     completed_jobs: &HashSet<InstanceId>,
     crash_looped: &HashSet<InstanceId>,
 ) -> PodActuationUpdate {
+    // spec: TRD#teardown
+    // An undeclared pod instance is held Unscheduled like any other, and
+    // stopping it needs only its recorded identity.
+    let undeclared: Vec<DesiredResource> = desired
+        .undeclared
+        .iter()
+        .filter_map(|instance| {
+            Some(DesiredResource {
+                instance: instance.clone(),
+                desired: LifecycleState::Unscheduled,
+                definition: undeclared_pod(instance)?,
+                demoted: false,
+            })
+        })
+        .collect();
+
     // Phase 1: observe all instances concurrently.
     let pod_resources: Vec<&DesiredResource> = desired
         .resources
         .iter()
         .filter(|dr| matches!(&dr.definition, Resource::Deployment(_) | Resource::Job(_)))
+        .chain(&undeclared)
         .collect();
 
     let observe_futures: Vec<_> = pod_resources

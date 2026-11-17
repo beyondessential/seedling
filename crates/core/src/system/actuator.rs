@@ -617,71 +617,97 @@ impl Actuator {
             Resource::Volume(vol) => {
                 let tmpfs = vol.def.lock().tmpfs;
                 if tmpfs {
-                    // spec: ACTU#volume-storage
-                    // Remove the directory holding the data, not a stand-in
-                    // for it: the tmpfs backing under /run is reclaimed once
-                    // the directory is gone.
-                    let host_path = tmpfs_volume_path(&instance.display_name);
-                    // spec: ACTU#storage-confinement — a symlink wearing the
-                    // name is refused rather than unlinked, so a stop never
-                    // reports a cleanup that removed only a link.
-                    if crate::system::confined::owned_dir_async(&host_path)
-                        .await
-                        .context(VolumeWriteSnafu {
-                            path: host_path.clone(),
-                        })?
-                        && let Err(e) = tokio::fs::remove_dir_all(&host_path).await
-                        && e.kind() != std::io::ErrorKind::NotFound
-                    {
-                        return Err(VolumeWriteSnafu { path: host_path }.into_error(e));
-                    }
-                    // Earlier releases stood a podman tmpfs-driver volume up
-                    // beside the directory. Reap it on the way past, by the
-                    // exact name those releases gave it.
-                    let podman_name = &instance.display_name;
-                    if self
-                        .driver
-                        .container
-                        .volume_exists(podman_name)
-                        .await
-                        .context(ContainerSnafu)?
-                    {
-                        self.driver
-                            .container
-                            .remove_volume(podman_name)
-                            .await
-                            .context(ContainerSnafu)?;
-                    }
+                    self.remove_tmpfs_volume(instance).await
                 } else {
-                    // spec: ACTU#held-volumes
-                    let vol_store = &self.driver.volume_store;
-                    let name = VolumeName::of_instance(instance);
-                    let held = vol_store
-                        .hold(&name, instance.app.as_str(), "removed from app definition")
-                        .await
-                        .map_err(|e| {
-                            VolumeWriteSnafu {
-                                path: vol_store.path(&name),
-                            }
-                            .into_error(e)
-                        })?;
-                    if let Some(meta) = held {
-                        // spec: ACTU#held-volumes
-                        self.event_tx.held_volume_created(
-                            meta.id,
-                            &instance.app,
-                            &meta.volume_name,
-                            &meta.reason,
-                            None,
-                        );
-                    }
+                    self.hold_named_volume(instance).await
                 }
-                Ok(())
             }
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(()),
             Resource::Service(_) => Ok(()),
             Resource::Ingress(_) => Ok(()),
         }
+    }
+
+    /// Stop a volume instance nothing declares, which leaves nothing to say
+    /// where its storage is: remove it at the tmpfs path its recorded identity
+    /// gives it, and hold it from the volume store under the name that
+    /// identity gives it, whichever of the two stands.
+    // spec: TRD#teardown
+    // spec: ACTU#volume-removal
+    #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
+    pub async fn stop_undeclared_volume(
+        &self,
+        instance: &ResourceInstance,
+    ) -> Result<(), ActuateError> {
+        self.remove_tmpfs_volume(instance).await?;
+        self.hold_named_volume(instance).await
+    }
+
+    /// Remove a tmpfs volume's storage. Storage that is not there is not an
+    /// error.
+    async fn remove_tmpfs_volume(&self, instance: &ResourceInstance) -> Result<(), ActuateError> {
+        // spec: ACTU#volume-storage
+        // Remove the directory holding the data, not a stand-in for it: the
+        // tmpfs backing under /run is reclaimed once the directory is gone.
+        let host_path = tmpfs_volume_path(&instance.display_name);
+        // spec: ACTU#storage-confinement — a symlink wearing the name is
+        // refused rather than unlinked, so a stop never reports a cleanup that
+        // removed only a link.
+        if crate::system::confined::owned_dir_async(&host_path)
+            .await
+            .context(VolumeWriteSnafu {
+                path: host_path.clone(),
+            })?
+            && let Err(e) = tokio::fs::remove_dir_all(&host_path).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(VolumeWriteSnafu { path: host_path }.into_error(e));
+        }
+        // Earlier releases stood a podman tmpfs-driver volume up beside the
+        // directory. Reap it on the way past, by the exact name those releases
+        // gave it.
+        let podman_name = &instance.display_name;
+        if self
+            .driver
+            .container
+            .volume_exists(podman_name)
+            .await
+            .context(ContainerSnafu)?
+        {
+            self.driver
+                .container
+                .remove_volume(podman_name)
+                .await
+                .context(ContainerSnafu)?;
+        }
+        Ok(())
+    }
+
+    /// Hold a named volume's storage for operator review. Storage that is not
+    /// there is not an error.
+    // spec: ACTU#held-volumes
+    async fn hold_named_volume(&self, instance: &ResourceInstance) -> Result<(), ActuateError> {
+        let vol_store = &self.driver.volume_store;
+        let name = VolumeName::of_instance(instance);
+        let held = vol_store
+            .hold(&name, instance.app.as_str(), "removed from app definition")
+            .await
+            .map_err(|e| {
+                VolumeWriteSnafu {
+                    path: vol_store.path(&name),
+                }
+                .into_error(e)
+            })?;
+        if let Some(meta) = held {
+            self.event_tx.held_volume_created(
+                meta.id,
+                &instance.app,
+                &meta.volume_name,
+                &meta.reason,
+                None,
+            );
+        }
+        Ok(())
     }
 
     /// Hold a named volume's data for operator review instead of deleting it.

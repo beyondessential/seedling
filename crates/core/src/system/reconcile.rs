@@ -14,7 +14,11 @@ use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{error, warn};
 
 use crate::{
-    defs::{app::AppDef, enums::Priority, resource::Resource},
+    defs::{
+        app::AppDef,
+        enums::Priority,
+        resource::{Resource, ResourceKind},
+    },
     oi::shells::ShellRegistry,
     runtime::{
         AppPhase, InstanceRegistry,
@@ -992,9 +996,7 @@ impl Reconciler {
                         &effective_scales,
                         &stopped_set,
                     ),
-                    None => Ok(DesiredState {
-                        resources: Vec::new(),
-                    }),
+                    None => Ok(DesiredState::default()),
                 },
                 // spec: RCN#desired-state
                 // From the moment the start action is initiated until it ends,
@@ -1008,9 +1010,7 @@ impl Reconciler {
                             .start_pending
                             .load(std::sync::atomic::Ordering::Acquire) =>
                 {
-                    Ok(DesiredState {
-                        resources: Vec::new(),
-                    })
+                    Ok(DesiredState::default())
                 }
                 AppPhase::Installed => compute(
                     &name,
@@ -1032,6 +1032,13 @@ impl Reconciler {
                         &name,
                         &format!("failed to compute desired state: {e}"),
                     );
+                    // spec: TRD#uninstall-scope
+                    // An uninstalling app's desired state is its recorded
+                    // instances, so failing to compute it is failing to read
+                    // them, and the teardown is held until they can be read.
+                    if phase == AppPhase::Uninstalling {
+                        self.hold_teardown_identities_unreadable(&name, &e.to_string());
+                    }
                     skipped += 1;
                     continue;
                 }
@@ -2435,14 +2442,22 @@ impl Reconciler {
         apps: &[AppSnapshot],
     ) {
         let mut observations = Vec::new();
-        for dr in &app.desired.resources {
-            let (removed, cleaned_up) = match &dr.definition {
-                Resource::Service(_) => ("network_removed", "network_cleaned_up"),
-                Resource::Ingress(_) => ("ingress_removed", "ingress_cleaned_up"),
+        // The undeclared ones as much as the declared: neither's routes or
+        // virtual hosts are in the state applied after this.
+        let instances = app
+            .desired
+            .resources
+            .iter()
+            .map(|dr| &dr.instance)
+            .chain(&app.desired.undeclared);
+        for instance in instances {
+            let (removed, cleaned_up) = match instance.kind {
+                ResourceKind::Service => ("network_removed", "network_cleaned_up"),
+                ResourceKind::Ingress => ("ingress_removed", "ingress_cleaned_up"),
                 _ => continue,
             };
             for kind in ["stop_sent", removed, cleaned_up] {
-                observations.push((dr.instance.clone(), kind, serde_json::json!({})));
+                observations.push((instance.clone(), kind, serde_json::json!({})));
             }
         }
         self.persist_obs(observations);
@@ -2727,6 +2742,7 @@ impl Reconciler {
                         .resources
                         .iter()
                         .map(|dr| dr.instance.id)
+                        .chain(app.desired.undeclared.iter().map(|instance| instance.id))
                         .collect();
                     self.written_obs
                         .retain(|(id, _)| !app_instance_ids.contains(id));
@@ -3177,6 +3193,16 @@ mod tests {
                 return Err(RegistryError::message("registry unavailable"));
             }
             self.inner.find_all_instances(app, kind, name)
+        }
+
+        fn instances_of_app(
+            &self,
+            app: &AppName,
+        ) -> Result<Vec<crate::runtime::identity::ResourceInstance>, RegistryError> {
+            if app == &self.broken {
+                return Err(RegistryError::message("registry unavailable"));
+            }
+            self.inner.instances_of_app(app)
         }
 
         fn service_address(
@@ -4113,6 +4139,189 @@ mod tests {
             })
             .unwrap();
         assert!(remaining.is_empty(), "{recorded:?}");
+    }
+
+    /// Run the phases that tear an uninstalling app down, the pods phase and
+    /// the uninstall phase, until `app` is `NotInstalled` or well past what a
+    /// teardown takes.
+    fn tear_down(oi: &crate::oi::test_support::TestOi, reconciler: &mut Reconciler, app: &str) {
+        for _ in 0..5 {
+            if phase_of(oi, app) == AppPhase::NotInstalled {
+                return;
+            }
+            let (apps, _) = reconciler.snapshot_all_apps();
+            let pod_updates = oi.block_on(phases::run_pods_phase(
+                &reconciler.observer,
+                &reconciler.actuator,
+                &reconciler.driver,
+                &reconciler.db,
+                &apps,
+                &reconciler.written_obs,
+                &reconciler.started_jobs,
+                &reconciler.completed_jobs,
+                &reconciler.crash_looped,
+            ));
+            let (running, _) = reconciler.ingest_pod_results(&apps, pod_updates);
+            oi.block_on(reconciler.run_uninstall_phase(&apps, &running));
+        }
+    }
+
+    fn network_exists(oi: &crate::oi::test_support::TestOi, network: &str) -> bool {
+        oi.block_on(oi.state.driver.container.network_exists(network))
+            .unwrap()
+    }
+
+    /// A harness over the stub system whose container runtime is returned
+    /// beside it, so a test can stand containers up on it directly.
+    fn with_stub_containers() -> (
+        crate::oi::test_support::TestOi,
+        Arc<crate::system::stub::StubContainerRuntime>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let container = Arc::new(crate::system::stub::StubContainerRuntime::new(
+            dir.path().join("vols"),
+        ));
+        let process = Arc::new(crate::system::stub::StubProcessManager::new(Arc::clone(
+            &container,
+        )));
+        let backends = crate::system::backends::Backends::working(
+            Arc::clone(&container) as Arc<dyn crate::system::ContainerRuntime>,
+            process,
+        );
+        let system = Arc::new(crate::system::System {
+            container: backends.container(),
+            process: backends.process(),
+            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
+            data_plane: Arc::new(crate::system::stub::StubDataPlane),
+            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+            backends,
+        });
+        (
+            crate::oi::test_support::TestOi::with_driver(system),
+            container,
+            dir,
+        )
+    }
+
+    /// Stand a pod instance up on the host, its container running on its pod
+    /// network, returning the network's name.
+    ///
+    /// The stub supervisor keeps a unit loaded once it is stopped, where
+    /// systemd unloads a stopped transient unit, so the unit is left out.
+    fn run_pod(
+        oi: &crate::oi::test_support::TestOi,
+        containers: &crate::system::stub::StubContainerRuntime,
+        instance: &crate::runtime::identity::ResourceInstance,
+    ) -> String {
+        let network = format!("seedling-{}", instance.display_name);
+        containers.seed_container(&instance.display_name, &[]);
+        oi.block_on(oi.state.driver.container.create_network(
+            &network,
+            "fd00:0:0:1::/64".parse().unwrap(),
+            None,
+        ))
+        .unwrap();
+        network
+    }
+
+    fn container_exists(oi: &crate::oi::test_support::TestOi, name: &str) -> bool {
+        oi.block_on(oi.state.driver.container.inspect(name))
+            .unwrap()
+            .is_some()
+    }
+
+    fn record(
+        oi: &crate::oi::test_support::TestOi,
+        app: &str,
+        kind: crate::defs::resource::ResourceKind,
+        name: Option<&str>,
+    ) -> crate::runtime::identity::ResourceInstance {
+        let app = AppName::new(app).unwrap();
+        let name = name.map(str::to_owned);
+        oi.state.db.call(move |db| {
+            crate::runtime::history::get_or_create_singleton(db, &app, kind, name.as_deref())
+                .unwrap()
+        })
+    }
+
+    // spec: TRD#teardown
+    // spec: RCN#desired-state
+    // An update that drops a resource leaves its running instances as they
+    // are, and leaves the uninstall with a definition that no longer declares
+    // them. Only the declared resources' instances were in the uninstalling
+    // desired state, so these were never stopped and the uninstall never
+    // completed.
+    #[test]
+    fn an_uninstall_stops_the_instances_of_resources_an_update_dropped() {
+        use crate::defs::resource::ResourceKind::{Deployment, Volume};
+
+        let (oi, containers, _dir) = with_stub_containers();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "app", "script": r#"
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                app.deployment("api").image("docker.io/library/nginx:1.29");
+                app.volume("data");
+            "# }),
+        )
+        .unwrap();
+        oi.install("app");
+        let web = record(&oi, "app", Deployment, Some("web"));
+        let data = record(&oi, "app", Volume, Some("data"));
+        let network = run_pod(&oi, &containers, &web);
+        let storage = crate::runtime::identity::VolumeName::of_instance(&data);
+        oi.block_on(oi.state.driver.volume_store.create(&storage))
+            .unwrap();
+
+        oi.call(
+            "/apps/update",
+            serde_json::json!({ "app": "app", "script": r#"
+                app.deployment("api").image("docker.io/library/nginx:1.29");
+            "# }),
+        )
+        .unwrap();
+        oi.call("/apps/uninstall", serde_json::json!({ "app": "app" }))
+            .unwrap();
+        let mut reconciler = test_reconciler(&oi);
+        tear_down(&oi, &mut reconciler, "app");
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        assert!(!container_exists(&oi, &web.display_name));
+        assert!(!network_exists(&oi, &network));
+        assert!(
+            !oi.state.driver.volume_store.exists(&storage),
+            "the dropped volume's data is held, as a declared one's is"
+        );
+    }
+
+    // spec: TRD#teardown
+    // spec: RCN#desired-state
+    // An instance an operation created is anonymous, so no definition ever
+    // declares it. One left standing when its operation ended is stopped by
+    // the uninstall from its recorded identity.
+    #[test]
+    fn an_uninstall_stops_an_instance_an_operation_created() {
+        use crate::defs::resource::ResourceKind::Deployment;
+
+        let (oi, containers, _dir) = with_stub_containers();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "app", "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+        )
+        .unwrap();
+        oi.install("app");
+        let anonymous = record(&oi, "app", Deployment, None);
+        let network = run_pod(&oi, &containers, &anonymous);
+
+        oi.call("/apps/uninstall", serde_json::json!({ "app": "app" }))
+            .unwrap();
+        let mut reconciler = test_reconciler(&oi);
+        tear_down(&oi, &mut reconciler, "app");
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        assert!(!container_exists(&oi, &anonymous.display_name));
+        assert!(!network_exists(&oi, &network));
     }
 
     // spec: PRIO#unreadable-priorities

@@ -159,7 +159,13 @@ it. The logic lives in `src/runtime/desired.rs`:
   `ensure_scaled_group` which splits instances into `keep` (desired
   `Ready`) and `excess` (desired `Unscheduled`).
 - **During operations**: desired state comes from `OperationProgress`.
-- **Uninstalling**: all instances desired at `Unscheduled`. The uninstall
+- **Uninstalling** (`compute_uninstalling`): every instance recorded for
+  the app desired at `Unscheduled`, including those of resources the
+  definition no longer declares (dropped by an update, or created
+  anonymously by an operation). Those undeclared instances are torn down
+  from their recorded identity alone: a pod's unit, container and network
+  by name, and a volume's storage at both its tmpfs path and its
+  volume-store name, holding whichever stands. The uninstall
   completes, and the recorded instances are forgotten, only once every
   recorded instance whose kind has a lifecycle is `Unscheduled`. While the
   recorded identities cannot be read it holds a

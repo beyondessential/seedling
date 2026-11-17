@@ -3,7 +3,7 @@ use serde_json::json;
 use tracing::error;
 
 use crate::{
-    defs::resource::Resource,
+    defs::resource::{Resource, ResourceKind},
     runtime::{
         autonomous_ops,
         db::DbHandle,
@@ -67,12 +67,47 @@ impl VolumeActuationUpdate {
     }
 }
 
+/// A volume instance the volumes phase acts on.
+#[derive(Clone, Copy)]
+enum VolumeTarget<'a> {
+    /// One a definition declares, in the state the desired state gives it.
+    Declared(&'a DesiredResource),
+    /// One nothing declares, held `Unscheduled` and torn down from its
+    /// recorded identity.
+    // spec: TRD#teardown
+    Undeclared(&'a ResourceInstance),
+}
+
+impl<'a> VolumeTarget<'a> {
+    fn instance(self) -> &'a ResourceInstance {
+        match self {
+            Self::Declared(dr) => &dr.instance,
+            Self::Undeclared(instance) => instance,
+        }
+    }
+
+    fn desired(self) -> LifecycleState {
+        match self {
+            Self::Declared(dr) => dr.desired,
+            Self::Undeclared(_) => LifecycleState::Unscheduled,
+        }
+    }
+
+    fn definition(self) -> Option<&'a Resource> {
+        match self {
+            Self::Declared(dr) => Some(&dr.definition),
+            Self::Undeclared(_) => None,
+        }
+    }
+}
+
 async fn process_one_volume(
     observer: &Observer,
     actuator: &Actuator,
     db: &DbHandle,
-    dr: &DesiredResource,
+    target: VolumeTarget<'_>,
 ) -> VolumeInstanceResult {
+    let instance = target.instance();
     let mut result = VolumeInstanceResult {
         observations: Vec::new(),
         observe_failure: None,
@@ -84,25 +119,27 @@ async fn process_one_volume(
     };
 
     // spec: OBS#volumes
-    let facts = match observer.observe(&dr.instance, &dr.definition).await {
+    let observed = match target {
+        VolumeTarget::Declared(dr) => observer.observe(&dr.instance, &dr.definition).await,
+        VolumeTarget::Undeclared(instance) => observer.observe_undeclared_volume(instance),
+    };
+    let facts = match observed {
         Ok(f) => f,
         Err(e) => {
             error!(
-                instance = %dr.instance.display_name,
+                instance = %instance.display_name,
                 error = %e,
                 "volumes: observe failed, skipping instance"
             );
-            result.observe_failure = Some((dr.instance.clone(), e.to_string()));
+            result.observe_failure = Some((instance.clone(), e.to_string()));
             return result;
         }
     };
 
-    result.observed = Some(dr.instance.clone());
+    result.observed = Some(instance.clone());
     for (fact, _ts) in &facts {
         for (kind, payload) in fact.to_obs_kinds() {
-            result
-                .observations
-                .push((dr.instance.clone(), kind, payload));
+            result.observations.push((instance.clone(), kind, payload));
         }
     }
 
@@ -115,20 +152,20 @@ async fn process_one_volume(
         .any(|(f, _)| matches!(f, ObservationFact::VolumeBackendMismatch));
     result.present = volume_present && !backend_mismatch;
 
-    match dr.desired {
+    match (target.desired(), target.definition()) {
         // spec: ACTU#held-volumes
-        LifecycleState::Ready if backend_mismatch => {
+        (LifecycleState::Ready, Some(definition)) if backend_mismatch => {
             // Storage backend changed; hold old volume and recreate.
             let Some(hold_op) = autonomous_ops::record(
                 db,
-                &dr.instance,
+                instance,
                 "volume_hold_for_migration",
                 "Volume backend mismatch observed; holding existing volume before recreating with current storage backend",
             ) else {
                 return result;
             };
             let hold_outcome = match actuator
-                .hold_volume(&dr.instance, &dr.definition, "storage backend changed")
+                .hold_volume(instance, definition, "storage backend changed")
                 .await
             {
                 Ok(()) => {
@@ -137,12 +174,12 @@ async fn process_one_volume(
                 }
                 Err(e) => {
                     error!(
-                        instance = %dr.instance.display_name,
+                        instance = %instance.display_name,
                         error = %e,
                         "volumes: hold for migration failed"
                     );
                     let msg = e.to_string();
-                    result.remove_failure = Some((dr.instance.clone(), msg.clone()));
+                    result.remove_failure = Some((instance.clone(), msg.clone()));
                     hold_op.complete(&format!("error: {msg}"));
                     return result;
                 }
@@ -151,84 +188,88 @@ async fn process_one_volume(
             // Now create a fresh volume with the current backend.
             let Some(create_op) = autonomous_ops::record(
                 db,
-                &dr.instance,
+                instance,
                 "volume_recreate_after_migration",
                 "After holding mismatched volume, creating replacement with current backend",
             ) else {
                 return result;
             };
-            let create_outcome = match actuator.start_volume(&dr.instance, &dr.definition).await {
+            let create_outcome = match actuator.start_volume(instance, definition).await {
                 Ok(_) => {
                     result.present = true;
                     "ok".to_owned()
                 }
                 Err(e) => {
                     error!(
-                        instance = %dr.instance.display_name,
+                        instance = %instance.display_name,
                         error = %e,
                         "volumes: recreate after migration failed"
                     );
                     let msg = e.to_string();
-                    result.create_failure = Some((dr.instance.clone(), msg.clone()));
+                    result.create_failure = Some((instance.clone(), msg.clone()));
                     format!("error: {msg}")
                 }
             };
             create_op.complete(&create_outcome);
         }
-        LifecycleState::Ready if !volume_present => {
+        (LifecycleState::Ready, Some(definition)) if !volume_present => {
             // spec: ACTU#volume-creation-and-seeding
             let Some(op) = autonomous_ops::record(
                 db,
-                &dr.instance,
+                instance,
                 "volume_create",
                 "Volume desired=Ready but absent on disk; creating",
             ) else {
                 return result;
             };
-            let outcome = match actuator.start_volume(&dr.instance, &dr.definition).await {
+            let outcome = match actuator.start_volume(instance, definition).await {
                 Ok(_) => {
                     result.present = true;
                     "ok".to_owned()
                 }
                 Err(e) => {
                     error!(
-                        instance = %dr.instance.display_name,
+                        instance = %instance.display_name,
                         error = %e,
                         "volumes: create failed"
                     );
                     let msg = e.to_string();
-                    result.create_failure = Some((dr.instance.clone(), msg.clone()));
+                    result.create_failure = Some((instance.clone(), msg.clone()));
                     format!("error: {msg}")
                 }
             };
             op.complete(&outcome);
         }
-        LifecycleState::Unscheduled if volume_present || backend_mismatch => {
+        (LifecycleState::Unscheduled, definition) if volume_present || backend_mismatch => {
             result
                 .observations
-                .push((dr.instance.clone(), "stop_sent", json!({})));
+                .push((instance.clone(), "stop_sent", json!({})));
             // spec: ACTU#volume-removal
             let Some(op) = autonomous_ops::record(
                 db,
-                &dr.instance,
+                instance,
                 "volume_remove",
                 "Volume desired=Unscheduled but still present; removing",
             ) else {
                 return result;
             };
-            let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
+            let stopped = match definition {
+                Some(definition) => actuator.stop(instance, definition).await,
+                None => actuator.stop_undeclared_volume(instance).await,
+            };
+            let outcome = match stopped {
                 Ok(()) => {
                     result.removed = true;
                     "ok".to_owned()
                 }
                 Err(e) => {
                     error!(
-                        instance = %dr.instance.display_name,
+                        instance = %instance.display_name,
                         error = %e,
                         "volumes: remove failed"
                     );
                     let msg = e.to_string();
-                    result.remove_failure = Some((dr.instance.clone(), msg.clone()));
+                    result.remove_failure = Some((instance.clone(), msg.clone()));
                     format!("error: {msg}")
                 }
             };
@@ -259,6 +300,14 @@ pub(super) fn external_volume_states(
             )
         })
         .map(|dr| (dr.instance.clone(), dr.desired))
+        // spec: TRD#teardown
+        .chain(
+            desired
+                .undeclared
+                .iter()
+                .filter(|instance| instance.kind == ResourceKind::ExternalVolume)
+                .map(|instance| (instance.clone(), LifecycleState::Unscheduled)),
+        )
         .collect()
 }
 
@@ -272,7 +321,15 @@ pub(super) async fn observe_and_actuate(
         .resources
         .iter()
         .filter(|dr| matches!(&dr.definition, Resource::Volume(_)))
-        .map(|dr| process_one_volume(observer, actuator, db, dr))
+        .map(VolumeTarget::Declared)
+        .chain(
+            desired
+                .undeclared
+                .iter()
+                .filter(|instance| instance.kind == ResourceKind::Volume)
+                .map(VolumeTarget::Undeclared),
+        )
+        .map(|target| process_one_volume(observer, actuator, db, target))
         .collect();
 
     let results = join_all(futures).await;

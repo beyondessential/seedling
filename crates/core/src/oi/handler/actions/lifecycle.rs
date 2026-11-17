@@ -739,11 +739,11 @@ async fn cleanup_dynamic_resources(
     active_progress: &RwLock<Option<OperationProgress>>,
     tick_notify: &Notify,
 ) {
-    use crate::defs::deployment::Deployment;
-    use crate::defs::job::Job;
-    use crate::defs::resource::{Resource, ResourceKind};
+    use crate::defs::resource::ResourceKind;
     use crate::runtime::LifecycleState;
-    use crate::runtime::desired::{delete_dynamic_resources_for_operation, list_dynamic_resources};
+    use crate::runtime::desired::{
+        delete_dynamic_resources_for_operation, list_dynamic_resources, undeclared_pod,
+    };
     use crate::runtime::history::read_lifecycle;
     use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
@@ -785,20 +785,8 @@ async fn cleanup_dynamic_resources(
                 display_name: record.display_name.clone(),
             };
 
-            let minimal = match kind {
-                ResourceKind::Deployment => Resource::Deployment(Deployment {
-                    name: std::sync::Arc::new(String::new()),
-                    def: Default::default(),
-                    frozen: false,
-                    anon_id: Some(instance.id),
-                }),
-                ResourceKind::Job => Resource::Job(Job {
-                    name: std::sync::Arc::new(String::new()),
-                    def: Default::default(),
-                    frozen: false,
-                    anon_id: Some(instance.id),
-                }),
-                _ => unreachable!(),
+            let Some(minimal) = undeclared_pod(&instance) else {
+                continue;
             };
 
             cleanup.stopped(instance.clone());

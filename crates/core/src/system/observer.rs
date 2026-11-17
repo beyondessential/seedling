@@ -40,6 +40,12 @@ pub enum ObserveError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("volume storage at {}: {source}", path.display()))]
+    Storage {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+        backtrace: snafu::Backtrace,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +138,35 @@ impl Observer {
         }
 
         Ok(facts)
+    }
+
+    /// Inspect a volume instance nothing declares, which leaves nothing to
+    /// say where its storage is: it is present while storage stands at either
+    /// the tmpfs path or the volume-store name its recorded identity gives it.
+    // spec: OBS#volumes
+    // spec: TRD#teardown
+    pub fn observe_undeclared_volume(
+        &self,
+        instance: &ResourceInstance,
+    ) -> Result<Vec<(ObservationFact, SystemTime)>, ObserveError> {
+        let now = SystemTime::now();
+        let vol_name = crate::runtime::identity::VolumeName::of_instance(instance);
+        let mut present = false;
+        for path in [
+            crate::system::actuator::tmpfs_volume_path(&instance.display_name),
+            self.driver.volume_store.path(&vol_name),
+        ] {
+            // A path that cannot be looked at is not one with nothing there.
+            present |= path.try_exists().context(StorageSnafu { path: &path })?;
+        }
+        Ok(vec![(
+            if present {
+                ObservationFact::VolumePresent
+            } else {
+                ObservationFact::VolumeMissing
+            },
+            now,
+        )])
     }
 
     // spec: OBS#containers

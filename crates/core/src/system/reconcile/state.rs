@@ -102,14 +102,24 @@ struct StateEntry {
 impl Reconciler {
     pub(super) fn emit_state_changes(&mut self, apps: &[AppSnapshot]) {
         let groups = dedupe_groups(apps.iter().flat_map(|app| {
-            app.desired.resources.iter().map(move |dr| {
+            let declared = app.desired.resources.iter().map(move |dr| {
                 (
                     app.name.clone(),
                     dr.instance.kind,
                     dr.instance.name.as_deref().map(str::to_owned),
                     declares_healthcheck(&dr.definition),
                 )
-            })
+            });
+            // An undeclared instance declares no healthcheck.
+            let undeclared = app.desired.undeclared.iter().map(move |instance| {
+                (
+                    app.name.clone(),
+                    instance.kind,
+                    instance.name.as_deref().map(str::to_owned),
+                    false,
+                )
+            });
+            declared.chain(undeclared)
         }));
 
         let (entries, unread_groups): (Vec<StateEntry>, UnreadGroups) =
@@ -854,6 +864,7 @@ mod tests {
                     .map(|i| entry(i, false))
                     .chain(excess.iter().map(|i| entry(i, true)))
                     .collect(),
+                undeclared: Vec::new(),
             },
             steady: true,
             app_def: Default::default(),

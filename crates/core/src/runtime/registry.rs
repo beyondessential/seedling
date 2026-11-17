@@ -115,6 +115,11 @@ pub trait InstanceRegistry: Send + Sync {
         name: Option<&str>,
     ) -> Result<Vec<ResourceInstance>, RegistryError>;
 
+    /// Every instance recorded for `app`, of every resource, declared or not.
+    /// Does not create anything.
+    // spec: TRD#teardown
+    fn instances_of_app(&self, app: &AppName) -> Result<Vec<ResourceInstance>, RegistryError>;
+
     /// The address a service instance is reached at, allocating it one no
     /// other service holds if it has none.
     // spec: INFRA#service-addresses
@@ -236,6 +241,24 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
             result.extend(scaled.iter().cloned());
         }
 
+        Ok(result)
+    }
+
+    fn instances_of_app(&self, app: &AppName) -> Result<Vec<ResourceInstance>, RegistryError> {
+        let mut result: Vec<ResourceInstance> = self
+            .cache
+            .lock()
+            .iter()
+            .filter(|((owner, _, _), _)| owner == app)
+            .map(|(_, instance)| instance.clone())
+            .collect();
+        result.extend(
+            self.scaled_cache
+                .lock()
+                .iter()
+                .filter(|((owner, _, _), _)| owner == app)
+                .flat_map(|(_, instances)| instances.iter().cloned()),
+        );
         Ok(result)
     }
 
@@ -392,6 +415,13 @@ impl InstanceRegistry for DbInstanceRegistry {
         Ok(self
             .db
             .call(move |db| history::find_instances_for_group(db, &app, kind, name.as_deref()))?)
+    }
+
+    fn instances_of_app(&self, app: &AppName) -> Result<Vec<ResourceInstance>, RegistryError> {
+        let app = app.clone();
+        Ok(self
+            .db
+            .call(move |db| history::instances_for_app(db, &app))?)
     }
 
     fn service_address(

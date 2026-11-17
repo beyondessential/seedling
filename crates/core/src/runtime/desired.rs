@@ -4,6 +4,8 @@ use std::sync::Arc;
 use seedling_protocol::names::AppName;
 
 use crate::defs::app::AppDef;
+use crate::defs::deployment::Deployment;
+use crate::defs::job::Job;
 use crate::defs::resource::{Resource, ResourceId, ResourceKind};
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::db::Db;
@@ -37,11 +39,18 @@ pub struct DesiredResource {
 #[derive(Debug, Default)]
 pub struct DesiredState {
     pub resources: Vec<DesiredResource>,
+    /// Recorded instances of an uninstalling app whose resource no definition
+    /// declares any more: one an update dropped, or one an operation created.
+    /// Each is held `Unscheduled`, and is torn down from its recorded identity
+    /// alone, there being no declared configuration to act on.
+    // spec: RCN#desired-state
+    // spec: TRD#teardown
+    pub undeclared: Vec<ResourceInstance>,
 }
 
 impl DesiredState {
     pub fn is_empty(&self) -> bool {
-        self.resources.is_empty()
+        self.resources.is_empty() && self.undeclared.is_empty()
     }
 }
 
@@ -187,32 +196,59 @@ pub fn compute(
     }
 }
 
-/// Compute the desired state for an app that is being uninstalled.
-/// All resources are desired at `Unscheduled`.
+/// Compute the desired state for an app that is being uninstalled: every
+/// instance recorded for it, each held `Unscheduled`.
+///
+/// An instance of a resource the definition still declares carries that
+/// declaration. Any other is undeclared, and is torn down from its recorded
+/// identity.
+// spec: RCN#desired-state
+// spec: TRD#teardown
 pub fn compute_uninstalling(
     app_name: &AppName,
     app_def: &AppDef,
     registry: &dyn InstanceRegistry,
 ) -> Result<DesiredState, RegistryError> {
-    let mut resources = Vec::new();
-    for (id, resource) in &app_def.resources {
-        // During uninstall, find every existing instance and mark it Unscheduled.
-        let all = registry.find_all_instances(app_name, id.kind, Some(id.name.as_str()))?;
-        if all.is_empty() {
-            // No instances at all — nothing to tear down for this resource.
-            continue;
-        }
-        for inst in all {
-            resources.push(DesiredResource {
-                instance: inst,
+    let mut state = DesiredState::default();
+    for instance in registry.instances_of_app(app_name)? {
+        match lookup_definition(app_def, &instance) {
+            Some(definition) => state.resources.push(DesiredResource {
+                instance,
                 desired: LifecycleState::Unscheduled,
-                definition: resource.clone(),
+                definition,
                 // Uninstall tears the whole app down through its own phase.
                 demoted: false,
-            });
+            }),
+            None => state.undeclared.push(instance),
         }
     }
-    Ok(DesiredState { resources })
+    Ok(state)
+}
+
+/// The definition a pod instance nothing declares is stopped with.
+///
+/// It carries no configuration, so stopping the instance acts on its
+/// recorded identity alone: its unit, its container and its pod network.
+/// `None` for an instance that is not a pod.
+// spec: TRD#teardown
+pub fn undeclared_pod(instance: &ResourceInstance) -> Option<Resource> {
+    let name = Arc::new(instance.name.clone().unwrap_or_default());
+    let anon_id = instance.name.is_none().then_some(instance.id);
+    match instance.kind {
+        ResourceKind::Deployment => Some(Resource::Deployment(Deployment {
+            name,
+            def: Default::default(),
+            frozen: true,
+            anon_id,
+        })),
+        ResourceKind::Job => Some(Resource::Job(Job {
+            name,
+            def: Default::default(),
+            frozen: true,
+            anon_id,
+        })),
+        _ => None,
+    }
 }
 
 // spec: RCN#desired-state
@@ -279,7 +315,10 @@ fn compute_steady(
         });
     }
 
-    Ok(DesiredState { resources })
+    Ok(DesiredState {
+        resources,
+        undeclared: Vec::new(),
+    })
 }
 
 // spec: RCN#desired-state
@@ -299,7 +338,10 @@ fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> D
             })
         })
         .collect();
-    DesiredState { resources }
+    DesiredState {
+        resources,
+        undeclared: Vec::new(),
+    }
 }
 
 fn lookup_definition(app_def: &AppDef, instance: &ResourceInstance) -> Option<Resource> {
