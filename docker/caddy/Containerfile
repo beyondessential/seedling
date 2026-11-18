@@ -37,9 +37,13 @@
 # against the built image before it is published.
 
 FROM docker.io/library/caddy:2.11.9-builder AS builder
+# The DTLS module is built from this directory. xcaddy writes the binary to
+# the working directory unless told otherwise, so the output is named: the
+# final stage copies it from /usr/bin/caddy.
 WORKDIR /src
 COPY dtls ./dtls
 RUN xcaddy build \
+      --output /usr/bin/caddy \
       --with github.com/mholt/caddy-l4@v0.1.3 \
       --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db \
       --with github.com/beyondessential/seedling/docker/caddy/dtls=./dtls
