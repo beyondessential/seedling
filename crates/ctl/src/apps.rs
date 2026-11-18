@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
 use seedling_protocol::client::OiClient;
@@ -9,7 +9,7 @@ use super::{
     print_result,
 };
 
-// spec: CLI#action-shell-and-install-parameters
+// spec: CLI#action-and-shell-parameters
 fn parse_positional_params(args: &[String]) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     for arg in args {
@@ -79,15 +79,11 @@ pub(super) enum AppsCommand {
         params: Vec<String>,
     },
     /// Cancel the in-flight lifecycle operation for an app
-    // spec: CLI#action-shell-and-install-parameters
+    // spec: CLI#action-and-shell-parameters
     CancelAction { app: AppName },
-    /// Invoke the install action
-    Install {
-        app: AppName,
-        /// Params as key=value (trailing positional args)
-        #[arg(trailing_var_arg = true)]
-        params: Vec<String>,
-    },
+    /// Install an app
+    // spec: ACI#install
+    Install { app: AppName },
     /// Open an interactive shell session
     Shell {
         app: AppName,
@@ -288,26 +284,6 @@ pub(super) enum ParamCommand {
     },
 }
 
-/// Parse `key=value` install params.
-///
-/// Unlike action and shell params, these carry values typed by the app's
-/// parameter schema rather than free-form JSON, so a bare key has no sensible
-/// reading — `true` is the wrong type and `""` is a guess at intent. It used
-/// to be dropped by a `filter_map` with no warning, so an operator who wrote
-/// `db-pass` instead of `db-pass=secret` got an install missing a parameter
-/// and no indication why.
-// spec: CLI#action-shell-and-install-parameters
-fn parse_install_params(args: &[String]) -> Result<HashMap<String, String>, String> {
-    let mut map = HashMap::new();
-    for arg in args {
-        let Some((key, value)) = arg.split_once('=') else {
-            return Err(format!("invalid install param {arg:?}: expected key=value"));
-        };
-        map.insert(key.to_owned(), value.to_owned());
-    }
-    Ok(map)
-}
-
 fn parse_vol_id(vol_id: &str) -> Result<(&str, &str), String> {
     let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
         format!("invalid volume ID {vol_id:?}: expected _site/<name> or <app>/<volume>")
@@ -498,7 +474,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             }
             print_result(client.request("/apps/action/invoke", req).await);
         }
-        // spec: CLI#action-shell-and-install-parameters
+        // spec: CLI#action-and-shell-parameters
         AppsCommand::CancelAction { app } => {
             print_result(
                 client
@@ -506,20 +482,11 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .await,
             );
         }
-        AppsCommand::Install { app, params } => {
-            let submitted = match parse_install_params(&params) {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
-            };
+        // spec: ACI#install
+        AppsCommand::Install { app } => {
             print_result(
                 client
-                    .request(
-                        "/apps/install/invoke",
-                        serde_json::json!({ "app": app, "params": submitted }),
-                    )
+                    .request("/apps/install", serde_json::json!({ "app": app }))
                     .await,
             );
         }
@@ -874,33 +841,7 @@ mod tests {
         assert_eq!(proposed_unset, ["c"]);
     }
 
-    // spec: CLI#action-shell-and-install-parameters
-    // A bare key used to be dropped by a `filter_map`, so an operator who
-    // wrote `db-pass` instead of `db-pass=secret` got an install missing a
-    // parameter and nothing said so.
-    #[test]
-    fn install_params_reject_a_bare_key() {
-        let err = parse_install_params(&["db-pass".to_owned()])
-            .expect_err("a bare key has no typed value");
-        assert!(err.contains("db-pass"), "should name the argument: {err}");
-    }
-
-    // spec: CLI#action-shell-and-install-parameters
-    #[test]
-    fn install_params_take_pairs_including_empty_values() {
-        let map = parse_install_params(&[
-            "key=value".to_owned(),
-            "empty=".to_owned(),
-            "url=https://x/?a=b".to_owned(),
-        ])
-        .expect("pairs parse");
-        assert_eq!(map["key"], "value");
-        assert_eq!(map["empty"], "");
-        assert_eq!(map["url"], "https://x/?a=b", "only the first = splits");
-        assert!(parse_install_params(&[]).unwrap().is_empty());
-    }
-
-    // spec: CLI#action-shell-and-install-parameters
+    // spec: CLI#action-and-shell-parameters
     #[test]
     fn positional_params_map_pairs_and_bare_keys() {
         let map = parse_positional_params(&[
@@ -914,7 +855,7 @@ mod tests {
         assert!(parse_positional_params(&[]).is_empty());
     }
 
-    // spec: CLI#action-shell-and-install-parameters
+    // spec: CLI#action-and-shell-parameters
     #[test]
     fn action_args_after_name_are_collected_as_params() {
         let cli =
