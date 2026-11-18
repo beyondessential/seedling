@@ -1099,18 +1099,8 @@ pub(super) async fn observe_and_actuate(
     let mut held_starts: HashSet<String> = HashSet::new();
     let mut rolling_deployments: HashSet<String> = HashSet::new();
 
-    // spec: UPD#stale-instances
-    // A stale instance is not stopped while its workload waits on a target
-    // that is not ready, whatever the update strategy.
-    let mut waiting_instances: HashSet<String> = HashSet::new();
-    for obs in &observed {
-        if gates.waits_for(&obs.dr.instance.kind, obs.dr.instance.name.as_deref()) {
-            waiting_instances.insert(obs.dr.instance.display_name.clone());
-            if obs.spec_stale && obs.is_running {
-                inhibited_instances.insert(obs.dr.instance.display_name.clone());
-            }
-        }
-    }
+    let (waiting_instances, kept_running) = instances_waiting_on_targets(gates, &observed);
+    inhibited_instances.extend(kept_running);
 
     for (dep_name, indices) in &deployment_groups {
         let group_refs: Vec<&ObservedInstance<'_>> =
@@ -1258,6 +1248,30 @@ pub(super) async fn observe_and_actuate(
     }
 
     update
+}
+
+/// The instances whose workload waits on a target that is not ready, and, of
+/// those, the stale ones that are running, which are not stopped.
+///
+/// A workload that waits starts no new instance. Its stale instances go on
+/// running whatever the update strategy, since a replacement could not start.
+// spec: GATE#start-order
+// spec: UPD#stale-instances
+fn instances_waiting_on_targets(
+    gates: &GateView,
+    observed: &[ObservedInstance<'_>],
+) -> (HashSet<String>, HashSet<String>) {
+    let mut waiting = HashSet::new();
+    let mut kept_running = HashSet::new();
+    for obs in observed {
+        if gates.waits_for(&obs.dr.instance.kind, obs.dr.instance.name.as_deref()) {
+            waiting.insert(obs.dr.instance.display_name.clone());
+            if obs.spec_stale && obs.is_running {
+                kept_running.insert(obs.dr.instance.display_name.clone());
+            }
+        }
+    }
+    (waiting, kept_running)
 }
 
 /// Whether the Job instance has been running for longer than its deadline,

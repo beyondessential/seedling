@@ -1059,16 +1059,7 @@ impl Reconciler {
             };
             // A resource a gate holds is kept at `Unscheduled` as one an
             // operator stopped is.
-            let down: stopped::StoppedSet = stopped_set
-                .iter()
-                .cloned()
-                .chain(
-                    gates
-                        .held
-                        .keys()
-                        .map(|id| (id.kind, id.name.as_str().to_owned())),
-                )
-                .collect();
+            let down = gates.keep_down(&stopped_set);
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 // spec: OPS#shell-sessions

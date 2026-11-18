@@ -700,6 +700,21 @@ impl GateView {
         self.held.keys().cloned().collect()
     }
 
+    /// `stopped`, the resources an operator stopped, with every resource a gate
+    /// holds added: each is kept at `Unscheduled` whatever its effective scale.
+    // spec: RCN#gate-holds
+    pub fn keep_down(&self, stopped: &StoppedSet) -> StoppedSet {
+        stopped
+            .iter()
+            .cloned()
+            .chain(
+                self.held
+                    .keys()
+                    .map(|id| (id.kind, id.name.as_str().to_owned())),
+            )
+            .collect()
+    }
+
     /// Whether the named workload of the given kind waits on a target.
     pub fn waits_for(&self, kind: &ResourceKind, name: Option<&str>) -> bool {
         name.is_some_and(|name| {
