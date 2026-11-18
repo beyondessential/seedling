@@ -39,6 +39,23 @@ pub fn take_bool(what: &str, value: Dynamic) -> Result<bool, Box<EvalAltResult>>
     })
 }
 
+/// Convert an integer or a finite floating-point number to a `f64`, or throw
+/// naming `what` and the actual type.
+pub fn take_number(what: &str, value: Dynamic) -> Result<f64, Box<EvalAltResult>> {
+    // take: dispatch
+    if let Ok(n) = value.as_int() {
+        return Ok(n as f64);
+    }
+    // take: dispatch
+    if let Ok(f) = value.as_float() {
+        if f.is_finite() {
+            return Ok(f);
+        }
+        return Err(format!("`{what}` must be a finite number, got {f}").into());
+    }
+    Err(format!("`{what}` must be a number, got {}", value.type_name()).into())
+}
+
 /// Convert to a map, or throw naming `what` and the actual type.
 pub fn take_map(what: &str, value: Dynamic) -> Result<rhai::Map, Box<EvalAltResult>> {
     let type_name = value.type_name();
@@ -196,6 +213,23 @@ mod tests {
             take_int_in_range::<u32>("pids_limit", 64, 1..=4_294_967_295).unwrap(),
             64
         );
+    }
+
+    #[test]
+    fn take_number_takes_integers_and_finite_floats_only() {
+        assert_eq!(take_number("interval", Dynamic::from(3_i64)).unwrap(), 3.0);
+        assert_eq!(
+            take_number("interval", Dynamic::from(0.5_f64)).unwrap(),
+            0.5
+        );
+        for bad in [
+            Dynamic::from(f64::NAN),
+            Dynamic::from(f64::INFINITY),
+            Dynamic::from("3".to_owned()),
+        ] {
+            let message = take_number("interval", bad).unwrap_err().to_string();
+            assert!(message.contains("`interval`"), "{message}");
+        }
     }
 
     #[test]

@@ -236,6 +236,14 @@ bsl_name_newtype! {
 }
 
 bsl_name_newtype! {
+    /// Canonical name of a gate declared by a BSL app via `app.gate("...")`.
+    ///
+    /// Used as a `BTreeMap` key in [`AppDef::gates`] and identifies the gate
+    /// in its record and in the faults filed against it.
+    GateName
+}
+
+bsl_name_newtype! {
     /// Canonical name of a shell declared by a BSL app via
     /// `app.on_shell("...")`.
     ///
