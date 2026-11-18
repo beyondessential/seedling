@@ -67,7 +67,12 @@ If the operation ends other than in success while a guard stands, the runtime MU
 An anonymous resource in the selection MUST make `rt.guard` throw.
 
 `rt.guard` over a [held resource](../overview.md#held-resource) MUST end its hold and place it under the new guard, so that the operation directs it as any other guarded resource.
+`rt.guard` MUST resolve a held deployment to its held instances, rather than to the instances its effective scale calls for.
 The resource's instances MUST stay as they were held until the closure starts or stops it.
+
+> [!NOTE]
+> A closure guards the resources a risky step could leave unsafe, before that step.
+> If the step throws, the resources stay as the closure left them, instead of returning to the resource graph of a generation the step did not finish preparing for.
 
 ### Held resources
 
@@ -79,10 +84,6 @@ A runtime handle method other than `rt.guard` MUST NOT change the desired state 
 > [!NOTE]
 > A start action written to bring every resource up leaves a held resource as it was held, so a host restart after a failed upgrade does not undo the hold.
 > An operation that means to take a held resource over guards it first.
-
-> [!NOTE]
-> A closure guards the resources a risky step could leave unsafe, before that step.
-> If the step throws, the resources stay as the closure left them, instead of returning to the resource graph of a generation the step did not finish preparing for.
 
 ### Querying resources
 

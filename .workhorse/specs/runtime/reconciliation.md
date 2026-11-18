@@ -40,6 +40,7 @@ Its running instances MUST keep the specification they were last started with, a
 An install operation is a lifecycle operation, and the runtime MUST actuate the resources its closure places in the desired state as for any other.
 
 From the moment the runtime initiates an app's [start action](../language/action.md#start-action) until that start action ends, including while it is queued, the app's desired state MUST be as for an app with a lifecycle operation in progress.
+
 > [!NOTE]
 > Holding the whole resource graph back until the start action has run lets the start action bring an app up in its own order after the host restarts.
 > A held resource is in the desired state throughout, so its held instances come back after a host restart without waiting for the start action.

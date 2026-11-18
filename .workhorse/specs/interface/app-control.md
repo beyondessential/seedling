@@ -149,9 +149,10 @@ The server MUST refuse any other `kind` with `requirements_invalid`.
 The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no resource of that kind and name.
 The result is `{}`.
 Unholding a resource that is not held MUST change nothing.
+If the server cannot read the app's holds, it MUST refuse the request with `internal`, and MUST NOT end any hold.
 
 `/apps/unhold` takes an `app` parameter and ends every hold on that app's resources.
-The server MUST refuse it with `not_found` if the app is not registered.
+The server MUST refuse it with `not_found` if the app is not registered, and with `internal` if it cannot read the app's holds.
 The result is `{}`.
 
 The runtime emits a `ResourceUnheld` event for each hold either method ends, as [held resources](../runtime/operations.md#held-resources) specifies.
@@ -166,6 +167,7 @@ The server MUST accept `/apps/resource/stop` for a held resource.
 A held resource that is [stopped](#resource-stop) MUST be desired `Unscheduled`, and stays stopped when its hold ends.
 
 A scaling decision stored for a held deployment MUST take effect only once its hold ends.
+A held deployment's `scale.current` in `/apps/show` is the effective scale it will take once its hold ends.
 A [restart](#deployment-restart) of a held deployment MUST replace its instances with the specification they hold.
 
 `/apps/show` reports a `held` member on each resource, true when the resource is held, and a top-level `held_resources` array of `{ "kind": <string>, "name": <string> }` naming every held resource.

@@ -121,7 +121,8 @@ An app's status is the first of these that applies:
 6. `degraded`: at least one active fault is filed against the app, or at least one of the app's resources is not at its desired [lifecycle state](../overview.md#lifecycle-state).
 7. `running`: none of the above.
 
-A resource's desired lifecycle state is `Ready`, except that a [stopped](app-control.md#resource-stop) resource, a deployment whose effective scale is zero, and a [held resource](../overview.md#held-resource) held `Unscheduled`, are desired at `Unscheduled`.
+A [held resource](../overview.md#held-resource) is desired at `Unscheduled` if it is [stopped](app-control.md#resource-stop) or held `Unscheduled`, and at `Ready` otherwise, whatever its effective scale.
+Any other resource's desired lifecycle state is `Ready`, except that a stopped resource and a deployment whose effective scale is zero are desired at `Unscheduled`.
 
 A resource desired at `Ready` is at its desired state when at least one of its instances is `Ready` and none is `Pending`, `Scheduled` or `Running`.
 A resource desired at `Unscheduled` is at its desired state when none of its instances is `Pending`, `Scheduled`, `Running` or `Ready`.

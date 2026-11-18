@@ -58,6 +58,7 @@ A console reloaded in the same browser tab MAY resume an elevation that has not 
 A control that changes host state MUST require at least the `write` mode.
 A control that removes, revokes, stops, cancels or clears something MUST require the `dangerous` mode, with two exceptions.
 A control that clears [faults](../overview.md#fault) MUST require the `write` mode.
+A control that ends a hold on a [held resource](../overview.md#held-resource) MUST require the `dangerous` mode.
 Closing a shell the console itself opened, which stops it, MUST be available in every safety mode.
 A control that requires a mode above the console's current one MUST be disabled, and SHOULD show the mode it requires.
 

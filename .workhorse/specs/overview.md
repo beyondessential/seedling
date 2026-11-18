@@ -251,7 +251,7 @@ Defined in [OPS](runtime/operations.md#operation).
 
 ### Held resource
 
-A resource the runtime keeps as a lifecycle operation that ended other than in success left it, apart from the resource graph, until the hold ends.
+A resource the runtime keeps in the state a failed or cancelled lifecycle operation left it in, instead of returning it to the resource graph.
 Defined in [OPS](runtime/operations.md#held-resources).
 
 ### World observation history

@@ -96,16 +96,18 @@ A held resource is one the runtime keeps as an operation left it, apart from the
 When an operation ends other than in success, the runtime MUST hold every resource under a guard still standing.
 This includes an operation that fails, one that is [cancelled](#cancellation), one whose evaluation reaches an [engine limit](engine-limits.md), and an [interrupted operation](#interrupted-operations) that the runtime does not replay.
 When an operation succeeds, every guard still standing closes, and the runtime MUST NOT hold the resources it guarded.
+When an install operation fails or is cancelled, every guard still standing closes likewise, and the app moves to `NotInstalled` as [install](../interface/actions.md#install) specifies.
 
 The runtime MUST persist a guard durably before `rt.guard` returns, and the guard's closing before `guard.release()` returns.
 If the runtime cannot persist a guard or its closing, the call MUST throw.
 
 The runtime MUST hold a resource in the state the operation left it in:
 
-- a resource with no running instance is held `Unscheduled`;
-- a resource with running instances is held at those instances, each keeping the specification it was last started with.
+- a resource with an instance that is `Running` or `Ready` when the operation ends is held at its instances that are, each keeping the specification it was last started with;
+- any other resource is held `Unscheduled`.
 
 The runtime MUST maintain a held resource in its held state without direction, as for steady-state desired state, and MUST NOT rotate, scale or replace a held instance with another specification.
+A held resource that an operator has [stopped](../interface/app-control.md#resource-stop) is desired `Unscheduled` instead, as [resource hold](../interface/app-control.md#resource-hold) specifies.
 The runtime MUST keep a resource held across a runtime restart, starting its held instances again with the specification each holds.
 
 A later operation directs a held resource only by [guarding](../language/rt.md#guarding-resources) it, and every other runtime handle method leaves it as [held resources](../language/rt.md#held-resources) in the runtime handle specifies.
@@ -118,12 +120,20 @@ A hold MUST end only when:
 - the app's definition is updated to one that does not declare the resource.
 
 The runtime MUST store each hold durably, with the state it holds, before it clears the persisted operation.
+If it cannot store a hold, it MUST keep the persisted operation and retry.
 While a resource is held, the runtime MUST hold a [`resource_held`](faults.md#app-faults) fault for it.
 The runtime MUST emit a `ResourceHeld` [event](../interface/events.md#app-events) for each resource it holds, and a `ResourceUnheld` event for each hold that ends.
 
 > [!NOTE]
 > An upgrade that fails after stopping the app's workloads leaves them stopped, so the new release does not start against data it was never prepared for.
 > One that fails before stopping them leaves the old release serving, so the new release does not roll out in its place.
+
+### Unreadable holds
+
+If the runtime cannot read an app's holds, or the specification a held instance holds, it MUST NOT treat any of the app's resources as not held, and MUST NOT start a held instance with any other specification.
+It MUST NOT actuate in that iteration any of the app's resources, so that the instances already running keep running.
+It MUST hold a [`desired_state_unreadable`](faults.md#app-faults) fault for the app for as long as the holds cannot be read.
+The runtime MUST throw from an `rt.*` call whose selection holds a resource of the app while the app's holds cannot be read.
 
 ## Persistence
 
@@ -174,7 +184,7 @@ The runtime MUST answer a cancel request for an app that is `Installing` with no
 The runtime MUST let an operator [cancel](../interface/actions.md#cancellation) the operation in progress for an app.
 
 When a cancel is requested, the runtime MUST wake the operation if it is suspended on a [barrier](suspension.md#barriers), including a barrier with no deadline, so the cancel takes effect without waiting for the barrier's next re-evaluation or deadline.
-The runtime MUST stop a cancelled operation at the next barrier or `rt.*` call it reaches.
+The runtime MUST stop a cancelled operation at the next barrier, `rt.*` call or `guard.release()` call it reaches.
 
 The runtime MUST end a cancelled operation in an outcome distinct from success and from failure.
 The runtime MUST clean up after a cancelled operation as after a failed one, tearing down its [dynamic resources](../language/app.md#dynamic-resource-lifetime) and clearing its persisted record.

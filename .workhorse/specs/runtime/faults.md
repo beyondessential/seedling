@@ -94,7 +94,7 @@ A `health_check_replace_failed` fault MUST identify the failed replacement and t
 
 ### Withholding faults
 
-A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)), `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)) and `resource_held` ([held resources](operations.md#held-resources)).
+A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)), `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)) and `resource_held` ([no move to the current generation's specification](operations.md#held-resources)).
 An app holding one is [`faulted`](../interface/apps.md#status-derivation) rather than `degraded`.
 
 ## Volume faults

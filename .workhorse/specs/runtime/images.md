@@ -88,6 +88,7 @@ The runtime MUST periodically remove images from the host that meet every condit
 
 - no pin's reference resolves to the image;
 - no running container uses the image;
+- no instance of a [held resource](../overview.md#held-resource) is held at a specification that uses the image;
 - the image's last-used time is at least 30 days in the past.
 
 The runtime MUST do this once per [collection interval](garbage-collection.md#collection).
