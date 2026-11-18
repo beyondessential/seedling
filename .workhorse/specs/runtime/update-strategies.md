@@ -10,7 +10,7 @@ Applies to how the [runtime](../overview.md#runtime) replaces running Deployment
 
 ### Spec hash
 
-A digest of a container's full configuration, together with the [keys](../language/gate.md#key) of the gates its workload is [ordered after](../language/gate.md#start-order), recorded on the container when it starts.
+A digest of a container's full configuration, together with a digest under the host's [secret key](secrets.md#secret-key) of the [keys](../language/gate.md#keys) of the gates its workload is [ordered](../language/gate.md#start-order) directly after, recorded on the container when it starts.
 
 ### Stale instance
 
@@ -19,6 +19,11 @@ A running instance whose recorded spec hash differs from the spec hash its curre
 ## Stale instances
 
 On each iteration of the [reconciliation loop](reconciliation.md#reconciliation-loop), the runtime MUST compare the observed spec hash of each running Deployment and Job instance with the spec hash derived from its current definition.
+
+While a workload waits on a [target](../language/gate.md#start-order) that is not ready, the runtime MUST NOT stop its stale instances, whatever its update strategy, and replaces them once the target is ready.
+
+> [!NOTE]
+> A replace-strategy Deployment whose gate keeps failing goes on serving its previous release until the gate's run stops what the gate holds.
 
 The runtime MUST derive the progress of an update from the observed spec hashes on each iteration.
 After a runtime restart, the runtime MUST observe the running containers, find the remaining stale instances, and continue the update from where it stopped.

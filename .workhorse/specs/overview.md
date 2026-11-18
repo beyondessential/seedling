@@ -251,7 +251,7 @@ An install moves an app to `Installed`, as [ACI](interface/actions.md#install) s
 
 ### Lifecycle operation
 
-A single run of an action closure directing the runtime through a change to an app.
+A single run of an action closure, or of a gate, directing the runtime through a change to an app.
 Defined in [OPS](runtime/operations.md#operation).
 
 ### World observation history

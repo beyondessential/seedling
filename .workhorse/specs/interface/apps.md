@@ -57,7 +57,7 @@ The runtime MUST keep each generation's definition and parameter changes durably
 
 The result is `{ "generation": <integer> }`, as for a [parameter change](params.md#parameter-changes).
 
-The server MUST refuse the request with `requirements_invalid` if a member of `params` has a name that breaks the [naming rules](../language/overview.md#names).
+The server MUST refuse the request with `requirements_invalid` if it carries a `params` that a [parameter change](params.md#parameter-changes) would refuse with `requirements_invalid`.
 It MUST refuse it with `not_found` if the app is not registered.
 It MUST refuse it with `operation_in_progress` if another change to the app is being applied.
 
@@ -99,7 +99,8 @@ The result is `{}`.
 | --- | --- | --- |
 | `name` | string | the app's name |
 | `status` | string | the app's [app status](#status-derivation) |
-| `action_name` | string | present only when `status` is `operating`: the name of the action the running operation runs |
+| `action_name` | string | present only when `status` is `operating` and the running operation is not a gate run: the name of the action it runs |
+| `gate` | string | present only when `status` is `operating` and the running operation is a [gate run](../runtime/gates.md): the gate's name |
 | `fault_count` | integer | the number of active faults filed against the app |
 | `priority` | string | the app's [app priority](app-control.md#app-priority) |
 | `has_stopped_resources` | boolean | whether any of the app's resources is [stopped](app-control.md#resource-stop) |
@@ -115,11 +116,12 @@ An app's status is the first of these that applies:
 2. `operating`: the lifecycle operation running on the host is one of the app's; a queued operation does not count.
 3. `not_installed`: the app is not installed.
 4. `faulted`: at least one active [withholding fault](../runtime/faults.md#withholding-faults) is filed against the app.
-5. `installing`: at least one of the app's [gates](../language/gate.md) has no [last success](../language/gate.md#last-success).
+5. `installing`: the app is installed and not yet [set up](../runtime/gates.md#set-up).
 6. `degraded`: at least one active fault is filed against the app, or at least one of the app's resources is not at its desired [lifecycle state](../overview.md#lifecycle-state).
 7. `running`: none of the above.
 
-A resource's desired lifecycle state is `Ready`, except that a [stopped](app-control.md#resource-stop) resource, a resource a gate [holds](../runtime/reconciliation.md#gate-holds), a gate's check Job, and a deployment whose effective scale is zero, are desired at `Unscheduled`.
+A resource's desired lifecycle state is `Ready`, except that a [stopped](app-control.md#resource-stop) resource, a resource a gate [holds](../runtime/reconciliation.md#gate-holds), and a deployment whose effective scale is zero, are desired at `Unscheduled`.
+The Job of a gate's [check](../language/gate.md#check) is always at its desired state.
 
 A resource desired at `Ready` is at its desired state when at least one of its instances is `Ready` and none is `Pending`, `Scheduled` or `Running`.
 A resource desired at `Unscheduled` is at its desired state when none of its instances is `Pending`, `Scheduled`, `Running` or `Ready`.
@@ -127,7 +129,7 @@ A job is at its desired state when none of its instances is `Pending`, `Schedule
 An instance that is `Terminating`, `Terminated` or `Unscheduled` otherwise counts neither for nor against its resource.
 A resource kind without a lifecycle state, such as an external service, is always at its desired state.
 
-If the server cannot read the faults, stops, scaling decisions or observations an app's status rests on, it MUST NOT report a status for the app.
+If the server cannot read the faults, stops, gate holds, setup record, scaling decisions or observations an app's status rests on, it MUST NOT report a status for the app.
 
 ## Description
 
@@ -166,6 +168,7 @@ Each entry of `resources` has these members.
 | `instances` | array | the resource's instances, below |
 | `faults` | array | the fault records of the active faults concerning the resource |
 | `stopped` | boolean | whether the resource is stopped |
+| `held_by` | array of strings | in ascending order, the names of the gates whose [holds](../runtime/reconciliation.md#gate-holds) keep the resource stopped |
 | `waiting_on` | array | for a Deployment or Job, the [targets](../language/gate.md#start-order) its starts wait on that are not ready, each `{ "kind": "gate" \| "deployment" \| "job", "name": <string> }` |
 | `scale` | object | for a deployment only, as [scaling](app-control.md#scaling) specifies |
 | `priority` | string | for a deployment only, as [app priority](app-control.md#app-priority) specifies |
@@ -340,7 +343,7 @@ Each entry of `gates` has these members, in the order the script declared the ga
 | `next_run_at` | string or null | for an unsatisfied gate whose last run failed, when the runtime next [runs it](../runtime/gates.md#retries); `null` otherwise |
 | `after` | array | its [targets](../language/gate.md#start-order), each `{ "kind": "gate" \| "deployment" \| "job", "name": <string> }` |
 
-A gate is `running` while a run of it is in progress, and `paused` while the runtime holds back from running it after a [cancelled run](../runtime/gates.md#retries).
+A gate is `running` while a run of it is in progress, and `paused` while it is [paused](../runtime/gates.md#pauses).
 Otherwise its `state` is the [gate state](../runtime/gates.md#gate-state) the runtime last determined.
 
 ### Current operation
@@ -350,10 +353,10 @@ An app being uninstalled has no operation to report.
 
 | member | type | meaning |
 | --- | --- | --- |
-| `action_name` | string | the name of the action the operation runs |
+| `action_name` | string | for an operation other than a gate run, the name of the action it runs |
+| `gate` | string | for a gate run, the gate's name |
 | `barrier` | object or null | the barrier the operation is waiting on, or `null` while its closure runs |
-| `source_generation` | integer | the generation the operation started from |
-| `target_generation` | integer | the generation it moves the app to |
+| `generation` | integer | the operation's [operation generation](../runtime/operations.md#operation-generation) |
 
 `barrier` MUST describe the earliest unsatisfied barrier recorded in the operation's action log.
 It MUST be `null` while the closure runs between barriers.

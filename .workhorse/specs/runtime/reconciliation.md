@@ -33,11 +33,11 @@ An app that is `NotInstalled` MUST have no desired state.
 The runtime MUST maintain an app's steady-state desired state without direction from an operator, as [autonomous reconciliation](autonomous.md) specifies.
 
 While a lifecycle operation other than a [gate run](gates.md) is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](operations.md#operation) has [started](../language/rt.md#starting-resources) or [stopped](../language/rt.md#stopping-resources), each in the state the closure last put it in.
-The runtime MUST act only on resources in the desired state.
+The runtime MUST act only on resources in the desired state, and on the Jobs of the [gate checks](gates.md#checks) it runs.
 A resource outside the desired state MUST be left as it is until the operation names it or completes.
 Its running instances MUST keep the specification they were last started with, and MUST NOT be rotated.
 
-While a gate run is in progress for an app, the app's desired state MUST be as in steady state, with each resource the gate's body has started or stopped in the state the body last put it in.
+While a gate run is in progress for an app, the app's desired state MUST be as in steady state, with each resource the gate's body has started or stopped in the state the body last put it in, including the gate's own exclusive selection and the workloads ordered after it.
 
 > [!NOTE]
 > A gate run holds only what the gate holds, so the rest of the app goes on being maintained while a migration runs, including a supervisor that answers requests meanwhile.
@@ -47,11 +47,16 @@ The runtime MUST keep each session's resources apart from those of every other s
 
 ### Gate holds
 
-The runtime MUST NOT start an instance of a workload ordered after a target, nor run a gate ordered after one, until the target is ready, as [start order](../language/gate.md#start-order) specifies.
-
 Before a [gate run](gates.md#preparation) stops the gate's exclusive selection, the runtime MUST record durably that the gate holds the selection, and MUST NOT stop it if it cannot record that.
-From then until the gate is next satisfied, the runtime MUST hold every resource of the selection `Unscheduled`, through failed and cancelled runs and across restarts of the runtime.
+From then until the gate is next satisfied, the runtime MUST hold every resource of the selection `Unscheduled`, through failed and cancelled runs and across restarts of the runtime, whatever the resource's effective scale and except as the gate's own body directs it.
+A closure other than the gate's body cannot start a held resource, as [resources a gate holds](../language/rt.md#resources-a-gate-holds) specifies.
 The runtime MUST clear the record once the gate is satisfied, and MUST NOT start the selection before it has cleared it.
+
+The hold covers the gate's exclusive selection as the app's current definition gives it, and the runtime MUST keep the resources it covers in its record.
+A resource that a change adds to the selection while the gate holds it MUST be stopped and held with the rest.
+A resource that a change removes from the selection is released once the runtime has removed it from the record.
+When the definition no longer declares the gate, the runtime MUST clear the record, and every resource the hold covered is released once it has.
+While the app's definition fails to evaluate, the runtime MUST go on holding the resources the record names.
 
 If the runtime cannot read whether a gate holds its exclusive selection, it MUST NOT start any resource of the selection.
 

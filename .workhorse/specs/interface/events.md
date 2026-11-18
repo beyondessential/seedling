@@ -41,8 +41,9 @@ Each member in the table below has the same type and meaning in every event type
 | `app` | string | an [app](../overview.md#app)'s name |
 | `generation` | integer | an app's [generation](../overview.md#generation) after the change |
 | `previous_generation` | integer or null | an app's generation before the change, or `null` where the app had none |
-| `source_generation`, `target_generation` | integer | an operation's [source and target generations](../runtime/operations.md#initiating-events) |
+| `operation_generation` | integer | an operation's [operation generation](../runtime/operations.md#operation-generation) |
 | `action_name` | string | the name of the action an operation runs |
+| `gate` | string | the name of a [gate](../language/gate.md) |
 | `operation_id` | string | a [lifecycle operation](../overview.md#lifecycle-operation)'s identifier |
 | `session_id` | string | a [shell session](shells.md#shell-session)'s identifier |
 | `forward_id` | string | a [port forward](port-forwards.md#port-forward)'s identifier |
@@ -89,11 +90,12 @@ An entry for a secret parameter MUST carry `redacted` `true` and no `previous_va
 
 | `type` | members | emitted |
 | --- | --- | --- |
-| `OperationStarted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `trigger` (string) | when a lifecycle operation starts |
-| `OperationCompleted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` | when a lifecycle operation completes successfully |
-| `OperationFailed` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `error` (string) | when a lifecycle operation fails |
-| `OperationCancelled` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` | when a lifecycle operation ends [cancelled](../runtime/operations.md#cancellation) |
+| `OperationStarted` | `app`, `action_name` (optional), `gate` (optional), `operation_id`, `operation_generation`, `trigger` (string) | when a lifecycle operation starts |
+| `OperationCompleted` | `app`, `action_name` (optional), `gate` (optional), `operation_id`, `operation_generation` | when a lifecycle operation completes successfully |
+| `OperationFailed` | `app`, `action_name` (optional), `gate` (optional), `operation_id`, `operation_generation`, `error` (string) | when a lifecycle operation fails |
+| `OperationCancelled` | `app`, `action_name` (optional), `gate` (optional), `operation_id`, `operation_generation` | when a lifecycle operation ends [cancelled](../runtime/operations.md#cancellation) |
 
+An operation event MUST carry `gate` for a [gate run](../runtime/gates.md), and `action_name` for any other operation, and never both.
 `trigger` is the operation's [initiating trigger](../runtime/operations.md#initiating-events).
 
 ### Fault and resource events

@@ -79,6 +79,7 @@ If the stored app priority cannot be read, the server MUST refuse `/apps/show` a
 
 The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no deployment of that name.
 The server MUST refuse the request with `not_installed` unless the app's install phase is `Installed`.
+It MUST refuse it with `requirements_invalid` while a gate [holds](../runtime/reconciliation.md#gate-holds) the deployment, with a `message` naming each gate that holds it.
 
 The runtime MUST replace the instances following the deployment's [update strategy](../runtime/update-strategies.md).
 A restart MUST NOT change the app's definition or generation.
@@ -129,6 +130,10 @@ The server MUST refuse `/apps/resource/stop`, `/apps/resource/unstop` and `/apps
 > An operator cancels a running operation with [`/apps/action/cancel`](actions.md#cancellation), or waits for a queued one or a change to finish.
 > A change to the desired state made while an action closure drives the same resources would race it.
 
+The server MUST accept a stop of a resource a gate holds.
+The resource stays stopped once the gate's hold ends.
+A scaling decision stored for a deployment a gate holds takes effect once the hold ends.
+
 The runtime MUST discard every stop recorded for an app when it uninstalls the app.
 When an app's definition is updated, the runtime MUST discard every stop recorded for a resource the new definition does not declare.
 
@@ -145,11 +150,11 @@ Each entry of `/apps/list` reports a `has_stopped_resources` member, true when a
 | `gate` | string | yes | the gate's name |
 
 The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no gate of that name.
-It MUST refuse it with `not_installed` unless the app is `Installed`.
-It MUST refuse it with `operation_in_progress` while a run of the gate is in progress, and with `already_queued` while one is queued.
+It MUST refuse it with `not_installed` unless the app is `Installed`, and with `script_error` while the app has an active `script_error` fault.
+It MUST refuse it with `requirements_invalid` while any of the gate's [targets](../language/gate.md#start-order) is not ready, with a `message` naming each such target.
+It MUST refuse it with `operation_in_progress` while an operation for the app is running or a change to the app is being applied, and with `already_queued` while an operation for the app is queued.
 
-Otherwise the runtime MUST initiate a [run](../runtime/gates.md) of the gate with the trigger `operator`, without waiting for its [retry](../runtime/gates.md#retries) to come due, and MUST end any hold-back after a cancelled run.
-The run's targets MUST still be ready before it starts, as [start order](../language/gate.md#start-order) specifies.
+Otherwise the runtime MUST end the gate's [pause](../runtime/gates.md#pauses), if any, and initiate a [run](../runtime/gates.md) of the gate with the trigger `operator`, without waiting for its [retry](../runtime/gates.md#retries) to come due.
 The result is as for [action invocation](actions.md#invoking-an-action).
 
 > [!NOTE]

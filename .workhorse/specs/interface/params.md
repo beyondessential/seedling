@@ -57,7 +57,7 @@ Registering an app and reloading a stored app run no validators.
 
 The result is `{ "generation": <integer> }`, the app's current [generation](../overview.md#generation) once the request completes.
 
-The server MUST refuse the request with `requirements_invalid` if `params` has no members, or if a member's name breaks the [naming rules](../language/overview.md#names).
+The server MUST refuse the request with `requirements_invalid` if `params` has no members, names a parameter more than once, has a member whose name breaks the [naming rules](../language/overview.md#names), or has a member whose value is neither a string nor `null`.
 It MUST refuse it with `not_found` if the app is not registered.
 It MUST refuse it with `operation_in_progress` if another change to the app is being applied.
 
@@ -102,13 +102,13 @@ The result has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `diff` | array | one entry per resource added, removed or modified |
-| `gates_would_run` | array of strings | in ascending order, the names of the gates whose [key](../language/gate.md#key) the change would move, where the app is installed |
+| `gates_would_run` | array of strings | where the app is installed, in ascending order, the names of the gates the evaluated definition declares that would be [unsatisfied](../runtime/gates.md#gate-state) under it and the proposed values |
 | `errors` | array of strings | the parse or evaluation errors, if the evaluated definition fails to parse or evaluate |
 | `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose validator rejects the proposed values |
 
 If the evaluated definition fails to parse or evaluate, the result MUST carry `errors` and no other member.
 Otherwise `errors` MUST be empty.
-If the request carries neither a proposed definition nor `proposed_params`, every array in the result MUST be empty.
+If the request carries neither a proposed definition nor `proposed_params`, `diff` and `rejections` MUST be empty.
 
 Each `diff` entry has these members.
 

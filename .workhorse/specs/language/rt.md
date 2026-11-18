@@ -70,6 +70,20 @@ In a shell's closure, `rt.stop` MUST throw, without changing the desired state, 
 
 `rt.query(selection)` returns a `Started` over the selection's resources, and MUST NOT change the desired state.
 
+### Resources a gate holds
+
+`rt.start` and `rt.stop` MUST leave these resources out of the resources they act on, out of the `Started` they return, and out of every barrier they wait on:
+
+- each resource in the [exclusive selection](gate.md#exclusive-selection) of a gate while the gate [holds](../runtime/reconciliation.md#gate-holds) it;
+- each workload [ordered after](gate.md#start-order) a gate that is not satisfied, whether directly or through other targets.
+
+In the [body](gate.md#body) of a gate, the runtime MUST NOT leave out a resource of that gate's own exclusive selection, nor a workload ordered after that gate, on account of that gate.
+`rt.restart` of a deployment that `rt.start` would leave out MUST throw.
+
+> [!NOTE]
+> An action written to start the whole app leaves a failed migration's selection stopped, and starts no release the database has not been migrated to.
+> A gate's body directs what the gate holds, since it runs to bring those resources to the state the gate's dependants need.
+
 ### Deployment restart
 
 `rt.restart(deployment: Deployment)` MUST restart every running instance of the named deployment, following its [update strategy](deployment.md#update-and-termination-strategies), and returns no value.

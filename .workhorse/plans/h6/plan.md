@@ -126,19 +126,32 @@ Drafted: Gates and start order (GATE), Gate runs (GRUN), and the removal of chan
 - Several parameters per change: `/apps/params/set` takes `params` (name to string, or `null` to unset) and `/apps/params/unset` goes; `/apps/update` and `/apps/plan` take the same object; `ParamSet`/`ParamUnset` become `ParamsChanged` with `changes`, a shape `AppUpdated` shares; history kind `param_change` with a `params` list; `apps params set <app> a=1 --unset b` and repeatable `--set`/`--unset` on `apps update`.
 - Code citations of removed sections (`PARAM#change-handlers`, `ACN#start-action`, `ACN#install-action`, `ACI#install-parameters`, `ACI#install-completion`, `OPS#stuck-install-recovery`, `OPS#parameter-changes`, `PRM#parameter-set`, `PRM#parameter-unset`, `CLI#parameter-change-on-update`, `CLI#action-shell-and-install-parameters`) go with the code changes.
 
-Next: spec review, then revisit J6 against the gate specs, then plan implementation.
+Fresh-eyes review round: findings folded in. Decisions taken with it:
+
+- `rt.start`/`rt.stop` leave out what a gate holds and workloads waiting on an unsatisfied gate, except in that gate's own body (J6's rule for its holds, kept for gates).
+- A run invalidates the gate's last success when it starts, and a failed check invalidates it too, so the gate is unsatisfied until a run succeeds.
+- A stale instance is not stopped while its workload waits on a target that is not ready, whatever its update strategy.
+- `installing` means installed and not yet set up (every gate satisfied at once since install, recorded durably).
+- Actions and schedules don't wait for setup.
+- A gate hold covers the current definition's exclusive selection; a gate no longer declared releases it and keeps its record until uninstall.
+- Source and target generations collapse to one operation generation, current at dispatch; operation events, `/apps/list` and `current_operation` carry `gate` for a gate run.
+- A cancelled gate run pauses the gate durably and files `gate_failed`.
+
+Next: plan implementation.
 
 ## Other cards in flight
 
 - F6 (shell sessions' dynamic resources, implemented, not merged): no conflict in behaviour. It edits the same places: the desired-state section of Reconciliation, Lifecycle operations, the runtime handle, `system/reconcile.rs`, `runtime/desired.rs` and `oi/handler/actions/lifecycle.rs`. Expect to rebase over it.
 - G6 (DTLS termination, implemented, not merged): proxy and ingress only; overlaps in `system/reconcile.rs` and the faults spec, textually.
-- J6 (guards and holds, specced, implementation waiting on this card): overlaps in behaviour. Its holds reference the boot start action this card removes, and a gate's exclusive selection covers the failed-upgrade case it was raised for. Revisit J6 once the gate specs are drafted.
+- J6 (guards and holds): absorbed and cancelled. A gate's exclusive selection is its guard, held through failure, cancel and restart and released when the gate is satisfied. Taken from it: `rt.start`/`rt.stop` leave held resources out; an operator stop of a held resource is accepted and outlasts the hold; scaling decisions take effect once the hold ends; a restart of a held deployment is refused; `/apps/show` reports `held_by` per resource.
 
 ## Explicitly rejected
 
 - Effective-value `on_change` (fire when the value `value()` returns moves), with a `multiple_handlers` refusal for changes that would fire more than one handler. It fixed the triggers but kept the edge-triggered model.
 - A definition-update hook that runs on every definition update.
 - Keeping `on_change` alongside gates.
+- J6's `rt.guard` holds alongside gates, and with them durable holds for ordinary actions and `/apps/resource/unhold`/`/apps/unhold`. An operator ends a gate hold by running the gate or moving its key.
+- A `held` key on `Started.select`: a gate holds its selection `Unscheduled`, so there are no held instances to filter.
 
 ## Superseded: desired-state hold for generation-initiated operations
 
