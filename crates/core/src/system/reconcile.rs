@@ -1721,18 +1721,6 @@ impl Reconciler {
         let nft_and_proxy = caddy_addrs.map(|addrs| {
             let caddy_ip = addrs.v6;
 
-            let nft_build = phases::compute_nftables_rules(
-                &apps,
-                &running_pods_by_app,
-                caddy_ip,
-                self.caddy_v4_addr,
-                &self.node_prefix,
-                &*self.registry,
-                ext_snapshot.as_ref(),
-                &make_resolve_ctx(),
-                site_ingress_snapshot.as_ref(),
-            );
-
             let proxy_build = phases::compute_proxy_config(
                 &apps,
                 app_coverage,
@@ -1742,6 +1730,20 @@ impl Reconciler {
                 &*self.registry,
                 self.cert_endpoint_url.as_deref(),
                 &renewal_ratios,
+            );
+
+            // spec: PRX#shared-ports
+            // After the proxy, whose served claims the redirected ports are.
+            let nft_build = phases::compute_nftables_rules(
+                &apps,
+                &running_pods_by_app,
+                caddy_ip,
+                self.caddy_v4_addr,
+                &self.node_prefix,
+                &*self.registry,
+                ext_snapshot.as_ref(),
+                &make_resolve_ctx(),
+                &proxy_build,
             );
 
             (nft_build, proxy_build, caddy_ip)
@@ -1765,6 +1767,7 @@ impl Reconciler {
                     ready_observations: proxy_ready_obs,
                     conflicts: ingress_conflicts,
                     unresolved_site_attachments,
+                    dtls_ingresses,
                 } = proxy_build;
                 // spec: SITE#unreadable-site-ingresses
                 // spec: FLT#filing-and-clearing
@@ -1878,6 +1881,14 @@ impl Reconciler {
                     apply_rules_plane(&*self.driver.data_plane, &dp_rules, rules_coverage),
                     apply_proxy_plane(&*self.driver.proxy, &proxy_config, proxy_coverage),
                 );
+
+                // spec: FLT#ingress-and-service-faults
+                // `None` when the build is partial: an ingress missing from it
+                // is absent rather than gone, so its fault is neither filed nor
+                // cleared.
+                if let Some(served) = &dtls_ingresses {
+                    self.reconcile_dtls_refusals(served).await;
+                }
 
                 match routes_res {
                     Some(Err(e)) => {
@@ -3118,6 +3129,13 @@ mod tests {
         ) -> BoxFuture<'a, Result<(), BoxError>> {
             self.0.lock().push(config.virtual_hosts.is_empty());
             Box::pin(async { Ok(()) })
+        }
+
+        fn dtls_refusals<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Result<std::collections::BTreeMap<String, jiff::Timestamp>, BoxError>>
+        {
+            Box::pin(async { Ok(Default::default()) })
         }
     }
 
@@ -5361,6 +5379,15 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async { Ok(()) })
         }
+
+        fn dtls_refusals<'a>(
+            &'a self,
+        ) -> crate::system::BoxFuture<
+            'a,
+            Result<std::collections::BTreeMap<String, jiff::Timestamp>, crate::system::BoxError>,
+        > {
+            Box::pin(async { Ok(Default::default()) })
+        }
     }
 
     fn site_ingress_with_attachment(db: &crate::runtime::db::Db, port: u16) {
@@ -5393,7 +5420,7 @@ mod tests {
                 port,
                 protocol: AttachmentProtocol::Tcp,
                 target: AttachmentTarget::Forward {
-                    app: AppName::new("absent").unwrap(),
+                    app: AppName::new("web").unwrap(),
                     service: AppServiceName::new("api").unwrap(),
                 },
                 created_at: "2026-11-17T00:00:00Z".into(),
@@ -5447,7 +5474,16 @@ mod tests {
     fn unreadable_site_ingresses_withhold_the_proxy_and_rules() {
         const PORT: u16 = 8443;
         let oi = crate::oi::test_support::TestOi::new();
-        let apps = vec![snapshot_with_service("web")];
+        // A target that resolves, so the attachment's port is one the proxy
+        // serves and the rules redirect.
+        let apps = vec![snapshot_with_priorities(
+            "web",
+            AppPriority::default(),
+            r#"
+            let api = app.service("api");
+            app.deployment("web").image("docker.io/library/nginx:1.29").tcp(80, api.port(8080));
+            "#,
+        )];
         let registry = crate::runtime::registry::EphemeralInstanceRegistry::new();
         let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
         let resolve_ctx = ResolveCtx {
@@ -5460,17 +5496,6 @@ mod tests {
             crate::runtime::external_service_mappings::ExternalServiceSnapshot::default();
         let planes = RecordingPlanes::default();
         let apply = |site: Option<&site_proxy::SiteIngressSnapshot>| {
-            let nft = phases::compute_nftables_rules(
-                &apps,
-                &HashMap::new(),
-                std::net::Ipv6Addr::LOCALHOST,
-                None,
-                &node_prefix,
-                &registry,
-                Some(&external),
-                &resolve_ctx,
-                site,
-            );
             let proxy = phases::compute_proxy_config(
                 &apps,
                 Coverage::Complete,
@@ -5480,6 +5505,17 @@ mod tests {
                 &registry,
                 None,
                 &std::collections::BTreeMap::new(),
+            );
+            let nft = phases::compute_nftables_rules(
+                &apps,
+                &HashMap::new(),
+                std::net::Ipv6Addr::LOCALHOST,
+                None,
+                &node_prefix,
+                &registry,
+                Some(&external),
+                &resolve_ctx,
+                &proxy,
             );
             let rules = oi.block_on(apply_rules_plane(&planes, &nft.rules, nft.coverage));
             let config = oi.block_on(apply_proxy_plane(&planes, &proxy.config, proxy.coverage));
@@ -5501,8 +5537,8 @@ mod tests {
         assert!(applied_ports().contains(&PORT));
         assert_eq!(
             proxy.unresolved_site_attachments.map(|u| u.len()),
-            Some(1),
-            "the attachment's missing target is reported"
+            Some(0),
+            "the attachment's target resolves"
         );
         assert!(proxy.conflicts.is_some());
 
@@ -5747,6 +5783,19 @@ mod tests {
                 external,
                 &resolve_ctx,
             );
+            let proxy = phases::compute_proxy_config(
+                &apps,
+                Coverage::Complete,
+                Some(&site_proxy::SiteIngressSnapshot {
+                    ingresses: Vec::new(),
+                    attachments: Vec::new(),
+                }),
+                &HashMap::new(),
+                &node_prefix,
+                &registry,
+                None,
+                &std::collections::BTreeMap::new(),
+            );
             let nft = phases::compute_nftables_rules(
                 &apps,
                 &HashMap::new(),
@@ -5756,10 +5805,7 @@ mod tests {
                 &registry,
                 external,
                 &resolve_ctx,
-                Some(&site_proxy::SiteIngressSnapshot {
-                    ingresses: Vec::new(),
-                    attachments: Vec::new(),
-                }),
+                &proxy,
             );
             let routes_applied = oi
                 .block_on(apply_routes_plane(&planes, &routes.routes, routes.coverage))
@@ -5899,6 +5945,117 @@ mod tests {
                 retain_restart_records: 50,
             },
         )
+    }
+
+    /// A proxy whose answer about refused DTLS sessions the test sets.
+    struct RefusingProxy(
+        parking_lot::Mutex<Result<std::collections::BTreeMap<String, jiff::Timestamp>, String>>,
+    );
+
+    impl crate::system::NetworkProxy for RefusingProxy {
+        fn is_healthy<'a>(
+            &'a self,
+        ) -> crate::system::BoxFuture<'a, Result<bool, crate::system::BoxError>> {
+            Box::pin(async { Ok(true) })
+        }
+
+        fn apply_config<'a>(
+            &'a self,
+            _config: &'a crate::system::types::ProxyConfig,
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn dtls_refusals<'a>(
+            &'a self,
+        ) -> crate::system::BoxFuture<
+            'a,
+            Result<std::collections::BTreeMap<String, jiff::Timestamp>, crate::system::BoxError>,
+        > {
+            let answer = self.0.lock().clone();
+            Box::pin(async move { answer.map_err(Into::into) })
+        }
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    // spec: PRX#dtls-terminating-ingresses
+    #[test]
+    fn dtls_session_refused_is_filed_on_a_recent_refusal_and_cleared_when_it_is_not_one() {
+        use crate::system::{
+            ContainerRuntime, ProcessManager,
+            stub::{StubContainerRuntime, StubDataPlane, StubProcessManager},
+            volume_store::VolumeStore,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let volumes = dir.path().join("stub-volumes");
+        std::fs::create_dir_all(&volumes).unwrap();
+        let container = Arc::new(StubContainerRuntime::new(volumes));
+        let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+        let backends = crate::system::backends::Backends::working(
+            Arc::clone(&container) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&process) as Arc<dyn ProcessManager>,
+        );
+        let proxy = Arc::new(RefusingProxy(parking_lot::Mutex::new(Ok(
+            Default::default(),
+        ))));
+        let system = Arc::new(System {
+            container: backends.container(),
+            process: backends.process(),
+            proxy: Arc::clone(&proxy) as Arc<dyn crate::system::NetworkProxy>,
+            data_plane: Arc::new(StubDataPlane),
+            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+            backends,
+        });
+        let oi = crate::oi::test_support::TestOi::with_driver(system);
+        let reconciler = test_reconciler(&oi);
+
+        let ingress = "voip.example.com:5684".to_owned();
+        let served = vec![(AppName::new_unchecked("voip"), ingress.clone())];
+        let refused_ago = |secs: i64| {
+            Ok(std::collections::BTreeMap::from([(
+                ingress.clone(),
+                jiff::Timestamp::from_second(jiff::Timestamp::now().as_second() - secs).unwrap(),
+            )]))
+        };
+        let held = || -> Vec<String> {
+            active_kinds(&oi, "voip")
+                .into_iter()
+                .filter(|(k, _)| k == "dtls_session_refused")
+                .map(|(_, s)| s)
+                .collect()
+        };
+        let reconcile = |served: &[(AppName, String)]| {
+            oi.block_on(reconciler.reconcile_dtls_refusals(served));
+        };
+
+        reconcile(&served);
+        assert!(held().is_empty(), "nothing refused");
+
+        *proxy.0.lock() = refused_ago(10);
+        reconcile(&served);
+        assert_eq!(held(), vec![ingress.clone()], "a recent refusal is held");
+
+        // The route cannot be read: not "none refused", so nothing clears.
+        *proxy.0.lock() = Err("admin API unreachable".to_owned());
+        reconcile(&served);
+        assert_eq!(
+            held(),
+            vec![ingress.clone()],
+            "an unreadable route clears nothing"
+        );
+
+        // Five quiet minutes.
+        *proxy.0.lock() = refused_ago(6 * 60);
+        reconcile(&served);
+        assert!(held().is_empty(), "cleared after the quiet period");
+
+        // Removed from the definition while refusing.
+        *proxy.0.lock() = refused_ago(10);
+        reconcile(&served);
+        assert_eq!(held().len(), 1);
+        reconcile(&[]);
+        assert!(held().is_empty(), "cleared when the ingress is gone");
     }
 
     // spec: AUTO#restart-pacing

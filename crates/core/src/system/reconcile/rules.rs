@@ -6,10 +6,9 @@ use std::{
 use ipnet::Ipv6Net;
 use seedling_protocol::names::{AppName, ExternalServiceName, ServiceRef};
 
-use super::{RunningPod, site_proxy::SiteIngressSnapshot};
+use super::RunningPod;
 use crate::{
     defs::{
-        app::AppDef,
         resource::{Resource, ResourceKind},
         service::{BoundService, ServicePort},
     },
@@ -17,14 +16,15 @@ use crate::{
         InstanceRegistry,
         external_service_mappings::ExternalServiceSnapshot,
         registry::RegistryError,
-        site_ingress_attachments::AttachmentProtocol,
-        site_ingresses::TlsProvider,
         site_services::{
             SiteServiceProtocol,
             resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
         },
     },
-    system::types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
+    system::types::{
+        ForwardProto, IngressRule, L4Proto, MountRule, ProxyConfig, ProxyListenerProto,
+        ServiceDnatRule,
+    },
 };
 
 /// Per-app map from `(service_name, service_port, proto)` to `Vec<(pod_ip, pod_port)>`.
@@ -156,87 +156,45 @@ fn select_pool(entries: Vec<TaggedBackend>) -> (Vec<(Ipv6Addr, u16)>, bool) {
     }
 }
 
-// spec: AUTO#ingress-and-network-repair
+/// The redirection of each port the proxy serves to the proxy: TCP for what it
+/// listens for over TCP, UDP for what it listens for over UDP, and both where
+/// it listens for both.
+///
+/// Read from the configuration the proxy is given rather than from the
+/// ingresses declared, so a port is forwarded only for the transports whose
+/// claims were served: an ingress left out for a conflict forwards nothing, and
+/// a DTLS ingress that lost its port leaves no UDP forwarded to the proxy.
+// spec: INFRA#ingress-redirection
+// spec: PRX#shared-ports
 pub(super) fn build_ingress_rules(
-    snapshot: &AppDef,
+    config: &ProxyConfig,
     caddy_ip: Ipv6Addr,
     caddy_v4: Option<Ipv4Addr>,
 ) -> Vec<IngressRule> {
-    let mut rules = Vec::new();
+    use std::collections::BTreeMap;
 
-    for resource in snapshot.resources.values() {
-        let ingress = match resource {
-            Resource::Ingress(i) => i,
-            _ => continue,
-        };
-
-        let def = ingress.def.lock();
-
-        let caddy_v6 = SocketAddr::new(IpAddr::V6(caddy_ip), def.port.get());
-        let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port.get()));
-
-        // spec: PRX#plaintext-ingresses
-        // spec: INFRA#ingress-redirection
-        // Forward only the transports the ingress actually serves. A DTLS
-        // ingress serves UDP alone; an HTTPS ingress serves HTTP/3 over UDP
-        // as well as TCP; a plaintext HTTP ingress, and any other, TCP alone.
-        let serves_quic = def.tls && def.http_terminate.is_some();
-        let proto = if def.dtls {
-            ForwardProto::Udp
-        } else if serves_quic {
-            ForwardProto::Both
-        } else {
-            ForwardProto::Tcp
-        };
-
-        rules.push(IngressRule {
-            external_port: def.port.get(),
-            proto,
-            caddy_v6,
-            caddy_v4: caddy_v4_addr,
-        });
-
-        if let Some(redirect) = &def.redirect {
-            rules.push(IngressRule {
-                external_port: redirect.port.get(),
-                proto: ForwardProto::Tcp,
-                caddy_v6: SocketAddr::new(IpAddr::V6(caddy_ip), redirect.port.get()),
-                caddy_v4: caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), redirect.port.get())),
-            });
+    let mut by_port: BTreeMap<u16, (bool, bool)> = BTreeMap::new();
+    let mut serve = |port: u16, tcp: bool, udp: bool| {
+        let served = by_port.entry(port).or_default();
+        served.0 |= tcp;
+        served.1 |= udp;
+    };
+    for listener in &config.listeners {
+        match listener.proto {
+            ProxyListenerProto::Http | ProxyListenerProto::Https => {
+                serve(listener.port, true, false)
+            }
+            ProxyListenerProto::Quic => serve(listener.port, false, true),
         }
     }
-
-    rules
-}
-
-/// The redirection of each site ingress attachment's port to the proxy: UDP
-/// for a `udp` attachment, otherwise TCP, and UDP as well for an `http` or
-/// `http2` attachment on a site ingress that terminates TLS. A site ingress
-/// that has lost its source is not served, so its ports are not redirected.
-// spec: INFRA#ingress-redirection
-pub(super) fn build_site_ingress_rules(
-    snapshot: &SiteIngressSnapshot,
-    caddy_ip: Ipv6Addr,
-    caddy_v4: Option<Ipv4Addr>,
-) -> Vec<IngressRule> {
-    let mut by_port: std::collections::BTreeMap<u16, (bool, bool)> =
-        std::collections::BTreeMap::new();
-    for ingress in snapshot.ingresses.iter().filter(|i| !i.stale) {
-        let terminates_tls = !matches!(ingress.tls_provider, TlsProvider::None);
-        for att in snapshot
-            .attachments
-            .iter()
-            .filter(|a| a.site_ingress == ingress.name)
-        {
-            let (tcp, udp) = match att.protocol {
-                AttachmentProtocol::Udp => (false, true),
-                AttachmentProtocol::Tcp => (true, false),
-                AttachmentProtocol::Http | AttachmentProtocol::Http2 => (true, terminates_tls),
-            };
-            let claimed = by_port.entry(att.port).or_default();
-            claimed.0 |= tcp;
-            claimed.1 |= udp;
+    for route in &config.l4_routes {
+        match route.proto {
+            L4Proto::Tcp => serve(route.port, true, false),
+            L4Proto::Udp => serve(route.port, false, true),
         }
+    }
+    for route in &config.dtls_routes {
+        serve(route.port, false, true);
     }
 
     by_port
@@ -503,7 +461,10 @@ mod tests {
     use seedling_protocol::names::{AppName, AppServiceName, SiteServiceName};
 
     use super::*;
-    use crate::runtime::site_services::{SiteServiceEndpoint, resolve::StaticHostnameLookup};
+    use crate::{
+        runtime::site_services::{SiteServiceEndpoint, resolve::StaticHostnameLookup},
+        system::types::{DtlsRoute, L4Route, ProxyListener},
+    };
 
     fn ipv6(s: &str) -> Ipv6Addr {
         s.parse().unwrap()
@@ -831,126 +792,41 @@ mod tests {
         ));
     }
 
-    fn appdef_from(script: &str) -> std::sync::Arc<AppDef> {
-        let name = AppName::new("testapp").unwrap();
-        let (app, err) = crate::runtime::apps::evaluate_script(
-            &name,
-            script,
-            &std::collections::BTreeMap::new(),
-            &crate::ScriptLimits::default(),
-        );
-        assert!(err.is_none(), "script error: {err:?}");
-        app.def.load_full()
+    fn listener(port: u16, proto: ProxyListenerProto) -> ProxyListener {
+        ProxyListener { port, proto }
     }
 
-    fn ingress_protos(def: &AppDef) -> Vec<ForwardProto> {
-        build_ingress_rules(def, ipv6("fd5e::ff"), None)
-            .into_iter()
-            .map(|r| r.proto)
-            .collect()
-    }
-
-    fn site_ingress(
-        name: &str,
-        tls: TlsProvider,
-        stale: bool,
-    ) -> crate::runtime::site_ingresses::SiteIngressDef {
-        crate::runtime::site_ingresses::SiteIngressDef {
-            name: seedling_protocol::names::SiteIngressName::new(name).unwrap(),
-            hostname: format!("{name}.example.com"),
-            description: None,
-            source: crate::runtime::site_ingresses::SiteIngressSource::Manual,
-            tls_provider: tls,
-            stale,
-            created_at: "2026-01-01T00:00:00Z".to_owned(),
-        }
-    }
-
-    fn attachment(
-        site: &str,
-        port: u16,
-        protocol: AttachmentProtocol,
-    ) -> crate::runtime::site_ingress_attachments::SiteIngressAttachment {
-        crate::runtime::site_ingress_attachments::SiteIngressAttachment {
-            site_ingress: seedling_protocol::names::SiteIngressName::new(site).unwrap(),
-            port,
-            protocol,
-            target: crate::runtime::site_ingress_attachments::AttachmentTarget::Redirect {
-                url: "https://example.com".to_owned(),
-                code: 307,
-                preserve_path: false,
-            },
-            created_at: "2026-01-01T00:00:00Z".to_owned(),
-        }
-    }
-
-    // spec: INFRA#ingress-redirection
-    #[test]
-    fn a_site_ingress_attachments_port_is_redirected_by_its_protocols() {
-        let snapshot = SiteIngressSnapshot {
-            ingresses: vec![
-                site_ingress("tls", TlsProvider::Acme, false),
-                site_ingress("plain", TlsProvider::None, false),
-                site_ingress("gone", TlsProvider::Acme, true),
-            ],
-            attachments: vec![
-                attachment("tls", 8443, AttachmentProtocol::Http),
-                attachment("tls", 5353, AttachmentProtocol::Udp),
-                attachment("tls", 5432, AttachmentProtocol::Tcp),
-                attachment("plain", 8080, AttachmentProtocol::Http2),
-                attachment("gone", 9000, AttachmentProtocol::Http),
-            ],
-        };
-
-        let rules: Vec<_> = build_site_ingress_rules(&snapshot, ipv6("fd5e::ff"), None)
+    fn rules_for(config: &ProxyConfig) -> Vec<(u16, ForwardProto)> {
+        build_ingress_rules(config, ipv6("fd5e::ff"), None)
             .into_iter()
             .map(|r| (r.external_port, r.proto))
-            .collect();
-        assert_eq!(
-            rules,
-            vec![
-                (5353, ForwardProto::Udp),
-                (5432, ForwardProto::Tcp),
-                (8080, ForwardProto::Tcp),
-                (8443, ForwardProto::Both),
-            ]
-        );
+            .collect()
     }
 
     // spec: PRX#plaintext-ingresses
     #[test]
     fn tls_http_ingress_forwards_tcp_and_udp() {
         // HTTPS serves HTTP/3 over UDP, so both transports are forwarded.
-        let def = appdef_from(
-            r#"
-            let svc = app.service("web").http(80);
-            svc.ingress("clinic.example.com", 443).tls(Terminate.Https, Output.Http1);
-        "#,
-        );
-        assert_eq!(ingress_protos(&def), vec![ForwardProto::Both]);
+        let config = ProxyConfig {
+            listeners: vec![
+                listener(443, ProxyListenerProto::Https),
+                listener(443, ProxyListenerProto::Quic),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(rules_for(&config), vec![(443, ForwardProto::Both)]);
     }
 
     // spec: PRX#plaintext-ingresses
     #[test]
     fn plaintext_http_ingress_forwards_tcp_only() {
-        // BSL cannot express plaintext HTTP termination — only a site ingress
-        // whose TLS provisioning mode is `none` produces it — so drop TLS on
-        // the evaluated def to reach that shape.
-        let def = appdef_from(
-            r#"
-            let svc = app.service("web").http(80);
-            svc.ingress("clinic.local", 80).tls(Terminate.Https, Output.Http1);
-        "#,
-        );
-        for resource in def.resources.values() {
-            if let Resource::Ingress(i) = resource {
-                i.def.lock().tls = false;
-            }
-        }
-
+        let config = ProxyConfig {
+            listeners: vec![listener(80, ProxyListenerProto::Http)],
+            ..Default::default()
+        };
         assert_eq!(
-            ingress_protos(&def),
-            vec![ForwardProto::Tcp],
+            rules_for(&config),
+            vec![(80, ForwardProto::Tcp)],
             "a plaintext HTTP ingress serves no UDP, so none should be forwarded"
         );
     }
@@ -958,12 +834,64 @@ mod tests {
     // spec: INFRA#ingress-redirection
     #[test]
     fn a_dtls_ingress_redirects_udp_alone() {
-        let def = appdef_from(
-            r#"
-            let svc = app.service("voip");
-            svc.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
-        "#,
+        let config = ProxyConfig {
+            dtls_routes: vec![DtlsRoute {
+                port: 5684,
+                hostname: "voip.example.com".to_owned(),
+                upstream: "[fd5e::1]:5684".to_owned(),
+                ingress: "voip.example.com:5684".to_owned(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(rules_for(&config), vec![(5684, ForwardProto::Udp)]);
+    }
+
+    // spec: INFRA#ingress-redirection
+    #[test]
+    fn layer_4_routes_are_redirected_by_their_transport() {
+        let route = |port, proto| L4Route {
+            port,
+            proto,
+            upstreams: vec!["[fd5e::1]:1".to_owned()],
+            terminate_tls: false,
+            hostname: None,
+        };
+        let config = ProxyConfig {
+            l4_routes: vec![
+                route(5353, L4Proto::Udp),
+                route(5432, L4Proto::Tcp),
+                route(8000, L4Proto::Tcp),
+                route(8000, L4Proto::Udp),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            rules_for(&config),
+            vec![
+                (5353, ForwardProto::Udp),
+                (5432, ForwardProto::Tcp),
+                (8000, ForwardProto::Both),
+            ]
         );
-        assert_eq!(ingress_protos(&def), vec![ForwardProto::Udp]);
+    }
+
+    // spec: PRX#shared-ports
+    #[test]
+    fn a_port_shared_by_several_ingresses_is_forwarded_once() {
+        let config = ProxyConfig {
+            listeners: vec![
+                listener(443, ProxyListenerProto::Https),
+                listener(443, ProxyListenerProto::Quic),
+            ],
+            l4_routes: vec![L4Route {
+                port: 443,
+                proto: L4Proto::Tcp,
+                upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                terminate_tls: true,
+                hostname: Some("db.example.com".to_owned()),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(rules_for(&config), vec![(443, ForwardProto::Both)]);
     }
 }

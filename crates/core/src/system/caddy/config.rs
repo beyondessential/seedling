@@ -1,41 +1,74 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
 use crate::runtime::tls::state::is_caddy_internal;
 use crate::system::types::{
-    HttpRedirect, L4Proto, ProxyConfig, ProxyListenerProto, RedirectSegment, RouteBalance,
+    HttpRedirect, L4Proto, L4Route, ProxyConfig, ProxyListenerProto, RedirectSegment, RouteBalance,
     RouteCompress, RouteHeaderOps, RouteHeaders, RouteRateLimit, VirtualHost,
 };
 
-/// Ports declared for both a plaintext and a TLS listener.
+/// An address and transport one server of the rendered configuration binds.
 ///
-/// The HTTP and HTTPS servers are built independently from the listener set,
-/// and nothing stopped both from listing `:P`. Caddy refuses a config where
-/// two servers bind the same address, and `POST /config/` is all-or-nothing —
-/// so one such pair invalidated every route and every cert policy on the
-/// node, not just the ingress that caused it.
-///
-/// Reported rather than quietly resolved: dropping one side would silently
-/// serve an ingress on a protocol its author did not ask for.
-// spec: PRX#plaintext-ingresses
-pub(crate) fn conflicting_listener_ports(config: &ProxyConfig) -> Vec<u16> {
-    let mut plaintext: BTreeSet<u16> = BTreeSet::new();
-    let mut tls: BTreeSet<u16> = BTreeSet::new();
-    for l in &config.listeners {
-        match l.proto {
-            ProxyListenerProto::Http => {
-                plaintext.insert(l.port);
-            }
-            ProxyListenerProto::Https | ProxyListenerProto::Quic => {
-                tls.insert(l.port);
+/// A transport is either `tcp` or `udp`. HTTP/3 binds the UDP address of the
+/// HTTPS server it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Bind {
+    pub transport: &'static str,
+    pub port: u16,
+}
+
+impl std::fmt::Display for Bind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.transport, self.port)
+    }
+}
+
+/// A rendered proxy document, with every address its servers bind.
+pub(crate) struct Rendered {
+    pub json: Value,
+    binds: Vec<Bind>,
+}
+
+impl Rendered {
+    /// Addresses the document binds more than once, across every server it
+    /// emits: HTTP, HTTPS and HTTP/3, layer 4, and DTLS.
+    ///
+    /// Caddy refuses a config where two servers bind the same address, and
+    /// `POST /config/` is all-or-nothing, so one such pair invalidates every
+    /// route and every cert policy on the node, not just the ingress that
+    /// caused it. The claims the runtime resolves keep this from happening;
+    /// this is the check that a mistake in them fails as one ingress's apply,
+    /// and not as the whole document's rejection.
+    ///
+    /// Reported rather than quietly resolved: dropping one side would silently
+    /// serve an ingress on a protocol its author did not ask for.
+    // spec: PRX#shared-ports
+    pub(crate) fn conflicting_binds(&self) -> Vec<Bind> {
+        let mut seen: BTreeSet<&Bind> = BTreeSet::new();
+        let mut conflicts: BTreeSet<Bind> = BTreeSet::new();
+        for bind in &self.binds {
+            if !seen.insert(bind) {
+                conflicts.insert(bind.clone());
             }
         }
+        conflicts.into_iter().collect()
     }
-    plaintext.intersection(&tls).copied().collect()
+}
+
+/// The TLS versions an ingress that terminates TLS accepts.
+// spec: ING#termination
+fn tls_versions() -> Value {
+    json!({ "protocol_min": "tls1.2", "protocol_max": "tls1.3" })
 }
 
 pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
+    render(config).json
+}
+
+/// Render the proxy document for `config`, once, with what it binds.
+pub(crate) fn render(config: &ProxyConfig) -> Rendered {
+    let mut binds: Vec<Bind> = Vec::new();
     let http_ports: Vec<u16> = config
         .listeners
         .iter()
@@ -81,6 +114,21 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     // server of its port rather than on a server of its own.
     let https_listen_ports: BTreeSet<u16> =
         https_ports.iter().chain(&quic_ports).copied().collect();
+
+    // spec: PRX#shared-ports
+    // TLS the proxy terminates for a connection that is not HTTP, by the name
+    // the client sends, per port.
+    let mut tls_streams: BTreeMap<u16, Vec<&L4Route>> = BTreeMap::new();
+    for route in config
+        .l4_routes
+        .iter()
+        .filter(|r| r.proto == L4Proto::Tcp && r.terminate_tls)
+    {
+        tls_streams.entry(route.port).or_default().push(route);
+    }
+    // Ports where an HTTPS server is emitted, and so also takes the streams.
+    let mut shared_ports: BTreeSet<u16> = BTreeSet::new();
+
     for port in https_listen_ports {
         let routes: Vec<Value> = config
             .virtual_hosts
@@ -90,10 +138,55 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
             .collect();
 
         if !routes.is_empty() {
-            servers.insert(
-                format!("seedling_https_{port}"),
-                json!({ "listen": [format!(":{port}")], "routes": routes }),
-            );
+            // spec: ING#termination
+            // Both TLS versions are named rather than left to the proxy's
+            // defaults, so a change of those cannot narrow what an ingress
+            // accepts.
+            let mut policy = tls_versions();
+            // spec: PRX#shared-ports
+            // The one policy matches the names the server answers to. A
+            // handshake with no SNI, or one naming none of them, matches no
+            // policy and is refused, rather than being given whatever
+            // certificate the proxy would pick for it and then served by
+            // the `Host` it sends.
+            let hostnames: BTreeSet<&str> = config
+                .virtual_hosts
+                .iter()
+                .filter(|vh| vh.tls_acme && vh.port == port)
+                .map(|vh| vh.hostname.as_str())
+                .collect();
+            policy["match"] = json!({ "sni": hostnames });
+            let mut server = json!({
+                "listen": [format!(":{port}")],
+                "routes": routes,
+                "tls_connection_policies": [policy],
+            });
+            // spec: PRX#shared-ports
+            // A TLS-terminating ingress that is not HTTP shares the port by
+            // SNI. The proxy's layer 4 module reads the hello and handles the
+            // connection of such a name itself; any other falls through to
+            // the HTTPS server. The TLS wrapper that follows is the proxy's
+            // own, and has to be named for the layer 4 wrapper to come ahead
+            // of it: left out, it is placed first, and the layer 4 module
+            // would be reading the handshake's ciphertext.
+            if let Some(streams) = tls_streams.get(&port) {
+                server["listener_wrappers"] = json!([
+                    { "wrapper": "layer4", "routes": tls_stream_routes(streams) },
+                    { "wrapper": "tls" },
+                ]);
+                shared_ports.insert(port);
+            }
+            servers.insert(format!("seedling_https_{port}"), server);
+            binds.push(Bind {
+                transport: "tcp",
+                port,
+            });
+            if quic_ports.contains(&port) {
+                binds.push(Bind {
+                    transport: "udp",
+                    port,
+                });
+            }
         }
     }
 
@@ -133,6 +226,10 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
                     "automatic_https": { "disable": true },
                 }),
             );
+            binds.push(Bind {
+                transport: "tcp",
+                port,
+            });
         }
     }
 
@@ -245,49 +342,121 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         apps["tls"] = tls;
     }
 
-    if !config.l4_routes.is_empty() {
-        let mut l4_servers = serde_json::Map::new();
-
-        for route in &config.l4_routes {
-            let proto_str = match route.proto {
-                L4Proto::Tcp => "tcp",
-                L4Proto::Udp => "udp",
-            };
-            let server_name = format!("l4_{proto_str}_{}", route.port);
-            let listen = format!("{proto_str}/:{}", route.port);
-
-            let upstreams: Vec<Value> = route
-                .upstreams
-                .iter()
-                .map(|u| json!({ "dial": [u] }))
-                .collect();
-
-            // spec: ING#termination
-            // The proxy's TLS handler takes its certificate from the proxy's
-            // own TLS app, by SNI, as an HTTPS ingress's does: the hostname is
-            // among those the TLS app automates.
-            let mut handle = Vec::with_capacity(2);
-            if route.terminate_tls {
-                handle.push(json!({ "handler": "tls" }));
-            }
-            handle.push(json!({
-                "handler": "proxy",
-                "upstreams": upstreams,
-            }));
-
-            l4_servers.insert(
-                server_name,
-                json!({
-                    "listen": [listen],
-                    "routes": [{ "handle": handle }]
-                }),
-            );
+    // spec: PRX#shared-ports
+    // One server per port and transport. The routes of a port that carries
+    // TLS are told apart by the SNI each answers to, so a handshake with no
+    // name, or one no route answers to, matches none and is closed rather than
+    // handed to whichever route came first.
+    let mut l4_servers = serde_json::Map::new();
+    let mut l4_ports: BTreeSet<(L4Proto, u16)> = BTreeSet::new();
+    for route in &config.l4_routes {
+        // Served by the HTTPS server of its port.
+        if route.proto == L4Proto::Tcp && route.terminate_tls && shared_ports.contains(&route.port)
+        {
+            continue;
         }
-
+        l4_ports.insert((route.proto, route.port));
+    }
+    for (proto, port) in l4_ports {
+        let proto_str = match proto {
+            L4Proto::Tcp => "tcp",
+            L4Proto::Udp => "udp",
+        };
+        let routes: Vec<Value> = config
+            .l4_routes
+            .iter()
+            .filter(|r| r.proto == proto && r.port == port)
+            .map(l4_route)
+            .collect();
+        l4_servers.insert(
+            format!("l4_{proto_str}_{port}"),
+            json!({
+                "listen": [format!("{proto_str}/:{port}")],
+                "routes": routes,
+            }),
+        );
+        binds.push(Bind {
+            transport: proto_str,
+            port,
+        });
+    }
+    if !l4_servers.is_empty() {
         apps["layer4"] = json!({ "servers": l4_servers });
     }
 
-    json!({ "admin": { "listen": "unix//run/caddy-admin/admin.sock" }, "apps": apps })
+    // spec: PRX#dtls-terminating-ingresses
+    // A server of the proxy's own DTLS module per port, which listens on its
+    // own socket rather than through the layer 4 module: that one splits a
+    // UDP port into a flow per remote address before any handler runs, so
+    // could neither follow a session whose client changed address nor keep
+    // the session for the idle period the requirement gives.
+    if !config.dtls_routes.is_empty() {
+        let mut dtls_servers = serde_json::Map::new();
+        for route in &config.dtls_routes {
+            dtls_servers.insert(
+                format!("dtls_{}", route.port),
+                json!({
+                    "listen": [format!(":{}", route.port)],
+                    "hostname": route.hostname,
+                    "upstream": route.upstream,
+                    "ingress": route.ingress,
+                }),
+            );
+            binds.push(Bind {
+                transport: "udp",
+                port: route.port,
+            });
+        }
+        apps["seedling_dtls"] = json!({ "servers": dtls_servers });
+    }
+
+    Rendered {
+        json: json!({ "admin": { "listen": "unix//run/caddy-admin/admin.sock" }, "apps": apps }),
+        binds,
+    }
+}
+
+/// One layer 4 route: the traffic passed through to its upstreams, or, where
+/// it terminates TLS, the plaintext stream inside the session for the name it
+/// is answering to.
+// spec: ING#termination
+// spec: PRX#shared-ports
+fn l4_route(route: &L4Route) -> Value {
+    let upstreams: Vec<Value> = route
+        .upstreams
+        .iter()
+        .map(|u| json!({ "dial": [u] }))
+        .collect();
+    let proxy = json!({ "handler": "proxy", "upstreams": upstreams });
+    if !route.terminate_tls {
+        return json!({ "handle": [proxy] });
+    }
+    // A route cached before routes carried a hostname terminates TLS for any
+    // name, as the daemon that wrote it rendered it, so replaying it
+    // reproduces what was running; the next reconciliation tick rebuilds it
+    // from the declaration, with its name.
+    // spec: PRX#proxy-upgrades
+    match &route.hostname {
+        Some(hostname) => json!({
+            "match": [{ "tls": { "sni": [hostname] } }],
+            "handle": [tls_handler(), proxy],
+        }),
+        None => json!({ "handle": [tls_handler(), proxy] }),
+    }
+}
+
+/// Routes for the TLS the proxy terminates ahead of an HTTPS server: one for
+/// each name, and no route for any other, which falls through to the server.
+fn tls_stream_routes(routes: &[&L4Route]) -> Vec<Value> {
+    routes.iter().copied().map(l4_route).collect()
+}
+
+/// The proxy's TLS handler takes its certificate from the proxy's own TLS app,
+/// by SNI, as an HTTPS ingress's does: the hostname is among those the TLS app
+/// automates.
+// spec: ING#termination
+fn tls_handler() -> Value {
+    json!({ "handler": "tls", "connection_policies": [tls_versions()] })
 }
 
 fn build_policy(

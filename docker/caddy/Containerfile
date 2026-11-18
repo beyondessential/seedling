@@ -3,6 +3,8 @@
 #   caddy-l4        L4 proxying for raw TCP/UDP ingress, which stock Caddy
 #                   cannot do.
 #   caddy-ratelimit Per-route rate limiting.
+#   seedling_dtls   DTLS termination for ingresses that terminate DTLS, which no
+#                   upstream module does. Built from ./dtls in this directory.
 #
 # Built and published to ghcr.io/beyondessential/seedling-caddy by
 # .github/workflows/caddy-image.yml. The daemon PULLS this image at runtime
@@ -35,9 +37,16 @@
 # against the built image before it is published.
 
 FROM docker.io/library/caddy:2.11.9-builder AS builder
+# The DTLS module is built from this directory. xcaddy writes the binary to
+# the working directory unless told otherwise, so the output is named: the
+# final stage copies it from /usr/bin/caddy.
+WORKDIR /src
+COPY dtls ./dtls
 RUN xcaddy build \
+      --output /usr/bin/caddy \
       --with github.com/mholt/caddy-l4@v0.1.3 \
-      --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db
+      --with github.com/mholt/caddy-ratelimit@5625512f24f6f59d6f64fb3aafe5eecff0b286db \
+      --with github.com/beyondessential/seedling/docker/caddy/dtls=./dtls
 
 # The final stage deliberately does NOT derive from the caddy image: layering
 # our binary over that one leaves its ~48 MB Caddy in a lower layer, still

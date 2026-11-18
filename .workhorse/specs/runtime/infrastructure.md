@@ -135,6 +135,9 @@ The ingress ports and their protocols are:
 | an app ingress's [HTTP redirect](../language/ingress.md#redirect-to-https) | the port the redirect names | TCP |
 | a [site ingress attachment](site-resources.md#attachments) | the attachment's port | UDP for a `udp` attachment; otherwise TCP, and UDP as well for an `http` or `http2` attachment on a site ingress that terminates TLS |
 
+The runtime MUST redirect a port for a protocol only where the proxy serves a [claim](proxy.md#shared-ports) on that port and protocol.
+An ingress, redirect or site ingress attachment that is left out of the proxy configuration, whether for a [conflict](../language/ingress.md#claims-across-apps) or because the attachment's target cannot be resolved, MUST NOT cause its port to be redirected.
+
 The runtime MUST redirect IPv6 traffic to the proxy's IPv6 address.
 Where the proxy has an IPv4 address, the runtime MUST also redirect IPv4 traffic to it.
 The runtime MUST NOT redirect the ports of an app that is uninstalling.

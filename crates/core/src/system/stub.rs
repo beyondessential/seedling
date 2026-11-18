@@ -828,6 +828,12 @@ impl NetworkProxy for StubNetworkProxy {
     fn apply_config<'a>(&'a self, _config: &'a ProxyConfig) -> BoxFuture<'a, Result<(), BoxError>> {
         async { Ok(()) }.boxed()
     }
+
+    fn dtls_refusals<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, Result<std::collections::BTreeMap<String, jiff::Timestamp>, BoxError>> {
+        async { Ok(Default::default()) }.boxed()
+    }
 }
 
 /// Stub `DataPlane`: no-ops everything. nftables / routing-table effects

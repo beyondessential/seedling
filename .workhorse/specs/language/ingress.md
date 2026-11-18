@@ -10,8 +10,12 @@ Applies to the BSL `Ingress` type, through which an app exposes one of its servi
 
 | term | meaning |
 | --- | --- |
-| TLS | Transport Layer Security, as defined by [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) |
-| DTLS | Datagram Transport Layer Security, as defined by [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) |
+| TLS | Transport Layer Security, in either TLS 1.2 or TLS 1.3 |
+| TLS 1.2 | as defined by [RFC 5246](https://www.rfc-editor.org/rfc/rfc5246) |
+| TLS 1.3 | as defined by [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) |
+| DTLS | Datagram Transport Layer Security, in either DTLS 1.2 or DTLS 1.3 |
+| DTLS 1.2 | as defined by [RFC 6347](https://www.rfc-editor.org/rfc/rfc6347) |
+| DTLS 1.3 | as defined by [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) |
 | HTTPS | HTTP over TLS, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) §4.2.2 |
 | HTTP/1.1 | as defined by [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) |
 | HTTP/2 | as defined by [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113); in cleartext, started with prior knowledge as in §3.3 |
@@ -47,16 +51,17 @@ The runtime MUST deliver traffic arriving at an ingress whose termination is `Te
 An ingress is identified within its app by its hostname and port.
 An ingress's name MUST be its [hostname](#hostnames) in lower case, followed by `:` and its port in decimal, such as `example.org:443`.
 Declaring an ingress whose hostname and port match an ingress already declared in the same app MUST throw, and MUST leave the earlier ingress as it was.
+A definition in which two of the app's ingresses make [conflicting claims](../runtime/proxy.md#shared-ports) on a port MUST fail to evaluate, with an error naming both ingresses.
 
 > [!NOTE]
 > A script may catch the error with `try`/`catch`, as [evaluation](overview.md#evaluation) allows.
 
 ### Claims across apps
 
-When ingresses of two apps claim the same hostname and port, the runtime MUST serve the ingress of the app whose install completed first, and MUST leave the other out of the proxy configuration.
+When ingresses of two apps make [conflicting claims](../runtime/proxy.md#shared-ports) on a port, the runtime MUST serve the ingress of the app whose install completed first, and MUST leave the other out of the proxy configuration.
 The runtime MUST file an [`ingress_conflict`](../runtime/faults.md#ingress-and-service-faults) fault against the app whose ingress it leaves out.
-Once the served ingress no longer claims the hostname and port, the runtime MUST serve the other.
-How an app's ingress and a site ingress attachment claiming the same hostname and port are handled is specified by [ingress conflicts](../runtime/site-resources.md#ingress-conflicts).
+Once the served ingress no longer makes a conflicting claim, the runtime MUST serve the other.
+How an app's ingress and a site ingress attachment making conflicting claims are handled is specified by [ingress conflicts](../runtime/site-resources.md#ingress-conflicts).
 
 ## Hostnames
 
@@ -80,7 +85,7 @@ Exactly four pairings are valid:
 | `terminate` | `output` | the ingress accepts | the Service receives |
 | --- | --- | --- | --- |
 | `Terminate.Tls` | `Output.Tcp` | TLS over TCP | the plaintext TCP stream inside the TLS session |
-| `Terminate.Dtls` | `Output.Udp` | DTLS over UDP | the plaintext datagrams inside the DTLS session |
+| `Terminate.Dtls` | `Output.Udp` | DTLS over UDP | the plaintext datagrams inside the DTLS session, as [DTLS-terminating ingresses](../runtime/proxy.md#dtls-terminating-ingresses) specifies |
 | `Terminate.Https` | `Output.Http1` | HTTP/1.1 and HTTP/2 over TLS on TCP, and HTTP/3 on UDP | plaintext HTTP/1.1 |
 | `Terminate.Https` | `Output.Http2` | HTTP/1.1 and HTTP/2 over TLS on TCP, and HTTP/3 on UDP | cleartext HTTP/2 |
 
@@ -88,8 +93,12 @@ Any other pairing MUST throw.
 The error MUST name the pairing supplied and the four valid pairings.
 A second `tls()` call MUST replace the first.
 
+An ingress terminating TLS or HTTPS MUST accept both TLS 1.2 and TLS 1.3 on TCP.
+An ingress terminating DTLS MUST accept both DTLS 1.2 and DTLS 1.3.
+An ingress terminating DTLS MUST present the certificate for its own hostname, whatever SNI the client sends, and whether or not it sends one.
 An ingress terminating TLS or DTLS MUST NOT interpret the application protocol inside it.
 An ingress with a termination MUST reject traffic that is not of the protocol it accepts.
+An ingress terminating DTLS MUST discard a datagram that is not DTLS, without replying to it.
 
 An ingress on which `tls()` is never called MUST forward TCP connections to its Service unmodified, and MUST NOT forward UDP traffic.
 

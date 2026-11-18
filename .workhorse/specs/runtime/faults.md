@@ -145,14 +145,15 @@ The runtime MUST file and clear the faults below against the app owning the ingr
 
 | kind | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- |
-| `ingress_conflict` | the app ingress or the site ingress | an app ingress and a site ingress attachment claim the same hostname and port, or a site ingress attachment is left out because another site ingress's attachment claims them, as [SITE](site-resources.md#ingress-conflicts) specifies, or an app ingress is left out because another app's ingress [claims](../language/ingress.md#claims-across-apps) them | the hostname and port are no longer in conflict | condition |
+| `ingress_conflict` | the app ingress or the site ingress | an app ingress and a site ingress attachment make [conflicting claims](proxy.md#shared-ports) on a port, or a site ingress attachment is left out because another site ingress's attachment makes a conflicting claim, as [SITE](site-resources.md#ingress-conflicts) specifies, or an app ingress is left out because another app's ingress makes [a conflicting claim](../language/ingress.md#claims-across-apps) | the claims no longer conflict | condition |
 | `proxy_apply_failed` | the app ingress or the site ingress | applying a proxy configuration that includes the ingress fails | a later proxy configuration is applied | condition |
+| `dtls_session_refused` | the app ingress | the proxy has refused a session of the DTLS-terminating ingress for want of a flow to its Service, as [PRX](proxy.md#dtls-terminating-ingresses) specifies, within the last five minutes | no session of the ingress has been refused for five minutes, or the ingress no longer exists | condition |
 | `site_ingress_target_missing` | the site ingress attachment | a site ingress attachment forwards to an app service that does not exist, or that no pod of its app binds | the attachment's target exists, or the attachment is removed | condition |
 | `service_degraded` | the service | the service's routing pool has [fallen back](lifecycle.md#routing-pool) to backends that are running but unhealthy | a backend in the pool is healthy, or the service is unscheduled | condition |
 | `site_service_endpoint_unresolvable` | the site service | an endpoint of the site service is [unresolvable](site-resources.md#endpoint-addressing) | no endpoint of the site service is unresolvable | condition |
 | `site_service_endpoint_unroutable` | the site service | an endpoint of the site service is [unroutable](site-resources.md#endpoint-addressing) | no endpoint of the site service is unroutable | condition |
 
-An `ingress_conflict` fault MUST identify the other party and the hostname and port.
+An `ingress_conflict` fault MUST identify the other party, the port and transport, and each claim's hostname where it has one.
 A `proxy_apply_failed` fault MUST carry the most recent apply error.
 A withheld apply, as [RCN](reconciliation.md#applying-absolute-state) specifies, MUST neither file nor clear `proxy_apply_failed`.
 A site service fault MUST name the failing endpoints, and an unroutable one MUST state whether each needs NAT64 or IPv6 egress.

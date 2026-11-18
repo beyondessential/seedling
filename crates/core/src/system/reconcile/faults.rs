@@ -549,10 +549,10 @@ impl Reconciler {
         });
     }
 
-    /// Converge `ingress_conflict` faults to the current `(hostname, port)`
-    /// collision set: one fault per involved app ingress, one per app ingress
-    /// left out for another app's claim, and one against `_system` per
-    /// involved site ingress, and nothing else.
+    /// Converge `ingress_conflict` faults to the current set of conflicting
+    /// claims: one fault per involved app ingress, one per app ingress left
+    /// out for another app's claim, and one against `_system` per involved
+    /// site ingress, and nothing else.
     ///
     /// This used to clear only `prior \\ current`, where `prior` was a
     /// `Reconciler` field that starts empty on every daemon start — so a
@@ -561,6 +561,7 @@ impl Reconciler {
     /// set instead needs no warm-up state and is restart-safe by construction.
     // spec: SITE#ingress-conflicts
     // spec: FLT#filing-and-clearing
+    // spec: FLT#ingress-and-service-faults
     pub(super) fn reconcile_ingress_conflicts(
         &mut self,
         report: &super::site_proxy::ConflictReport,
@@ -570,92 +571,107 @@ impl Reconciler {
         let site_claims = report.site_claims.clone();
         self.db.call(move |db| {
             let system = AppName::new_unchecked("_system");
-            let mut current: BTreeMap<faults::FaultKey, (faults::FaultMeta, String)> =
+            // One fault covers every claim of its subject that conflicts, so
+            // the descriptions of a subject's conflicts are gathered before
+            // any is written.
+            let mut gathered: BTreeMap<faults::FaultKey, (faults::FaultMeta, Vec<String>)> =
                 BTreeMap::new();
+            let mut add = |key: faults::FaultKey, meta: faults::FaultMeta, text: String| {
+                gathered
+                    .entry(key)
+                    .or_insert_with(|| (meta, Vec::new()))
+                    .1
+                    .push(text);
+            };
 
             // spec: ING#claims-across-apps
             for lost in &app_claims {
-                let (served_app, served_ingress) = &lost.served;
-                current.insert(
+                let what = if lost.redirect {
+                    "the HTTP redirect's claim"
+                } else {
+                    "this ingress's claim"
+                };
+                let left_out = if lost.redirect {
+                    "the redirect is left out of the proxy"
+                } else {
+                    "this ingress is left out of the proxy"
+                };
+                add(
                     faults::FaultKey::new(&lost.app, "ingress_conflict", lost.ingress.as_str()),
-                    (
-                        faults::FaultMeta::resource("ingress", lost.ingress.as_str()),
-                        format!(
-                            "ingress conflict on ({}:{}) with app ingress {served_app}/\
-                             {served_ingress}, whose app installed first; this ingress is left \
-                             out of the proxy while that one claims them",
-                            lost.hostname, lost.port
-                        ),
+                    faults::FaultMeta::resource("ingress", lost.ingress.as_str()),
+                    format!(
+                        "{what} on {} conflicts with the claim on {} of app ingress {}/{}, \
+                         whose app installed first; {left_out} while that one is served",
+                        lost.claim, lost.served.claim, lost.served.app, lost.served.ingress
                     ),
                 );
             }
 
             // spec: SITE#ingress-conflicts
             for lost in &site_claims {
-                current.insert(
+                let other = if lost.served == lost.site_ingress {
+                    "another attachment of this site ingress".to_owned()
+                } else {
+                    format!("site ingress {}, whose attachment", lost.served)
+                };
+                add(
                     faults::FaultKey::new(&system, "ingress_conflict", lost.site_ingress.as_str()),
-                    (
-                        faults::FaultMeta::resource("site_ingress", lost.site_ingress.as_str()),
-                        format!(
-                            "ingress conflict on ({}:{}) with site ingress {}, whose attachment \
-                             was created first; this attachment is left out of the proxy while \
-                             that one claims them",
-                            lost.hostname, lost.port, lost.served
-                        ),
+                    faults::FaultMeta::resource("site_ingress", lost.site_ingress.as_str()),
+                    format!(
+                        "claim on {} conflicts with the claim on {} of {other} was created \
+                         first; this attachment is left out of the proxy while that one is served",
+                        lost.claim, lost.served_claim
                     ),
                 );
             }
 
             for party in &parties {
-                let app_summary: Vec<String> = party
-                    .apps
-                    .iter()
-                    .map(|(a, ing)| format!("{a}/{ing}"))
-                    .collect();
-                let site_summary: Vec<String> = party.site.clone();
-                let host_port = format!("{}:{}", party.hostname, party.port);
-
+                let (app_side, dropped) = if party.redirect {
+                    (
+                        "the HTTP redirect of this ingress",
+                        "the redirect and the attachment are",
+                    )
+                } else {
+                    ("this ingress", "both sides are")
+                };
+                // Subject is the party's own ingress, so one app's fault
+                // clearing cannot depend on another app's still standing.
+                add(
+                    faults::FaultKey::new(&party.app, "ingress_conflict", party.ingress.as_str()),
+                    faults::FaultMeta::resource("ingress", party.ingress.as_str()),
+                    format!(
+                        "claim of {app_side} on {} conflicts with the claim on {} of site \
+                         ingress {}; {dropped} dropped from the proxy until resolved",
+                        party.app_claim, party.site_claim, party.site_ingress
+                    ),
+                );
                 let app_claim = if party.redirect {
-                    "the HTTP redirect of an app ingress"
+                    "the HTTP redirect of app ingress"
                 } else {
-                    "an app ingress"
+                    "app ingress"
                 };
-                let dropped = if party.redirect {
-                    "the redirect and the attachment are"
-                } else {
-                    "both sides are"
-                };
-
-                for (app, ingress_name) in &party.apps {
-                    // Subject is the party's own ingress, so one app's fault
-                    // clearing cannot depend on another app's still standing.
-                    current.insert(
-                        faults::FaultKey::new(app, "ingress_conflict", ingress_name.as_str()),
-                        (
-                            faults::FaultMeta::resource("ingress", ingress_name.as_str()),
-                            format!(
-                                "ingress conflict on ({host_port}) with site ingress(es) \
-                                 {site_summary:?}; {dropped} dropped from the proxy until \
-                                 resolved"
-                            ),
-                        ),
-                    );
-                }
-
-                for site_name in &party.site {
-                    current.insert(
-                        faults::FaultKey::new(&system, "ingress_conflict", site_name.as_str()),
-                        (
-                            faults::FaultMeta::resource("site_ingress", site_name.as_str()),
-                            format!(
-                                "ingress conflict on ({host_port}) with {app_claim} \
-                                 {app_summary:?}; {dropped} dropped from the proxy until \
-                                 resolved"
-                            ),
-                        ),
-                    );
-                }
+                add(
+                    faults::FaultKey::new(&system, "ingress_conflict", party.site_ingress.as_str()),
+                    faults::FaultMeta::resource("site_ingress", party.site_ingress.as_str()),
+                    format!(
+                        "claim on {} conflicts with the claim on {} of {app_claim} {}/{}; \
+                         {dropped} dropped from the proxy until resolved",
+                        party.site_claim, party.app_claim, party.app, party.ingress
+                    ),
+                );
             }
+
+            let current: BTreeMap<faults::FaultKey, (faults::FaultMeta, String)> = gathered
+                .into_iter()
+                .map(|(key, (meta, mut texts))| {
+                    texts.sort();
+                    texts.dedup();
+                    (
+                        key,
+                        (meta, format!("ingress conflict: {}", texts.join("; "))),
+                    )
+                })
+                .collect();
 
             if let Err(e) = faults::sync_faults(
                 db,
@@ -663,6 +679,48 @@ impl Reconciler {
                 &current,
             ) {
                 tracing::warn!("failed to converge ingress_conflict faults: {e}");
+            }
+        });
+    }
+
+    /// Converge `dtls_session_refused` faults to the DTLS ingresses the proxy
+    /// has refused a session of in the last five minutes.
+    ///
+    /// The refusals are read from the proxy. A read that fails is not an
+    /// answer, so it files nothing and clears nothing: the faults stay as they
+    /// were until a read succeeds.
+    // spec: FLT#ingress-and-service-faults
+    // spec: PRX#dtls-terminating-ingresses
+    pub(super) async fn reconcile_dtls_refusals(&self, served: &[(AppName, String)]) {
+        // With no DTLS ingress served nothing can be refusing, and any fault
+        // left over is cleared without asking the proxy.
+        let refusals = if served.is_empty() {
+            BTreeMap::new()
+        } else {
+            match self.driver.proxy.dtls_refusals().await {
+                Ok(refusals) => refusals,
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not read the proxy's DTLS session refusals");
+                    return;
+                }
+            }
+        };
+        let current = dtls_refusal_faults(served, &refusals, jiff::Timestamp::now());
+        let subjects: Vec<String> = current.keys().map(|k| k.subject.to_string()).collect();
+        self.db.call(move |db| {
+            match faults::sync_faults(
+                db,
+                &faults::FaultScope::Kind("dtls_session_refused".to_owned()),
+                &current,
+            ) {
+                Ok(outcome) if outcome.filed > 0 => {
+                    tracing::warn!(
+                        ingresses = ?subjects,
+                        "the proxy refused DTLS sessions for want of a flow to the service"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("failed to converge dtls_session_refused faults: {e}"),
             }
         });
     }
@@ -1305,3 +1363,100 @@ mod health_check_tests;
 
 #[cfg(test)]
 mod cert_acquisition_tests;
+
+/// How long after a refused session its ingress holds a `dtls_session_refused`
+/// fault.
+// spec: FLT#ingress-and-service-faults
+const DTLS_REFUSAL_WINDOW_SECS: i64 = 5 * 60;
+
+/// The faults to hold: one per served DTLS ingress with a session refused
+/// within the window ending at `now`. An ingress no longer served has none,
+/// whatever the proxy last reported for it.
+// spec: FLT#ingress-and-service-faults
+fn dtls_refusal_faults(
+    served: &[(AppName, String)],
+    refusals: &BTreeMap<String, jiff::Timestamp>,
+    now: jiff::Timestamp,
+) -> BTreeMap<faults::FaultKey, (faults::FaultMeta, String)> {
+    served
+        .iter()
+        .filter_map(|(app, ingress)| {
+            let at = refusals.get(ingress)?;
+            (now.as_second() - at.as_second() < DTLS_REFUSAL_WINDOW_SECS).then(|| {
+                (
+                    faults::FaultKey::new(app, "dtls_session_refused", ingress.as_str()),
+                    (
+                        faults::FaultMeta::resource("ingress", ingress.as_str()),
+                        format!(
+                            "the proxy refused a session at {at} for want of a flow to the \
+                             service; the sessions already open are served"
+                        ),
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod dtls_refusal_tests {
+    use super::*;
+
+    fn at(s: &str) -> jiff::Timestamp {
+        s.parse().unwrap()
+    }
+
+    fn served() -> Vec<(AppName, String)> {
+        vec![(
+            AppName::new_unchecked("voip"),
+            "voip.example.com:5684".to_owned(),
+        )]
+    }
+
+    fn refusals(when: &str) -> BTreeMap<String, jiff::Timestamp> {
+        BTreeMap::from([("voip.example.com:5684".to_owned(), at(when))])
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn a_recent_refusal_is_held_against_the_ingress() {
+        let held = dtls_refusal_faults(
+            &served(),
+            &refusals("2026-11-18T01:00:00Z"),
+            at("2026-11-18T01:04:59Z"),
+        );
+        assert_eq!(held.len(), 1);
+        let key = held.keys().next().unwrap();
+        assert_eq!(key.kind.as_ref() as &str, "dtls_session_refused");
+        assert_eq!(key.subject.as_ref() as &str, "voip.example.com:5684");
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn five_quiet_minutes_hold_nothing() {
+        let held = dtls_refusal_faults(
+            &served(),
+            &refusals("2026-11-18T01:00:00Z"),
+            at("2026-11-18T01:05:00Z"),
+        );
+        assert!(held.is_empty());
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn an_ingress_that_is_no_longer_served_holds_nothing() {
+        let held = dtls_refusal_faults(
+            &[],
+            &refusals("2026-11-18T01:00:00Z"),
+            at("2026-11-18T01:00:01Z"),
+        );
+        assert!(held.is_empty());
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn an_ingress_never_refused_holds_nothing() {
+        let held = dtls_refusal_faults(&served(), &BTreeMap::new(), at("2026-11-18T01:00:01Z"));
+        assert!(held.is_empty());
+    }
+}

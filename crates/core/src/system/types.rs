@@ -463,6 +463,10 @@ pub struct ProxyConfig {
     pub virtual_hosts: Vec<VirtualHost>,
     /// Layer-4 (TCP/UDP) routes for non-HTTP ingresses proxied via Caddy L4.
     pub l4_routes: Vec<L4Route>,
+    /// Ingresses on which the proxy terminates DTLS.
+    // spec: PRX#dtls-terminating-ingresses
+    #[serde(default)]
+    pub dtls_routes: Vec<DtlsRoute>,
     /// Hostnames whose TLS certificates should be pre-provisioned without
     /// adding routes (`rt.warm_certs`). Translated to
     /// `tls.certificates.automate` plus matching policy subjects so that Caddy
@@ -502,9 +506,30 @@ pub struct L4Route {
     // spec: ING#termination
     #[serde(default)]
     pub terminate_tls: bool,
+    /// The hostname a TLS-terminating route answers to. The proxy routes a
+    /// connection to it by SNI, which is what lets several such routes share
+    /// a port. Absent on a route that passes traffic through.
+    // spec: PRX#shared-ports
+    #[serde(default)]
+    pub hostname: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// An ingress that terminates DTLS: the proxy accepts DTLS on the UDP port
+/// and forwards the plaintext datagrams inside each session to the upstream.
+// spec: PRX#dtls-terminating-ingresses
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DtlsRoute {
+    pub port: u16,
+    /// The hostname whose certificate every session is given, whatever name
+    /// the client sends.
+    pub hostname: String,
+    /// Upstream address: `"[fd5e:...]:port"` format.
+    pub upstream: String,
+    /// The ingress's name, which the proxy reports a refused session against.
+    pub ingress: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum L4Proto {
     Tcp,
     Udp,

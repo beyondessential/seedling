@@ -37,5 +37,19 @@ http.reverse_proxy.selection_policies.first
 
 layer4
 layer4.handlers.proxy
-# A TLS ingress is terminated by the proxy before its stream is forwarded.
+# A TLS ingress is terminated by the proxy before its stream is forwarded, and
+# its connection is told apart from others on the port by the name the client
+# sends.
 layer4.handlers.tls
+layer4.matchers.tls
+
+# A TLS ingress that is not HTTP shares a port with an HTTPS server by reading
+# the hello ahead of it; the TLS wrapper is named so it follows.
+caddy.listeners.layer4
+caddy.listeners.tls
+
+# A DTLS ingress is terminated by the proxy's own module, built into the image
+# from docker/caddy/dtls: no upstream module terminates DTLS.
+seedling_dtls
+# The route the runtime polls for refused sessions.
+admin.api.seedling_dtls

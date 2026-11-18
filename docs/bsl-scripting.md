@@ -86,8 +86,16 @@ svc.ingress("host.example.com", 8443)
     .tls(Terminate.Https, Output.Http2);   // HTTPS → HTTP/2 (h2c)
 svc.ingress("tls.example.com", 443)
     .tls(Terminate.Tls, Output.Tcp);       // TLS → plaintext TCP
-svc.ingress("dtls.example.com", 443)
+svc.ingress("dtls.example.com", 5684)
     .tls(Terminate.Dtls, Output.Udp);      // DTLS → plaintext UDP
+
+// Ingresses that terminate TLS or HTTPS share a port when their hostnames
+// differ: the proxy routes each connection by the name the client sends,
+// so the three above on 443 and 8443 evaluate together. A pass-through
+// ingress, and a DTLS ingress, hold their whole port: nothing else can
+// use that port on the same transport (a DTLS ingress on 443 would take
+// the UDP port HTTP/3 needs). Two ingresses of one app whose claims on a
+// port conflict make the definition fail to evaluate.
 
 // HttpService.ingress() delegates to the wrapped Service, so chains
 // that flow through .http() can declare ingresses without backing out.

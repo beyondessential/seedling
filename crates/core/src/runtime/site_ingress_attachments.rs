@@ -19,7 +19,7 @@ pub struct SiteIngressAttachment {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AttachmentProtocol {
     /// L4 TCP passthrough on the listening port.

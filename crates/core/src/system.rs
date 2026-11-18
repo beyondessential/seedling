@@ -245,6 +245,14 @@ pub trait ProcessManager: Send + Sync + 'static {
 pub trait NetworkProxy: Send + Sync + 'static {
     fn is_healthy<'a>(&'a self) -> BoxFuture<'a, Result<bool, BoxError>>;
     fn apply_config<'a>(&'a self, config: &'a ProxyConfig) -> BoxFuture<'a, Result<(), BoxError>>;
+
+    /// When the proxy last refused a session of each DTLS-terminating ingress,
+    /// by ingress name, for want of a flow to its service. An error is "could
+    /// not be read", which is not "none refused".
+    // spec: PRX#dtls-terminating-ingresses
+    fn dtls_refusals<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, Result<std::collections::BTreeMap<String, jiff::Timestamp>, BoxError>>;
 }
 
 pub trait DataPlane: Send + Sync + 'static {

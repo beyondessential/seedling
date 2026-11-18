@@ -17,6 +17,8 @@ Applies to the proxy through which the [runtime](../overview.md#runtime) serves 
 | connection-specific field | A header field describing the connection rather than the message, such as `Connection` or `Keep-Alive`, [RFC 9110 §7.6.1](https://www.rfc-editor.org/rfc/rfc9110#section-7.6.1). |
 | QUIC | The UDP-based transport that carries HTTP/3, [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000). |
 | redirect | An HTTP response with a 3xx status code, [RFC 9110 §15.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.4). |
+| SNI | The TLS Server Name Indication extension, [RFC 6066 §3](https://www.rfc-editor.org/rfc/rfc6066#section-3). |
+| connection ID | An identifier carried in DTLS records that associates them with a session independently of the sender's address, [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) for DTLS 1.2 and [RFC 9147 §9](https://www.rfc-editor.org/rfc/rfc9147#section-9) for DTLS 1.3. |
 
 ## Terminology
 
@@ -54,6 +56,28 @@ An ingress's [HTTP redirect](../language/ingress.md#redirect-to-https) claims th
 On that port, the proxy MUST answer an ACME HTTP-01 challenge request for a certificate it is acquiring, ahead of the redirect.
 That claim and a plaintext ingress's claim on the same hostname and port conflict, and the runtime MUST resolve the conflict as [claims across apps](../language/ingress.md#claims-across-apps) and [ingress conflicts](site-resources.md#ingress-conflicts) specify.
 
+### Shared ports
+
+Each transport an ingress serves on its port is a claim on that port, of one of these kinds:
+
+| the ingress serves on the transport | kind of claim |
+| --- | --- |
+| TCP or UDP passed through, as an app ingress with no termination or a `tcp` or `udp` attachment does | the whole port |
+| TLS on TCP, including HTTPS | the port for its hostname, among TLS claims |
+| HTTP/3 on UDP | the port for its hostname, among HTTP/3 claims |
+| DTLS on UDP | the whole port |
+| plaintext HTTP on TCP, as a plaintext ingress or an [HTTP redirect](../language/ingress.md#redirect-to-https) does | the port for its hostname, among plaintext HTTP claims |
+
+Two claims on the same port and transport MUST be served together when both are for a hostname, both are of the same kind, and their hostnames differ.
+Any other two claims on the same port and transport conflict.
+
+The proxy MUST route each connection or request on a shared port to the ingress whose hostname the client names: by SNI for TLS and HTTP/3, and by the request's `Host` for plaintext HTTP.
+The proxy MUST refuse a TLS handshake that carries no SNI, or whose SNI names no ingress on the port.
+
+> [!NOTE]
+> Traffic passed through carries nothing the proxy reads a hostname from, so a pass-through ingress leaves nothing on its port for another to be told apart by.
+> DTLS clients commonly send no SNI, so a DTLS ingress is not told apart by hostname either, and holds its UDP port alone.
+
 ### Plaintext ingresses
 
 An ingress that terminates HTTP without terminating TLS is a plaintext ingress.
@@ -71,6 +95,45 @@ A plaintext HTTP ingress therefore MUST NOT cause UDP traffic on its port to be 
 A hostname MAY carry plaintext and TLS-terminating ingresses on different ports.
 The runtime MUST serve each from a listener matching its own termination.
 A TLS-terminating ingress on a hostname MUST NOT cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
+
+### DTLS-terminating ingresses
+
+These requirements apply to each DTLS session at an ingress whose [termination](../language/ingress.md#termination) is `Terminate.Dtls`.
+
+The proxy MUST carry the plaintext datagrams of each DTLS session to the service on a UDP flow of the session's own, whose source port differs from that of every other session's flow open to the service.
+The proxy MUST deliver a datagram the service sends on a session's flow to that session's client, inside the session.
+
+> [!NOTE]
+> A flow per session lets the service tell its clients apart by source port, as it would if they reached it over plain UDP.
+
+The proxy MUST NOT complete a DTLS handshake before the client has shown, by the protocol's cookie exchange, that it receives datagrams at the address it sends from.
+The proxy MUST open a session's flow to the service only once the session's handshake has completed.
+
+When no flow to the service can be opened for a new session, the proxy MUST refuse that session, and MUST continue to serve the sessions already open.
+The proxy MUST log each session it refuses, naming the ingress.
+The runtime MUST hold a [`dtls_session_refused`](faults.md#ingress-and-service-faults) fault against the ingress while it has refused one recently, as that fault's row specifies.
+
+> [!NOTE]
+> Each open session holds a source port toward its service, so the sessions one service can have open at once are bounded by the ports available to the proxy.
+> Requiring the cookie exchange and a completed handshake first keeps a client sending from addresses it does not hold from spending those ports.
+
+A session MUST end when its client closes it.
+The proxy MUST end a session that has carried no datagram in either direction for an idle period, which SHOULD be at least five minutes.
+When a session ends, the proxy MUST close its flow to the service.
+
+Applying a proxy configuration MUST NOT end the sessions of a DTLS-terminating ingress whose hostname, port and service it leaves as they were.
+Replacing the proxy in an [upgrade](#proxy-upgrades) MAY end them.
+
+> [!NOTE]
+> A configuration is applied whenever anything on the host changes, so sessions that ended on every apply would end whenever any app was installed or updated, and a DTLS 1.2 client is not told its session has gone.
+
+The proxy MUST support [connection IDs](#borrowed-terms) in both DTLS versions.
+A session whose client uses a connection ID MUST continue when the client's address or port changes, on the same flow to the service.
+Before sending a session's datagrams to a client's changed address, the proxy MUST confirm that the client receives datagrams at that address.
+
+> [!NOTE]
+> A client moving between networks keeps its session rather than handshaking again, and the service sees no change.
+> Confirming the new address keeps a party that rewrites a datagram's source from aiming the session's traffic at someone else.
 
 ## Route emission
 

@@ -259,11 +259,15 @@ translator.
 
 Every ingress port gets nftables DNAT rules in the prerouting chain, and
 IPv6 ones in the output chain, that redirect traffic to Caddy. The ports
-are those of app ingresses (UDP alone for a DTLS ingress; TCP, and UDP
-as well, for an HTTPS one; TCP otherwise) and their HTTP redirects, and of the
-attachments of site ingresses (UDP for a `udp` attachment; otherwise TCP,
-and UDP as well for an `http` or `http2` attachment on a site ingress that
-terminates TLS), except for a site ingress that has lost its source.
+are those the proxy is given to serve, read from its configuration:
+app ingresses (UDP alone for a DTLS ingress; TCP, and UDP as well, for an
+HTTPS one; TCP otherwise) and their HTTP redirects, and the attachments of
+site ingresses (UDP for a `udp` attachment; otherwise TCP, and UDP as well
+for an `http` or `http2` attachment on a site ingress that terminates
+TLS). An ingress or attachment left out of the configuration (a conflict
+loser, an attachment whose target cannot be resolved, a site ingress that
+has lost its source) forwards nothing, so a DTLS ingress that lost its port
+leaves no UDP forwarded to the proxy.
 For IPv6:
 
     meta nfproto ipv6 fib daddr type local tcp dport <port>
@@ -293,20 +297,38 @@ are left as they are meanwhile.
 
 ### Ingress conflicts
 
-When two claims on one `(hostname, port)` meet, the proxy configuration
-leaves one or both out and an `ingress_conflict` fault names the party
-left out:
+Each transport an ingress serves on its port is a claim on that port.
+Claims on the same port and transport are served together only when both
+are for a hostname, are of the same kind, and name different hostnames;
+every other pair conflicts. The kinds are TLS on TCP (including HTTPS),
+HTTP/3 on UDP, and plaintext HTTP on TCP (a plaintext ingress, or an HTTP
+redirect). Pass-through TCP or UDP and DTLS claim their whole port,
+because traffic that is passed through carries nothing the proxy reads a
+hostname from, and DTLS clients commonly send no SNI.
+
+The proxy routes each connection on a shared port by SNI (TLS and
+HTTP/3) or by the request's `Host` (plaintext HTTP), and refuses a TLS
+handshake with no SNI or one that names no ingress on the port.
+
+Within one app, conflicting claims make the definition fail to evaluate.
+Between apps and site ingresses, the proxy configuration leaves one or
+both out and an `ingress_conflict` fault names the party left out, the
+port and transport, and each claim's hostname:
 
 - an app ingress and a site ingress attachment: both are left out;
 - the ingresses of two apps: the app whose install completed first is
   served;
 - the attachments of two site ingresses: the attachment created first is
   served;
-- an app ingress's HTTP redirect and a plaintext site ingress attachment
-  on the redirect's port: the redirect and the attachment are left out,
-  and the ingress itself is still served.
+- an app ingress's HTTP redirect and a conflicting claim of a site ingress
+  attachment on the redirect's port: the redirect and the attachment are
+  left out, and the ingress itself is still served.
 
-A conflict on one port never affects other ports on the same hostname.
+An ingress that loses is left out whole, not per transport. A conflict on
+one port never affects other ports on the same hostname, nor claims on
+the same port that do not conflict. As a last check, the proxy
+configuration is refused, as one failed apply, if any address would still
+be bound by two servers.
 
 While an app is held back from reconciliation (its desired state, its
 stopped resources or its priority cannot be read, or its ingresses
@@ -386,12 +408,46 @@ JSON, separate from the `http.servers` entries used for HTTP ingress.
 
 An ingress with no `tls()` gets a TCP listener only. A
 `tls(Terminate.Tls, Output.Tcp)` ingress puts the L4 `tls` handler
-ahead of the proxy, so Caddy terminates TLS with the certificate its
-TLS app holds for the hostname (the same chain as HTTPS ingresses) and
-the service receives the plaintext stream. A
-`tls(Terminate.Dtls, Output.Udp)` ingress gets a UDP listener only;
-the proxy image has no DTLS terminator yet, so its datagrams reach the
-service still encrypted.
+ahead of the proxy, so Caddy terminates TLS (1.2 and 1.3) with the
+certificate its TLS app holds for the hostname (the same chain as HTTPS
+ingresses) and the service receives the plaintext stream. Each such
+route matches the SNI of its hostname, so several share a port; where an
+HTTPS server holds the same port, the routes go in a `layer4` listener
+wrapper ahead of that server's TLS and other names fall through to it.
+
+A `tls(Terminate.Dtls, Output.Udp)` ingress is terminated by the
+`seedling_dtls` Caddy app, built into the proxy image from
+`docker/caddy/dtls` on pion/dtls (DTLS 1.2 and 1.3, connection IDs, and
+the return routability check). It is not a layer4 server: caddy-l4 splits
+a UDP listener into a flow per remote address before any handler runs,
+which could neither follow a session whose client changed address nor
+keep it for the idle period. Each ingress is a server of the app with its
+port, hostname, upstream and name.
+
+- Every session is presented the certificate for the ingress's own
+  hostname, whatever SNI the client sends or omits, looked up through the
+  proxy's TLS app so runtime-managed certificates apply.
+- A handshake is not completed before the cookie exchange, and a session's
+  upstream UDP flow is opened only after its handshake completes, with a
+  source port of its own, so the service tells clients apart as over plain
+  UDP. The cap is the source ports the proxy has toward one service, and
+  across every DTLS ingress, half the proxy's open-file limit, so sessions
+  cannot spend the descriptors the other routes need; a session beyond
+  either is refused.
+- A datagram from the service too big for one DTLS record is dropped, and
+  the session goes on.
+- A datagram that is not DTLS is dropped without a reply. A session ends
+  when its client closes it, or after five minutes with no datagram in
+  either direction, and its flow is closed.
+- A configuration apply that leaves an ingress's hostname, port and
+  upstream as they were keeps its sessions; a proxy upgrade may end them.
+- When no flow can be opened, the session is refused and logged, and the
+  proxy records the time against the ingress. The runtime polls
+  `/seedling/dtls/refusals` on the admin API each iteration and holds a
+  `dtls_session_refused` fault (condition) against the ingress for five
+  minutes after the last refusal. An unreadable route files and clears
+  nothing.
+- The service does not see the client's address; that is separate work.
 
 Because all ingress flows through Caddy, dual-stack works uniformly
 for both HTTP and TCP/UDP: IPv4 clients connect to Caddy over IPv4,

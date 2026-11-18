@@ -42,11 +42,12 @@ pub(crate) enum CaddyError {
         backtrace: snafu::Backtrace,
     },
     #[snafu(display(
-        "port(s) {ports:?} are declared as both plaintext and TLS listeners; \
-         Caddy cannot bind one address twice and would reject the whole config"
+        "address(es) {} are bound by more than one server; \
+         Caddy cannot bind one address twice and would reject the whole config",
+        binds.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     ))]
     ConflictingListeners {
-        ports: Vec<u16>,
+        binds: Vec<super::config::Bind>,
         backtrace: snafu::Backtrace,
     },
 }
@@ -133,12 +134,14 @@ impl CaddyProxy {
         // bind the same address, and `POST /config/` is all-or-nothing, so
         // pushing one would drop every route and cert policy on the node —
         // far past the ingress that caused it.
-        let conflicts = super::config::conflicting_listener_ports(config);
+        // spec: PRX#shared-ports
+        let rendered = super::config::render(config);
+        let conflicts = rendered.conflicting_binds();
         if !conflicts.is_empty() {
-            return ConflictingListenersSnafu { ports: conflicts }.fail();
+            return ConflictingListenersSnafu { binds: conflicts }.fail();
         }
 
-        let caddy_json = super::config::build_caddy_config(config);
+        let caddy_json = rendered.json;
         let client = self.get_client().await;
 
         // Dedup against Caddy's current config: when nothing has
@@ -173,6 +176,27 @@ impl CaddyProxy {
         Ok(())
     }
 
+    /// Read when the proxy last refused a session of each DTLS ingress.
+    // spec: PRX#dtls-terminating-ingresses
+    async fn dtls_refusals_impl(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, jiff::Timestamp>, CaddyError> {
+        let client = self.get_client().await;
+        let resp = client
+            .get("http://localhost/seedling/dtls/refusals")
+            .send()
+            .await
+            .context(HttpSnafu)?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return ApiSnafu { status, body }.fail();
+        }
+        let raw: std::collections::BTreeMap<String, String> =
+            resp.json().await.context(HttpSnafu)?;
+        parse_refusals(raw)
+    }
+
     pub(crate) async fn apply_raw_json(&self, json: &Value) -> Result<(), CaddyError> {
         let client = self.get_client().await;
         let resp = client
@@ -190,6 +214,25 @@ impl CaddyProxy {
     }
 }
 
+/// The refusals as the proxy reports them, each time an RFC 3339 timestamp. A
+/// time that does not parse fails the read, as the whole answer is then not
+/// known, rather than being dropped from it.
+// spec: PRX#dtls-terminating-ingresses
+fn parse_refusals(
+    raw: std::collections::BTreeMap<String, String>,
+) -> Result<std::collections::BTreeMap<String, jiff::Timestamp>, CaddyError> {
+    raw.into_iter()
+        .map(|(ingress, at)| match at.parse::<jiff::Timestamp>() {
+            Ok(at) => Ok((ingress, at)),
+            Err(e) => ApiSnafu {
+                status: 200u16,
+                body: format!("refusal time {at:?} for {ingress}: {e}"),
+            }
+            .fail(),
+        })
+        .collect()
+}
+
 impl NetworkProxy for CaddyProxy {
     fn is_healthy<'a>(&'a self) -> BoxFuture<'a, Result<bool, BoxError>> {
         Box::pin(async move { self.is_healthy_impl().await.map_err(Into::into) })
@@ -197,5 +240,42 @@ impl NetworkProxy for CaddyProxy {
 
     fn apply_config<'a>(&'a self, config: &'a ProxyConfig) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.apply_config_impl(config).await.map_err(Into::into) })
+    }
+
+    fn dtls_refusals<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, Result<std::collections::BTreeMap<String, jiff::Timestamp>, BoxError>> {
+        Box::pin(async move { self.dtls_refusals_impl().await.map_err(Into::into) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_refusals;
+
+    // spec: PRX#dtls-terminating-ingresses
+    #[test]
+    fn refusal_times_are_read_as_reported() {
+        let raw = [(
+            "voip.example.com:5684".to_owned(),
+            "2026-11-18T01:02:03.5Z".to_owned(),
+        )]
+        .into();
+        let read = parse_refusals(raw).expect("parses");
+        assert_eq!(
+            read["voip.example.com:5684"].to_string(),
+            "2026-11-18T01:02:03.5Z"
+        );
+    }
+
+    // spec: PRX#dtls-terminating-ingresses
+    #[test]
+    fn an_unreadable_time_fails_the_whole_read() {
+        let raw = [
+            ("a:1".to_owned(), "2026-11-18T01:02:03Z".to_owned()),
+            ("b:2".to_owned(), "yesterday".to_owned()),
+        ]
+        .into();
+        assert!(parse_refusals(raw).is_err());
     }
 }
