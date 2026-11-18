@@ -1380,10 +1380,11 @@ mod tests {
             vec![("first".to_owned(), 443), ("second".to_owned(), 8443)],
             "another port on the same hostname is unaffected"
         );
-        assert_eq!(lost.len(), 2, "its TCP claim and its UDP claim");
+        assert_eq!(lost.len(), 1, "the attachment is left out once, whole");
         assert!(lost.iter().all(|l| l.site_ingress == site("second")));
         assert!(lost.iter().all(|l| l.served == site("first")));
         assert!(lost.iter().all(|l| l.claim.port == 443));
+        assert!(lost.iter().all(|l| l.served_claim.port == 443));
 
         // Once the served attachment no longer claims the pair, the other is
         // served.

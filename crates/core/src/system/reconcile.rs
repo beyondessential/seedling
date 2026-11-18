@@ -1699,18 +1699,6 @@ impl Reconciler {
         let nft_and_proxy = caddy_addrs.map(|addrs| {
             let caddy_ip = addrs.v6;
 
-            let nft_build = phases::compute_nftables_rules(
-                &apps,
-                &running_pods_by_app,
-                caddy_ip,
-                self.caddy_v4_addr,
-                &self.node_prefix,
-                &*self.registry,
-                ext_snapshot.as_ref(),
-                &make_resolve_ctx(),
-                site_ingress_snapshot.as_ref(),
-            );
-
             let proxy_build = phases::compute_proxy_config(
                 &apps,
                 app_coverage,
@@ -1720,6 +1708,20 @@ impl Reconciler {
                 &*self.registry,
                 self.cert_endpoint_url.as_deref(),
                 &renewal_ratios,
+            );
+
+            // spec: PRX#shared-ports
+            // After the proxy, whose served claims the redirected ports are.
+            let nft_build = phases::compute_nftables_rules(
+                &apps,
+                &running_pods_by_app,
+                caddy_ip,
+                self.caddy_v4_addr,
+                &self.node_prefix,
+                &*self.registry,
+                ext_snapshot.as_ref(),
+                &make_resolve_ctx(),
+                &proxy_build,
             );
 
             (nft_build, proxy_build, caddy_ip)
@@ -5167,7 +5169,7 @@ mod tests {
                 port,
                 protocol: AttachmentProtocol::Tcp,
                 target: AttachmentTarget::Forward {
-                    app: AppName::new("absent").unwrap(),
+                    app: AppName::new("web").unwrap(),
                     service: AppServiceName::new("api").unwrap(),
                 },
                 created_at: "2026-11-17T00:00:00Z".into(),
@@ -5221,7 +5223,16 @@ mod tests {
     fn unreadable_site_ingresses_withhold_the_proxy_and_rules() {
         const PORT: u16 = 8443;
         let oi = crate::oi::test_support::TestOi::new();
-        let apps = vec![snapshot_with_service("web")];
+        // A target that resolves, so the attachment's port is one the proxy
+        // serves and the rules redirect.
+        let apps = vec![snapshot_with_priorities(
+            "web",
+            AppPriority::default(),
+            r#"
+            let api = app.service("api");
+            app.deployment("web").image("docker.io/library/nginx:1.29").tcp(80, api.port(8080));
+            "#,
+        )];
         let registry = crate::runtime::registry::EphemeralInstanceRegistry::new();
         let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
         let resolve_ctx = ResolveCtx {
@@ -5234,17 +5245,6 @@ mod tests {
             crate::runtime::external_service_mappings::ExternalServiceSnapshot::default();
         let planes = RecordingPlanes::default();
         let apply = |site: Option<&site_proxy::SiteIngressSnapshot>| {
-            let nft = phases::compute_nftables_rules(
-                &apps,
-                &HashMap::new(),
-                std::net::Ipv6Addr::LOCALHOST,
-                None,
-                &node_prefix,
-                &registry,
-                Some(&external),
-                &resolve_ctx,
-                site,
-            );
             let proxy = phases::compute_proxy_config(
                 &apps,
                 Coverage::Complete,
@@ -5254,6 +5254,17 @@ mod tests {
                 &registry,
                 None,
                 &std::collections::BTreeMap::new(),
+            );
+            let nft = phases::compute_nftables_rules(
+                &apps,
+                &HashMap::new(),
+                std::net::Ipv6Addr::LOCALHOST,
+                None,
+                &node_prefix,
+                &registry,
+                Some(&external),
+                &resolve_ctx,
+                &proxy,
             );
             let rules = oi.block_on(apply_rules_plane(&planes, &nft.rules, nft.coverage));
             let config = oi.block_on(apply_proxy_plane(&planes, &proxy.config, proxy.coverage));
@@ -5275,8 +5286,8 @@ mod tests {
         assert!(applied_ports().contains(&PORT));
         assert_eq!(
             proxy.unresolved_site_attachments.map(|u| u.len()),
-            Some(1),
-            "the attachment's missing target is reported"
+            Some(0),
+            "the attachment's target resolves"
         );
         assert!(proxy.conflicts.is_some());
 
@@ -5521,6 +5532,19 @@ mod tests {
                 external,
                 &resolve_ctx,
             );
+            let proxy = phases::compute_proxy_config(
+                &apps,
+                Coverage::Complete,
+                Some(&site_proxy::SiteIngressSnapshot {
+                    ingresses: Vec::new(),
+                    attachments: Vec::new(),
+                }),
+                &HashMap::new(),
+                &node_prefix,
+                &registry,
+                None,
+                &std::collections::BTreeMap::new(),
+            );
             let nft = phases::compute_nftables_rules(
                 &apps,
                 &HashMap::new(),
@@ -5530,10 +5554,7 @@ mod tests {
                 &registry,
                 external,
                 &resolve_ctx,
-                Some(&site_proxy::SiteIngressSnapshot {
-                    ingresses: Vec::new(),
-                    attachments: Vec::new(),
-                }),
+                &proxy,
             );
             let routes_applied = oi
                 .block_on(apply_routes_plane(&planes, &routes.routes, routes.coverage))

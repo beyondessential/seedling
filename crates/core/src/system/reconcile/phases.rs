@@ -224,7 +224,7 @@ pub(super) fn compute_nftables_rules(
     registry: &dyn InstanceRegistry,
     ext_snapshot: Option<&ExternalServiceSnapshot>,
     resolve_ctx: &ResolveCtx<'_>,
-    site_snapshot: Option<&site_proxy::SiteIngressSnapshot>,
+    proxy_build: &ProxyBuildResult,
 ) -> NftablesBuild {
     let backends_by_app = rules::collect_backends_by_app(running_pods_by_app);
 
@@ -241,11 +241,6 @@ pub(super) fn compute_nftables_rules(
             .get(&app.name)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        all_ingress.extend(rules::build_ingress_rules(
-            &app.app_def,
-            caddy_ip,
-            caddy_v4_addr,
-        ));
         all_mounts.extend(rules::build_mount_rules(
             running,
             &app.name,
@@ -276,14 +271,15 @@ pub(super) fn compute_nftables_rules(
         }
     }
     // spec: INFRA#ingress-redirection
-    // spec: SITE#unreadable-site-ingresses
-    if let Some(snapshot) = site_snapshot {
-        all_ingress.extend(rules::build_site_ingress_rules(
-            snapshot,
-            caddy_ip,
-            caddy_v4_addr,
-        ));
-    }
+    // spec: PRX#shared-ports
+    // The ports the proxy is given to serve, and nothing declared that it
+    // left out: from the same build, so the two cannot disagree about which
+    // claims were served.
+    all_ingress.extend(rules::build_ingress_rules(
+        &proxy_build.config,
+        caddy_ip,
+        caddy_v4_addr,
+    ));
     NftablesBuild {
         rules: DataPlaneRules {
             ingress: all_ingress,
@@ -293,8 +289,11 @@ pub(super) fn compute_nftables_rules(
         degraded_services_by_app: degraded_by_app,
         // spec: SITE#unreadable-site-ingresses
         // spec: SITE#unreadable-site-services
+        // The ingress rules are the proxy build's, which is partial when an
+        // app's ingresses could not be built or the site ingresses could not
+        // be read.
         coverage: Coverage::of(dropped)
-            .and(Coverage::of_read(site_snapshot))
+            .and(proxy_build.coverage)
             .and(Coverage::of_read(ext_snapshot)),
     }
 }
