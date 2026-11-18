@@ -1210,7 +1210,7 @@ fn parse_lifecycle_state(s: &str) -> Result<LifecycleState, rusqlite::Error> {
 /// persisted by the reconciler but had no arm here, so `find_instance` on one
 /// returned a conversion failure rather than the instance. An exhaustive
 /// match means a new variant stops compiling here instead.
-fn resource_kind_str(kind: ResourceKind) -> &'static str {
+pub(crate) fn resource_kind_str(kind: ResourceKind) -> &'static str {
     match kind {
         ResourceKind::Parameter => "Parameter",
         ResourceKind::Service => "Service",
@@ -1224,7 +1224,7 @@ fn resource_kind_str(kind: ResourceKind) -> &'static str {
     }
 }
 
-fn parse_resource_kind(s: &str) -> Result<ResourceKind, rusqlite::Error> {
+pub(crate) fn parse_resource_kind(s: &str) -> Result<ResourceKind, rusqlite::Error> {
     match s {
         "Parameter" => Ok(ResourceKind::Parameter),
         "Service" => Ok(ResourceKind::Service),

@@ -221,6 +221,12 @@ impl GateKeyDigests {
             .map(Self)
     }
 
+    /// The digest of the key of gate `name`, or `None` for a gate the
+    /// definition does not declare.
+    pub fn get(&self, name: &GateName) -> Option<KeyDigest> {
+        self.0.get(name).copied()
+    }
+
     #[cfg(test)]
     pub fn from_digests(digests: impl IntoIterator<Item = (GateName, KeyDigest)>) -> Self {
         Self(digests.into_iter().collect())
