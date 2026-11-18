@@ -287,6 +287,17 @@ pub(crate) async fn open_shell_session(
     // The slot stands from here until the session's dynamic resources are gone
     // after it has ended, so nothing of the session is ever outside it.
     let slot = sessions.open(session_id);
+    // spec: OPS#shell-sessions
+    // However the session ends, panicking or dropped included, its resources
+    // are torn down and its slot let go.
+    let teardown = SessionTeardown {
+        state: Arc::clone(&state),
+        app_name: app_name.clone(),
+        session_id,
+        sessions,
+        slot: Arc::clone(&slot),
+        tick_notify: Arc::clone(&tick_notify),
+    };
     let run = run_app_shell(
         &state,
         app,
@@ -323,14 +334,45 @@ pub(crate) async fn open_shell_session(
     // spec: OPS#shell-sessions
     // The session is over for its client; tearing its dynamic resources down
     // takes as long as it takes.
-    tokio::spawn(tear_down_session_resources(
-        state,
-        app_name,
-        session_id,
-        sessions,
-        slot,
-        tick_notify,
-    ));
+    drop(teardown);
+}
+
+/// Starts tearing down a session's dynamic resources when it is dropped,
+/// which is when the session has ended, by whatever path.
+pub(super) struct SessionTeardown {
+    pub(super) state: Arc<OiState>,
+    pub(super) app_name: AppName,
+    pub(super) session_id: SessionId,
+    pub(super) sessions: Arc<SessionSlots>,
+    pub(super) slot: SessionSlot,
+    pub(super) tick_notify: Arc<Notify>,
+}
+
+impl Drop for SessionTeardown {
+    // spec: OPS#shell-sessions
+    fn drop(&mut self) {
+        let teardown = tear_down_session_resources(
+            Arc::clone(&self.state),
+            self.app_name.clone(),
+            self.session_id,
+            Arc::clone(&self.sessions),
+            Arc::clone(&self.slot),
+            Arc::clone(&self.tick_notify),
+        );
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(teardown);
+            }
+            // Only when the runtime itself is going: the records stay, and
+            // the next start tears their resources down.
+            Err(e) => {
+                tracing::error!(
+                    app = %self.app_name, session = %self.session_id,
+                    "cannot tear down the session's dynamic resources now: {e}"
+                );
+            }
+        }
+    }
 }
 
 /// Tears down the dynamic resources a session that has ended created, then

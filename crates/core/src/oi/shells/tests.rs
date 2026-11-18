@@ -865,3 +865,43 @@ fn a_session_whose_resources_are_slow_to_go_holds_the_stall_fault_by_its_id() {
         "the record is forgotten"
     );
 }
+
+// spec: OPS#shell-sessions
+// The slot was let go only on the session's ordinary end, so a session task
+// that panicked or was dropped kept its app from ever being steady again.
+#[test]
+fn a_session_dropped_mid_run_still_lets_go_of_its_slot() {
+    let oi = TestOi::with_app("demo");
+    let (sessions, tick_notify) = {
+        let reg = oi.state.registry.read();
+        let entry = reg.get("demo").unwrap();
+        (Arc::clone(&entry.sessions), Arc::clone(&entry.tick_notify))
+    };
+    let session_id = SessionId::generate();
+    let slot = sessions.open(session_id);
+    let teardown = super::session::SessionTeardown {
+        state: Arc::clone(&oi.state),
+        app_name: "demo".parse().unwrap(),
+        session_id,
+        sessions: Arc::clone(&sessions),
+        slot,
+        tick_notify,
+    };
+
+    oi.block_on(async {
+        let running = tokio::spawn(async move {
+            let _teardown = teardown;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        running.abort();
+        let _ = running.await;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !sessions.is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the slot is let go");
+    });
+}
