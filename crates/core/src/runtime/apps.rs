@@ -185,6 +185,22 @@ pub struct AppEntry {
     pub start_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
+impl AppEntry {
+    /// Whether the app's desired state is its whole resource graph, which
+    /// nothing in flight can change: it is installed, and no operation, start
+    /// action or shell session is placing resources of its own.
+    // spec: RCN#desired-state
+    // spec: GC#unscheduled-instances
+    pub fn is_steady(&self) -> bool {
+        *self.phase.lock() == AppPhase::Installed
+            && self.active_progress.read().is_none()
+            && self.sessions.is_empty()
+            && !self
+                .start_pending
+                .load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
 pub struct AppRegistry {
     entries: HashMap<String, AppEntry>,
 }

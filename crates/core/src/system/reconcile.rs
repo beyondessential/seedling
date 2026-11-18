@@ -967,6 +967,10 @@ impl Reconciler {
                 AppPhase::NotInstalled if entry.sessions.is_empty() => continue,
                 AppPhase::NotInstalled => {}
             }
+            // Read before the progress is held, as it reads the progress
+            // itself. A snapshot that went unsteady since is rechecked before
+            // the GC sweeps by it.
+            let steady = entry.is_steady();
             let progress = entry.active_progress.read();
             let app_def_arc = entry.app.def.load_full();
             let app_def = (*app_def_arc).clone();
@@ -1095,16 +1099,6 @@ impl Reconciler {
                 .and_then(|p| p.as_ref().ok())
                 .copied()
                 .unwrap_or_default();
-            let steady = phase == AppPhase::Installed
-                && progress.is_none()
-                // spec: GC#unscheduled-instances
-                // A session with a slot may place an instance at any moment,
-                // whether or not it has placed one yet, as `known_desired_state`
-                // has it.
-                && entry.sessions.is_empty()
-                && !entry
-                    .start_pending
-                    .load(std::sync::atomic::Ordering::Acquire);
             snapshots.push(AppSnapshot {
                 name,
                 desired,

@@ -649,14 +649,12 @@ impl Reconciler {
 /// does not hold may simply have failed to load, so it gets no entry.
 // spec: GC#unscheduled-instances
 fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDesiredState {
-    let still_steady = |entry: &AppEntry| {
-        *entry.phase.lock() == AppPhase::Installed
-            && entry.active_progress.read().is_none()
-            && entry.sessions.is_empty()
-    };
     let mut known = KnownDesiredState::default();
     for app in apps.iter().filter(|app| app.steady) {
-        if registry.get(app.name.as_str()).is_some_and(still_steady) {
+        if registry
+            .get(app.name.as_str())
+            .is_some_and(AppEntry::is_steady)
+        {
             known.insert_app(
                 &app.name,
                 app.desired
