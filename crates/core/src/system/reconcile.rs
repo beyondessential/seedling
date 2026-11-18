@@ -1081,7 +1081,11 @@ impl Reconciler {
                 .unwrap_or_default();
             let steady = phase == AppPhase::Installed
                 && progress.is_none()
-                && sessions.is_empty()
+                // spec: GC#unscheduled-instances
+                // A session with a slot may place an instance at any moment,
+                // whether or not it has placed one yet, as `known_desired_state`
+                // has it.
+                && entry.sessions.is_empty()
                 && !entry
                     .start_pending
                     .load(std::sync::atomic::Ordering::Acquire);
@@ -4930,6 +4934,15 @@ mod tests {
 
         let (steady, _) = desired_instances(&reconciler, "app");
         hold_in_session(&oi, "app", first, &first_job, definition.clone(), false);
+        let sessions = Arc::clone(&oi.state.registry.read().get("app").unwrap().sessions);
+        let empty = SessionId::generate();
+        sessions.open(empty);
+        let (_, steady_with_empty_slot) = desired_instances(&reconciler, "app");
+        assert!(
+            !steady_with_empty_slot,
+            "a session that has placed nothing yet still breaks steadiness"
+        );
+        sessions.close(&empty);
         let (with_session, still_steady) = desired_instances(&reconciler, "app");
         assert!(
             with_session.contains(&first_job.id),
@@ -4947,7 +4960,6 @@ mod tests {
             "the operation's and each session's resources are all desired"
         );
 
-        let sessions = Arc::clone(&oi.state.registry.read().get("app").unwrap().sessions);
         sessions.close(&first);
         let (all, _) = desired_instances(&reconciler, "app");
         assert_eq!(
