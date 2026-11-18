@@ -75,7 +75,6 @@ impl ReloadOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppPhase {
     NotInstalled,
-    Installing,
     Installed,
     Uninstalling,
 }
@@ -178,26 +177,18 @@ pub struct AppEntry {
     /// completed, lower first; `None` before any install has completed.
     // spec: ING#claims-across-apps
     pub install_seq: Option<i64>,
-    /// The app's start action has been initiated and has not yet ended,
-    /// including while it is queued. Until it ends, the app's desired state is
-    /// held as for an app with an operation in progress.
-    // spec: RCN#desired-state
-    pub start_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppEntry {
     /// Whether the app's desired state is its whole resource graph, which
-    /// nothing in flight can change: it is installed, and no operation, start
-    /// action or shell session is placing resources of its own.
+    /// nothing in flight can change: it is installed, and no operation or shell
+    /// session is placing resources of its own.
     // spec: RCN#desired-state
     // spec: GC#unscheduled-instances
     pub fn is_steady(&self) -> bool {
         *self.phase.lock() == AppPhase::Installed
             && self.active_progress.read().is_none()
             && self.sessions.is_empty()
-            && !self
-                .start_pending
-                .load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -277,7 +268,6 @@ impl AppRegistry {
                 script_error,
                 current_generation: generation,
                 install_seq: None,
-                start_pending: Arc::default(),
             },
         );
     }
@@ -402,25 +392,24 @@ impl AppRegistry {
     ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
-            "SELECT name, installed, uninstalling, installing, current_generation, install_seq \
+            "SELECT name, installed, uninstalling, current_generation, install_seq \
              FROM registered_apps ORDER BY name",
         )?;
-        type Row = (AppName, bool, bool, bool, i64, Option<i64>);
+        type Row = (AppName, bool, bool, i64, Option<i64>);
         let rows: Vec<Row> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, AppName>(0)?,
                     row.get::<_, bool>(1)?,
                     row.get::<_, bool>(2)?,
-                    row.get::<_, bool>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, installed, uninstalling, installing, current_gen, install_seq) in rows {
-            let phase = decode_phase(name.as_str(), installed, uninstalling, installing);
+        for (name, installed, uninstalling, current_gen, install_seq) in rows {
+            let phase = decode_phase(installed, uninstalling);
             if current_gen <= 0 {
                 tracing::warn!(app = %name, "skipping app with no current generation");
                 continue;
@@ -480,7 +469,6 @@ impl AppRegistry {
                     script_error,
                     current_generation,
                     install_seq,
-                    start_pending: Arc::default(),
                 },
             );
         }
@@ -504,22 +492,20 @@ impl AppRegistry {
 
     // spec: APPS#persistence
     pub fn persist_app(db: &Db, entry: &AppEntry) -> rusqlite::Result<()> {
-        let (installed, uninstalling, installing) = encode_phase(&entry.phase.lock());
+        let (installed, uninstalling) = encode_phase(&entry.phase.lock());
         db.conn.execute(
             // spec: INFRA#database
             "INSERT INTO registered_apps \
-                 (name, installed, uninstalling, installing, current_generation) \
-             VALUES (?1, ?2, ?3, ?4, ?5) \
+                 (name, installed, uninstalling, current_generation) \
+             VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT(name) DO UPDATE SET \
                  installed = excluded.installed, \
                  uninstalling = excluded.uninstalling, \
-                 installing = excluded.installing, \
                  current_generation = excluded.current_generation",
             rusqlite::params![
                 entry.name,
                 installed as i64,
                 uninstalling as i64,
-                installing as i64,
                 entry.current_generation as i64,
             ],
         )?;
@@ -555,39 +541,23 @@ pub fn definition_at_generation(
     Ok(Some((generations::load_bundle(db, &hash)?, source)))
 }
 
-/// Encode a phase as the `(installed, uninstalling, installing)` triple stored
-/// in `registered_apps`. Exactly one of the three is ever set, except that
-/// `Uninstalling` sets `installed` alongside `uninstalling` so that a halted
-/// migration or manual intervention reading only `installed` still sees the app
-/// as "has been installed".
-fn encode_phase(phase: &AppPhase) -> (bool, bool, bool) {
+/// Encode a phase as the `(installed, uninstalling)` pair stored in
+/// `registered_apps`. `Uninstalling` sets `installed` alongside `uninstalling`
+/// so that a halted migration or manual intervention reading only `installed`
+/// still sees the app as "has been installed".
+fn encode_phase(phase: &AppPhase) -> (bool, bool) {
     match phase {
-        AppPhase::NotInstalled => (false, false, false),
-        AppPhase::Installing => (false, false, true),
-        AppPhase::Installed => (true, false, false),
-        AppPhase::Uninstalling => (true, true, false),
+        AppPhase::NotInstalled => (false, false),
+        AppPhase::Installed => (true, false),
+        AppPhase::Uninstalling => (true, true),
     }
 }
 
-/// Inverse of [`encode_phase`]. Tolerates inconsistent triples (e.g. both
-/// `installed` and `installing` set) by preferring the earliest-in-state-
-/// -machine interpretation and logging a warning — a defensive arm that
-/// should not trigger under the invariant that the encoder is the only
-/// writer.
-fn decode_phase(app: &str, installed: bool, uninstalling: bool, installing: bool) -> AppPhase {
+/// Inverse of [`encode_phase`].
+fn decode_phase(installed: bool, uninstalling: bool) -> AppPhase {
     if uninstalling {
-        return AppPhase::Uninstalling;
-    }
-    if installing {
-        if installed {
-            tracing::warn!(
-                app,
-                "registered_apps row has both installed=1 and installing=1; treating as Installing"
-            );
-        }
-        return AppPhase::Installing;
-    }
-    if installed {
+        AppPhase::Uninstalling
+    } else if installed {
         AppPhase::Installed
     } else {
         AppPhase::NotInstalled
@@ -605,15 +575,10 @@ pub fn transition_phase(
     db: &Db,
     app_name: &AppName,
 ) -> rusqlite::Result<()> {
-    let (installed, uninstalling, installing) = encode_phase(&new_phase);
+    let (installed, uninstalling) = encode_phase(&new_phase);
     db.conn.execute(
-        "UPDATE registered_apps SET installed = ?1, uninstalling = ?2, installing = ?3 WHERE name = ?4",
-        rusqlite::params![
-            installed as i64,
-            uninstalling as i64,
-            installing as i64,
-            app_name,
-        ],
+        "UPDATE registered_apps SET installed = ?1, uninstalling = ?2 WHERE name = ?3",
+        rusqlite::params![installed as i64, uninstalling as i64, app_name],
     )?;
     *phase_arc.lock() = new_phase;
     Ok(())

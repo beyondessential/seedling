@@ -896,7 +896,6 @@ mod tests {
             .unwrap()
             .sessions
             .open(seedling_protocol::names::SessionId::generate());
-        register(&mut reg, "installing", AppPhase::Installing);
         register(&mut reg, "absent", AppPhase::NotInstalled);
         // Not installed, but a session that has ended is still tearing down.
         register(&mut reg, "ended", AppPhase::NotInstalled);
@@ -920,7 +919,6 @@ mod tests {
         assert!(!known.sweepable("busy", unrelated.id));
         assert!(!known.sweepable("sessioned", unrelated.id));
         assert!(!known.sweepable("ended", unrelated.id));
-        assert!(!known.sweepable("installing", unrelated.id));
         assert!(!known.sweepable("unloaded", unrelated.id));
         assert!(known.sweepable("absent", unrelated.id));
     }

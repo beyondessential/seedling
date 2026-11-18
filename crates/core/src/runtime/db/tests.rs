@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 82);
+    assert_eq!(version, 83);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 82);
+    assert_eq!(version, 83);
 }
 
 // spec: APPS#persistence
@@ -566,4 +566,61 @@ fn single_parameter_history_rows_move_to_the_per_parameter_table() {
         )
         .unwrap();
     assert_eq!(dropped, 0, "the old per-generation columns are gone");
+}
+
+// spec: ACI#install
+#[test]
+fn an_app_part_way_through_an_install_is_installed_and_the_removed_actions_leave_the_queue() {
+    let db = Db::open_in_memory_through(82).expect("open at v82");
+    db.conn
+        .execute_batch(
+            "INSERT INTO registered_apps (name, installed, uninstalling, installing, current_generation)
+                 VALUES ('half', 0, 0, 1, 1), ('fresh', 0, 0, 0, 1), ('live', 1, 0, 0, 1);
+             INSERT INTO queued_operations
+                 (operation_id, app, action, trigger, source_generation, target_generation, params_ciphertext)
+                 VALUES ('boot', 'live', 'start', 'boot', 1, 1, x'00'),
+                        ('after-install', 'live', 'start', 'install', 1, 1, x'00'),
+                        ('install', 'fresh', 'install', 'operator', 1, 1, x'00'),
+                        ('action', 'live', 'backup', 'operator', 1, 1, x'00'),
+                        ('change', 'live', 'mode', 'param_change', 1, 2, x'00');",
+        )
+        .expect("seed v82 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let phases: Vec<(String, bool)> = db
+        .conn
+        .prepare("SELECT name, installed FROM registered_apps ORDER BY name")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        phases,
+        [
+            ("fresh".to_owned(), false),
+            ("half".to_owned(), true),
+            ("live".to_owned(), true),
+        ]
+    );
+    let has_column: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('registered_apps') WHERE name = 'installing'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_column, 0, "the installing column is gone");
+
+    let queued: Vec<String> = db
+        .conn
+        .prepare("SELECT operation_id FROM queued_operations ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(queued, ["action", "change"]);
 }

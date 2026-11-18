@@ -286,12 +286,12 @@ pub(crate) fn bind_volume_params(
     state: &OiState,
     schema: &std::collections::BTreeMap<
         seedling_protocol::names::ParamName,
-        crate::defs::install::ParamDef,
+        crate::defs::param_def::ParamDef,
     >,
     mut params: serde_json::Map<String, serde_json::Value>,
     operation_id: &str,
 ) -> Result<BoundParams, String> {
-    use crate::defs::install::ParamKind;
+    use crate::defs::param_def::ParamKind;
     use crate::defs::volume::{VolumeParamSpec, build_operation_volume_params};
     use crate::runtime::site_volumes;
     use seedling_protocol::names::SiteVolumeName;
@@ -736,17 +736,9 @@ pub fn set_phase_and_persist(
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(app_name.as_str()) {
-            let (app_n, generation_n, installed, uninstalling, installing) =
-                extract_persist_fields(entry);
+            let (app_n, generation_n, installed, uninstalling) = extract_persist_fields(entry);
             if let Err(e) = state.db.call(move |db| {
-                persist_app_fields(
-                    db,
-                    &app_n,
-                    generation_n,
-                    installed,
-                    uninstalling,
-                    installing,
-                )
+                persist_app_fields(db, &app_n, generation_n, installed, uninstalling)
             }) {
                 tracing::error!(app = %app_name, "persist phase transition: {e}");
             }
@@ -759,72 +751,9 @@ pub fn set_phase_and_persist(
 fn phase_event_name(phase: &AppPhase) -> &'static str {
     match phase {
         AppPhase::NotInstalled => "not_installed",
-        AppPhase::Installing => "installing",
         AppPhase::Installed => "installed",
         AppPhase::Uninstalling => "uninstalling",
     }
-}
-
-// spec: ACI#install
-fn enter_installing_phase(
-    state: &OiState,
-    app_name: &AppName,
-    actor: Option<Arc<seedling_protocol::actor::Actor>>,
-) {
-    set_phase_and_persist(state, app_name, AppPhase::Installing, actor);
-    tracing::info!(app = %app_name, "install started; entering Installing phase");
-}
-
-/// Place the app's just-completed install after every install completed
-/// before it, durably and then in memory.
-// spec: ING#claims-across-apps
-pub(crate) fn record_install_completed(state: &OiState, app_name: &AppName) {
-    let name = app_name.clone();
-    match state
-        .db
-        .call(move |db| crate::runtime::apps::AppRegistry::record_install_completed(db, &name))
-    {
-        Ok(seq) => {
-            if let Some(entry) = state.registry.write().get_mut(app_name.as_str()) {
-                entry.install_seq = Some(seq);
-            }
-        }
-        Err(e) => tracing::error!(app = %app_name, "record install completion order: {e}"),
-    }
-}
-
-/// An install of the app has completed, so an earlier interrupted one no
-/// longer needs the operator's attention.
-// spec: FLT#app-faults
-pub(crate) fn clear_install_interrupted(state: &OiState, app_name: &AppName) {
-    let name = app_name.clone();
-    if let Err(e) = state.db.call(move |db| {
-        crate::runtime::faults::clear_faults_by_kind(db, &name, "install_interrupted")
-    }) {
-        tracing::error!(app = %app_name, "clear install_interrupted: {e}");
-    }
-}
-
-// spec: ACI#install-completion
-fn finalize_install(
-    state: &OiState,
-    app_name: &AppName,
-    actor: Option<Arc<seedling_protocol::actor::Actor>>,
-) {
-    record_install_completed(state, app_name);
-    clear_install_interrupted(state, app_name);
-    set_phase_and_persist(state, app_name, AppPhase::Installed, actor);
-    tracing::info!(app = %app_name, "install completed; app is now installed");
-}
-
-// spec: ACI#install-completion
-fn revert_install_phase(
-    state: &OiState,
-    app_name: &AppName,
-    actor: Option<Arc<seedling_protocol::actor::Actor>>,
-) {
-    set_phase_and_persist(state, app_name, AppPhase::NotInstalled, actor);
-    tracing::info!(app = %app_name, "install failed; reverted to NotInstalled");
 }
 
 #[expect(
@@ -842,14 +771,13 @@ pub fn spawn_accepted_operation(
     trigger: String,
     actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
 ) {
-    let (app, active_progress, tick_notify, start_pending) = {
+    let (app, active_progress, tick_notify) = {
         let reg = state.registry.read();
         match reg.get(app_name.as_str()) {
             Some(e) => (
                 e.app.clone(),
                 Arc::clone(&e.active_progress),
                 Arc::clone(&e.tick_notify),
-                Arc::clone(&e.start_pending),
             ),
             None => {
                 tracing::error!(app = %app_name, "spawn_accepted_operation: app not found");
@@ -861,10 +789,6 @@ pub fn spawn_accepted_operation(
     let event_tx = state.event_tx.clone();
     let script_limits = state.script_limits.clone();
     let cipher = Arc::clone(&state.cipher);
-    let is_install = action_name == "install";
-    let is_start = action_name == "start";
-
-    let requester = actor.clone();
 
     tokio::spawn(async move {
         // spec: WIRE#actor-attribution
@@ -885,14 +809,6 @@ pub fn spawn_accepted_operation(
             state.db.call(move |db| {
                 let _ = crate::runtime::history::clear_queued_operation(db, &id);
             });
-        }
-
-        // spec: ACI#install
-        // Flip to Installing as soon as the install operation actually starts
-        // (covers both directly-accepted and later-dequeued installs because
-        // both paths funnel through spawn_accepted_operation).
-        if is_install {
-            enter_installing_phase(&state, &app_name, requester.clone());
         }
 
         let operation_id_str = operation_id.0.clone();
@@ -928,7 +844,7 @@ pub fn spawn_accepted_operation(
             OperationParams::Replayed { params, bindings } => Ok(BoundParams { params, bindings }),
         };
 
-        let success = {
+        let ran = {
             let app_name = app_name.clone();
             let active_progress = Arc::clone(&active_progress);
             let tick_notify = Arc::clone(&tick_notify);
@@ -960,8 +876,10 @@ pub fn spawn_accepted_operation(
                 )
             })
             .await
-            .unwrap_or(false)
         };
+        if let Err(e) = ran {
+            tracing::error!(app = %app_name, action = %action_name, "operation task failed: {e}");
+        }
 
         cleanup_dynamic_resources(
             &state.db,
@@ -973,25 +891,8 @@ pub fn spawn_accepted_operation(
         )
         .await;
 
-        // spec: RCN#desired-state
-        // The start action has ended, however it ended. Released while the
-        // operation's progress still stands, so the desired state passes from
-        // what the closure placed there to the whole resource graph without a
-        // moment of holding nothing.
-        if is_start {
-            start_pending.store(false, std::sync::atomic::Ordering::Release);
-        }
         *active_progress.write() = None;
         tick_notify.notify_one();
-
-        // spec: ACI#install-completion
-        if is_install {
-            if success {
-                finalize_install(&state, &app_name, requester.clone());
-            } else {
-                revert_install_phase(&state, &app_name, requester.clone());
-            }
-        }
 
         let next = state.scheduler.lock().complete_current();
         if let Some(queued) = next {
@@ -1007,51 +908,7 @@ pub fn spawn_accepted_operation(
                 queued.actor,
             );
         }
-
-        // spec: OPS#initiating-events
-        // The install has finished and its slot is free, so the start action
-        // can be admitted: before this, the install itself held the app's.
-        if is_install && success {
-            initiate_start(&state, &app_name, "install", requester);
-        }
     });
-}
-
-/// Recover an `Installing` app whose install cannot be replayed as a stuck
-/// install, and file a fault saying the install was interrupted.
-///
-/// The app moves to `Uninstalling` rather than back to `NotInstalled`: the
-/// install may have left running resources, which reconciliation leaves alone
-/// for a `NotInstalled` app, and teardown is what returns it to
-/// `NotInstalled`.
-// spec: OPS#interrupted-operations
-// spec: OPS#stuck-install-recovery
-pub fn recover_unreplayable_install(state: &OiState, app_name: &AppName) {
-    let was_installing = {
-        let reg = state.registry.read();
-        reg.get(app_name.as_str())
-            .map(|e| matches!(*e.phase.lock(), AppPhase::Installing))
-            .unwrap_or(false)
-    };
-
-    let app_owned = app_name.clone();
-    state.db.call(move |db| {
-        let _ = crate::runtime::history::clear_current_operation(db);
-        if was_installing {
-            let _ = crate::runtime::faults::file_fault(
-                db,
-                &app_owned,
-                None,
-                None,
-                None,
-                "install_interrupted",
-                "install was interrupted by a runtime restart and could not be replayed",
-            );
-        }
-    });
-    if was_installing {
-        set_phase_and_persist(state, app_name, AppPhase::Uninstalling, None);
-    }
 }
 
 /// Persist the request the scheduler has just queued as `operation_id`, so
@@ -1101,19 +958,15 @@ pub fn restore_queue(
 ) {
     use crate::runtime::scheduler::ScheduleResult;
     for op in queued {
-        let app = {
-            let reg = state.registry.read();
-            reg.get(op.app.as_str())
-                .map(|e| Arc::clone(&e.start_pending))
-        };
-        let Some(start_pending) = app else {
+        let registered = state.registry.read().get(op.app.as_str()).is_some();
+        if !registered {
             tracing::warn!(app = %op.app, action = %op.action, "queued operation names an unregistered app; discarding");
             let id = op.operation_id.clone();
             state.db.call(move |db| {
                 let _ = crate::runtime::history::clear_queued_operation(db, &id);
             });
             continue;
-        };
+        }
         let result = state.scheduler.lock().request_with_id(
             &op.app,
             &op.action,
@@ -1126,9 +979,6 @@ pub fn restore_queue(
         );
         match result {
             ScheduleResult::Accepted => {
-                if op.action == "start" {
-                    start_pending.store(true, std::sync::atomic::Ordering::Release);
-                }
                 spawn_accepted_operation(
                     Arc::clone(state),
                     op.app,
@@ -1141,11 +991,7 @@ pub fn restore_queue(
                     op.actor,
                 );
             }
-            ScheduleResult::Queued => {
-                if op.action == "start" {
-                    start_pending.store(true, std::sync::atomic::Ordering::Release);
-                }
-            }
+            ScheduleResult::Queued => {}
             ScheduleResult::Rejected(reason) => {
                 tracing::warn!(app = %op.app, action = %op.action, ?reason, "restored queued operation refused; discarding");
                 let id = op.operation_id.clone();
@@ -1184,87 +1030,6 @@ pub fn persist_queued_fire(
         }
         Err(e) => {
             tracing::error!(app = %fire.app, action = %fire.action, "scheduled fire refused: {}", e.message);
-        }
-    }
-}
-
-/// Initiate `app_name`'s start action with `trigger`, holding the app's
-/// desired state from now until the start action ends.
-///
-/// The start action runs as any lifecycle operation does: at once if nothing
-/// else is in progress, or queued behind another app's.
-// spec: OPS#initiating-events
-// spec: ACN#start-action
-// spec: RCN#desired-state
-pub fn initiate_start(
-    state: &Arc<OiState>,
-    app_name: &AppName,
-    trigger: &str,
-    actor: Option<Arc<seedling_protocol::actor::Actor>>,
-) {
-    let (generation, phase_handle, start_pending) = {
-        let reg = state.registry.read();
-        let Some(entry) = reg.get(app_name.as_str()) else {
-            return;
-        };
-        (
-            entry.current_generation,
-            Arc::clone(&entry.phase),
-            Arc::clone(&entry.start_pending),
-        )
-    };
-    start_pending.store(true, std::sync::atomic::Ordering::Release);
-    let start = ActionName::new_unchecked("start");
-    let (result, op_id) = {
-        let mut sched = state.scheduler.lock();
-        let result = sched.admit(
-            app_name,
-            &start,
-            serde_json::Map::new(),
-            generation,
-            generation,
-            trigger,
-            &phase_handle,
-            actor.clone(),
-        );
-        let op_id = match &result {
-            crate::runtime::scheduler::ScheduleResult::Accepted => {
-                sched.active().map(|a| a.operation_id.clone())
-            }
-            crate::runtime::scheduler::ScheduleResult::Queued => sched
-                .queue_iter()
-                .find(|q| q.app == *app_name)
-                .map(|q| q.operation_id.clone()),
-            crate::runtime::scheduler::ScheduleResult::Rejected(_) => None,
-        };
-        (result, op_id)
-    };
-    match (result, op_id) {
-        (crate::runtime::scheduler::ScheduleResult::Accepted, Some(operation_id)) => {
-            spawn_accepted_operation(
-                Arc::clone(state),
-                app_name.clone(),
-                start,
-                operation_id,
-                OperationParams::Requested(serde_json::Map::new()),
-                generation,
-                generation,
-                trigger.to_owned(),
-                actor,
-            )
-        }
-        (crate::runtime::scheduler::ScheduleResult::Queued, Some(operation_id)) => {
-            match persist_queued(state, &operation_id) {
-                Ok(()) => tracing::info!(app = %app_name, trigger, "start action queued"),
-                Err(e) => {
-                    tracing::error!(app = %app_name, trigger, "start action refused: {}", e.message);
-                    start_pending.store(false, std::sync::atomic::Ordering::Release);
-                }
-            }
-        }
-        (other, _) => {
-            tracing::warn!(app = %app_name, trigger, "start action not admitted: {other:?}");
-            start_pending.store(false, std::sync::atomic::Ordering::Release);
         }
     }
 }

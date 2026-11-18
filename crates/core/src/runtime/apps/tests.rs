@@ -22,12 +22,11 @@ fn phase_encode_round_trip() {
     use super::{decode_phase, encode_phase};
     for phase in [
         AppPhase::NotInstalled,
-        AppPhase::Installing,
         AppPhase::Installed,
         AppPhase::Uninstalling,
     ] {
-        let (installed, uninstalling, installing) = encode_phase(&phase);
-        let decoded = decode_phase("test-app", installed, uninstalling, installing);
+        let (installed, uninstalling) = encode_phase(&phase);
+        let decoded = decode_phase(installed, uninstalling);
         assert_eq!(decoded, phase, "round-trip for {phase:?}");
     }
 }
@@ -36,12 +35,9 @@ fn phase_encode_round_trip() {
 #[test]
 fn decode_phase_prefers_uninstalling_over_conflicts() {
     use super::decode_phase;
-    // All bits set: uninstalling wins because teardown is the highest-
+    // Both bits set: uninstalling wins because teardown is the highest-
     // priority in-flight state.
-    assert_eq!(
-        decode_phase("test-app", true, true, true),
-        AppPhase::Uninstalling,
-    );
+    assert_eq!(decode_phase(true, true), AppPhase::Uninstalling);
 }
 
 // spec: PRM#parameter-storage
@@ -84,7 +80,6 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
         current_generation: 0,
         install_seq: None,
-        start_pending: Default::default(),
     }
 }
 
@@ -601,18 +596,18 @@ fn transition_phase_updates_shared_state_and_db() {
     let entry = make_entry("myapp", None);
     AppRegistry::persist_app(&db, &entry).expect("persist");
 
-    transition_phase(&entry.phase, AppPhase::Installing, &db, &app("myapp")).expect("persist");
+    transition_phase(&entry.phase, AppPhase::Installed, &db, &app("myapp")).expect("persist");
 
-    assert_eq!(*entry.phase.lock(), AppPhase::Installing);
-    let (installed, uninstalling, installing): (bool, bool, bool) = db
+    assert_eq!(*entry.phase.lock(), AppPhase::Installed);
+    let (installed, uninstalling): (bool, bool) = db
         .conn
         .query_row(
-            "SELECT installed, uninstalling, installing FROM registered_apps WHERE name = 'myapp'",
+            "SELECT installed, uninstalling FROM registered_apps WHERE name = 'myapp'",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .expect("row");
-    assert_eq!((installed, uninstalling, installing), (false, false, true));
+    assert_eq!((installed, uninstalling), (true, false));
 }
 
 // spec: ACI#uninstall

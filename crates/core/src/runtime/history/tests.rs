@@ -194,17 +194,17 @@ fn volume_bindings_persist_with_the_current_operation() {
     );
 }
 
-// spec: OPS#persistence, ACI#install-parameters
+// spec: OPS#persistence
 #[test]
-fn install_params_round_trip_through_cipher() {
+fn operation_params_round_trip_through_cipher() {
     use crate::runtime::secrets::Cipher;
 
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
     let op = CurrentOperation {
-        operation_id: OperationId("install-op".into()),
+        operation_id: OperationId("restore-op".into()),
         app: app_name("myapp"),
-        action_name: action_name("install"),
+        action_name: action_name("restore"),
         source_generation: 1,
         target_generation: 1,
     };
@@ -216,7 +216,7 @@ fn install_params_round_trip_through_cipher() {
 
     // Metadata loads via the normal path.
     let meta = load_current_operation(&db).unwrap().unwrap();
-    assert_eq!(meta.action_name, "install");
+    assert_eq!(meta.action_name, "restore");
 
     // Params decrypt back to the original map.
     let restored = load_current_operation_params(&db, &cipher)
@@ -231,34 +231,6 @@ fn install_params_round_trip_through_cipher() {
             .unwrap()
             .is_none()
     );
-}
-
-// spec: OPS#persistence
-#[test]
-fn non_install_operation_params_round_trip() {
-    use crate::runtime::secrets::Cipher;
-
-    let db = Db::open_in_memory().unwrap();
-    let cipher = Cipher::for_tests();
-    let op = CurrentOperation {
-        operation_id: OperationId("invoke-op".into()),
-        app: app_name("myapp"),
-        action_name: ActionName::new_unchecked("rotate_secret"),
-        source_generation: 5,
-        target_generation: 5,
-    };
-    // Operator-invoked actions may pass params that include secret-ish
-    // values. On replay those params must be restored.
-    let mut params = serde_json::Map::new();
-    params.insert("target_host".into(), serde_json::json!("db-1.internal"));
-    params.insert("auth_token".into(), serde_json::json!("s3cr3t"));
-
-    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
-
-    let restored = load_current_operation_params(&db, &cipher)
-        .unwrap()
-        .unwrap();
-    assert_eq!(restored, params);
 }
 
 // spec: OPS#persistence

@@ -465,7 +465,7 @@ pub struct Reconciler {
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
     /// What the reconciler knows of the jool translator instance on this host.
-    /// The reconciler sets it up when an app is installed or installing, and
+    /// The reconciler sets it up when an app is installed, and
     /// tears it down when none is.
     // spec: NAT64#translator-lifecycle
     nat64_translator: Nat64Translator,
@@ -954,16 +954,11 @@ impl Reconciler {
                 continue;
             }
             // spec: RCN#desired-state
-            // Installing apps participate in reconciliation exactly like
-            // Installed apps: the install closure's rt.start() / rt.stop()
-            // calls populate active_progress and the reconciler actuates the
-            // resources placed into the desired state. Only NotInstalled
-            // apps — those that have neither been installed nor have an
-            // install currently in flight — are skipped, unless a shell
-            // session that has ended is still tearing down what it started:
-            // nothing else stops those resources.
+            // Only NotInstalled apps are skipped, unless a shell session that
+            // has ended is still tearing down what it started: nothing else
+            // stops those resources.
             match phase {
-                AppPhase::Installed | AppPhase::Installing | AppPhase::Uninstalling => {}
+                AppPhase::Installed | AppPhase::Uninstalling => {}
                 AppPhase::NotInstalled if entry.sessions.is_empty() => continue,
                 AppPhase::NotInstalled => {}
             }
@@ -1004,40 +999,6 @@ impl Reconciler {
                 // spec: OPS#shell-sessions
                 // An app that is not installed desires nothing of its own.
                 AppPhase::NotInstalled => Ok(DesiredState::default()),
-                // spec: RCN#desired-state
-                // While Installing, the install closure drives every
-                // resource into desired state explicitly via rt.start.
-                // If the closure hasn't pushed its first entry yet
-                // (active_progress is still None), the desired state
-                // must stay empty — falling back to the steady-state
-                // computation here would have the reconciler racing
-                // ahead and starting every static resource before
-                // on_install runs the prerequisite setup steps.
-                AppPhase::Installing => match (*progress).as_ref() {
-                    Some(_) => compute(
-                        &name,
-                        &app_def,
-                        (*progress).as_ref(),
-                        &*self.registry,
-                        &effective_scales,
-                        &stopped_set,
-                    ),
-                    None => Ok(DesiredState::default()),
-                },
-                // spec: RCN#desired-state
-                // From the moment the start action is initiated until it ends,
-                // including while it is queued, the desired state is held as
-                // for an operation in progress: only what the start action has
-                // started or stopped. Until it has put something there, that
-                // is nothing.
-                AppPhase::Installed
-                    if progress.is_none()
-                        && entry
-                            .start_pending
-                            .load(std::sync::atomic::Ordering::Acquire) =>
-                {
-                    Ok(DesiredState::default())
-                }
                 AppPhase::Installed => compute(
                     &name,
                     &app_def,
@@ -1132,7 +1093,7 @@ enum Nat64Step {
 }
 
 /// What an iteration does about the translator. While NAT64 is active it is
-/// kept set up whenever an app is installed or installing, and torn down when
+/// kept set up whenever an app is installed, and torn down when
 /// none is; a translator known to be removed is not torn down again.
 // spec: NAT64#translator-lifecycle
 fn nat64_step(active: bool, translator: Nat64Translator, idle: bool) -> Option<Nat64Step> {
@@ -3507,38 +3468,6 @@ mod tests {
         }
     }
 
-    // spec: RCN#desired-state
-    #[test]
-    fn a_pending_start_action_holds_the_apps_desired_state_until_it_ends() {
-        use std::sync::atomic::Ordering;
-
-        let oi = crate::oi::test_support::TestOi::with_app("demo");
-        let reconciler = test_reconciler(&oi);
-        let (pending, phase) = {
-            let reg = oi.state.registry.read();
-            let entry = reg.get("demo").unwrap();
-            (Arc::clone(&entry.start_pending), Arc::clone(&entry.phase))
-        };
-        *phase.lock() = AppPhase::Installed;
-        let desired_of = |reconciler: &Reconciler| {
-            let (snapshots, dropped) = reconciler.snapshot_all_apps();
-            assert_eq!(dropped, 0);
-            let app = snapshots
-                .into_iter()
-                .next()
-                .expect("the app is snapshotted");
-            (app.desired.resources.len(), app.steady)
-        };
-
-        pending.store(true, Ordering::Release);
-        assert_eq!(desired_of(&reconciler), (0, false));
-
-        pending.store(false, Ordering::Release);
-        let (resources, steady) = desired_of(&reconciler);
-        assert!(resources > 0, "the whole resource graph is desired again");
-        assert!(steady);
-    }
-
     fn volume_instance(app: &str, name: &str) -> crate::runtime::identity::ResourceInstance {
         crate::runtime::identity::ResourceInstance::new_singleton(
             AppName::new(app).unwrap(),
@@ -5047,7 +4976,7 @@ mod tests {
 
     // spec: RCN#desired-state
     // spec: OPS#shell-sessions
-    // A session's resources are desired while the app is installing, and held
+    // A session's resources are desired while the app is installed, and held
     // stopped while it uninstalls and once it is no longer installed: the
     // reconciler skipped an app that was not installed, so the teardown of a
     // session that outlasted its app's uninstall was never actuated.
@@ -5071,7 +5000,7 @@ mod tests {
         );
 
         for phase in [
-            AppPhase::Installing,
+            AppPhase::Installed,
             AppPhase::Uninstalling,
             AppPhase::NotInstalled,
         ] {
@@ -5087,7 +5016,7 @@ mod tests {
                 .iter()
                 .find(|resource| resource.instance.id == job.id)
                 .unwrap_or_else(|| panic!("the session's job is desired while {phase:?}"));
-            if phase != AppPhase::Installing {
+            if phase != AppPhase::Installed {
                 assert_eq!(
                     held.desired,
                     LifecycleState::Unscheduled,

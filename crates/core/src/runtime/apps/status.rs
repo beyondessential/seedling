@@ -158,10 +158,8 @@ fn snapshot_all<T>(
 /// The status the phase or the scheduler settles without the database, or
 /// `None` for an installed app with no operation, whose status is its health.
 fn settled(snapshot: &Snapshot, active: Option<&ActiveOperation>) -> Option<AppStatus> {
-    match snapshot.phase {
-        AppPhase::Uninstalling => return Some(AppStatus::Uninstalling),
-        AppPhase::Installing => return Some(AppStatus::Installing),
-        AppPhase::NotInstalled | AppPhase::Installed => {}
+    if snapshot.phase == AppPhase::Uninstalling {
+        return Some(AppStatus::Uninstalling);
     }
     // An operation outranks the app not being installed.
     if let Some(op) = active.filter(|a| a.app == snapshot.name) {

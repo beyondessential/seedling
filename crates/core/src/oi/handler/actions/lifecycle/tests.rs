@@ -241,8 +241,8 @@ fn an_operation_runs_against_its_target_generation_not_the_current_one() {
             generations::update_script(db, &name, gen2).unwrap();
             db.conn
                 .execute(
-                    "INSERT INTO registered_apps (name, installed, uninstalling, installing, \
-                     current_generation) VALUES (?1, 1, 0, 0, 2)",
+                    "INSERT INTO registered_apps (name, installed, uninstalling, \
+                     current_generation) VALUES (?1, 1, 0, 2)",
                     [&name],
                 )
                 .unwrap();
@@ -293,7 +293,7 @@ fn an_operation_runs_against_its_target_generation_not_the_current_one() {
 // spec: ACN#volume-params
 #[test]
 fn a_volume_param_that_cannot_be_bound_fails_the_dispatch_rather_than_being_skipped() {
-    use crate::defs::install::{ParamDef, ParamKind};
+    use crate::defs::param_def::{ParamDef, ParamKind};
     use crate::oi::test_support::TestOi;
     use seedling_protocol::names::ParamName;
 
