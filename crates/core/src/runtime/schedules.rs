@@ -204,7 +204,6 @@ pub fn check_due_schedules(
                 &row.action,
                 serde_json::Map::new(),
                 generation,
-                generation,
                 "schedule",
                 &phase,
                 None,

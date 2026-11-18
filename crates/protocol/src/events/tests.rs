@@ -184,44 +184,41 @@ fn operation_lifecycle_events_wire_shape() {
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 2, 3, None)
-            .started("param_change")),
+            .operation(app.clone(), action.clone(), "op-1", 3, None)
+            .started("operator")),
         json!({
             "type": "OperationStarted",
             "app": "web",
             "action_name": "start",
             "operation_id": "op-1",
-            "source_generation": 2,
-            "target_generation": 3,
-            "trigger": "param_change",
+            "operation_generation": 3,
+            "trigger": "operator",
         })
     );
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 2, 3, None)
+            .operation(app.clone(), action.clone(), "op-1", 3, None)
             .completed()),
         json!({
             "type": "OperationCompleted",
             "app": "web",
             "action_name": "start",
             "operation_id": "op-1",
-            "source_generation": 2,
-            "target_generation": 3,
+            "operation_generation": 3,
         })
     );
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 2, 3, None)
+            .operation(app.clone(), action.clone(), "op-1", 3, None)
             .failed("container exploded")),
         json!({
             "type": "OperationFailed",
             "app": "web",
             "action_name": "start",
             "operation_id": "op-1",
-            "source_generation": 2,
-            "target_generation": 3,
+            "operation_generation": 3,
             "error": "container exploded",
         })
     );
@@ -889,7 +886,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.app_phase_changed(&app, "installed");
     sender.scale(app.clone(), "srv", 0, 4).changed(2, Some(1));
     sender
-        .operation(app.clone(), action.clone(), "op-1", 1, 1)
+        .operation(app.clone(), action.clone(), "op-1", 1)
         .started("operator");
     sender.params_changed(
         &app,

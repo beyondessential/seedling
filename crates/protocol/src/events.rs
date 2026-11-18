@@ -111,8 +111,7 @@ pub enum OiEvent {
         app: AppName,
         action_name: ActionName,
         operation_id: String,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         trigger: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -123,8 +122,7 @@ pub enum OiEvent {
         app: AppName,
         action_name: ActionName,
         operation_id: String,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -134,8 +132,7 @@ pub enum OiEvent {
         app: AppName,
         action_name: ActionName,
         operation_id: String,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         error: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -146,8 +143,7 @@ pub enum OiEvent {
         app: AppName,
         action_name: ActionName,
         operation_id: String,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -1406,8 +1402,7 @@ impl EventSender {
         app: AppName,
         action_name: ActionName,
         operation_id: impl Into<String>,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         actor: Option<Arc<Actor>>,
     ) -> OperationEventCtx {
         OperationEventCtx {
@@ -1415,8 +1410,7 @@ impl EventSender {
             app,
             action_name,
             operation_id: operation_id.into(),
-            source_generation,
-            target_generation,
+            operation_generation,
             actor,
         }
     }
@@ -1589,15 +1583,13 @@ impl EventSenderWithActor {
         app: AppName,
         action_name: ActionName,
         operation_id: impl Into<String>,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
     ) -> OperationEventCtx {
         self.inner.operation(
             app,
             action_name,
             operation_id,
-            source_generation,
-            target_generation,
+            operation_generation,
             Some(Arc::clone(&self.actor)),
         )
     }
@@ -1951,8 +1943,7 @@ pub struct OperationEventCtx {
     pub app: AppName,
     pub action_name: ActionName,
     pub operation_id: String,
-    pub source_generation: u64,
-    pub target_generation: u64,
+    pub operation_generation: u64,
     actor: Option<Arc<Actor>>,
 }
 
@@ -1963,8 +1954,7 @@ impl OperationEventCtx {
             app: self.app.clone(),
             action_name: self.action_name.clone(),
             operation_id: self.operation_id.clone(),
-            source_generation: self.source_generation,
-            target_generation: self.target_generation,
+            operation_generation: self.operation_generation,
             trigger: trigger.to_owned(),
             actor: self.actor.clone(),
         });
@@ -1976,8 +1966,7 @@ impl OperationEventCtx {
             app: self.app.clone(),
             action_name: self.action_name.clone(),
             operation_id: self.operation_id.clone(),
-            source_generation: self.source_generation,
-            target_generation: self.target_generation,
+            operation_generation: self.operation_generation,
             actor: self.actor.clone(),
         });
     }
@@ -1989,8 +1978,7 @@ impl OperationEventCtx {
             app: self.app.clone(),
             action_name: self.action_name.clone(),
             operation_id: self.operation_id.clone(),
-            source_generation: self.source_generation,
-            target_generation: self.target_generation,
+            operation_generation: self.operation_generation,
             actor: self.actor.clone(),
         });
     }
@@ -2001,8 +1989,7 @@ impl OperationEventCtx {
             app: self.app.clone(),
             action_name: self.action_name.clone(),
             operation_id: self.operation_id.clone(),
-            source_generation: self.source_generation,
-            target_generation: self.target_generation,
+            operation_generation: self.operation_generation,
             error: error.to_owned(),
             actor: self.actor.clone(),
         });

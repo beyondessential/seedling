@@ -35,8 +35,7 @@ fn save_and_load_current_operation() {
         operation_id: OperationId("test-op-id".into()),
         app: app_name("myapp"),
         action_name: action_name("start"),
-        source_generation: 3,
-        target_generation: 4,
+        generation: 4,
     };
     save_current_operation(
         &db,
@@ -50,8 +49,7 @@ fn save_and_load_current_operation() {
     assert_eq!(loaded.operation_id.0, "test-op-id");
     assert_eq!(loaded.app, "myapp");
     assert_eq!(loaded.action_name, "start");
-    assert_eq!(loaded.source_generation, 3);
-    assert_eq!(loaded.target_generation, 4);
+    assert_eq!(loaded.generation, 4);
 }
 
 #[test]
@@ -70,8 +68,7 @@ fn clear_current_operation_removes_record() {
         operation_id: OperationId("op-1".into()),
         app: app_name("app"),
         action_name: action_name("start"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
     save_current_operation(
         &db,
@@ -96,8 +93,7 @@ fn cancel_requested_round_trips_through_db() {
         operation_id: OperationId("op-c1".into()),
         app: app_name("app"),
         action_name: action_name("reindex"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
     save_current_operation(
         &db,
@@ -153,8 +149,7 @@ fn volume_bindings_persist_with_the_current_operation() {
         operation_id: OperationId("backup-op".into()),
         app: app_name("myapp"),
         action_name: action_name("backup"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
     let mut params = serde_json::Map::new();
     params.insert(
@@ -205,8 +200,7 @@ fn operation_params_round_trip_through_cipher() {
         operation_id: OperationId("restore-op".into()),
         app: app_name("myapp"),
         action_name: action_name("restore"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
     let mut params = serde_json::Map::new();
     params.insert("passphrase".into(), serde_json::json!("hunter2"));
@@ -244,8 +238,7 @@ fn empty_params_round_trip() {
         operation_id: OperationId("start-op".into()),
         app: app_name("myapp"),
         action_name: action_name("start"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
     save_current_operation(
         &db,
@@ -274,15 +267,13 @@ fn save_overwrites_previous_current_operation() {
         operation_id: OperationId("op-1".into()),
         app: app_name("app"),
         action_name: action_name("start"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
     let op2 = CurrentOperation {
         operation_id: OperationId("op-2".into()),
         app: app_name("app"),
         action_name: action_name("stop"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
     save_current_operation(
         &db,
@@ -877,8 +868,7 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
         operation_id: OperationId("op-cancel".into()),
         app: app_name("app"),
         action_name: action_name("migrate"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
 
     save_current_operation(
@@ -1029,8 +1019,7 @@ fn the_persisted_operation_state_carries_a_persisted_cancel() {
         operation_id: OperationId("op-cancelled".into()),
         app: app_name("myapp"),
         action_name: action_name("start"),
-        source_generation: 1,
-        target_generation: 1,
+        generation: 1,
     };
     save_current_operation(
         &db,

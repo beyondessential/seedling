@@ -409,41 +409,41 @@ fn run_operation_loop(
     };
 
     // spec: OPS#initiating-events
-    // The operation runs against the definition and parameters of its target
+    // The operation runs against the definition and parameters of its
     // generation, however many generations have been committed since it was
     // dispatched, and on every replay. If that generation cannot be rebuilt
     // the operation fails; it is never run against another's state.
-    let target_app;
+    let generation_app;
     let app = {
         let name = app_name.clone();
         let current = db.call(move |db| crate::runtime::generations::current(db, &name));
         match current {
             Ok(Some(current))
-                if op_ctx.target_generation != 0 && current != op_ctx.target_generation =>
+                if op_ctx.operation_generation != 0 && current != op_ctx.operation_generation =>
             {
                 let name = app_name.clone();
-                let (limits, cipher, target) = (
+                let (limits, cipher, generation) = (
                     script_limits.clone(),
                     Arc::clone(&cipher),
-                    op_ctx.target_generation,
+                    op_ctx.operation_generation,
                 );
                 match db.call(move |db| {
                     crate::runtime::generations::reconstruct_app_def(
-                        db, &name, target, &limits, &cipher,
+                        db, &name, generation, &limits, &cipher,
                     )
                 }) {
                     Ok(rebuilt) => {
-                        target_app = rebuilt;
-                        &target_app
+                        generation_app = rebuilt;
+                        &generation_app
                     }
                     Err(e) => {
-                        tracing::error!(app = %app_name, action = %action_name, "cannot rebuild generation {}: {e}", op_ctx.target_generation);
+                        tracing::error!(app = %app_name, action = %action_name, "cannot rebuild generation {}: {e}", op_ctx.operation_generation);
                         refuse_to_run(
                             &db,
                             op_ctx,
                             format!(
                                 "{action_name} not run: generation {} cannot be rebuilt: {e}",
-                                op_ctx.target_generation
+                                op_ctx.operation_generation
                             ),
                         );
                         return false;
@@ -511,8 +511,7 @@ fn run_operation_loop(
         operation_id: operation_id.clone(),
         app: app_name.clone(),
         action_name: action_name.clone(),
-        source_generation: op_ctx.source_generation,
-        target_generation: op_ctx.target_generation,
+        generation: op_ctx.operation_generation,
     };
     let params_for_persist = params.clone();
     let bindings_for_persist = operation_volume_bindings.clone();
@@ -763,8 +762,7 @@ pub fn spawn_accepted_operation(
     action_name: ActionName,
     operation_id: OperationId,
     params: OperationParams,
-    source_generation: u64,
-    target_generation: u64,
+    generation: u64,
     trigger: String,
     actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
 ) {
@@ -793,8 +791,7 @@ pub fn spawn_accepted_operation(
             app_name.clone(),
             action_name.clone(),
             &operation_id.0,
-            source_generation,
-            target_generation,
+            generation,
             actor,
         );
         op_ctx.started(&trigger);
@@ -899,8 +896,7 @@ pub fn spawn_accepted_operation(
                 queued.action,
                 queued.operation_id,
                 OperationParams::Requested(queued.params),
-                queued.source_generation,
-                queued.target_generation,
+                queued.generation,
                 queued.trigger,
                 queued.actor,
             );
@@ -968,8 +964,7 @@ pub fn restore_queue(
             &op.app,
             &op.action,
             op.params.clone(),
-            op.source_generation,
-            op.target_generation,
+            op.generation,
             &op.trigger,
             op.operation_id.clone(),
             op.actor.clone(),
@@ -982,8 +977,7 @@ pub fn restore_queue(
                     op.action,
                     op.operation_id,
                     OperationParams::Requested(op.params),
-                    op.source_generation,
-                    op.target_generation,
+                    op.generation,
                     op.trigger,
                     op.actor,
                 );

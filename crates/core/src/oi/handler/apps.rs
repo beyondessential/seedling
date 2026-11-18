@@ -998,8 +998,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         desc["current_operation"] = json!({
             "action_name": op.action,
             "barrier": barrier_json,
-            "source_generation": op.source_generation,
-            "target_generation": op.target_generation,
+            "generation": op.generation,
         });
     }
 

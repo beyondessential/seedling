@@ -256,7 +256,6 @@ mod tests {
             &action,
             serde_json::Map::new(),
             1,
-            1,
             "test",
             &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
             None,
@@ -289,7 +288,6 @@ mod tests {
             &AppName::new("blocker").unwrap(),
             &ActionName::new("install").unwrap(),
             serde_json::Map::new(),
-            1,
             1,
             "test",
             &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -408,7 +406,7 @@ mod tests {
                     "CREATE TABLE queued_operations (
                         seq INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE,
                         app TEXT NOT NULL, action TEXT NOT NULL, trigger TEXT NOT NULL,
-                        source_generation INTEGER NOT NULL, target_generation INTEGER NOT NULL,
+                        generation INTEGER NOT NULL,
                         params_ciphertext BLOB NOT NULL, actor TEXT);",
                 )
                 .unwrap()
@@ -451,8 +449,7 @@ mod tests {
             action: seedling_protocol::names::ActionName::new("refresh").unwrap(),
             operation_id: crate::runtime::barrier::OperationId(id.to_owned()),
             params: serde_json::Map::new(),
-            source_generation: 1,
-            target_generation: 1,
+            generation: 1,
             trigger: "operator".to_owned(),
             actor: None,
         };

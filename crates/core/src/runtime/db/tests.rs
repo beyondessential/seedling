@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 84);
+    assert_eq!(version, 85);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 84);
+    assert_eq!(version, 85);
 }
 
 // spec: APPS#persistence
@@ -648,4 +648,50 @@ fn requests_queued_for_a_parameter_change_leave_the_queue() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(queued, ["action"]);
+}
+
+// spec: OPS#initiating-events
+#[test]
+fn a_persisted_operation_keeps_its_target_generation_as_its_generation() {
+    let db = Db::open_in_memory_through(84).expect("open at v84");
+    db.conn
+        .execute_batch(
+            "INSERT INTO current_operation
+                 (singleton, operation_id, app, action_name, source_generation, target_generation)
+                 VALUES (1, 'running', 'live', 'backup', 2, 3);
+             INSERT INTO queued_operations
+                 (operation_id, app, action, trigger, source_generation, target_generation, params_ciphertext)
+                 VALUES ('waiting', 'live', 'backup', 'operator', 4, 5, x'00');",
+        )
+        .expect("seed v84 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let current: i64 = db
+        .conn
+        .query_row(
+            "SELECT generation FROM current_operation WHERE operation_id = 'running'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let queued: i64 = db
+        .conn
+        .query_row(
+            "SELECT generation FROM queued_operations WHERE operation_id = 'waiting'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!((current, queued), (3, 5));
+    let dropped: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('current_operation')
+             WHERE name IN ('source_generation', 'target_generation')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dropped, 0);
 }

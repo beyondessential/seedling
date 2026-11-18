@@ -796,8 +796,7 @@ pub struct CurrentOperation {
     pub operation_id: OperationId,
     pub app: AppName,
     pub action_name: ActionName,
-    pub source_generation: u64,
-    pub target_generation: u64,
+    pub generation: u64,
 }
 
 // spec: OPS#persistence, SUSP#replay
@@ -838,22 +837,20 @@ pub fn save_current_operation(
             // which is exactly how this kind of bug arrives.
             "INSERT INTO current_operation
                 (singleton, operation_id, app, action_name,
-                 source_generation, target_generation, params_ciphertext, volume_bindings)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 generation, params_ciphertext, volume_bindings)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(singleton) DO UPDATE SET
                 operation_id = excluded.operation_id,
                 app = excluded.app,
                 action_name = excluded.action_name,
-                source_generation = excluded.source_generation,
-                target_generation = excluded.target_generation,
+                generation = excluded.generation,
                 params_ciphertext = excluded.params_ciphertext,
                 volume_bindings = excluded.volume_bindings",
             params![
                 op.operation_id.0,
                 op.app,
                 op.action_name,
-                op.source_generation as i64,
-                op.target_generation as i64,
+                op.generation as i64,
                 ciphertext,
                 volume_bindings,
             ],
@@ -949,7 +946,7 @@ impl From<rusqlite::Error> for OperationPersistError {
 // spec: SUSP#replay
 pub fn load_current_operation(db: &Db) -> rusqlite::Result<Option<CurrentOperation>> {
     let result = db.conn.query_row(
-        "SELECT operation_id, app, action_name, source_generation, target_generation
+        "SELECT operation_id, app, action_name, generation
          FROM current_operation WHERE singleton = 1",
         [],
         |row| {
@@ -957,8 +954,7 @@ pub fn load_current_operation(db: &Db) -> rusqlite::Result<Option<CurrentOperati
                 operation_id: OperationId(row.get(0)?),
                 app: row.get(1)?,
                 action_name: row.get(2)?,
-                source_generation: row.get::<_, i64>(3)? as u64,
-                target_generation: row.get::<_, i64>(4)? as u64,
+                generation: row.get::<_, i64>(3)? as u64,
             })
         },
     );
@@ -993,16 +989,14 @@ pub fn save_queued_operation(
         .map_err(OperationPersistError::Json)?;
     db.conn.execute(
         "INSERT INTO queued_operations
-            (operation_id, app, action, trigger, source_generation, target_generation,
-             params_ciphertext, actor)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            (operation_id, app, action, trigger, generation, params_ciphertext, actor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             op.operation_id.0,
             op.app,
             op.action,
             op.trigger,
-            op.source_generation as i64,
-            op.target_generation as i64,
+            op.generation as i64,
             ciphertext,
             actor,
         ],
@@ -1031,8 +1025,7 @@ pub fn load_queued_operations(
 ) -> Result<Vec<crate::runtime::scheduler::QueuedOperation>, OperationPersistError> {
     use secrecy::ExposeSecret;
     let mut stmt = db.conn.prepare(
-        "SELECT operation_id, app, action, trigger, source_generation, target_generation,
-                params_ciphertext, actor
+        "SELECT operation_id, app, action, trigger, generation, params_ciphertext, actor
            FROM queued_operations ORDER BY seq",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -1042,14 +1035,13 @@ pub fn load_queued_operations(
             row.get::<_, ActionName>(2)?,
             row.get::<_, String>(3)?,
             row.get::<_, i64>(4)?,
-            row.get::<_, i64>(5)?,
-            row.get::<_, Vec<u8>>(6)?,
-            row.get::<_, Option<String>>(7)?,
+            row.get::<_, Vec<u8>>(5)?,
+            row.get::<_, Option<String>>(6)?,
         ))
     })?;
     let mut out = Vec::new();
     for row in rows {
-        let (id, app, action, trigger, source, target, ciphertext, actor) = row?;
+        let (id, app, action, trigger, generation, ciphertext, actor) = row?;
         let plaintext = cipher
             .decrypt(&ciphertext)
             .map_err(OperationPersistError::Cipher)?;
@@ -1065,8 +1057,7 @@ pub fn load_queued_operations(
             action,
             operation_id: OperationId(id),
             params,
-            source_generation: source as u64,
-            target_generation: target as u64,
+            generation: generation as u64,
             trigger,
             actor,
         });

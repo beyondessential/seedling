@@ -60,7 +60,6 @@ fn run_poke(cancel: bool, break_persistence: bool) -> Run {
         ActionName::new("poke").unwrap(),
         operation_id.0.clone(),
         1,
-        1,
         None,
     );
     let cancel_token = Arc::new(CancelToken::new());
@@ -187,7 +186,6 @@ fn a_replayed_closure_restarts_the_deployment_only_once() {
             ActionName::new("bounce").unwrap(),
             operation_id.0.clone(),
             1,
-            1,
             None,
         );
         run_operation_loop(
@@ -222,7 +220,7 @@ fn a_replayed_closure_restarts_the_deployment_only_once() {
 
 // spec: OPS#initiating-events
 #[test]
-fn an_operation_runs_against_its_target_generation_not_the_current_one() {
+fn an_operation_runs_against_its_generation_not_the_current_one() {
     let name = AppName::new("demo").unwrap();
     // Generation 1's `poke` restarts the deployment; generation 2's does not.
     let gen1 = r#"
@@ -260,7 +258,6 @@ fn an_operation_runs_against_its_target_generation_not_the_current_one() {
         name.clone(),
         ActionName::new("poke").unwrap(),
         "op-1",
-        1,
         1,
         None,
     );
@@ -371,7 +368,6 @@ fn a_replayed_operation_binds_its_volumes_under_their_persisted_names() {
         &action,
         params.clone(),
         1,
-        1,
         "replay",
         operation_id.clone(),
         None,
@@ -384,7 +380,6 @@ fn a_replayed_operation_binds_its_volumes_under_their_persisted_names() {
             action,
             operation_id,
             super::OperationParams::Replayed { params, bindings },
-            1,
             1,
             "replay".to_owned(),
             None,
@@ -637,7 +632,6 @@ fn rt_start_fails_when_the_dynamic_resource_cannot_be_recorded() {
         name,
         ActionName::new("work").unwrap(),
         operation_id.0.clone(),
-        1,
         1,
         None,
     );

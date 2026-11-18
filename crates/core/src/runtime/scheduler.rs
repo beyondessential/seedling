@@ -21,15 +21,9 @@ pub struct ActiveOperation {
     pub app: AppName,
     pub action: ActionName,
     pub operation_id: OperationId,
-    /// Generation that was current immediately before the change that
-    /// triggered this operation. Equal to target for operations not
-    /// triggered by a generation bump.
+    /// The generation current when the operation was dispatched.
     // spec: OPS#initiating-events
-    pub source_generation: u64,
-    /// Generation produced by the change that triggered this operation, or
-    /// the current generation at dispatch for operator-invoked actions.
-    // spec: OPS#initiating-events
-    pub target_generation: u64,
+    pub generation: u64,
     /// Cooperative cancellation signal. Flipped by the cancel-action
     /// endpoint; observed by the action runtime at barrier entry and by the
     /// lifecycle loop's interruptible sleep.
@@ -48,9 +42,7 @@ pub struct QueuedOperation {
     // spec: OPS#persistence
     pub params: serde_json::Map<String, serde_json::Value>,
     // spec: OPS#initiating-events
-    pub source_generation: u64,
-    // spec: OPS#initiating-events
-    pub target_generation: u64,
+    pub generation: u64,
     // spec: EVT#event-types
     pub trigger: String,
     /// Who asked for the operation, where a person or client did; its events
@@ -247,8 +239,7 @@ impl Scheduler {
         app: &AppName,
         action: &ActionName,
         params: serde_json::Map<String, serde_json::Value>,
-        source_generation: u64,
-        target_generation: u64,
+        generation: u64,
         trigger: &str,
         phase: &Mutex<AppPhase>,
         actor: Option<Arc<seedling_protocol::actor::Actor>>,
@@ -256,15 +247,7 @@ impl Scheduler {
         if matches!(*phase.lock(), AppPhase::Uninstalling) {
             return ScheduleResult::Rejected(RejectReason::AppUninstalling);
         }
-        self.request(
-            app,
-            action,
-            params,
-            source_generation,
-            target_generation,
-            trigger,
-            actor,
-        )
+        self.request(app, action, params, generation, trigger, actor)
     }
 
     /// Request a lifecycle operation for `app` / `action`.
@@ -275,18 +258,13 @@ impl Scheduler {
     ///
     /// The queue mechanic alone, with no view of the app's phase: reach it
     /// through [`Self::admit`], which decides whether the app may have one.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the operation's request, as admit() takes it"
-    )]
     // spec: OPS#concurrency
     fn request(
         &mut self,
         app: &AppName,
         action: &ActionName,
         params: serde_json::Map<String, serde_json::Value>,
-        source_generation: u64,
-        target_generation: u64,
+        generation: u64,
         trigger: &str,
         actor: Option<Arc<seedling_protocol::actor::Actor>>,
     ) -> ScheduleResult {
@@ -294,8 +272,7 @@ impl Scheduler {
             app,
             action,
             params,
-            source_generation,
-            target_generation,
+            generation,
             trigger,
             OperationId::new(),
             actor,
@@ -314,8 +291,7 @@ impl Scheduler {
         app: &AppName,
         action: &ActionName,
         params: serde_json::Map<String, serde_json::Value>,
-        source_generation: u64,
-        target_generation: u64,
+        generation: u64,
         trigger: &str,
         operation_id: OperationId,
         actor: Option<Arc<seedling_protocol::actor::Actor>>,
@@ -335,8 +311,7 @@ impl Scheduler {
                     app: app.clone(),
                     action: action.clone(),
                     operation_id,
-                    source_generation,
-                    target_generation,
+                    generation,
                     cancel_token: Arc::new(CancelToken::new()),
                 });
                 ScheduleResult::Accepted
@@ -355,8 +330,7 @@ impl Scheduler {
                     action: action.clone(),
                     operation_id,
                     params,
-                    source_generation,
-                    target_generation,
+                    generation,
                     trigger: trigger.to_owned(),
                     actor,
                 });
@@ -393,8 +367,7 @@ impl Scheduler {
             app: next.app.clone(),
             action: next.action.clone(),
             operation_id: next.operation_id.clone(),
-            source_generation: next.source_generation,
-            target_generation: next.target_generation,
+            generation: next.generation,
             cancel_token: Arc::new(CancelToken::new()),
         });
         Some(next)

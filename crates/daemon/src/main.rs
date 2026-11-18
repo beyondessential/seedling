@@ -1005,7 +1005,6 @@ async fn main() {
                                     serde_json::Map::new(),
                                 ),
                                 fire.generation,
-                                fire.generation,
                                 "schedule".to_owned(),
                                 None,
                             );
@@ -1461,8 +1460,7 @@ fn start_replay(
         &app_name,
         &action_name,
         params_for_sched,
-        op.source_generation,
-        op.target_generation,
+        op.generation,
         "replay",
         op.operation_id.clone(),
         None,
@@ -1506,8 +1504,7 @@ fn start_replay(
             params,
             bindings: volume_bindings,
         },
-        op.source_generation,
-        op.target_generation,
+        op.generation,
         "replay".to_owned(),
         None,
     );
