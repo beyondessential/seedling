@@ -167,6 +167,7 @@ pub(crate) async fn open_shell_session(
         return;
     }
 
+    let session_id = SessionId::generate();
     // All registry access is done in a synchronous closure so no lock guard
     // crosses an await point (parking_lot guards are not Send).
     let lookup: Result<_, (&str, String)> = (|| {
@@ -184,19 +185,38 @@ pub(crate) async fn open_shell_session(
                 None => return Err(("not_found", format!("shell not found: {shell_name}"))),
             }
         };
+        // spec: RCN#desired-state
+        // spec: APPS#removal
+        // The slot is opened under the same look at the registry that found
+        // the app installed, so the app cannot be removed between the two,
+        // and stands until the session's dynamic resources are gone after it
+        // has ended.
+        let slot = entry.sessions.open(session_id);
         Ok((
             entry.app.clone(),
             shell_params_schema,
             Arc::clone(&entry.sessions),
+            slot,
             Arc::clone(&entry.tick_notify),
         ))
     })();
-    let (app, shell_params_schema, sessions, tick_notify) = match lookup {
+    let (app, shell_params_schema, sessions, slot, tick_notify) = match lookup {
         Ok(v) => v,
         Err((code, msg)) => {
             reject(&mut send, code, msg).await;
             return;
         }
+    };
+    // spec: OPS#shell-sessions
+    // However the session ends, refused before it began, panicking or dropped
+    // included, its resources are torn down and its slot let go.
+    let teardown = SessionTeardown {
+        state: Arc::clone(&state),
+        app_name: app_name.clone(),
+        session_id,
+        sessions,
+        slot: Arc::clone(&slot),
+        tick_notify: Arc::clone(&tick_notify),
     };
 
     // spec: ACN#param-delivery
@@ -241,7 +261,6 @@ pub(crate) async fn open_shell_session(
         }
     };
 
-    let session_id = SessionId::generate();
     let stop = StopSignal::new();
     let session = ShellSession::starting(
         session_id,
@@ -283,21 +302,6 @@ pub(crate) async fn open_shell_session(
         job_exit: Mutex::new(None),
     });
 
-    // spec: RCN#desired-state
-    // The slot stands from here until the session's dynamic resources are gone
-    // after it has ended, so nothing of the session is ever outside it.
-    let slot = sessions.open(session_id);
-    // spec: OPS#shell-sessions
-    // However the session ends, panicking or dropped included, its resources
-    // are torn down and its slot let go.
-    let teardown = SessionTeardown {
-        state: Arc::clone(&state),
-        app_name: app_name.clone(),
-        session_id,
-        sessions,
-        slot: Arc::clone(&slot),
-        tick_notify: Arc::clone(&tick_notify),
-    };
     let run = run_app_shell(
         &state,
         app,
