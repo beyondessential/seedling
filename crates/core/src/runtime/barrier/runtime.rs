@@ -1071,7 +1071,7 @@ impl RuntimeInstance {
                 // whatever else drives them, so only its anonymous ones are
                 // its own to record.
                 if creator == crate::runtime::desired::DynamicCreator::ShellSession
-                    && instance.name.is_some()
+                    && instance.is_declared()
                 {
                     continue;
                 }
@@ -1835,7 +1835,7 @@ impl RuntimeInstance {
         // A shell does not drive its app's declared resources, so it has no
         // standing to stop one. The call claims no position in the log.
         if ctx.lock().is_shell
-            && let Some(declared) = resources.iter().find(|r| r.name.is_some())
+            && let Some(declared) = resources.iter().find(|r| r.is_declared())
         {
             return Err(format!(
                 "rt.stop in a shell cannot stop {}: it is declared by the app",

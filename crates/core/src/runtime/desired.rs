@@ -102,11 +102,10 @@ impl OperationProgress {
         self.resources.is_empty()
     }
 
-    /// Drop every resource that is not dynamic. A declared resource is named
-    /// and a dynamic one is anonymous.
+    /// Drop every resource that is not dynamic.
     // spec: RT#starting-resources
     pub fn retain_dynamic(&mut self) {
-        self.resources.retain(|instance, _| instance.name.is_none());
+        self.resources.retain(|instance, _| !instance.is_declared());
     }
 
     /// Build from a slice of action log entries.
