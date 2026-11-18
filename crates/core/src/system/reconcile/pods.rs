@@ -5,7 +5,7 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use crate::{
-    defs::{enums::OnUpdate, resource::Resource},
+    defs::{enums::OnUpdate, gate::GateKeyDigests, resource::Resource},
     runtime::{
         autonomous_ops,
         db::DbHandle,
@@ -205,6 +205,7 @@ async fn observe_one_pod<'a>(
     observer: &Observer,
     actuator: &Actuator,
     driver: &Arc<System>,
+    gate_keys: &GateKeyDigests,
     dr: &'a DesiredResource,
 ) -> PodObservation<'a> {
     let mut result = PodInstanceResult {
@@ -274,7 +275,7 @@ async fn observe_one_pod<'a>(
     });
 
     let desired_spec_hash = if is_running {
-        actuator.desired_spec_hash(&dr.instance, &dr.definition)
+        actuator.desired_spec_hash(&dr.instance, &dr.definition, gate_keys)
     } else {
         None
     };
@@ -426,6 +427,7 @@ async fn actuate_one_pod(
     actuator: &Actuator,
     db: &DbHandle,
     app_priority: AppPriority,
+    gate_keys: &GateKeyDigests,
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
     hold_start: bool,
@@ -728,7 +730,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             };
             let outcome = match actuator
-                .start(&dr.instance, &dr.definition, app_priority)
+                .start(&dr.instance, &dr.definition, app_priority, gate_keys)
                 .await
             {
                 Ok(Some(_)) | Ok(None) => {
@@ -1002,6 +1004,7 @@ pub(super) async fn observe_and_actuate(
     db: &DbHandle,
     desired: &DesiredState,
     app_priority: AppPriority,
+    gate_keys: &GateKeyDigests,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -1033,7 +1036,7 @@ pub(super) async fn observe_and_actuate(
 
     let observe_futures: Vec<_> = pod_resources
         .iter()
-        .map(|dr| observe_one_pod(observer, actuator, driver, dr))
+        .map(|dr| observe_one_pod(observer, actuator, driver, gate_keys, dr))
         .collect();
 
     // spec: OBS#failed-observation — instances whose observation
@@ -1110,6 +1113,7 @@ pub(super) async fn observe_and_actuate(
             actuator,
             db,
             app_priority,
+            gate_keys,
             obs,
             inhibit,
             hold_start,
@@ -1400,6 +1404,7 @@ mod update_tests {
                     &reconciler.actuator,
                     &reconciler.db,
                     AppPriority::default(),
+                    &GateKeyDigests::default(),
                     running,
                     false,
                     false,

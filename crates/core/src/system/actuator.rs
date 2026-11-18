@@ -15,6 +15,7 @@ use crate::{
     defs::{
         container::VolumeMount,
         enums::{OnExit, Priority},
+        gate::GateKeyDigests,
         resource::{Resource, ResourceKind},
     },
     runtime::{
@@ -28,7 +29,7 @@ use crate::{
     system::{
         System,
         priority::WorkloadStanding,
-        translate::container::{deployment_spec, job_spec, podman_args, spec_hash},
+        translate::container::{ConfigStamp, deployment_spec, job_spec, podman_args, spec_hash},
     },
 };
 
@@ -109,6 +110,12 @@ pub enum ActuateError {
     #[snafu(display("external volume '{name}' is not mapped"))]
     ExternalVolumeNotMapped {
         name: String,
+        backtrace: snafu::Backtrace,
+    },
+    // spec: UPD#spec-hash
+    #[snafu(display("cannot start with a spec hash that leaves out a gate key: {source}"))]
+    GateKeyUnavailable {
+        source: crate::defs::gate::MissingGateKey,
         backtrace: snafu::Backtrace,
     },
 }
@@ -339,7 +346,11 @@ impl Actuator {
         instance: &ResourceInstance,
         resource: &Resource,
         app_priority: AppPriority,
+        gate_keys: &GateKeyDigests,
     ) -> Result<Option<String>, ActuateError> {
+        let gate_keys = gate_keys
+            .directly_after(resource)
+            .context(GateKeyUnavailableSnafu)?;
         match resource {
             Resource::Deployment(dep) => {
                 let (image, raw_mounts, restart, vols, required_ext_vols) = {
@@ -389,6 +400,10 @@ impl Actuator {
                         restart_gens::load_restart_gen(db, &app_name, &dep_name).unwrap_or(0)
                     })
                 };
+                let stamp = ConfigStamp {
+                    restart_gen,
+                    gate_keys,
+                };
                 let (kill_signal, timeout_stop_secs, declared_priority) = {
                     let def = dep.def.lock();
                     let priority = def.priority;
@@ -417,7 +432,7 @@ impl Actuator {
                             &self.dns_servers,
                             Some(self.driver.volume_store.volumes_dir()),
                             &external_vols,
-                            restart_gen,
+                            &stamp,
                         );
                         podman_args(&spec)
                     },
@@ -475,6 +490,10 @@ impl Actuator {
                 // Priority is declared on Deployments only; every other
                 // workload stands at Normal within its app.
                 let standing = WorkloadStanding::new(app_priority, Priority::Normal);
+                let stamp = ConfigStamp {
+                    restart_gen: 0,
+                    gate_keys,
+                };
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -495,7 +514,7 @@ impl Actuator {
                             &self.dns_servers,
                             Some(self.driver.volume_store.volumes_dir()),
                             &external_vols,
-                            0,
+                            &stamp,
                         );
                         podman_args(&spec)
                     },
@@ -810,11 +829,23 @@ impl Actuator {
     ///
     /// This mirrors the hash stamped on the container at start time and lets the
     /// observer detect config drift for any field — not just the image.
+    ///
+    /// `gate_keys` holds the digests of the keys of the app's gates, of which
+    /// the hash carries those the workload is ordered directly after.
+    // spec: UPD#spec-hash
     pub fn desired_spec_hash(
         &self,
         instance: &ResourceInstance,
         resource: &Resource,
+        gate_keys: &GateKeyDigests,
     ) -> Option<String> {
+        let gate_keys = match gate_keys.directly_after(resource) {
+            Ok(keys) => keys,
+            Err(e) => {
+                tracing::error!(instance = %instance.display_name, error = %e, "gate key lookup failed computing spec hash");
+                return None;
+            }
+        };
         let net_name = format!("seedling-{}", instance.display_name);
         // A pod network that has no recorded prefix has no container running
         // on it to have drifted from anything.
@@ -848,7 +879,10 @@ impl Actuator {
                     &self.dns_servers,
                     Some(self.driver.volume_store.volumes_dir()),
                     &self.resolve_external_volumes(&instance.app),
-                    restart_gen,
+                    &ConfigStamp {
+                        restart_gen,
+                        gate_keys,
+                    },
                 )
             }
             Resource::Job(job) => {
@@ -870,7 +904,10 @@ impl Actuator {
                     &self.dns_servers,
                     Some(self.driver.volume_store.volumes_dir()),
                     &self.resolve_external_volumes(&instance.app),
-                    0,
+                    &ConfigStamp {
+                        restart_gen: 0,
+                        gate_keys,
+                    },
                 )
             }
             _ => return None,

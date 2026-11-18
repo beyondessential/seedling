@@ -725,6 +725,7 @@ async fn main() {
         data_dir.clone(),
         obs_db,
         Arc::clone(&registry),
+        Arc::clone(&cipher),
         event_tx.clone(),
         dns_servers.clone(),
         dns_upstreams,

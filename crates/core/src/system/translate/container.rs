@@ -5,7 +5,7 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
-use seedling_protocol::names::ExternalVolumeName;
+use seedling_protocol::names::{ExternalVolumeName, GateName};
 
 use std::time::Duration;
 
@@ -16,7 +16,10 @@ use crate::{
         job::JobDef,
         pod::PodDef,
     },
-    runtime::identity::{ResourceInstance, VolumeName},
+    runtime::{
+        identity::{ResourceInstance, VolumeName},
+        secrets::KeyDigest,
+    },
     system::{
         translate::proxy::node_mount_addr,
         types::{
@@ -25,6 +28,56 @@ use crate::{
         },
     },
 };
+
+/// What a container's configuration carries beyond its definition, and so what
+/// moves its spec hash without the definition changing.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ConfigStamp {
+    // spec: CTL#deployment-restart
+    pub restart_gen: u64,
+    /// The digests of the keys of the gates its workload is ordered directly
+    /// after, in order of gate name.
+    // spec: UPD#spec-hash
+    pub gate_keys: Vec<(GateName, KeyDigest)>,
+}
+
+/// The label carrying a digest of the gate keys a container was configured
+/// with.
+const GATE_KEYS_LABEL: &str = "seedling.gate-keys";
+
+impl ConfigStamp {
+    /// Add what the stamp carries to `spec`'s labels, and stamp the spec with
+    /// the hash of the whole.
+    fn apply(&self, mut spec: ContainerSpec) -> ContainerSpec {
+        use sha2::{Digest, Sha256};
+        // spec: CTL#deployment-restart
+        if self.restart_gen > 0 {
+            spec.labels.insert(
+                "seedling.restart-gen".to_string(),
+                self.restart_gen.to_string(),
+            );
+        }
+        // spec: UPD#spec-hash
+        if !self.gate_keys.is_empty() {
+            let mut digest = Sha256::new();
+            for (name, key) in &self.gate_keys {
+                digest.update(name.as_str().as_bytes());
+                digest.update([0x00]);
+                digest.update(key.as_bytes());
+                digest.update([0xff]);
+            }
+            let hex: String = digest
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            spec.labels.insert(GATE_KEYS_LABEL.to_string(), hex);
+        }
+        let hash = spec_hash(&spec);
+        spec.labels.insert(SPEC_HASH_LABEL.to_string(), hash);
+        spec
+    }
+}
 
 /// Builds a `ContainerSpec` for one instance of a `Deployment`.
 #[expect(
@@ -40,10 +93,10 @@ pub fn deployment_spec(
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
     external_volumes: &HashMap<ExternalVolumeName, ResolvedExternalMount>,
-    restart_gen: u64,
+    stamp: &ConfigStamp,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    let mut spec = spec_from_pod(
+    stamp.apply(spec_from_pod(
         &pod,
         instance,
         network,
@@ -51,13 +104,7 @@ pub fn deployment_spec(
         dns_servers,
         volumes_dir,
         external_volumes,
-    );
-    // spec: CTL#deployment-restart
-    if restart_gen > 0 {
-        spec.labels
-            .insert("seedling.restart-gen".to_string(), restart_gen.to_string());
-    }
-    spec
+    ))
 }
 
 /// Builds a `ContainerSpec` for a `Job` instance.
@@ -74,10 +121,10 @@ pub fn job_spec(
     dns_servers: &[Ipv6Addr],
     volumes_dir: Option<&Path>,
     external_volumes: &HashMap<ExternalVolumeName, ResolvedExternalMount>,
-    restart_gen: u64,
+    stamp: &ConfigStamp,
 ) -> ContainerSpec {
     let pod = def.pod.lock();
-    let mut spec = spec_from_pod(
+    stamp.apply(spec_from_pod(
         &pod,
         instance,
         network,
@@ -85,12 +132,7 @@ pub fn job_spec(
         dns_servers,
         volumes_dir,
         external_volumes,
-    );
-    if restart_gen > 0 {
-        spec.labels
-            .insert("seedling.restart-gen".to_string(), restart_gen.to_string());
-    }
-    spec
+    ))
 }
 
 /// Produces the `podman run [...]` argv from a `ContainerSpec`.
@@ -403,7 +445,7 @@ fn spec_from_pod(
         }
     });
 
-    let mut spec = ContainerSpec {
+    ContainerSpec {
         name: instance.display_name.clone(),
         image,
         command,
@@ -424,10 +466,7 @@ fn spec_from_pod(
         user: container.user.clone(),
         stop_signal: container.stop_signal.clone(),
         stop_timeout_secs: container.stop_timeout_secs,
-    };
-    let hash = spec_hash(&spec);
-    spec.labels.insert(SPEC_HASH_LABEL.to_string(), hash);
-    spec
+    }
 }
 
 #[cfg(test)]

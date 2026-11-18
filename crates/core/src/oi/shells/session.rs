@@ -27,7 +27,10 @@ use crate::{
         identity::{InstanceVariant, ResourceInstance},
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
-    system::{translate::container::job_spec, types::ExecHandle},
+    system::{
+        translate::container::{ConfigStamp, job_spec},
+        types::ExecHandle,
+    },
 };
 
 /// The three streams of a shell session: the session stream the handshake and
@@ -944,7 +947,7 @@ impl AppShellHost {
             &state.dns_servers,
             Some(state.driver.volume_store.volumes_dir()),
             &external_volumes,
-            0,
+            &ConfigStamp::default(),
         );
         container_spec.health = None;
         container_spec.labels.insert(

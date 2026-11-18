@@ -962,6 +962,7 @@ mod tests {
             )),
             warm_cert_hostnames: Default::default(),
             app_priority: Default::default(),
+            gate_keys: Default::default(),
             install_seq: Some(1),
         }
     }

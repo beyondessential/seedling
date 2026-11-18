@@ -17,6 +17,7 @@ use crate::{
     defs::{
         app::AppDef,
         enums::Priority,
+        gate::GateKeyDigests,
         resource::{Resource, ResourceKind},
     },
     oi::shells::ShellRegistry,
@@ -31,6 +32,7 @@ use crate::{
         lifecycle::LifecycleState,
         priority::AppPriority,
         scaling,
+        secrets::Cipher,
         site_services::{resolve::ResolveCtx, resolver::SiteServiceResolver},
         stopped,
     },
@@ -396,6 +398,10 @@ struct AppSnapshot {
     /// effect without a redeploy.
     // spec: PRIO#priority-setting
     app_priority: AppPriority,
+    /// The digests of the keys of the app's gates, which the spec hash of a
+    /// workload ordered after one of them carries.
+    // spec: UPD#spec-hash
+    gate_keys: GateKeyDigests,
     /// Where the app's install stands in the order installs completed.
     // spec: ING#claims-across-apps
     install_seq: Option<i64>,
@@ -415,6 +421,8 @@ pub struct Reconciler {
     caddy_upgrade_rejected: bool,
     data_dir: PathBuf,
     db: DbHandle,
+    /// The host's secret key, under which gate keys are digested.
+    cipher: Arc<Cipher>,
     registry: Arc<dyn InstanceRegistry>,
     app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
@@ -765,6 +773,7 @@ impl Reconciler {
         data_dir: PathBuf,
         db: DbHandle,
         app_registry: Arc<RwLock<AppRegistry>>,
+        cipher: Arc<Cipher>,
         event_tx: EventSender,
         dns_servers: Vec<Ipv6Addr>,
         dns_upstreams: Vec<std::net::SocketAddr>,
@@ -796,6 +805,7 @@ impl Reconciler {
             caddy_upgrade_rejected: false,
             data_dir,
             db,
+            cipher,
             registry,
             app_registry,
             written_obs,
@@ -994,6 +1004,19 @@ impl Reconciler {
                     }
                 }
             };
+            // spec: UPD#spec-hash
+            let gate_keys = match GateKeyDigests::of(&app_def, &self.cipher) {
+                Ok(keys) => keys,
+                Err(e) => {
+                    error!(app = %name, error = %e, "cannot digest the app's gate keys; skipping app this tick");
+                    self.file_desired_state_fault(
+                        &name,
+                        &format!("cannot digest the app's gate keys: {e}"),
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            };
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 // spec: OPS#shell-sessions
@@ -1069,6 +1092,7 @@ impl Reconciler {
                 phase_handle: Arc::clone(&entry.phase),
                 warm_cert_hostnames,
                 app_priority,
+                gate_keys,
                 install_seq: entry.install_seq,
             });
         }
@@ -3437,6 +3461,7 @@ mod tests {
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
             app_priority: AppPriority::default(),
+            gate_keys: GateKeyDigests::default(),
             install_seq: Some(1),
         }
     }
@@ -3464,6 +3489,7 @@ mod tests {
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
             app_priority,
+            gate_keys: GateKeyDigests::default(),
             install_seq: Some(1),
         }
     }
@@ -5859,6 +5885,7 @@ mod tests {
             std::env::temp_dir(),
             oi.state.db.clone(),
             Arc::clone(&oi.state.registry),
+            Arc::clone(&oi.state.cipher),
             oi.state.event_tx.clone(),
             Vec::new(),
             Vec::new(),
@@ -6035,6 +6062,7 @@ mod tests {
                 &reconciler.db,
                 &app.desired,
                 app.app_priority,
+                &app.gate_keys,
                 &HashSet::new(),
                 &HashSet::new(),
                 &HashSet::new(),
@@ -6067,6 +6095,107 @@ mod tests {
                 .is_none(),
             "and nothing started it again"
         );
+    }
+
+    // spec: UPD#spec-hash
+    #[test]
+    fn a_workloads_spec_hash_moves_with_the_key_of_a_gate_it_is_ordered_directly_after_only() {
+        use crate::system::{
+            ContainerRuntime, ProcessManager,
+            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+            volume_store::VolumeStore,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let volumes = dir.path().join("stub-volumes");
+        std::fs::create_dir_all(&volumes).unwrap();
+        let container = Arc::new(StubContainerRuntime::new(volumes));
+        let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+        let backends = crate::system::backends::Backends::working(
+            Arc::clone(&container) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&process) as Arc<dyn ProcessManager>,
+        );
+        let system = Arc::new(System {
+            container: backends.container(),
+            process: backends.process(),
+            proxy: Arc::new(StubNetworkProxy),
+            data_plane: Arc::new(StubDataPlane),
+            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+            backends,
+        });
+        let oi = crate::oi::test_support::TestOi::with_driver(system);
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"
+                    let migrate = app.gate("migrate").key("1.0.0");
+                    let web = app.deployment("web").image("docker.io/library/nginx:1.30").after(migrate);
+                    app.deployment("worker").image("docker.io/library/nginx:1.30").after(web);
+                    app.job("report").image("docker.io/library/nginx:1.30").after(migrate);
+                    app.deployment("plain").image("docker.io/library/nginx:1.30");
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let reconciler = test_reconciler(&oi);
+        let (apps, _) = reconciler.snapshot_all_apps();
+        let app = apps.iter().find(|a| a.name.as_str() == "demo").unwrap();
+        oi.block_on(container.pull_image("docker.io/library/nginx:1.30"))
+            .unwrap();
+        let _ = oi.block_on(pods::observe_and_actuate(
+            &reconciler.observer,
+            &reconciler.actuator,
+            &reconciler.driver,
+            &reconciler.db,
+            &app.desired,
+            app.app_priority,
+            &app.gate_keys,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        ));
+
+        let moved = GateKeyDigests::of(
+            &{
+                let mut def = app.app_def.clone();
+                def.gates.get_mut("migrate").unwrap().key =
+                    crate::defs::gate::GateKey::from_script("2.0.0".into()).unwrap();
+                def
+            },
+            &oi.state.cipher,
+        )
+        .unwrap();
+        assert_ne!(moved, app.gate_keys);
+
+        let hash = |name: &str, keys: &GateKeyDigests| {
+            let dr = app
+                .desired
+                .resources
+                .iter()
+                .find(|r| r.instance.name.as_deref() == Some(name))
+                .unwrap();
+            reconciler
+                .actuator
+                .desired_spec_hash(&dr.instance, &dr.definition, keys)
+                .unwrap_or_else(|| panic!("{name} has a spec hash"))
+        };
+        for directly_after in ["web", "report"] {
+            assert_ne!(
+                hash(directly_after, &app.gate_keys),
+                hash(directly_after, &moved),
+                "{directly_after} is ordered directly after the gate"
+            );
+        }
+        for not_directly_after in ["worker", "plain"] {
+            assert_eq!(
+                hash(not_directly_after, &app.gate_keys),
+                hash(not_directly_after, &moved),
+                "{not_directly_after} is not ordered directly after the gate"
+            );
+        }
     }
 
     // spec: APPS#resources

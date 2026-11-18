@@ -874,6 +874,7 @@ mod tests {
             phase_handle: std::sync::Arc::new(parking_lot::Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
             app_priority: Default::default(),
+            gate_keys: Default::default(),
             install_seq: Some(1),
         }
     }
