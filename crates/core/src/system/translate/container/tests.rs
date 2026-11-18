@@ -948,9 +948,14 @@ fn the_spec_hash_moves_with_the_key_of_a_gate_the_workload_is_ordered_after() {
     def.pod.lock().container.lock().image = Some("img".to_string());
     let cipher = Cipher::for_tests();
     let digest = |key: &[u8]| cipher.key_digest(key).unwrap();
+    let instance = make_instance("myapp", "web");
     let hash = |gate_keys: Vec<(seedling_protocol::names::GateName, _)>| {
-        let spec = spec_for_deployment_stamped(
+        let spec = deployment_spec(
             &def,
+            &instance,
+            &BTreeMap::new(),
+            &network(),
+            &[],
             &[],
             None,
             &HashMap::new(),
