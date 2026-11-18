@@ -9,14 +9,11 @@
 package seedlingdtls
 
 import (
-	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
-	"github.com/caddyserver/caddy/v2/modules/caddytls"
 	"go.uber.org/zap"
 )
 
@@ -94,11 +91,14 @@ func (a *App) Provision(ctx caddy.Context) error {
 	}
 
 	if len(a.Servers) > 0 {
-		tlsApp, err := ctx.AppIfConfigured("tls")
-		if err != nil {
+		if _, err := ctx.AppIfConfigured("tls"); err != nil {
 			return fmt.Errorf("the tls app, which holds the certificates, is not configured: %w", err)
 		}
-		a.getCert = certificateFromTLSApp(ctx, tlsApp.(*caddytls.TLS))
+		getCert, err := certificateFromTLSApp(ctx)
+		if err != nil {
+			return err
+		}
+		a.getCert = getCert
 	}
 	return nil
 }
@@ -135,10 +135,6 @@ func (a *App) Stop() error {
 	a.ports = nil
 	return firstErr
 }
-
-// certFunc finds the certificate to present for a session whose client sent
-// `hello`, naming `hostname`.
-type certFunc func(ctx context.Context, hostname string, hello clientHello) (*tls.Certificate, error)
 
 var (
 	_ caddy.App         = (*App)(nil)

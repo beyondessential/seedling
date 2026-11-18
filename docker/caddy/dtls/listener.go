@@ -123,29 +123,11 @@ func (l *listener) certificate(hello *dtls.ClientHelloInfo) (*tls.Certificate, e
 	hostname, getCert := l.cfg.Hostname, l.getCert
 	l.mu.Unlock()
 
-	info := clientHello{
-		signatureSchemes: hello.SignatureSchemes,
-		supportedProtos:  hello.SupportedProtos,
-	}
-	for _, suite := range hello.CipherSuites {
-		info.cipherSuites = append(info.cipherSuites, uint16(suite))
-	}
-	for _, curve := range hello.SupportedCurves {
-		info.supportedCurves = append(info.supportedCurves, tls.CurveID(curve))
-	}
-	for _, version := range hello.SupportedVersions {
-		switch version {
-		case protocol.Version1_2:
-			info.supportedVersions = append(info.supportedVersions, tls.VersionTLS12)
-		case protocol.Version1_3:
-			info.supportedVersions = append(info.supportedVersions, tls.VersionTLS13)
-		}
-	}
 	ctx := hello.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return getCert(ctx, hostname, info)
+	return getCert(ctx, hostname)
 }
 
 // reconfigure adopts a configuration for a listener that is already serving.

@@ -73,7 +73,7 @@ func testCert(t *testing.T, s *served) certFunc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return func(_ context.Context, hostname string, _ clientHello) (*tls.Certificate, error) {
+	return func(_ context.Context, hostname string) (*tls.Certificate, error) {
 		s.mu.Lock()
 		s.names = append(s.names, hostname)
 		s.mu.Unlock()
