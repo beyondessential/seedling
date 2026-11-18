@@ -2809,6 +2809,27 @@ impl Reconciler {
             }
             self.bring_remaining_instances_to_unscheduled(app, apps)
                 .await;
+            // spec: GRUN#uninstall
+            // The gate records, their holds and the record that the app is set
+            // up go with the uninstall, so that installing again runs every
+            // gate as for the first time. While they cannot be deleted the app
+            // does not reach `NotInstalled`.
+            let gate_state_deleted = {
+                let app_name = app.name.clone();
+                match self
+                    .db
+                    .call(move |db| crate::runtime::gates::store::delete_app_state(db, &app_name))
+                {
+                    Ok(()) => true,
+                    Err(e) => {
+                        error!(
+                            app = %app.name,
+                            "uninstall: could not delete the app's gate state; trying again next tick: {e}"
+                        );
+                        false
+                    }
+                }
+            };
             // spec: TRD#uninstall-scope — match units against the
             // identities the registry recorded, not against a name prefix.
             // `seedling-{app}-` is not prefix-free: uninstalling `app` matched
@@ -2932,6 +2953,10 @@ impl Reconciler {
                     if !self.remove_recorded_anonymous_volumes(app).await {
                         continue;
                     }
+                    // spec: GRUN#uninstall
+                    if !gate_state_deleted {
+                        continue;
+                    }
                     let app_name_owned = app.name.clone();
                     let phase_handle = Arc::clone(&app.phase_handle);
                     let moved = self.db.call(move |db| {
@@ -2981,6 +3006,7 @@ impl Reconciler {
                         continue;
                     }
                     self.unidentifiable_units_filed.remove(&app.name);
+                    self.gate_runtime.forget_app(&app.name);
                     // spec: EVT#event-types
                     // Uninstall is reconciler-driven and therefore emits no
                     // OperationCompleted event; this phase change is the only

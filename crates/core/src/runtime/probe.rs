@@ -12,11 +12,11 @@ use std::{
 
 use parking_lot::Mutex;
 use rhai::{AST, Dynamic, Engine, FnPtr, Scope};
-use seedling_protocol::names::{ActionName, AppName, ParamName};
+use seedling_protocol::names::{ActionName, AppName, GateName, ParamName};
 
 use crate::{
     defs::{
-        app::{App, begin_closure_capture, end_closure_capture},
+        app::{App, ClosureCapture, begin_closure_capture, end_closure_capture},
         param_def::ParamDef,
     },
     runtime::{
@@ -35,6 +35,7 @@ use crate::{
 pub enum HandlerKind {
     Action,
     Shell,
+    Gate,
 }
 
 impl HandlerKind {
@@ -42,6 +43,7 @@ impl HandlerKind {
         match self {
             HandlerKind::Action => "action",
             HandlerKind::Shell => "shell",
+            HandlerKind::Gate => "gate",
         }
     }
 }
@@ -76,6 +78,70 @@ pub struct ProbeResponse {
     pub all_images: BTreeSet<String>,
 }
 
+/// Evaluate the script again to recover the closures it registered, which the
+/// definition does not keep.
+fn capture_closures(engine: &Engine, script_ast: &AST, app: &App) -> Result<ClosureCapture, String> {
+    let app_name = app.def.load().name.clone();
+    let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle))
+        .map_err(|e| format!("script evaluation failed: {e}"))?;
+    fresh_app.def.rcu(|d| {
+        let mut d = (**d).clone();
+        d.name = app_name.clone();
+        d
+    });
+    *fresh_app.stored.lock() = app.stored.lock().clone();
+    begin_closure_capture();
+    let run_result = engine.run_ast_with_scope(&mut scope, script_ast);
+    let captured = end_closure_capture();
+    drop(fresh_app.take_gate_selections());
+    run_result.map_err(|e| format!("script evaluation failed: {e}"))?;
+    Ok(captured)
+}
+
+/// The images the body of gate `gate` might pull in a run, as a probe of it
+/// reports them, with `last` as the run would give it.
+///
+/// Nothing in the host or the app's persisted state changes.
+// spec: IMG#image-discovery
+// spec: GRUN#preparation
+pub fn probe_gate_body(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+    registry: Arc<dyn InstanceRegistry>,
+    gate: &GateName,
+    last: Option<&App>,
+) -> Result<HandlerProbe, String> {
+    let captured = capture_closures(engine, script_ast, app)?;
+    let body = match captured.gates.get(gate) {
+        Some(Some(body)) => body.clone(),
+        Some(None) => {
+            return Ok(HandlerProbe {
+                name: gate.as_str().to_owned(),
+                kind: HandlerKind::Gate,
+                images: BTreeSet::new(),
+                error: None,
+                skipped_reason: None,
+            });
+        }
+        None => return Err(format!("gate '{gate}' is not declared")),
+    };
+    let arity = closure_arity(script_ast, &body)
+        .ok_or_else(|| format!("the body of gate '{gate}' cannot be called"))?;
+    Ok(run_probe(
+        engine,
+        app,
+        &registry,
+        gate.as_str(),
+        HandlerKind::Gate,
+        body,
+        ProbeCall::Gate {
+            arity,
+            last: last.map_or(Dynamic::UNIT, |last| Dynamic::from(last.clone())),
+        },
+    ))
+}
+
 // spec: IMG#image-discovery
 pub fn probe_app(
     engine: &Engine,
@@ -87,23 +153,7 @@ pub fn probe_app(
     // Re-run the script to capture every registered closure. The script
     // itself must not fail; if it does, the caller can surface that as an
     // app-level script_error fault and there's nothing to probe.
-    let app_name = app.def.load().name.clone();
-    let captured = {
-        let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle))
-            .map_err(|e| format!("script evaluation failed: {e}"))?;
-        fresh_app.def.rcu(|d| {
-            let mut d = (**d).clone();
-            d.name = app_name.clone();
-            d
-        });
-        *fresh_app.stored.lock() = app.stored.lock().clone();
-        begin_closure_capture();
-        let run_result = engine.run_ast_with_scope(&mut scope, script_ast);
-        let captured = end_closure_capture();
-        drop(fresh_app.take_gate_selections());
-        run_result.map_err(|e| format!("script evaluation failed: {e}"))?;
-        captured
-    };
+    let captured = capture_closures(engine, script_ast, app)?;
 
     // Build the per-handler probe list in declaration order from the def.
     let def = app.def.load_full();
@@ -199,6 +249,35 @@ fn probe_handler(
         };
     }
 
+    let param_map: rhai::Map = resolved_params
+        .iter()
+        .map(|(k, v)| (k.as_str().into(), Dynamic::from(v.clone())))
+        .collect();
+    let call = match kind {
+        HandlerKind::Shell => ProbeCall::Shell(param_map),
+        HandlerKind::Action | HandlerKind::Gate => ProbeCall::Action(param_map),
+    };
+    run_probe(engine, app, registry, handler_name, kind, closure, call)
+}
+
+/// How a closure is called under a probe.
+enum ProbeCall {
+    Action(rhai::Map),
+    Shell(rhai::Map),
+    /// A gate's body, given as many of its arguments as it declares.
+    Gate { arity: usize, last: Dynamic },
+}
+
+/// Call `closure` under probe mode and report the images it reached.
+fn run_probe(
+    engine: &Engine,
+    app: &App,
+    registry: &Arc<dyn InstanceRegistry>,
+    handler_name: &str,
+    kind: HandlerKind,
+    closure: FnPtr,
+    call: ProbeCall,
+) -> HandlerProbe {
     // Fresh probe buffer per handler. Shared across rt.* calls through the
     // ReplayContext and into Started's check_barrier.
     let images: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
@@ -227,21 +306,27 @@ fn probe_handler(
     scope.push("app", app.clone());
     scope.push("__bsl_rt", rt);
     scope.push("__bsl_closure", closure);
-    let param_map: rhai::Map = resolved_params
-        .iter()
-        .map(|(k, v)| (k.as_str().into(), Dynamic::from(v.clone())))
-        .collect();
-    scope.push("__bsl_param", param_map);
-
-    let call_script = match kind {
-        HandlerKind::Shell => {
+    let call_script = match call {
+        ProbeCall::Shell(params) => {
+            scope.push("__bsl_param", params);
             scope.push(
                 "__bsl_shell",
                 crate::runtime::barrier::shell::ShellControl::new(),
             );
             "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
         }
-        HandlerKind::Action => "__bsl_closure.call(__bsl_rt, __bsl_param)",
+        ProbeCall::Action(params) => {
+            scope.push("__bsl_param", params);
+            "__bsl_closure.call(__bsl_rt, __bsl_param)"
+        }
+        ProbeCall::Gate { arity, last } => {
+            scope.push("__bsl_last", last);
+            match arity {
+                0 => "__bsl_closure.call()",
+                1 => "__bsl_closure.call(__bsl_rt)",
+                _ => "__bsl_closure.call(__bsl_rt, __bsl_last)",
+            }
+        }
     };
 
     clear_barrier_hit();
@@ -298,6 +383,14 @@ fn resolve_params(
     }
 
     (resolved, missing)
+}
+
+/// How many parameters the closure `pointer` declares, or `None` where the
+/// function it points to is not in `ast`.
+pub(crate) fn closure_arity(ast: &AST, pointer: &FnPtr) -> Option<usize> {
+    ast.iter_functions()
+        .find(|function| function.name == pointer.fn_name())
+        .map(|function| function.params.len().saturating_sub(pointer.curry().len()))
 }
 
 #[cfg(test)]

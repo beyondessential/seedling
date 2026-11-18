@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use parking_lot::{Mutex, RwLock};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
 use seedling_protocol::events::OperationTarget;
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, GateName};
 use tokio::sync::Notify;
 
 use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
@@ -270,6 +270,38 @@ pub(super) fn json_value_to_rhai_dynamic(v: &serde_json::Value) -> rhai::Dynamic
     }
 }
 
+/// What one run of the runtime executes: an action's closure, a shell's, or
+/// a gate's body.
+// spec: OPS#operation
+#[derive(Clone, Copy)]
+pub enum Subject<'a> {
+    Action(&'a str),
+    /// A shell session's closure, which does not drive the app's declared
+    /// resources.
+    // spec: OPS#shell-sessions
+    Shell(&'a str),
+    Gate(GateBody<'a>),
+}
+
+impl Subject<'_> {
+    fn name(&self) -> &str {
+        match self {
+            Self::Action(name) | Self::Shell(name) => name,
+            Self::Gate(gate) => gate.name.as_str(),
+        }
+    }
+}
+
+/// The gate a run executes the body of.
+#[derive(Clone, Copy)]
+pub struct GateBody<'a> {
+    pub name: &'a GateName,
+    /// The app as it was at the gate's last success, or `None` for a gate
+    /// that has none, which the body receives as the unit value.
+    // spec: GATE#body
+    pub last: Option<&'a App>,
+}
+
 /// Execute one pass of a lifecycle operation's action closure.
 ///
 /// Returns:
@@ -284,7 +316,7 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub script_ast: &'a AST,
     pub operation_id: OperationId,
     pub app: &'a App,
-    pub action_name: &'a str,
+    pub subject: Subject<'a>,
     pub log: &'a dyn ActionLog,
     pub world: Arc<W>,
     pub registry: Arc<dyn InstanceRegistry>,
@@ -294,9 +326,6 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// validated requirements. Empty map for actions with no params.
     // spec: OPS#persistence
     pub params: serde_json::Map<String, serde_json::Value>,
-    /// `true` when this operation executes a shell action closure.
-    /// Affects the call script used to invoke the closure.
-    pub is_shell: bool,
     /// DB handle for persisting dynamic resources created during the operation.
     pub db: Option<crate::runtime::db::DbHandle>,
     /// Cipher for sealing and opening the secret parameters of a recorded
@@ -324,6 +353,9 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// real container runtime is present.
     // spec: RT#command-execution
     pub executor: Option<std::sync::Arc<dyn crate::runtime::barrier::Executor>>,
+    /// What `rt.start` and `rt.stop` leave out on account of gates.
+    // spec: RT#resources-a-gate-holds
+    pub exclusions: crate::runtime::gates::Exclusions,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -339,14 +371,13 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         script_ast,
         operation_id,
         app,
-        action_name,
+        subject,
         log,
         world,
         registry,
         active_progress,
         tick_notify,
         params,
-        is_shell: requested_shell,
         db,
         cipher,
         operation_volume_bindings,
@@ -354,7 +385,14 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         container_signaler,
         volume_writer,
         executor,
+        exclusions,
     } = op;
+    let action_name = subject.name();
+    let requested_shell = matches!(subject, Subject::Shell(_));
+    let gate = match subject {
+        Subject::Gate(gate) => Some(gate),
+        _ => None,
+    };
 
     // Save the operation ID string before it is moved into the replay context.
     let op_id_str = operation_id.0.clone();
@@ -401,6 +439,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // spec: SEC#storage
     ctx.lock().cipher = cipher.clone();
     ctx.lock().is_shell = requested_shell;
+    // spec: RT#resources-a-gate-holds
+    ctx.lock().gate_exclusions = exclusions;
     // spec: SUSP#side-effecting-calls
     ctx.lock().early_commit = log.early_committer();
 
@@ -456,7 +496,24 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         check_idempotent(&fresh_app.def.load(), &app.def.load());
 
         let captured_actions = captured.actions.clone();
-        let (closure, is_shell) = if requested_shell {
+        let (closure, is_shell) = if let Some(gate) = &gate {
+            // spec: GATE#body
+            match captured.gates.get(gate.name) {
+                Some(Some(body)) => (body.clone(), false),
+                Some(None) => {
+                    return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                        format!("Gate '{}' has no body", gate.name).into(),
+                        rhai::Position::NONE,
+                    )));
+                }
+                None => {
+                    return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                        format!("Gate '{}' not found", gate.name).into(),
+                        rhai::Position::NONE,
+                    )));
+                }
+            }
+        } else if requested_shell {
             // spec: ACN#shells
             // A shell is looked up among shells, and an action among
             // actions: a shell and an action may share a name.
@@ -482,6 +539,31 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         // fresh_scope, and fresh_app are all dropped here.
     };
 
+    // spec: GATE#body
+    // A gate's body takes as many of its arguments as it declares parameters
+    // for, so how many that is is read before the closure is called.
+    let gate_call = match &gate {
+        Some(_) => match crate::runtime::probe::closure_arity(script_ast, &closure) {
+            Some(arity @ 0..=2) => Some(arity),
+            Some(arity) => {
+                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                    format!(
+                        "the body of gate '{action_name}' takes {arity} parameters, but it is \
+                         called with at most two: a runtime handle and `last`"
+                    )
+                    .into(),
+                    rhai::Position::NONE,
+                )));
+            }
+            None => {
+                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                    format!("the body of gate '{action_name}' cannot be called").into(),
+                    rhai::Position::NONE,
+                )));
+            }
+        },
+        None => None,
+    };
     scope.push("__bsl_rt", rt);
     scope.push("__bsl_closure", closure);
     let param_map: rhai::Map = params
@@ -492,11 +574,20 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     if is_shell {
         scope.push("__bsl_shell", super::shell::ShellControl::new());
     }
+    if let Some(gate) = &gate {
+        scope.push(
+            "__bsl_last",
+            gate.last
+                .map_or(Dynamic::UNIT, |last| Dynamic::from(last.clone())),
+        );
+    }
 
-    let call_script = if is_shell {
-        "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
-    } else {
-        "__bsl_closure.call(__bsl_rt, __bsl_param)"
+    let call_script = match gate_call {
+        Some(0) => "__bsl_closure.call()",
+        Some(1) => "__bsl_closure.call(__bsl_rt)",
+        Some(_) => "__bsl_closure.call(__bsl_rt, __bsl_last)",
+        None if is_shell => "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)",
+        None => "__bsl_closure.call(__bsl_rt, __bsl_param)",
     };
 
     // Evaluate only the closure call — do NOT re-execute the script body.
@@ -513,7 +604,10 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // app.action(name) / Action.call(...) for the duration of the
     // outer closure body. The outer action's name seeds the call
     // stack so a self-call is rejected as recursion.
-    let outer_name = ActionName::new_unchecked(action_name);
+    let outer_name = ActionName::new_unchecked(match &gate {
+        Some(_) => format!("gate {action_name}"),
+        None => action_name.to_owned(),
+    });
     let rt_for_table = rt_clone_for_active.clone();
     let result = crate::defs::app::with_action_call_table(captured_actions, outer_name, || {
         let _guard =
@@ -527,6 +621,9 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let _ = scope.remove::<rhai::Map>("__bsl_param");
     if is_shell {
         let _ = scope.remove::<super::shell::ShellControl>("__bsl_shell");
+    }
+    if gate.is_some() {
+        let _ = scope.remove::<Dynamic>("__bsl_last");
     }
 
     // Flush pending entries from the context to the log.
@@ -542,6 +639,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         };
         let mut progress = OperationProgress::from_log(&loaded);
         progress.dynamic_defs = ctx.lock().dynamic_defs.clone();
+        // spec: RCN#desired-state
+        progress.gate_run = gate.is_some();
         // spec: RT#starting-resources
         // A shell does not drive its app's declared resources: the steady
         // state or the operation in progress does.

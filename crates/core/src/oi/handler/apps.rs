@@ -1569,11 +1569,21 @@ pub(crate) fn install_app(state: &OiState, params: AppParams, ctx: &RequestCtx) 
     // becomes `Installed`, in one durable step: neither is observable without
     // the other.
     let name_owned = params.app.clone();
+    // spec: GRUN#app-setup
+    // An app that declares no gates is set up once it is installed.
+    let declares_no_gates = state
+        .registry
+        .read()
+        .get(name)
+        .is_some_and(|entry| entry.app.def.load().gates.is_empty());
     let install_seq = state
         .db
         .call(move |db| {
             let seq = AppRegistry::record_install_completed(db, &name_owned)?;
             transition_phase(&phase_arc, AppPhase::Installed, db, &name_owned)?;
+            if declares_no_gates {
+                crate::runtime::gates::store::mark_set_up(db, &name_owned)?;
+            }
             Ok::<_, rusqlite::Error>(seq)
         })
         .map_err(|e| OiError::internal(format!("recording the install: {e}")))?;

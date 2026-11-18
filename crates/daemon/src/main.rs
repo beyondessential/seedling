@@ -1016,6 +1016,12 @@ async fn main() {
                     }
                 }
 
+                // spec: GRUN#initiating-runs
+                // Gates are brought up to date and their runs and checks
+                // initiated before the iteration acts on the host, so that
+                // what a gate holds is what the iteration reads.
+                seedling_core::runtime::gates::drive::drive(&oi_state_for_sched).await;
+
                 let tick = AssertUnwindSafe(reconciler.tick()).catch_unwind().await;
                 if reconciler.take_host_facts_changed() {
                     seedling_core::oi::handler::registries::re_evaluate_all_apps(

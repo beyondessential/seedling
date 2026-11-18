@@ -32,6 +32,8 @@ use crate::{
     },
 };
 
+pub mod drive;
+pub mod run;
 pub mod store;
 
 use store::{GateRecord, Holds, Records};
@@ -100,6 +102,9 @@ pub struct GateStatus {
     /// A cancelled run paused the gate for its current key.
     // spec: GRUN#pauses
     pub paused: bool,
+    /// Why the gate's record cannot be read, where it cannot, whatever else
+    /// keeps the gate's state from being told.
+    pub record_error: Option<String>,
 }
 
 impl GateStatus {
@@ -124,10 +129,28 @@ impl GateStatus {
     }
 
     /// Why the gate's record cannot be read, if it cannot.
+    // spec: GRUN#gate-state
     pub fn unreadable(&self) -> Option<&str> {
-        match &self.state {
-            GateState::Undetermined(Undetermined::Record(why)) => Some(why),
-            _ => None,
+        self.record_error.as_deref()
+    }
+}
+
+impl GateStatus {
+    /// The state reported for the gate: `running` while a run of it is in
+    /// progress, `paused` while it is paused, and otherwise the state the
+    /// runtime determined.
+    // spec: APPS#gates
+    pub fn reported(&self, running: bool) -> &'static str {
+        if running {
+            "running"
+        } else if self.paused && self.state == GateState::Unsatisfied {
+            "paused"
+        } else {
+            match self.state {
+                GateState::Satisfied => "satisfied",
+                GateState::Unsatisfied => "unsatisfied",
+                GateState::Undetermined(_) => "undetermined",
+            }
         }
     }
 }
@@ -238,8 +261,8 @@ fn status_of(
         Some(Undetermined::Definition(why.to_owned()))
     } else if let Some(why) = key_error {
         Some(Undetermined::Definition(why))
-    } else if let Some(why) = unreadable {
-        Some(Undetermined::Record(why))
+    } else if let Some(why) = &unreadable {
+        Some(Undetermined::Record(why.clone()))
     } else {
         remembered
             .unrecorded
@@ -269,6 +292,7 @@ fn status_of(
         key_digest,
         record,
         paused,
+        record_error: unreadable,
     }
 }
 
@@ -448,6 +472,60 @@ pub fn rt_exclusions(
         }
     }
     Ok(excluded)
+}
+
+/// What a runtime handle leaves out of the resources it acts on, as a
+/// closure's pass was given it.
+// spec: RT#resources-a-gate-holds
+#[derive(Debug, Clone, Default)]
+pub enum Exclusions {
+    /// Nothing is left out: the closure runs outside an installed app, as in a
+    /// language-only test.
+    #[default]
+    None,
+    Known(BTreeSet<ResourceId>),
+    /// What gates hold cannot be read, so a call that would act on a workload
+    /// fails rather than act on one that may be held.
+    Unreadable(String),
+}
+
+impl Exclusions {
+    /// What is left out for a closure of `def` running for gate `running`, or
+    /// for no gate.
+    pub fn of(def: &AppDef, gates: &AppGates, running: Option<&GateName>) -> Self {
+        match rt_exclusions(def, gates, running) {
+            Ok(ids) => Self::Known(ids),
+            Err(why) => Self::Unreadable(why),
+        }
+    }
+
+    /// What is left out for a closure of `app`, as its gates stand now.
+    ///
+    /// The gates are evaluated here, as the reconciler evaluates them, so a
+    /// closure is kept from what the reconciler keeps from the app.
+    // spec: RT#resources-a-gate-holds
+    pub fn for_closure(
+        db: &Db,
+        app: &AppName,
+        def: &AppDef,
+        cipher: &Cipher,
+        remembered: &Remembered,
+        running: Option<&GateName>,
+    ) -> Self {
+        let gates = evaluate(db, app, def, cipher, None, remembered);
+        Self::of(def, &gates, running)
+    }
+
+    /// Whether the named workload is left out.
+    pub fn leaves_out(&self, kind: ResourceKind, name: &str) -> Result<bool, String> {
+        match self {
+            Self::None => Ok(false),
+            Self::Known(ids) => Ok(ids
+                .iter()
+                .any(|id| id.kind == kind && id.name.as_str() == name)),
+            Self::Unreadable(why) => Err(why.clone()),
+        }
+    }
 }
 
 /// Which of a gate's or workload's targets are ready, as readiness reads them.
@@ -736,6 +814,7 @@ pub struct GateRuntime {
 #[derive(Debug, Default)]
 struct Memory {
     remembered: BTreeMap<AppName, Remembered>,
+    reported: BTreeMap<(AppName, GateName), &'static str>,
     checking: BTreeSet<(AppName, GateName)>,
     last_checked: BTreeMap<(AppName, GateName), Instant>,
     not_before: BTreeMap<(AppName, GateName), Instant>,
@@ -791,10 +870,28 @@ impl GateRuntime {
         }
     }
 
+    /// Note the state reported for `gate`, returning the one reported before
+    /// it where that differs.
+    // spec: EVT#app-events
+    pub fn note_state(
+        &self,
+        app: &AppName,
+        gate: &GateName,
+        state: &'static str,
+    ) -> Option<&'static str> {
+        let previous = self
+            .inner
+            .lock()
+            .reported
+            .insert((app.clone(), gate.clone()), state);
+        previous.filter(|previous| *previous != state)
+    }
+
     /// Forget everything held for `app`.
     pub fn forget_app(&self, app: &AppName) {
         let mut inner = self.inner.lock();
         inner.remembered.remove(app);
+        inner.reported.retain(|(a, _), _| a != app);
         inner.checking.retain(|(a, _)| a != app);
         inner.last_checked.retain(|(a, _), _| a != app);
         inner.not_before.retain(|(a, _), _| a != app);

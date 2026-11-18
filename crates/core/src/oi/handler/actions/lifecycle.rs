@@ -13,7 +13,9 @@ use crate::{
         barrier::{
             CancelToken, OperationId,
             oracle::DbWorldOracle,
-            replay::{DbActionLog, OperationContext, OperationResult, run_operation},
+            replay::{
+                DbActionLog, GateBody, OperationContext, OperationResult, Subject, run_operation,
+            },
         },
         db::DbHandle,
         desired::OperationProgress,
@@ -59,7 +61,7 @@ impl crate::runtime::barrier::ContainerSignaler for OperationSignaler {
     }
 }
 
-fn make_container_signaler(
+pub(crate) fn make_container_signaler(
     state: &OiState,
 ) -> Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>> {
     Some(Arc::new(OperationSignaler {
@@ -246,7 +248,7 @@ impl crate::runtime::barrier::Executor for OperationExecutor {
     }
 }
 
-fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Executor>> {
+pub(crate) fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Executor>> {
     Some(Arc::new(OperationExecutor {
         container: Arc::clone(&state.driver.container),
     }))
@@ -349,15 +351,155 @@ pub(crate) fn bind_volume_params(
     Ok(BoundParams { params, bindings })
 }
 
-/// End an operation that was accepted but cannot run, as a failed one ends.
-fn refuse_to_run(db: &DbHandle, op_ctx: &OperationEventCtx, description: String) {
+/// The app as it was at `generation`, or `None` where `current` already is
+/// that, or the generation is not one that has been recorded.
+// spec: OPS#initiating-events
+pub(crate) fn app_at_generation(
+    db: &DbHandle,
+    app_name: &AppName,
+    current: &App,
+    generation: u64,
+    limits: &crate::ScriptLimits,
+    cipher: &Arc<crate::runtime::secrets::Cipher>,
+) -> Result<Option<App>, crate::runtime::generations::Error> {
+    let name = app_name.clone();
+    let now = db.call(move |db| crate::runtime::generations::current(db, &name))?;
+    match now {
+        Some(now) if generation != 0 && now != generation => {
+            let (name, limits, cipher) = (app_name.clone(), limits.clone(), Arc::clone(cipher));
+            db.call(move |db| {
+                crate::runtime::generations::reconstruct_app_def(db, &name, generation, &limits, &cipher)
+            })
+            .map(Some)
+        }
+        _ => {
+            let _ = current;
+            Ok(None)
+        }
+    }
+}
+
+/// The script engine, a scope and the compiled script of `app`.
+// spec: BND#script-formation
+pub(crate) fn language_for(
+    app: &App,
+    limits: &crate::ScriptLimits,
+) -> Result<(rhai::Engine, rhai::Scope<'static>, rhai::AST), String> {
+    // spec: CONST#host-constants
+    let (engine, scope, _) =
+        crate::setup_language(limits, Arc::clone(&app.bundle)).map_err(|e| e.to_string())?;
+    let script = app.bundle.script().map_err(|e| e.to_string())?;
+    let ast = engine
+        .compile(script.text())
+        .map_err(|e| script.remap_error(&e.to_string()))
+        .map_err(|e| format!("script compile error: {e}"))?;
+    Ok((engine, scope, ast))
+}
+
+/// How an operation's closure ended, before anything is reported of it.
+pub(crate) enum OperationEnd {
+    Completed,
+    Failed(String),
+    // spec: OPS#cancellation
+    Cancelled,
+    /// The operation was accepted and could not be started.
+    NotRun(String),
+}
+
+/// End an action as `end` says: file what it calls for, clear the persisted
+/// operation, and report it.
+///
+/// A gate run ends otherwise, as its outcome says.
+// spec: OPS#completion
+// spec: OPS#cancellation
+fn end_action(db: &DbHandle, op_ctx: &OperationEventCtx, end: OperationEnd) {
     let app_name = op_ctx.app.clone();
-    let for_db = description.clone();
-    db.call(move |db| {
-        let _ = faults::file_fault(db, &app_name, None, None, None, "operation_failed", &for_db);
-        let _ = clear_current_operation(db);
-    });
-    op_ctx.failed(&description);
+    let action_name = op_ctx.target.name().to_owned();
+    match end {
+        OperationEnd::Completed => {
+            db.call(move |db| {
+                // Clear stale "the previous attempt didn't run to
+                // completion" faults for this app: a fresh successful
+                // operation supersedes both prior `operation_failed`
+                // (a previous attempt errored out) and
+                // `operation_cancelled` (a previous attempt was
+                // operator-cancelled). Without this, a successful
+                // retry leaves the app stuck in `Faulted` even though
+                // its current state is fine.
+                for kind in ["operation_failed", "operation_cancelled"] {
+                    faults::clear_faults_by_kind(db, &app_name, kind).ok();
+                }
+                let _ = clear_current_operation(db);
+            });
+            op_ctx.completed();
+        }
+        OperationEnd::Failed(why) => {
+            let description = format!("{action_name} failed: {why}");
+            db.call(move |db| {
+                let _ = faults::file_fault(
+                    db,
+                    &app_name,
+                    None,
+                    None,
+                    None,
+                    "operation_failed",
+                    &description,
+                );
+                let _ = clear_current_operation(db);
+            });
+            op_ctx.failed(&why);
+        }
+        OperationEnd::NotRun(description) => {
+            let for_db = description.clone();
+            db.call(move |db| {
+                let _ = faults::file_fault(
+                    db,
+                    &app_name,
+                    None,
+                    None,
+                    None,
+                    "operation_failed",
+                    &for_db,
+                );
+                let _ = clear_current_operation(db);
+            });
+            op_ctx.failed(&description);
+        }
+        OperationEnd::Cancelled => {
+            let description = format!("{action_name} cancelled by operator");
+            db.call(move |db| {
+                let _ = faults::file_fault(
+                    db,
+                    &app_name,
+                    None,
+                    None,
+                    None,
+                    "operation_cancelled",
+                    &description,
+                );
+                let _ = clear_current_operation(db);
+            });
+            // spec: OPS#cancellation
+            // A cancelled operation ends in an outcome of its own.
+            op_ctx.cancelled();
+        }
+    }
+}
+
+/// What a gate's run gives the closure it calls.
+pub(crate) struct GateInput<'a> {
+    /// The app as it was at the gate's last success, if it has one.
+    // spec: GATE#body
+    pub last: Option<&'a App>,
+}
+
+/// Where a pass of the operation loop stands in what an operation persists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Persisted {
+    /// The loop persists the operation before the closure first runs.
+    No,
+    /// The operation is already on record.
+    Yes,
 }
 
 /// Run the operation loop synchronously until completion or failure.
@@ -365,7 +507,7 @@ fn refuse_to_run(db: &DbHandle, op_ctx: &OperationEventCtx, description: String)
     clippy::too_many_arguments,
     reason = "operation state is inherently multi-dimensional"
 )]
-fn run_operation_loop(
+pub(crate) fn run_operation_loop(
     app: &App,
     db: DbHandle,
     bound: Result<BoundParams, String>,
@@ -374,11 +516,14 @@ fn run_operation_loop(
     op_ctx: &OperationEventCtx,
     script_limits: &crate::ScriptLimits,
     cipher: Arc<crate::runtime::secrets::Cipher>,
+    gate_runtime: &crate::runtime::gates::GateRuntime,
     cancel_token: Arc<CancelToken>,
     container_signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
     volume_writer: Option<Arc<dyn crate::runtime::barrier::VolumeWriter>>,
     executor: Option<Arc<dyn crate::runtime::barrier::Executor>>,
-) -> bool {
+    gate: Option<GateInput<'_>>,
+    persisted: Persisted,
+) -> OperationEnd {
     let app_name = &op_ctx.app;
     let target = &op_ctx.target;
     let action_name = target.name();
@@ -393,12 +538,9 @@ fn run_operation_loop(
         Ok(bound) => bound,
         Err(why) => {
             tracing::error!(app = %app_name, action = %action_name, "volume binding failed: {why}");
-            refuse_to_run(
-                &db,
-                op_ctx,
-                format!("{action_name} not run: a volume param could not be bound: {why}"),
-            );
-            return false;
+            return OperationEnd::NotRun(format!(
+                "{action_name} not run: a volume param could not be bound: {why}"
+            ));
         }
     };
 
@@ -408,84 +550,33 @@ fn run_operation_loop(
     // dispatched, and on every replay. If that generation cannot be rebuilt
     // the operation fails; it is never run against another's state.
     let generation_app;
-    let app = {
-        let name = app_name.clone();
-        let current = db.call(move |db| crate::runtime::generations::current(db, &name));
-        match current {
-            Ok(Some(current))
-                if op_ctx.operation_generation != 0 && current != op_ctx.operation_generation =>
-            {
-                let name = app_name.clone();
-                let (limits, cipher, generation) = (
-                    script_limits.clone(),
-                    Arc::clone(&cipher),
-                    op_ctx.operation_generation,
-                );
-                match db.call(move |db| {
-                    crate::runtime::generations::reconstruct_app_def(
-                        db, &name, generation, &limits, &cipher,
-                    )
-                }) {
-                    Ok(rebuilt) => {
-                        generation_app = rebuilt;
-                        &generation_app
-                    }
-                    Err(e) => {
-                        tracing::error!(app = %app_name, action = %action_name, "cannot rebuild generation {}: {e}", op_ctx.operation_generation);
-                        refuse_to_run(
-                            &db,
-                            op_ctx,
-                            format!(
-                                "{action_name} not run: generation {} cannot be rebuilt: {e}",
-                                op_ctx.operation_generation
-                            ),
-                        );
-                        return false;
-                    }
-                }
-            }
-            _ => app,
+    let app = match app_at_generation(
+        &db,
+        app_name,
+        app,
+        op_ctx.operation_generation,
+        script_limits,
+        &cipher,
+    ) {
+        Ok(Some(rebuilt)) => {
+            generation_app = rebuilt;
+            &generation_app
+        }
+        Ok(None) => app,
+        Err(e) => {
+            tracing::error!(app = %app_name, action = %action_name, "cannot rebuild generation {}: {e}", op_ctx.operation_generation);
+            return OperationEnd::NotRun(format!(
+                "{action_name} not run: generation {} cannot be rebuilt: {e}",
+                op_ctx.operation_generation
+            ));
         }
     };
 
-    let (engine, mut scope, _) = match crate::setup_language(script_limits, Arc::clone(&app.bundle))
-    {
+    let (engine, mut scope, ast) = match language_for(app, script_limits) {
         Ok(language) => language,
-        // spec: CONST#host-constants
-        Err(e) => {
-            tracing::error!(app = %app_name, action = %action_name, "{action_name} not run: {e}");
-            refuse_to_run(&db, op_ctx, format!("{action_name} not run: {e}"));
-            return false;
-        }
-    };
-    // spec: BND#script-formation
-    let compiled = app
-        .bundle
-        .script()
-        .map_err(|e| e.to_string())
-        .and_then(|script| {
-            engine
-                .compile(script.text())
-                .map_err(|e| script.remap_error(&e.to_string()))
-        });
-    let ast = match compiled {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::error!(app = %app_name, action = %action_name, "script compile error: {e}");
-            let app_name_owned = app_name.clone();
-            let desc = format!("script compile error in {action_name}: {e}");
-            db.call(move |db| {
-                let _ = faults::file_fault(
-                    db,
-                    &app_name_owned,
-                    None,
-                    None,
-                    None,
-                    "operation_failed",
-                    &desc,
-                );
-            });
-            return false;
+        Err(why) => {
+            tracing::error!(app = %app_name, action = %action_name, "{action_name} not run: {why}");
+            return OperationEnd::NotRun(format!("{action_name} not run: {why}"));
         }
     };
 
@@ -501,55 +592,84 @@ fn run_operation_loop(
     // spec: OPS#initiating-events, SUSP#replay, OPS#persistence
     // Persist the current operation so a runtime restart can resume it.
     // Params are encrypted because they may carry secret values.
-    let record = CurrentOperation {
-        operation_id: operation_id.clone(),
-        app: app_name.clone(),
-        target: target.clone(),
-        generation: op_ctx.operation_generation,
-    };
-    let params_for_persist = params.clone();
-    let bindings_for_persist = operation_volume_bindings.clone();
-    let cipher_for_persist = Arc::clone(&cipher);
     // spec: OPS#persistence
     // The closure does not run unless the operation is on record: a restart
     // could not otherwise replay it, and its params could not be recovered.
-    if let Err(e) = db.call(move |db| {
-        save_current_operation(
-            db,
-            &cipher_for_persist,
-            &record,
-            &params_for_persist,
-            &bindings_for_persist,
-        )
-    }) {
-        tracing::error!(
-            app = %app_name,
-            action = %action_name,
-            "failed to persist current_operation; not running the operation: {e}"
-        );
-        refuse_to_run(
-            &db,
-            op_ctx,
-            format!("{action_name} not run: the operation could not be persisted: {e}"),
-        );
-        return false;
+    if persisted == Persisted::No {
+        let record = CurrentOperation {
+            operation_id: operation_id.clone(),
+            app: app_name.clone(),
+            target: target.clone(),
+            generation: op_ctx.operation_generation,
+        };
+        let params_for_persist = params.clone();
+        let bindings_for_persist = operation_volume_bindings.clone();
+        let cipher_for_persist = Arc::clone(&cipher);
+        if let Err(e) = db.call(move |db| {
+            save_current_operation(
+                db,
+                &cipher_for_persist,
+                &record,
+                &params_for_persist,
+                &bindings_for_persist,
+            )
+        }) {
+            tracing::error!(
+                app = %app_name,
+                action = %action_name,
+                "failed to persist current_operation; not running the operation: {e}"
+            );
+            return OperationEnd::NotRun(format!(
+                "{action_name} not run: the operation could not be persisted: {e}"
+            ));
+        }
     }
 
     loop {
+        // spec: RT#resources-a-gate-holds
+        // What gates keep from the closure is read for each pass, so a pass
+        // that follows a wait sees the gates as they stand then. In a gate's
+        // body, the gate's own holds and dependants are not kept from it.
+        let exclusions = {
+            let (name, cipher, remembered) = (
+                app_name.clone(),
+                Arc::clone(&cipher),
+                gate_runtime.remembered(app_name),
+            );
+            let def = app.def.load_full();
+            let running = target.gate().cloned();
+            db.call(move |db| {
+                crate::runtime::gates::Exclusions::for_closure(
+                    db,
+                    &name,
+                    &def,
+                    &cipher,
+                    &remembered,
+                    running.as_ref(),
+                )
+            })
+        };
         let result = run_operation(
             OperationContext {
                 engine: &engine,
                 script_ast: &ast,
                 operation_id: operation_id.clone(),
                 app,
-                action_name,
+                subject: match (&gate, target.gate()) {
+                    (Some(input), Some(name)) => {
+                        Subject::Gate(GateBody {
+                            name,
+                            last: input.last,
+                        })
+                    }
+                    _ => Subject::Action(action_name),
+                },
                 log: &log,
                 world: Arc::clone(&world),
                 registry: Arc::clone(&registry),
                 active_progress: Some(Arc::clone(&active_progress)),
                 tick_notify: Some(Arc::clone(&tick_notify)),
                 params: params.clone(),
-                is_shell: false,
                 db: Some(db.clone()),
                 cipher: Some(Arc::clone(&cipher)),
                 operation_volume_bindings: operation_volume_bindings.clone(),
@@ -557,70 +677,20 @@ fn run_operation_loop(
                 container_signaler: container_signaler.clone(),
                 volume_writer: volume_writer.clone(),
                 executor: executor.clone(),
+                exclusions,
             },
             &mut scope,
         );
         match result {
-            OperationResult::Completed => {
-                let app_name_owned = app_name.clone();
-                db.call(move |db| {
-                    // Clear stale "the previous attempt didn't run to
-                    // completion" faults for this app: a fresh successful
-                    // operation supersedes both prior `operation_failed`
-                    // (a previous attempt errored out) and
-                    // `operation_cancelled` (a previous attempt was
-                    // operator-cancelled). Without this, a successful
-                    // retry leaves the app stuck in `Faulted` even though
-                    // its current state is fine.
-                    for kind in ["operation_failed", "operation_cancelled"] {
-                        faults::clear_faults_by_kind(db, &app_name_owned, kind).ok();
-                    }
-                    let _ = clear_current_operation(db);
-                });
-                op_ctx.completed();
-                return true;
-            }
+            OperationResult::Completed => return OperationEnd::Completed,
             OperationResult::Failed(e) => {
-                tracing::error!(app = %app_name, action = %action_name, "operation failed: {e}");
-                let app_name_owned = app_name.clone();
-                let desc = format!("{action_name} failed: {e}");
-                db.call(move |db| {
-                    let _ = faults::file_fault(
-                        db,
-                        &app_name_owned,
-                        None,
-                        None,
-                        None,
-                        "operation_failed",
-                        &desc,
-                    );
-                    let _ = clear_current_operation(db);
-                });
-                op_ctx.failed(&e.to_string());
-                return false;
+                tracing::error!(app = %app_name, operation = %target, "operation failed: {e}");
+                return OperationEnd::Failed(e.to_string());
             }
             // spec: OPS#cancellation
             OperationResult::Cancelled => {
-                tracing::warn!(app = %app_name, action = %action_name, "operation cancelled");
-                let app_name_owned = app_name.clone();
-                let desc = format!("{action_name} cancelled by operator");
-                let desc_for_fault = desc.clone();
-                db.call(move |db| {
-                    let _ = faults::file_fault(
-                        db,
-                        &app_name_owned,
-                        None,
-                        None,
-                        None,
-                        "operation_cancelled",
-                        &desc_for_fault,
-                    );
-                    let _ = clear_current_operation(db);
-                });
-                // spec: OPS#cancellation
-                // A cancelled operation ends in an outcome of its own.
-                op_ctx.cancelled();
-                return false;
+                tracing::warn!(app = %app_name, operation = %target, "operation cancelled");
+                return OperationEnd::Cancelled;
             }
             OperationResult::Suspended(cond) => {
                 tick_notify.notify_one();
@@ -630,7 +700,7 @@ fn run_operation_loop(
                 if waited > 0 && waited.is_multiple_of(600) {
                     tracing::info!(
                         app = %app_name,
-                        action = %action_name,
+                        operation = %target,
                         state = ?cond.required_state,
                         elapsed_secs = waited,
                         deadline_secs = ?cond.deadline_secs,
@@ -810,41 +880,77 @@ pub fn spawn_accepted_operation(
             OperationParams::Replayed { params, bindings } => Ok(BoundParams { params, bindings }),
         };
 
-        let ran = {
-            let app_name = app_name.clone();
-            let active_progress = Arc::clone(&active_progress);
-            let tick_notify = Arc::clone(&tick_notify);
-            let op_ctx = op_ctx.clone();
-            let cipher = Arc::clone(&cipher);
-            let cancel_token = Arc::clone(&cancel_token);
+        match target.gate().cloned() {
+            None => {
+                let (app_name_for_task, op_ctx_for_task) = (app_name.clone(), op_ctx.clone());
+                let active_progress = Arc::clone(&active_progress);
+                let tick_notify = Arc::clone(&tick_notify);
+                let cipher = Arc::clone(&cipher);
+                let cancel_token = Arc::clone(&cancel_token);
+                let gate_runtime = Arc::clone(&state.gate_runtime);
 
-            let signaler = make_container_signaler(&state);
-            let writer = make_volume_writer(&state);
-            let executor = make_executor(&state);
-            tokio::task::spawn_blocking(move || {
-                let db = match open_operation_dbs(&db_path, &app_name) {
-                    Some(d) => d,
-                    None => return false,
-                };
-                run_operation_loop(
-                    &app,
-                    db,
-                    bound,
-                    active_progress,
-                    tick_notify,
-                    &op_ctx,
-                    &script_limits,
-                    cipher,
-                    cancel_token,
-                    signaler,
-                    writer,
-                    executor,
+                let signaler = make_container_signaler(&state);
+                let writer = make_volume_writer(&state);
+                let executor = make_executor(&state);
+                let db_path = db_path.clone();
+                let script_limits = script_limits.clone();
+                let app = app.clone();
+                let end = tokio::task::spawn_blocking(move || {
+                    let db = match open_operation_dbs(&db_path, &app_name_for_task) {
+                        Some(d) => d,
+                        None => {
+                            return OperationEnd::NotRun(format!(
+                                "{} not run: the database could not be opened",
+                                op_ctx_for_task.target
+                            ));
+                        }
+                    };
+                    run_operation_loop(
+                        &app,
+                        db,
+                        bound,
+                        active_progress,
+                        tick_notify,
+                        &op_ctx_for_task,
+                        &script_limits,
+                        cipher,
+                        &gate_runtime,
+                        cancel_token,
+                        signaler,
+                        writer,
+                        executor,
+                        None,
+                        Persisted::No,
+                    )
+                })
+                .await;
+                match end {
+                    Ok(end) => end_action(&state.db, &op_ctx, end),
+                    Err(e) => {
+                        tracing::error!(app = %app_name, operation = %target, "operation task failed: {e}");
+                        end_action(
+                            &state.db,
+                            &op_ctx,
+                            OperationEnd::Failed(format!("the operation's task failed: {e}")),
+                        );
+                    }
+                }
+            }
+            Some(gate) => {
+                crate::runtime::gates::run::run_gate(
+                    &state,
+                    crate::runtime::gates::run::GateRunInput {
+                        app: app.clone(),
+                        gate,
+                        op_ctx: op_ctx.clone(),
+                        active_progress: Arc::clone(&active_progress),
+                        tick_notify: Arc::clone(&tick_notify),
+                        cancel_token: Arc::clone(&cancel_token),
+                        db_path: db_path.clone(),
+                    },
                 )
-            })
-            .await
-        };
-        if let Err(e) = ran {
-            tracing::error!(app = %app_name, operation = %target, "operation task failed: {e}");
+                .await;
+            }
         }
 
         cleanup_dynamic_resources(
@@ -874,6 +980,82 @@ pub fn spawn_accepted_operation(
             );
         }
     });
+}
+
+/// What came of asking for a lifecycle operation.
+pub(crate) enum Admission {
+    /// It started at once.
+    Started(OperationId),
+    /// It is queued behind another app's operation, and persisted.
+    Queued(OperationId),
+    Rejected(crate::runtime::scheduler::RejectReason),
+    /// It was queued and could not be persisted, so it was taken off the queue.
+    CannotPersist(seedling_protocol::error::OiError),
+}
+
+/// Ask for an operation, and start it if it is accepted at once.
+///
+/// Every request for an operation goes through here: an operator's action, a
+/// schedule's firing, and a gate that is due. The scheduler decides, under its
+/// own lock, whether it starts, waits or is refused.
+// spec: OPS#concurrency
+// spec: TRD#uninstall-admission
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the request is what the scheduler needs to admit it"
+)]
+pub(crate) fn admit_and_spawn(
+    state: &Arc<OiState>,
+    app: &AppName,
+    target: OperationTarget,
+    params: serde_json::Map<String, serde_json::Value>,
+    generation: u64,
+    trigger: &str,
+    phase: &Arc<parking_lot::Mutex<AppPhase>>,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) -> Admission {
+    use crate::runtime::scheduler::ScheduleResult;
+    let (result, operation_id) = {
+        let mut sched = state.scheduler.lock();
+        let result = sched.admit(
+            app,
+            &target,
+            params.clone(),
+            generation,
+            trigger,
+            phase,
+            actor.clone(),
+        );
+        let operation_id = match &result {
+            ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
+            ScheduleResult::Queued => sched
+                .queue_iter()
+                .find(|q| q.app == *app)
+                .map(|q| q.operation_id.clone()),
+            ScheduleResult::Rejected(_) => None,
+        };
+        (result, operation_id.unwrap_or_else(|| OperationId(String::new())))
+    };
+    match result {
+        ScheduleResult::Accepted => {
+            spawn_accepted_operation(
+                Arc::clone(state),
+                app.clone(),
+                target,
+                operation_id.clone(),
+                OperationParams::Requested(params),
+                generation,
+                trigger.to_owned(),
+                actor,
+            );
+            Admission::Started(operation_id)
+        }
+        ScheduleResult::Queued => match persist_queued(state, &operation_id) {
+            Ok(()) => Admission::Queued(operation_id),
+            Err(e) => Admission::CannotPersist(e),
+        },
+        ScheduleResult::Rejected(reason) => Admission::Rejected(reason),
+    }
 }
 
 /// Persist the request the scheduler has just queued as `operation_id`, so

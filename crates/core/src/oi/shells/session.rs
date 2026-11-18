@@ -17,7 +17,7 @@ use crate::{
         barrier::{
             OperationId,
             oracle::DbWorldOracle,
-            replay::{DbActionLog, OperationContext, OperationResult, run_operation},
+            replay::{DbActionLog, OperationContext, OperationResult, Subject, run_operation},
             shell::{
                 ShellAttachCtx, ShellExecTarget, ShellExit, ShellHost, ShellProgress,
                 clear_shell_attach_ctx, set_shell_attach_ctx,
@@ -675,6 +675,7 @@ pub(super) async fn run_app_shell(
     let app_name_for_task = app_name.clone();
     let shell_name_for_task = shell_name.clone();
     let cancel = stop.cancel_token();
+    let remembered = state.gate_runtime.remembered(app_name);
 
     let script = tokio::task::spawn_blocking(move || {
         let (engine, mut scope, _) =
@@ -724,6 +725,22 @@ pub(super) async fn run_app_shell(
             shell_as_action,
         );
         let world = Arc::new(DbWorldOracle::new(db.clone()));
+        // spec: RT#resources-a-gate-holds
+        // What gates keep from a closure is read when the session opens: a
+        // shell's `Started` leaves it out as an operation's does.
+        let exclusions = {
+            let (name, def, cipher, remembered) = (
+                app_name_for_task.clone(),
+                app.def.load_full(),
+                Arc::clone(&cipher),
+                remembered,
+            );
+            db.call(move |db| {
+                crate::runtime::gates::Exclusions::for_closure(
+                    db, &name, &def, &cipher, &remembered, None,
+                )
+            })
+        };
 
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
@@ -738,15 +755,13 @@ pub(super) async fn run_app_shell(
                     script_ast: &ast,
                     operation_id: op_id_for_log.clone(),
                     app: &app,
-                    action_name: shell_name_for_task.as_str(),
+                    subject: Subject::Shell(shell_name_for_task.as_str()),
                     log: &log,
                     world: Arc::clone(&world),
                     registry: Arc::clone(&registry),
                     active_progress: Some(Arc::clone(&slot)),
                     tick_notify: Some(Arc::clone(&tick_notify)),
                     params: validated_params.clone(),
-                    // spec: OPS#shell-sessions
-                    is_shell: true,
                     // spec: OPS#shell-sessions
                     // The dynamic resources the closure starts are recorded
                     // against the session before they are started.
@@ -760,6 +775,7 @@ pub(super) async fn run_app_shell(
                     container_signaler: None,
                     volume_writer: None,
                     executor: None,
+                    exclusions: exclusions.clone(),
                 },
                 &mut scope,
             );

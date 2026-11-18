@@ -9,7 +9,7 @@ use crate::runtime::barrier::runtime::{ActionClosureGuard, RuntimeInstance};
 use crate::runtime::barrier::shell::ShellControl;
 use crate::runtime::barrier::{
     OperationId,
-    replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
+    replay::{InMemoryActionLog, OperationContext, OperationResult, Subject, run_operation},
 };
 
 /// An engine, scope and app evaluating no particular definition.
@@ -131,7 +131,7 @@ pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
         engine,
         script_ast,
         app,
-        action_name,
+        subject: Subject::Action(action_name),
         log,
         world,
         operation_id: OperationId::new(),
@@ -139,7 +139,6 @@ pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
         active_progress: hooks.active_progress,
         tick_notify: None,
         params: serde_json::Map::new(),
-        is_shell: false,
         db: None,
         cipher: None,
         operation_volume_bindings: hooks.operation_volume_bindings,
@@ -147,6 +146,7 @@ pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
         container_signaler: hooks.container_signaler,
         volume_writer: hooks.volume_writer,
         executor: hooks.executor,
+        exclusions: Default::default(),
     }
 }
 

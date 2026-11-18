@@ -7,7 +7,6 @@ use seedling_protocol::names::{ActionName, AppName, ParamName, SiteVolumeName};
 use serde::Deserialize;
 use serde_json::json;
 
-use self::lifecycle::spawn_accepted_operation;
 use super::HandlerResult;
 use crate::{
     defs::param_def::ParamDef,
@@ -15,7 +14,7 @@ use crate::{
     runtime::{
         AppPhase,
         action_params::{self, ParamValidationError, VolumeLookup},
-        scheduler::{CancelOutcome, RejectReason, ScheduleResult},
+        scheduler::{CancelOutcome, RejectReason},
     },
 };
 
@@ -178,77 +177,50 @@ pub(crate) fn invoke_action(
             .unwrap_or(0)
     };
     let target = OperationTarget::Action(action_name.clone());
-    let (result, op_id_str) = {
-        let mut sched = state.scheduler.lock();
-        // spec: TRD#uninstall-admission
-        // The phase read above was taken and released before this lock, so an
-        // uninstall could have landed in between. The scheduler reads the
-        // phase under its own lock and refuses an app being torn down, so the
-        // decision is made where every admission passes rather than here.
-        let result = sched.admit(
-            app_name,
-            &target,
-            action_params.clone(),
-            current_generation,
-            "operator",
-            &phase_handle,
-            Some(Arc::clone(&ctx.events.actor)),
-        );
-        let op_id = match &result {
-            ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
-            ScheduleResult::Queued => sched
-                .queue_iter()
-                .find(|q| q.app == *app_name)
-                .map(|q| q.operation_id.clone()),
-            ScheduleResult::Rejected(_) => None,
-        };
-        (result, op_id.map(|id| id.0.clone()).unwrap_or_default())
-    };
-
-    match result {
-        ScheduleResult::Accepted => {
-            let op_id = crate::runtime::barrier::OperationId(op_id_str.clone());
-            spawn_accepted_operation(
-                Arc::clone(state),
-                app_name.clone(),
-                target,
-                op_id,
-                lifecycle::OperationParams::Requested(action_params),
-                current_generation,
-                "operator".to_owned(),
-                Some(Arc::clone(&ctx.events.actor)),
-            );
+    // spec: TRD#uninstall-admission
+    // The phase read above was taken and released before the scheduler's
+    // lock, so an uninstall could have landed in between. The scheduler reads
+    // the phase under its own lock and refuses an app being torn down, so the
+    // decision is made where every admission passes rather than here.
+    let admission = lifecycle::admit_and_spawn(
+        state,
+        app_name,
+        target,
+        action_params,
+        current_generation,
+        "operator",
+        &phase_handle,
+        Some(Arc::clone(&ctx.events.actor)),
+    );
+    match admission {
+        lifecycle::Admission::Started(operation_id) => {
             tracing::info!(app = %app_name, action = %action_name, schedule = "accepted", "invoke_action");
-            Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))
+            Ok(json!({ "schedule": "accepted", "operation_id": operation_id.0 }))
         }
-        ScheduleResult::Queued => {
-            // spec: OPS#concurrency
-            lifecycle::persist_queued(
-                state,
-                &crate::runtime::barrier::OperationId(op_id_str.clone()),
-            )?;
+        lifecycle::Admission::Queued(operation_id) => {
             tracing::info!(app = %app_name, action = %action_name, schedule = "queued", "invoke_action");
-            Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))
+            Ok(json!({ "schedule": "queued", "operation_id": operation_id.0 }))
         }
-        ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress) => Err(OiError::new(
+        lifecycle::Admission::CannotPersist(e) => Err(e),
+        lifecycle::Admission::Rejected(RejectReason::SameAppOperationInProgress) => Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!("operation in progress for app: {app_name}"),
         )),
-        ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
+        lifecycle::Admission::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
             ErrorCode::AlreadyQueued,
             format!("already queued for app: {app_name}"),
         )),
-        ScheduleResult::Rejected(RejectReason::ChangeBeingApplied) => Err(OiError::new(
+        lifecycle::Admission::Rejected(RejectReason::ChangeBeingApplied) => Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!("a change to {app_name} is being applied; try again once it is applied"),
         )),
         // spec: TRD#uninstall-admission
-        ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
+        lifecycle::Admission::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is being uninstalled: {app_name}"),
         )),
         // spec: OPS#unreadable-operation-state
-        ScheduleResult::Rejected(RejectReason::OperationStateUnreadable) => Err(OiError::internal(
+        lifecycle::Admission::Rejected(RejectReason::OperationStateUnreadable) => Err(OiError::internal(
             "the persisted operation state cannot be read, so no operation can start",
         )),
     }

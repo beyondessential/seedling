@@ -315,6 +315,9 @@ pub struct ReplayContext {
     // spec: RT#starting-resources
     // spec: RT#stopping-resources
     pub is_shell: bool,
+    /// What `rt.start` and `rt.stop` leave out on account of gates.
+    // spec: RT#resources-a-gate-holds
+    pub gate_exclusions: crate::runtime::gates::Exclusions,
 }
 
 /// Synchronous side-effect handle the BSL `rt.signal` call uses to actually
@@ -456,6 +459,7 @@ impl ReplayContext {
             early_commit: None,
             cipher: None,
             is_shell: false,
+            gate_exclusions: Default::default(),
         }
     }
 
