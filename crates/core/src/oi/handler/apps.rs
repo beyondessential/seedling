@@ -1180,23 +1180,6 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                         .unwrap_or(false)
                 ),
             );
-            obj.insert(
-                "operation_id".into(),
-                e.operation_id.map_or(Value::Null, Value::String),
-            );
-            obj.insert(
-                "outcome".into(),
-                e.outcome
-                    .as_ref()
-                    .map_or(Value::Null, |o| json!(o.as_str())),
-            );
-            if matches!(
-                e.outcome,
-                Some(crate::runtime::generations::Outcome::Failed)
-            ) && let Some(err) = e.outcome_error
-            {
-                obj.insert("error".into(), json!(err));
-            }
             Value::Object(obj)
         })
         .collect();

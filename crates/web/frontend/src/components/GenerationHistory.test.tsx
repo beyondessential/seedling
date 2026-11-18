@@ -9,14 +9,12 @@ const entry = (generation: number, over: Partial<GenerationEntry> = {}): Generat
   timestamp: "2026-07-09T10:00:00Z",
   kind: "param_change",
   script_changed: false,
-  operation_id: null,
-  outcome: null,
   ...over,
 });
 
 describe("GenerationHistory", () => {
   // spec: UI#operator-capabilities
-  it("lists generations with their change, values and outcome", async () => {
+  it("lists generations with their change and values", async () => {
     renderWithSession(<GenerationHistory appName="shop" />, {
       fixtures: {
         "/apps/generations": [
@@ -27,7 +25,7 @@ describe("GenerationHistory", () => {
               { name: "tls", previous_value: "on", new_value: null },
             ],
           }),
-          entry(3, { params: [{ name: "replicas", previous_value: "1", new_value: "2" }], operation_id: "op", outcome: "failed", error: "handler exited" }),
+          entry(3, { params: [{ name: "replicas", previous_value: "1", new_value: "2" }] }),
           entry(2, { params: [{ name: "token", redacted: true }] }),
           entry(1, {
             kind: "register",
@@ -42,8 +40,6 @@ describe("GenerationHistory", () => {
     expect(screen.getByText("host: (unset) → h.example")).toBeTruthy();
     expect(screen.getByText("port: 80 → 8080")).toBeTruthy();
     expect(screen.getByText("tls: on → (unset)")).toBeTruthy();
-    expect(screen.getByText("failed")).toBeTruthy();
-    expect(screen.getByText("handler exited")).toBeTruthy();
     expect(screen.getByText("values withheld")).toBeTruthy();
     expect(screen.getByText("reg.example/shop:1")).toBeTruthy();
   });

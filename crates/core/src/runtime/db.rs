@@ -175,6 +175,8 @@ const SQL_V83: &str = include_str!("db/migrations/v83.sql");
 const SQL_V84: &str = include_str!("db/migrations/v84.sql");
 // spec: OPS#operation-generation
 const SQL_V85: &str = include_str!("db/migrations/v85.sql");
+// spec: GEN#history-entries
+const SQL_V86: &str = include_str!("db/migrations/v86.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -595,6 +597,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 85,
         sql: SQL_V85,
+        custom_run: None,
+    },
+    Migration {
+        version: 86,
+        sql: SQL_V86,
         custom_run: None,
     },
 ];

@@ -63,35 +63,6 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Outcome {
-    Pending,
-    Succeeded,
-    Failed,
-    Cancelled,
-}
-
-impl Outcome {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "pending" => Some(Self::Pending),
-            "succeeded" => Some(Self::Succeeded),
-            "failed" => Some(Self::Failed),
-            "cancelled" => Some(Self::Cancelled),
-            _ => None,
-        }
-    }
-}
-
 /// What a generation did to one parameter, as the history holds it.
 #[derive(Debug, Clone)]
 // spec: GEN#history-entries
@@ -117,9 +88,6 @@ pub struct HistoryEntry {
     /// For `Register` and `ScriptUpdate`: how the installed definition
     /// reached the runtime.
     pub provenance: Option<Source>,
-    pub operation_id: Option<String>,
-    pub outcome: Option<Outcome>,
-    pub outcome_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -466,62 +434,6 @@ pub fn bump_param_change(
     })
 }
 
-/// Attach a lifecycle operation id to a generation history entry, and mark its
-/// outcome as Pending. Called when a generation bump schedules an `on_change`
-/// (or other) lifecycle operation.
-pub fn attach_operation(
-    db: &Db,
-    app: &AppName,
-    generation: Generation,
-    operation_id: &str,
-) -> rusqlite::Result<()> {
-    db.conn.execute(
-        "UPDATE generations
-            SET operation_id = ?1,
-                outcome      = 'pending'
-          WHERE app = ?2 AND generation = ?3",
-        rusqlite::params![operation_id, app, generation as i64],
-    )?;
-    Ok(())
-}
-
-/// Record the final outcome of the lifecycle operation attached to a generation.
-pub fn record_outcome(
-    db: &Db,
-    app: &AppName,
-    generation: Generation,
-    outcome: Outcome,
-    error: Option<&str>,
-) -> rusqlite::Result<()> {
-    db.conn.execute(
-        "UPDATE generations
-            SET outcome       = ?1,
-                outcome_error = ?2
-          WHERE app = ?3 AND generation = ?4",
-        rusqlite::params![outcome.as_str(), error, app, generation as i64],
-    )?;
-    Ok(())
-}
-
-/// Record how the operation `operation_id` ended against the generation it
-/// was attached to, if it was attached to one.
-// spec: GEN#generation-numbers
-pub fn record_operation_outcome(
-    db: &Db,
-    operation_id: &str,
-    outcome: Outcome,
-    error: Option<&str>,
-) -> rusqlite::Result<()> {
-    db.conn.execute(
-        "UPDATE generations
-            SET outcome       = ?1,
-                outcome_error = ?2
-          WHERE operation_id = ?3",
-        rusqlite::params![outcome.as_str(), error, operation_id],
-    )?;
-    Ok(())
-}
-
 /// List generation history entries for an app, newest first.
 /// `before`, when provided, restricts results to `generation < before`.
 pub fn list(
@@ -533,8 +445,7 @@ pub fn list(
     let limit = limit.min(200) as i64;
     let entries = if let Some(before) = before {
         let mut stmt = db.conn.prepare(
-            "SELECT generation, created_at, kind, bundle_hash, operation_id,
-                    outcome, outcome_error, provenance
+            "SELECT generation, created_at, kind, bundle_hash, provenance
              FROM generations
              WHERE app = ?1 AND generation < ?2
              ORDER BY generation DESC
@@ -547,8 +458,7 @@ pub fn list(
         )?
     } else {
         let mut stmt = db.conn.prepare(
-            "SELECT generation, created_at, kind, bundle_hash, operation_id,
-                    outcome, outcome_error, provenance
+            "SELECT generation, created_at, kind, bundle_hash, provenance
              FROM generations
              WHERE app = ?1
              ORDER BY generation DESC
@@ -567,8 +477,7 @@ fn rows_to_entries(
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         let kind_str: String = row.get(2)?;
-        let outcome_str: Option<String> = row.get(5)?;
-        let provenance: Option<String> = row.get(7)?;
+        let provenance: Option<String> = row.get(4)?;
         let generation = row.get::<_, i64>(0)? as Generation;
         out.push(HistoryEntry {
             generation,
@@ -577,9 +486,6 @@ fn rows_to_entries(
             params: params_of(db, app, generation)?,
             bundle_hash: row.get(3)?,
             provenance: provenance.as_deref().and_then(|p| Source::from_db(p).ok()),
-            operation_id: row.get(4)?,
-            outcome: outcome_str.as_deref().and_then(Outcome::parse),
-            outcome_error: row.get(6)?,
         });
     }
     Ok(out)
@@ -619,8 +525,7 @@ pub fn get(
     generation: Generation,
 ) -> rusqlite::Result<Option<HistoryEntry>> {
     let mut stmt = db.conn.prepare(
-        "SELECT generation, created_at, kind, bundle_hash, operation_id,
-                outcome, outcome_error, provenance
+        "SELECT generation, created_at, kind, bundle_hash, provenance
          FROM generations
          WHERE app = ?1 AND generation = ?2",
     )?;

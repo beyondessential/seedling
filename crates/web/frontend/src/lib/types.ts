@@ -309,9 +309,6 @@ export interface GenerationEntry {
   /** The parameters the generation changed, in ascending order of name. */
   params?: GenerationParam[];
   script_changed: boolean;
-  operation_id: string | null;
-  outcome: "pending" | "succeeded" | "cancelled" | "failed" | null;
-  error?: string;
 }
 
 export interface AppDetail {

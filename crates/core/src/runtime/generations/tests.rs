@@ -588,23 +588,6 @@ fn delete_for_app_wipes_history_and_orphan_bodies() {
     assert_eq!(body_count, 1, "SCRIPT_A is still referenced by 'other'");
 }
 
-#[test]
-fn attach_operation_and_record_outcome() {
-    let db = test_db();
-    let cipher = test_cipher();
-    register_script(&db, &app(), SCRIPT_A).unwrap();
-    let g = bump_param_set(&db, &app(), &param("k"), None, "v", &cipher, false).unwrap();
-    attach_operation(&db, &app(), g, "op-123").unwrap();
-    let entry = get(&db, &app(), g).unwrap().unwrap();
-    assert_eq!(entry.operation_id.as_deref(), Some("op-123"));
-    assert_eq!(entry.outcome, Some(Outcome::Pending));
-
-    record_outcome(&db, &app(), g, Outcome::Failed, Some("boom")).unwrap();
-    let entry = get(&db, &app(), g).unwrap().unwrap();
-    assert_eq!(entry.outcome, Some(Outcome::Failed));
-    assert_eq!(entry.outcome_error.as_deref(), Some("boom"));
-}
-
 // spec: GEN#reconstruction
 #[test]
 fn reconstruct_unknown_generation_returns_not_found() {

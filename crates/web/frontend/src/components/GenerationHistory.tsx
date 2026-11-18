@@ -1,7 +1,6 @@
 import {
   Box,
   Button,
-  Chip,
   CircularProgress,
   Paper,
   Table,
@@ -26,9 +25,6 @@ const GENERATION_EVENTS: Set<string> = new Set([
   "AppRegistered",
   "AppUpdated",
   "ParamsChanged",
-  "OperationCompleted",
-  "OperationFailed",
-  "OperationCancelled",
 ]);
 
 const KIND_LABEL: Record<GenerationEntry["kind"], string> = {
@@ -36,19 +32,6 @@ const KIND_LABEL: Record<GenerationEntry["kind"], string> = {
   script_update: "script updated",
   param_change: "params changed",
 };
-
-function outcomeColor(outcome: NonNullable<GenerationEntry["outcome"]>): "success" | "error" | "warning" | "info" {
-  switch (outcome) {
-    case "succeeded":
-      return "success";
-    case "failed":
-      return "error";
-    case "cancelled":
-      return "warning";
-    case "pending":
-      return "info";
-  }
-}
 
 function provenanceLabel(def: DefinitionProvenance): string {
   return def.kind === "fetched"
@@ -87,8 +70,7 @@ function Detail({ entry }: { entry: GenerationEntry }) {
   );
 }
 
-/** The changes made to an app, newest first, each with the outcome of the
- *  operation it triggered. */
+/** The changes made to an app, newest first. */
 // spec: UI#operator-capabilities
 export function GenerationHistory({ appName }: { appName: string }) {
   const first = useOiQuery<GenerationEntry[]>("/apps/generations", { app: appName, limit: PAGE });
@@ -140,7 +122,6 @@ export function GenerationHistory({ appName }: { appName: string }) {
               <TableCell width={80}>Generation</TableCell>
               <TableCell>When</TableCell>
               <TableCell>Change</TableCell>
-              <TableCell>Outcome</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -153,16 +134,6 @@ export function GenerationHistory({ appName }: { appName: string }) {
                 <TableCell>
                   <Box>{KIND_LABEL[e.kind]}</Box>
                   <Detail entry={e} />
-                </TableCell>
-                <TableCell>
-                  {e.outcome !== null && (
-                    <Chip label={e.outcome} size="small" color={outcomeColor(e.outcome)} variant="outlined" />
-                  )}
-                  {e.error && (
-                    <Typography variant="caption" component="div" sx={{ color: "error.main" }}>
-                      {e.error}
-                    </Typography>
-                  )}
                 </TableCell>
               </TableRow>
             ))}

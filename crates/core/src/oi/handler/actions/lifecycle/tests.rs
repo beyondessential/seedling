@@ -28,8 +28,7 @@ struct Run {
     operation_id: String,
 }
 
-/// Run `poke` for an app whose generation 1 is attached to the operation,
-/// with `cancel` deciding whether the operation is cancelled before it starts.
+/// Run `poke` for an app at generation 1, with `cancel` deciding whether the operation is cancelled before it starts.
 fn run_poke(cancel: bool, break_persistence: bool) -> Run {
     let name = AppName::new("demo").unwrap();
     let (app, err) = crate::runtime::apps::evaluate_script(
@@ -42,10 +41,9 @@ fn run_poke(cancel: bool, break_persistence: bool) -> Run {
     let db = DbHandle::open_in_memory().unwrap();
     let operation_id = OperationId::new();
     {
-        let (id, name) = (operation_id.0.clone(), name.clone());
+        let name = name.clone();
         db.call(move |db| {
-            let generation = generations::register_script(db, &name, SCRIPT).unwrap();
-            generations::attach_operation(db, &name, generation, &id).unwrap();
+            generations::register_script(db, &name, SCRIPT).unwrap();
             if break_persistence {
                 db.conn
                     .execute_batch("DROP TABLE current_operation;")
@@ -91,18 +89,6 @@ fn run_poke(cancel: bool, break_persistence: bool) -> Run {
     }
 }
 
-fn outcome_of(db: &DbHandle) -> Option<String> {
-    db.call(|db| {
-        db.conn
-            .query_row(
-                "SELECT outcome FROM generations WHERE generation = 1",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap()
-    })
-}
-
 fn kinds_of(events: &mut tokio::sync::broadcast::Receiver<OiEvent>) -> Vec<String> {
     let mut kinds = Vec::new();
     while let Ok(event) = events.try_recv() {
@@ -116,12 +102,11 @@ fn kinds_of(events: &mut tokio::sync::broadcast::Receiver<OiEvent>) -> Vec<Strin
     kinds
 }
 
-// spec: GEN#generation-numbers
+// spec: OPS#completion
 #[test]
-fn a_completed_operation_records_its_outcome_against_its_generation() {
+fn a_completed_operation_ends_completed() {
     let mut run = run_poke(false, false);
     assert!(run.ok);
-    assert_eq!(outcome_of(&run.db).as_deref(), Some("succeeded"));
     assert!(kinds_of(&mut run.events).contains(&"OperationCompleted".to_owned()));
 }
 
@@ -137,7 +122,6 @@ fn a_cancelled_operation_ends_cancelled_rather_than_failed() {
         "{kinds:?}"
     );
     assert!(!kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
-    assert_eq!(outcome_of(&run.db).as_deref(), Some("cancelled"));
     let filed: Vec<String> = run.db.call(|db| {
         faults::list_active_faults(db, Some(&AppName::new("demo").unwrap()))
             .unwrap()
@@ -164,7 +148,6 @@ fn an_operation_that_cannot_be_persisted_does_not_run_its_closure() {
         ActionName::new("poke").unwrap(),
     );
     assert!(log.load().unwrap().is_empty(), "the closure made no call");
-    assert_eq!(outcome_of(&run.db).as_deref(), Some("failed"));
 }
 
 // spec: RT#deployment-restart
@@ -618,10 +601,9 @@ fn rt_start_fails_when_the_dynamic_resource_cannot_be_recorded() {
     let db = DbHandle::open_in_memory().unwrap();
     let operation_id = OperationId::new();
     {
-        let (id, name) = (operation_id.0.clone(), name.clone());
+        let name = name.clone();
         db.call(move |db| {
-            let generation = generations::register_script(db, &name, SCRIPT).unwrap();
-            generations::attach_operation(db, &name, generation, &id).unwrap();
+            generations::register_script(db, &name, SCRIPT).unwrap();
             db.conn
                 .execute_batch("DROP TABLE dynamic_resources;")
                 .unwrap();

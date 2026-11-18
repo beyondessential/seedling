@@ -352,17 +352,10 @@ pub(crate) fn bind_volume_params(
 /// End an operation that was accepted but cannot run, as a failed one ends.
 fn refuse_to_run(db: &DbHandle, op_ctx: &OperationEventCtx, description: String) {
     let app_name = op_ctx.app.clone();
-    let operation_id = op_ctx.operation_id.clone();
     let for_db = description.clone();
     db.call(move |db| {
         let _ = faults::file_fault(db, &app_name, None, None, None, "operation_failed", &for_db);
         let _ = clear_current_operation(db);
-        let _ = crate::runtime::generations::record_operation_outcome(
-            db,
-            &operation_id,
-            crate::runtime::generations::Outcome::Failed,
-            Some(&for_db),
-        );
     });
     op_ctx.failed(&description);
 }
@@ -566,7 +559,6 @@ fn run_operation_loop(
             },
             &mut scope,
         );
-        let operation_id_for_outcome = operation_id.0.clone();
         match result {
             OperationResult::Completed => {
                 let app_name_owned = app_name.clone();
@@ -583,13 +575,6 @@ fn run_operation_loop(
                         faults::clear_faults_by_kind(db, &app_name_owned, kind).ok();
                     }
                     let _ = clear_current_operation(db);
-                    // spec: GEN#generation-numbers
-                    let _ = crate::runtime::generations::record_operation_outcome(
-                        db,
-                        &operation_id_for_outcome,
-                        crate::runtime::generations::Outcome::Succeeded,
-                        None,
-                    );
                 });
                 op_ctx.completed();
                 return true;
@@ -609,12 +594,6 @@ fn run_operation_loop(
                         &desc,
                     );
                     let _ = clear_current_operation(db);
-                    let _ = crate::runtime::generations::record_operation_outcome(
-                        db,
-                        &operation_id_for_outcome,
-                        crate::runtime::generations::Outcome::Failed,
-                        Some(&desc),
-                    );
                 });
                 op_ctx.failed(&e.to_string());
                 return false;
@@ -636,12 +615,6 @@ fn run_operation_loop(
                         &desc_for_fault,
                     );
                     let _ = clear_current_operation(db);
-                    let _ = crate::runtime::generations::record_operation_outcome(
-                        db,
-                        &operation_id_for_outcome,
-                        crate::runtime::generations::Outcome::Cancelled,
-                        None,
-                    );
                 });
                 // spec: OPS#cancellation
                 // A cancelled operation ends in an outcome of its own.

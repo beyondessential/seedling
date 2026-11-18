@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 85);
+    assert_eq!(version, 86);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 85);
+    assert_eq!(version, 86);
 }
 
 // spec: APPS#persistence
@@ -689,6 +689,45 @@ fn a_persisted_operation_keeps_its_target_generation_as_its_generation() {
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('current_operation')
              WHERE name IN ('source_generation', 'target_generation')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dropped, 0);
+}
+
+// spec: GEN#history-entries
+#[test]
+fn a_generation_keeps_its_history_and_loses_the_operation_outcome() {
+    let db = Db::open_in_memory_through(85).expect("open at v85");
+    db.conn
+        .execute_batch(
+            "INSERT INTO generations
+                 (app, generation, created_at, kind, bundle_hash, operation_id, outcome, outcome_error)
+                 VALUES ('live', 1, 't', 'register', 'h', NULL, NULL, NULL),
+                        ('live', 2, 't', 'param_change', 'h', 'op', 'failed', 'boom');",
+        )
+        .expect("seed v85 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let kept: Vec<(i64, String)> = db
+        .conn
+        .prepare("SELECT generation, kind FROM generations ORDER BY generation")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        kept,
+        [(1, "register".to_owned()), (2, "param_change".to_owned())]
+    );
+    let dropped: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('generations')
+             WHERE name IN ('operation_id', 'outcome', 'outcome_error')",
             [],
             |r| r.get(0),
         )
