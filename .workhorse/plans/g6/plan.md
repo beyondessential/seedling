@@ -8,6 +8,7 @@ What remains is DTLS, whose datagrams reach the Service still encrypted.
 - DTLS is terminated in the proxy, by a layer4 handler written in this repository and built into the seedling-caddy image. caddy-l4 has no DTLS module.
 - The handler is built on pion/dtls, which serves DTLS 1.2 and 1.3.
 - It takes its certificate by SNI from the proxy's TLS app, as the L4 `tls` handler does, so runtime-managed certificates (through `get_certificate`) and proxy-held ones both apply with no new certificate path.
+- Ports are shared by hostname where the proxy can route by it: a claim is `(port, transport, Option<hostname>)`, `None` for pass-through. Claims of one kind (TLS, HTTP/3, DTLS, plaintext HTTP) for different hostnames share; anything else conflicts. DTLS and HTTP/3 on one UDP port conflict, since the proxy's HTTP/3 listener owns the port. A conflicting app ingress is left out whole, not per transport.
 
 ## Rejected
 
@@ -27,4 +28,8 @@ What remains is DTLS, whose datagrams reach the Service still encrypted.
 - [ ] Handshake gating (cookie exchange), per-session upstream flow, refusal when no flow can be opened, idle expiry, close on client close
 - [ ] Connection IDs and the return routability check for both versions
 - [ ] Image check fixture (`everything_on()`) exercises a DTLS route
+- [ ] Claim model in reconcile: compute claims per `(port, transport)`, resolve conflicts into `ingress_conflict` across apps and site ingresses, replacing `conflicting_listener_ports`
+- [ ] Fail evaluation when two ingresses of one app make conflicting claims
+- [ ] TLS on TCP shared with HTTPS: front the HTTPS server with the `caddy.listeners.layer4` wrapper, matching `Terminate.Tls` hostnames by SNI and falling through to HTTP; key L4 servers by port and transport with one SNI-matched route per hostname
+- [ ] DTLS handler dispatches sessions by SNI across the DTLS ingresses on its port
 - [ ] Update `docs/networking.md` and the `proxy.rs` comment that say DTLS datagrams pass through

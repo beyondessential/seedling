@@ -50,16 +50,17 @@ The runtime MUST deliver traffic arriving at an ingress whose termination is `Te
 An ingress is identified within its app by its hostname and port.
 An ingress's name MUST be its [hostname](#hostnames) in lower case, followed by `:` and its port in decimal, such as `example.org:443`.
 Declaring an ingress whose hostname and port match an ingress already declared in the same app MUST throw, and MUST leave the earlier ingress as it was.
+A definition in which two of the app's ingresses make [conflicting claims](../runtime/proxy.md#shared-ports) on a port MUST fail to evaluate, with an error naming both ingresses.
 
 > [!NOTE]
 > A script may catch the error with `try`/`catch`, as [evaluation](overview.md#evaluation) allows.
 
 ### Claims across apps
 
-When ingresses of two apps claim the same hostname and port, the runtime MUST serve the ingress of the app whose install completed first, and MUST leave the other out of the proxy configuration.
+When ingresses of two apps make [conflicting claims](../runtime/proxy.md#shared-ports) on a port, the runtime MUST serve the ingress of the app whose install completed first, and MUST leave the other out of the proxy configuration.
 The runtime MUST file an [`ingress_conflict`](../runtime/faults.md#ingress-and-service-faults) fault against the app whose ingress it leaves out.
-Once the served ingress no longer claims the hostname and port, the runtime MUST serve the other.
-How an app's ingress and a site ingress attachment claiming the same hostname and port are handled is specified by [ingress conflicts](../runtime/site-resources.md#ingress-conflicts).
+Once the served ingress no longer makes a conflicting claim, the runtime MUST serve the other.
+How an app's ingress and a site ingress attachment making conflicting claims are handled is specified by [ingress conflicts](../runtime/site-resources.md#ingress-conflicts).
 
 ## Hostnames
 

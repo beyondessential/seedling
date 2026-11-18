@@ -261,14 +261,14 @@ The discovered site ingress's certificate is obtained as [Tailscale certificates
 
 ### Ingress conflicts
 
-When an app's ingress and a site ingress attachment both claim the same `(hostname, port)`, the runtime MUST leave both out of the proxy configuration for as long as the conflict lasts.
+When an app's ingress and a site ingress attachment make [conflicting claims](proxy.md#shared-ports) on a port, the runtime MUST leave both out of the proxy configuration for as long as the conflict lasts.
 The runtime MUST raise the [`ingress_conflict`](faults.md#ingress-and-service-faults) fault for each side.
 
-When attachments of two site ingresses both claim the same `(hostname, port)`, the runtime MUST serve the attachment created first, and MUST leave the other out of the proxy configuration.
+When attachments of two site ingresses make conflicting claims on a port, the runtime MUST serve the attachment created first, and MUST leave the other out of the proxy configuration.
 The runtime MUST raise the `ingress_conflict` fault for the site ingress whose attachment it leaves out.
-Once the served attachment no longer claims the hostname and port, the runtime MUST serve the other.
+Once the served attachment no longer makes a conflicting claim, the runtime MUST serve the other.
 
-A conflict on one port MUST NOT affect the serving of other ports on the same hostname.
+A conflict on one port MUST NOT affect the serving of other ports on the same hostname, nor of claims on the same port that do not conflict.
 
 In an iteration that cannot compute the ingresses of every contributing app, the runtime MUST NOT file or clear an `ingress_conflict` fault, as for an apply it withholds when [applying absolute state](reconciliation.md#applying-absolute-state).
 

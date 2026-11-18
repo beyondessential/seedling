@@ -54,6 +54,27 @@ An ingress's [HTTP redirect](../language/ingress.md#redirect-to-https) claims th
 On that port, the proxy MUST answer an ACME HTTP-01 challenge request for a certificate it is acquiring, ahead of the redirect.
 That claim and a plaintext ingress's claim on the same hostname and port conflict, and the runtime MUST resolve the conflict as [claims across apps](../language/ingress.md#claims-across-apps) and [ingress conflicts](site-resources.md#ingress-conflicts) specify.
 
+### Shared ports
+
+Each transport an ingress serves on its port is a claim on that port, of one of these kinds:
+
+| the ingress serves on the transport | kind of claim |
+| --- | --- |
+| TCP or UDP passed through, as an app ingress with no termination or a `tcp` or `udp` attachment does | the whole port |
+| TLS on TCP, including HTTPS | the port for its hostname, among TLS claims |
+| HTTP/3 on UDP | the port for its hostname, among HTTP/3 claims |
+| DTLS on UDP | the port for its hostname, among DTLS claims |
+| plaintext HTTP on TCP, as a plaintext ingress or an [HTTP redirect](../language/ingress.md#redirect-to-https) does | the port for its hostname, among plaintext HTTP claims |
+
+Two claims on the same port and transport MUST be served together when both are for a hostname, both are of the same kind, and their hostnames differ.
+Any other two claims on the same port and transport conflict.
+
+The proxy MUST route each connection, session or request on a shared port to the ingress whose hostname the client names: by SNI for TLS, DTLS and HTTP/3, and by the request's `Host` for plaintext HTTP.
+
+> [!NOTE]
+> Traffic passed through carries nothing the proxy reads a hostname from, so a pass-through ingress leaves nothing on its port for another to be told apart by.
+> DTLS and HTTP/3 both name a hostname in their handshakes, but the proxy serves HTTP/3 from a listener of its own, which leaves no point at which the two could be told apart.
+
 ### Plaintext ingresses
 
 An ingress that terminates HTTP without terminating TLS is a plaintext ingress.
