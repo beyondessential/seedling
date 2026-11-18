@@ -147,8 +147,10 @@ downloaded by `seedling-ctl` itself (set `GITHUB_TOKEN` for private
 repositories), so the host needs no GitHub access; the URL and commit are
 recorded as the reported origin.
 
-Replace a definition and change one parameter in the same generation, so an
-upgrade runs under the definition written for it:
+Replace a definition and change parameters in the same generation, so an
+upgrade runs under the definition written for it. Repeat `--set name=value`
+and `--unset name` to change several parameters at once; `apps plan` takes the
+same changes as `--param name=value` and `--unset name`:
 
 ```bash
 seedling-ctl apps plan tamanu --ref ghcr.io/<org>/tamanu-definition:2.13.0 --param version=2.13.0
@@ -159,6 +161,13 @@ An update that fails to fetch, breaks the bundle rules, fails to evaluate, or
 is rejected by a parameter validator is refused, and the app keeps running
 what it had. `seedling-ctl apps export tamanu ./out [--generation N]` writes
 any generation's bundle back out as a folder.
+
+Parameters that belong together change in one generation, with or without a
+new definition, and each validator sees them together:
+
+```bash
+seedling-ctl apps params set tamanu host=tamanu.example.org port=8443 --unset legacy-url
+```
 
 ### Publishing a definition to a registry
 

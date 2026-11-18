@@ -71,12 +71,11 @@ The app declares an external `data` volume, so install fails with
 ```bash
 seedling-ctl volumes site create-managed pgdata
 seedling-ctl apps volumes attach postgres data _site/pgdata
-seedling-ctl apps param set postgres version 18.3
-seedling-ctl apps param set postgres password devpassword
+seedling-ctl apps params set postgres version=18.3 password=devpassword
 seedling-ctl apps install postgres
 ```
 
-Params set through `apps param set` persist across script updates; install
+Params set through `apps params set` persist across script updates; install
 params passed positionally do not reach `app.param()` values.
 
 If an install fails partway, `apps uninstall` then `apps install` resets the

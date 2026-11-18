@@ -185,7 +185,7 @@ version.validate(|value, all| {
 });
 ```
 
-A validator decides whether a proposed value is acceptable. It runs before any definition update, param set, or param unset is stored, against the values the app would hold if the request went through, so it sees the new definition's rules alongside the new values. A rejection refuses the request with `validation_failed` and the thrown value as the reason; nothing changes. A validator runs only while its param is set (use `required` for presence), gets no `rt`, and may not define resources. Call `validate` at most once per param, at the top level.
+A validator decides whether a proposed value is acceptable. It runs before any definition update or parameter change is stored, against the values the app would hold if the request went through, so it sees the new definition's rules alongside the new values. A rejection refuses the request with `validation_failed` and the thrown value as the reason; nothing changes. A validator runs only while its param is set (use `required` for presence), gets no `rt`, and may not define resources. Call `validate` at most once per param, at the top level.
 
 ### Runtime (rt)
 
