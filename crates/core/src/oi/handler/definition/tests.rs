@@ -41,14 +41,12 @@ fn err_code(r: Result<Value, (String, String)>) -> String {
     r.expect_err("the request must be refused").0
 }
 
-/// A definition whose `version` parameter accepts only `v2.12`, with a
-/// handler for it.
+/// A definition whose `version` parameter accepts only `v2.12`.
 const DEF_B: &str = r#"
     let version = app.param("version");
     version.validate(|value, all| {
         if value != "v2.12" { throw `definition B runs v2.12 only, not ${value}`; }
     });
-    version.on_change(|rt, old| {});
     app.deployment("web").image("docker.io/library/nginx:1.29");
 "#;
 
@@ -532,9 +530,8 @@ fn a_validator_defining_a_resource_rejects() {
 }
 
 // spec: APPS#update
-// spec: PARAM#change-handlers
 // spec: GEN#reconstruction
-// spec: OPS#initiating-events
+// spec: OPS#changes-to-an-app
 #[test]
 fn a_regime_change_is_one_atomic_definition_and_param_update() {
     let oi = TestOi::new();
@@ -553,8 +550,8 @@ fn a_regime_change_is_one_atomic_definition_and_param_update() {
     assert_eq!(code, "validation_failed");
     assert_eq!(show(&oi, "web")["generation"].as_u64().unwrap(), before);
 
-    // B with v2.12 in the same step succeeds in one generation, and B's
-    // handler for `version` is scheduled.
+    // B with v2.12 in the same step succeeds in one generation, and starts
+    // no operation.
     let result = oi
         .call(
             "/apps/update",
@@ -563,13 +560,10 @@ fn a_regime_change_is_one_atomic_definition_and_param_update() {
         .unwrap();
     let generation = result["generation"].as_u64().unwrap();
     assert_eq!(generation, before + 1);
-    assert!(
-        oi.state.scheduler.lock().active().is_some(),
-        "the handler was admitted"
-    );
+    assert!(oi.state.scheduler.lock().active().is_none());
+    assert_eq!(oi.state.scheduler.lock().queue_iter().count(), 0);
 
-    // `old` for the handler is the previous generation: A at v2.11; the
-    // target is B at v2.12.
+    // The previous generation is A at v2.11; the new one is B at v2.12.
     let app = seedling_protocol::names::AppName::new("web").unwrap();
     let cipher = std::sync::Arc::clone(&oi.state.cipher);
     let limits = oi.state.script_limits.clone();
@@ -630,20 +624,6 @@ fn another_validator_sees_the_proposed_values_during_an_atomic_update() {
         json!({ "app": "web", "script": def, "params": { "version": "v2.12" } }),
     )
     .expect("the database validator sees the proposed v2.12");
-}
-
-// spec: APPS#update
-#[test]
-fn a_definition_update_without_a_param_change_schedules_nothing() {
-    let oi = TestOi::new();
-    oi.call("/apps/create", json!({ "app": "web", "script": DEF_B }))
-        .unwrap();
-    oi.install("web");
-    let result = oi
-        .call("/apps/update", json!({ "app": "web", "script": DEF_B }))
-        .unwrap();
-    assert!(result["generation"].is_u64());
-    assert!(oi.state.scheduler.lock().active().is_none());
 }
 
 // spec: DEFN#provenance-reporting
@@ -769,48 +749,12 @@ fn the_plan_reports_validator_rejections_for_a_proposed_definition() {
         )
         .unwrap();
     assert_eq!(plan["rejections"], json!([]));
-    assert_eq!(plan["on_change_would_fire"], json!(["version"]));
+    assert_eq!(plan["gates_would_run"], json!([]));
     let code = err_code(oi.call(
         "/apps/plan",
         json!({ "app": "web", "proposed_reference": "registry.example.com/x/y:1" }),
     ));
     assert_eq!(code, "registry_not_allowed");
-}
-
-// spec: PRM#change-planning
-#[test]
-fn the_plan_lists_no_handler_for_an_app_that_is_not_installed_or_a_value_that_does_not_change() {
-    let oi = TestOi::new();
-    oi.call("/apps/create", json!({ "app": "web", "script": DEF_A }))
-        .unwrap();
-    oi.call(
-        "/apps/params/set",
-        json!({ "app": "web", "params": { "version": "v2.12" } }),
-    )
-    .unwrap();
-    publish(&oi, "b", &[("app.seed.rhai", DEF_B.as_bytes())]);
-    let plan = |oi: &TestOi, value: &str| {
-        oi.call(
-            "/apps/plan",
-            json!({
-                "app": "web",
-                "proposed_reference": format!("{REPO}:b"),
-                "proposed_params": { "version": value },
-            }),
-        )
-        .unwrap()["on_change_would_fire"]
-            .clone()
-    };
-
-    assert_eq!(plan(&oi, "v2.13"), json!([]), "not installed: nothing runs");
-
-    oi.install("web");
-    assert_eq!(
-        plan(&oi, "v2.12"),
-        json!([]),
-        "the stored value is no change"
-    );
-    assert_eq!(plan(&oi, "v2.13"), json!(["version"]));
 }
 
 // spec: FLT#app-faults

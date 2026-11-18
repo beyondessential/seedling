@@ -1227,7 +1227,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     if proposed_definition.is_empty() && params.proposed_params.is_none() {
         return Ok(json!({
             "diff": Vec::<Value>::new(),
-            "on_change_would_fire": Vec::<String>::new(),
+            "gates_would_run": Vec::<String>::new(),
             "rejections": Vec::<Value>::new(),
             "errors": Vec::<String>::new(),
         }));
@@ -1314,27 +1314,6 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         }
     }
 
-    // spec: PRM#change-planning
-    // The handlers the change would schedule if committed: the new definition
-    // registers one for a parameter whose stored value would change, and only
-    // while the app is installed.
-    let installed = {
-        let reg = state.registry.read();
-        let entry = reg.get(name).expect("confirmed registered");
-        matches!(*entry.phase.lock(), AppPhase::Installed)
-    };
-    let mut on_change_would_fire: Vec<String> = Vec::new();
-    if installed {
-        for handler_param in prop_def.param_changes.iter() {
-            let cur = current_params.get(handler_param.as_str());
-            let prop = proposed_param_map.get(handler_param.as_str());
-            if cur != prop {
-                on_change_would_fire.push(handler_param.as_str().to_owned());
-            }
-        }
-    }
-    on_change_would_fire.sort();
-
     // spec: PRM#validation
     let rejections: Vec<Value> = rejections
         .into_iter()
@@ -1343,7 +1322,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
 
     Ok(json!({
         "diff": diff,
-        "on_change_would_fire": on_change_would_fire,
+        "gates_would_run": Vec::<String>::new(),
         "errors": Vec::<String>::new(),
         "rejections": rejections,
     }))
@@ -1771,9 +1750,9 @@ pub(crate) fn update_app(
         }
     }
 
-    // Hold the app against other changes until this one is applied, and
-    // until the handler for a changed param is admitted.
-    let hold = super::params::hold_for_change(state, &params.app)?;
+    // Hold the app against other changes and operation admission until this
+    // change is applied.
+    let _hold = super::params::hold_for_change(state, &params.app)?;
 
     // spec: APPS#update — everything up to the commit below is a check:
     // fetching, bundle rules, evaluation and validation all happen before
@@ -1956,20 +1935,6 @@ pub(crate) fn update_app(
 
     // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, &params.app);
-
-    // spec: APPS#update — a handler for a changed parameter, registered
-    // by the new definition, runs under it with `old` the previous
-    // generation. A definition replaced without a parameter change
-    // schedules nothing.
-    let changed: Vec<&ParamName> = stored.iter().map(super::params::StoredEdit::name).collect();
-    super::params::schedule_on_change(
-        state,
-        hold,
-        &params.app,
-        &changed,
-        generation,
-        &ctx.events.actor,
-    )?;
 
     tracing::info!(app = %name, generation, "updated app");
     // spec: EVT#app-events

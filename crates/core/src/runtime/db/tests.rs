@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 83);
+    assert_eq!(version, 84);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 83);
+    assert_eq!(version, 84);
 }
 
 // spec: APPS#persistence
@@ -581,8 +581,7 @@ fn an_app_part_way_through_an_install_is_installed_and_the_removed_actions_leave
                  VALUES ('boot', 'live', 'start', 'boot', 1, 1, x'00'),
                         ('after-install', 'live', 'start', 'install', 1, 1, x'00'),
                         ('install', 'fresh', 'install', 'operator', 1, 1, x'00'),
-                        ('action', 'live', 'backup', 'operator', 1, 1, x'00'),
-                        ('change', 'live', 'mode', 'param_change', 1, 2, x'00');",
+                        ('action', 'live', 'backup', 'operator', 1, 1, x'00');",
         )
         .expect("seed v82 data");
 
@@ -622,5 +621,31 @@ fn an_app_part_way_through_an_install_is_installed_and_the_removed_actions_leave
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(queued, ["action", "change"]);
+    assert_eq!(queued, ["action"]);
+}
+
+// spec: OPS#changes-to-an-app
+#[test]
+fn requests_queued_for_a_parameter_change_leave_the_queue() {
+    let db = Db::open_in_memory_through(83).expect("open at v83");
+    db.conn
+        .execute_batch(
+            "INSERT INTO queued_operations
+                 (operation_id, app, action, trigger, source_generation, target_generation, params_ciphertext)
+                 VALUES ('action', 'live', 'backup', 'operator', 1, 1, x'00'),
+                        ('change', 'live', 'mode', 'param_change', 1, 2, x'00');",
+        )
+        .expect("seed v83 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let queued: Vec<String> = db
+        .conn
+        .prepare("SELECT operation_id FROM queued_operations ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(queued, ["action"]);
 }

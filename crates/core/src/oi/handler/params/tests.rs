@@ -357,10 +357,8 @@ fn param_calls_on_unknown_app_are_not_found() {
 }
 
 // spec: PRM#parameter-changes, TRD#uninstall-admission
-// The handler was asked for during a teardown, which the scheduler refuses,
-// and the request failed after the value had been stored.
 #[test]
-fn a_param_set_during_an_uninstall_stores_the_value_and_runs_no_handler() {
+fn a_param_set_during_an_uninstall_stores_the_value() {
     let oi = TestOi::new();
     oi.call(
         "/apps/create",
@@ -368,8 +366,7 @@ fn a_param_set_during_an_uninstall_stores_the_value_and_runs_no_handler() {
             "app": "demo",
             "script": r#"
                 app.deployment("web").image("docker.io/library/nginx:1.29");
-                let p = app.param("greeting");
-                p.on_change(|rt| {});
+                app.param("greeting");
             "#,
         }),
     )
@@ -388,13 +385,9 @@ fn a_param_set_during_an_uninstall_stores_the_value_and_runs_no_handler() {
     assert!(oi.state.scheduler.lock().active().is_none());
 }
 
-// spec: OPS#initiating-events
-// A change that matches a handler's transitions initiates an operation: the
-// handler was admitted to the scheduler but never run.
+// spec: OPS#changes-to-an-app
 #[test]
-fn a_param_change_runs_its_on_change_handler_as_an_operation_attributed_to_the_requester() {
-    use seedling_protocol::events::OiEvent;
-
+fn a_param_change_initiates_no_operation() {
     let oi = TestOi::new();
     oi.call(
         "/apps/create",
@@ -402,14 +395,12 @@ fn a_param_change_runs_its_on_change_handler_as_an_operation_attributed_to_the_r
             "app": "demo",
             "script": r#"
                 app.deployment("web").image("docker.io/library/nginx:1.29");
-                let p = app.param("greeting");
-                p.on_change(|rt| {});
+                app.param("greeting");
             "#,
         }),
     )
     .unwrap();
     oi.install("demo");
-    let mut events = oi.state.event_tx.subscribe();
 
     let result = oi
         .call(
@@ -418,37 +409,51 @@ fn a_param_change_runs_its_on_change_handler_as_an_operation_attributed_to_the_r
         )
         .unwrap();
     assert_eq!(result["generation"], 2);
+    assert!(oi.state.scheduler.lock().active().is_none());
+    assert_eq!(oi.state.scheduler.lock().queue_iter().count(), 0);
+}
 
-    let started = oi.block_on(async {
-        let wait = async {
-            loop {
-                if let Ok(OiEvent::OperationStarted {
-                    action_name,
-                    trigger,
-                    actor,
-                    source_generation,
-                    target_generation,
-                    ..
-                }) = events.recv().await
-                {
-                    break (
-                        action_name.to_string(),
-                        trigger,
-                        actor.and_then(|a| a.id.clone()),
-                        source_generation,
-                        target_generation,
-                    );
-                }
-            }
-        };
-        tokio::time::timeout(std::time::Duration::from_secs(10), wait)
-            .await
-            .expect("the handler's operation starts")
-    });
-    assert_eq!(started.0, "greeting");
-    assert_eq!(started.1, "param_change");
-    assert_eq!(started.2.as_deref(), Some("test-suite"));
-    assert_eq!(started.4, started.3 + 1);
+// spec: OPS#changes-to-an-app
+#[test]
+fn a_param_change_is_accepted_while_an_operation_runs_for_the_app() {
+    use seedling_protocol::names::{ActionName, AppName};
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                app.param("greeting");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+    oi.state.scheduler.lock().admit(
+        &AppName::new_unchecked("demo"),
+        &ActionName::new_unchecked("backup"),
+        serde_json::Map::new(),
+        1,
+        1,
+        "test",
+        &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        None,
+    );
+
+    let result = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "params": { "greeting": "hello" } }),
+        )
+        .unwrap();
+    assert_eq!(result["generation"], 2);
+    assert_eq!(
+        oi.state.scheduler.lock().active().map(|a| a.action.clone()),
+        Some(ActionName::new_unchecked("backup")),
+        "the operation goes on"
+    );
 }
 
 // spec: SEC#migration
@@ -498,69 +503,6 @@ fn a_param_made_secret_by_a_param_change_moves_to_secret_storage() {
     });
     assert_eq!(plaintext, 0, "no plaintext copy remains");
     assert!(secret, "the value is in secret storage");
-}
-
-// spec: APPS#generation-history
-// A handler queued behind another app's operation is still the operation the
-// change triggered, but only one that started at once was recorded against
-// the generation.
-#[test]
-fn a_queued_on_change_handler_is_recorded_against_its_generation() {
-    use seedling_protocol::names::{ActionName, AppName};
-
-    let oi = TestOi::new();
-    oi.call(
-        "/apps/create",
-        json!({
-            "app": "demo",
-            "script": r#"
-                app.deployment("web").image("docker.io/library/nginx:1.29");
-                let p = app.param("greeting");
-                p.on_change(|rt| {});
-            "#,
-        }),
-    )
-    .unwrap();
-    oi.install("demo");
-
-    // Another app holds the one operation slot.
-    oi.state.scheduler.lock().admit(
-        &AppName::new_unchecked("other"),
-        &ActionName::new_unchecked("backup"),
-        serde_json::Map::new(),
-        1,
-        1,
-        "test",
-        &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
-        None,
-    );
-
-    let result = oi
-        .call(
-            "/apps/params/set",
-            json!({ "app": "demo", "params": { "greeting": "hello" } }),
-        )
-        .unwrap();
-    let queued = oi
-        .state
-        .scheduler
-        .lock()
-        .queue_iter()
-        .find(|q| q.app.as_str() == "demo")
-        .map(|q| q.operation_id.0.clone())
-        .expect("the handler is queued");
-
-    let generations = oi
-        .call("/apps/generations", json!({ "app": "demo" }))
-        .unwrap();
-    let entry = generations
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["generation"] == result["generation"])
-        .expect("the change's generation");
-    assert_eq!(entry["operation_id"], queued.as_str());
-    assert_eq!(entry["outcome"], "pending");
 }
 
 fn stored_values(oi: &TestOi) -> Vec<(String, String)> {

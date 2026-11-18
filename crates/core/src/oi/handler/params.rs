@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use seedling_protocol::{
-    error::{ErrorCode, OiError},
+    error::OiError,
     events::ParamChangeEntry,
     names::{AppName, ParamName},
 };
@@ -11,10 +11,7 @@ use serde_json::{Value, json};
 use super::HandlerResult;
 use crate::{
     oi::{handler::RequestCtx, state::OiState},
-    runtime::{
-        AppPhase, generations,
-        scheduler::{AppHold, RejectReason, ScheduleResult},
-    },
+    runtime::{generations, scheduler::AppHold},
 };
 
 /// The parameters a request changes, in ascending order of name: a string
@@ -130,10 +127,6 @@ pub(crate) struct StoredEdit {
 }
 
 impl StoredEdit {
-    pub(crate) fn name(&self) -> &ParamName {
-        &self.edit.name
-    }
-
     pub(crate) fn record(&self) -> generations::ParamChange<'_> {
         generations::ParamChange {
             name: &self.edit.name,
@@ -331,118 +324,6 @@ fn validate_proposed(
     }
 }
 
-/// Admit the `on_change` handler for a committed change in place of the
-/// hold [`hold_for_change`] took before it, or report that none runs.
-///
-/// A temporary shim until change handlers are removed: a change schedules at
-/// most one handler, that of the first changed parameter, in ascending order
-/// of name, that registers one. A handler is not scheduled while another
-/// operation runs or is queued for the app.
-pub(crate) fn schedule_on_change(
-    state: &Arc<OiState>,
-    hold: AppHold,
-    app: &AppName,
-    changed: &[&ParamName],
-    generation: generations::Generation,
-    actor: &Arc<seedling_protocol::actor::Actor>,
-) -> Result<(), OiError> {
-    let (handler_param, is_installed, tick_notify, phase_handle) = {
-        let reg = state.registry.read();
-        let entry = reg.get(app.as_str()).expect("confirmed registered");
-        let def = entry.app.def.load();
-        let handler_param = changed
-            .iter()
-            .find(|name| def.param_changes.contains(**name))
-            .map(|name| (*name).clone());
-        // spec: TRD#uninstall-admission
-        // An app being torn down admits no handler. The hold keeps an
-        // uninstall from starting until the handler is admitted, so the
-        // phase read here is the one admission will see.
-        let installed = matches!(*entry.phase.lock(), AppPhase::Installed);
-        let notify = Arc::clone(&entry.tick_notify);
-        (handler_param, installed, notify, Arc::clone(&entry.phase))
-    };
-
-    let Some(param_name) = handler_param.filter(|_| is_installed) else {
-        return Ok(());
-    };
-    let source_generation = generation.saturating_sub(1);
-    // The on_change handler is dispatched by using the param name itself as an
-    // action identifier. Param names follow the same bsl.name rules.
-    let param_action = seedling_protocol::names::ActionName::new_unchecked(param_name.as_str());
-    let (result, op_id) = hold.admit(
-        &param_action,
-        source_generation,
-        generation,
-        "param_change",
-        &phase_handle,
-        Some(Arc::clone(actor)),
-    );
-    match result {
-        // A queued handler runs when the other app's operation ends, and is
-        // the operation this change triggered all the same.
-        ScheduleResult::Accepted | ScheduleResult::Queued => {
-            let refused_after_commit = |why: &dyn std::fmt::Display| {
-                OiError::internal(format!(
-                    "the change to {app} was applied as generation {generation}, but its \
-                     on_change handler could not be scheduled: {why}"
-                ))
-            };
-            let op_id = op_id.ok_or_else(|| refused_after_commit(&"it holds no operation"))?;
-            // Attach the operation to the generation history entry so the
-            // outcome can be recorded against it later.
-            {
-                let app_owned = app.clone();
-                let op = op_id.0.clone();
-                state.db.call(move |db| {
-                    if let Err(e) = generations::attach_operation(db, &app_owned, generation, &op) {
-                        tracing::warn!(app = %app_owned, generation, "failed to attach op to generation: {e}");
-                    }
-                });
-            }
-            // spec: OPS#initiating-events
-            // spec: OPS#concurrency
-            if matches!(result, ScheduleResult::Accepted) {
-                super::actions::lifecycle::spawn_accepted_operation(
-                    Arc::clone(state),
-                    app.clone(),
-                    param_action,
-                    op_id,
-                    super::actions::lifecycle::OperationParams::Requested(serde_json::Map::new()),
-                    source_generation,
-                    generation,
-                    "param_change".to_owned(),
-                    Some(Arc::clone(actor)),
-                );
-            } else {
-                super::actions::lifecycle::persist_queued(state, &op_id)
-                    .map_err(|e| refused_after_commit(&e.message))?;
-            }
-            tick_notify.notify_one();
-            Ok(())
-        }
-        ScheduleResult::Rejected(
-            RejectReason::SameAppOperationInProgress | RejectReason::SameAppAlreadyQueued,
-        ) => {
-            tracing::warn!(app = %app, param = %param_name, generation, "on_change handler not scheduled: another operation is running or queued for the app");
-            Ok(())
-        }
-        // The hold ruled out every other refusal, so this is a broken
-        // invariant. The change is committed either way, and the error says
-        // so rather than reading as a change that did not happen.
-        ScheduleResult::Rejected(reason) => {
-            tracing::error!(app = %app, param = %param_name, generation, ?reason, "on_change handler refused after the change was committed");
-            Err(OiError::new(
-                ErrorCode::Internal,
-                format!(
-                    "the change to {app} was applied as generation {generation}, but its on_change \
-                     handler was refused: {reason:?}"
-                ),
-            ))
-        }
-    }
-}
-
 // spec: PRM#parameter-changes
 // spec: PRM#parameter-storage
 pub(crate) fn set_params(
@@ -459,7 +340,7 @@ pub(crate) fn set_params(
         }
     }
 
-    let hold = hold_for_change(state, app)?;
+    let _hold = hold_for_change(state, app)?;
 
     let current = load_current_values(state, app)?;
     let edits = params.params.edits(&current);
@@ -503,9 +384,6 @@ pub(crate) fn set_params(
     // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, app);
 
-    let changed: Vec<&ParamName> = stored.iter().map(StoredEdit::name).collect();
-    schedule_on_change(state, hold, app, &changed, generation, &ctx.events.actor)?;
-
     // spec: PRM#parameter-changes
     ctx.events.params_changed(
         app,
@@ -514,7 +392,7 @@ pub(crate) fn set_params(
         previous_generation,
     );
 
-    tracing::info!(app = %app, params = changed.len(), generation, "set_params");
+    tracing::info!(app = %app, params = stored.len(), generation, "set_params");
     Ok(json!({ "generation": generation }))
 }
 

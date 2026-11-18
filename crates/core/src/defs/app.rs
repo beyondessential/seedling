@@ -35,7 +35,6 @@ mod volume;
 pub(crate) struct ClosureCapture {
     pub actions: BTreeMap<ActionName, FnPtr>,
     pub shells: BTreeMap<ShellName, FnPtr>,
-    pub param_changes: BTreeMap<ParamName, FnPtr>,
 }
 
 thread_local! {
@@ -43,7 +42,7 @@ thread_local! {
 }
 
 /// Activate the closure capture buffer on this thread. While active, every
-/// `on_action`, `on_shell`, and `param.on_change` call will push its `FnPtr` into the buffer in addition to writing metadata
+/// `on_action` and `on_shell` call will push its `FnPtr` into the buffer in addition to writing metadata
 /// into `AppDef`. Has no effect (and causes no allocation) when not active.
 pub(crate) fn begin_closure_capture() {
     CLOSURE_CAPTURE.with(|c| *c.borrow_mut() = Some(ClosureCapture::default()));
@@ -53,16 +52,6 @@ pub(crate) fn begin_closure_capture() {
 /// exactly once after `begin_closure_capture`, even if the script run fails.
 pub(crate) fn end_closure_capture() -> ClosureCapture {
     CLOSURE_CAPTURE.with(|c| c.borrow_mut().take().unwrap_or_default())
-}
-
-/// Called by `param.on_change` — writes the FnPtr into the active buffer if
-/// one exists, otherwise silently discards it.
-pub(crate) fn capture_param_change(name: ParamName, fnptr: FnPtr) {
-    CLOSURE_CAPTURE.with(|c| {
-        if let Some(ref mut store) = *c.borrow_mut() {
-            store.param_changes.insert(name, fnptr);
-        }
-    });
 }
 
 fn capture_action(name: ActionName, fnptr: FnPtr) {
@@ -177,10 +166,10 @@ pub(crate) trait StaticResource: Clone {
 /// Every named-resource method resolves the same way in the action context, so
 /// the lookup lives here rather than in each of them: one diagnosis for a name
 /// that is not there, and nothing for the next resource type to copy. It reads
-/// the definition of the `App` it was called on, so `old` in a change handler
-/// answers from the previous generation rather than the current one.
+/// the definition of the `App` it was called on, so an `App` rebuilt from
+/// another generation answers from that generation rather than the current
+/// one.
 // spec: APP#named-resources
-// spec: PARAM#change-handlers
 pub(crate) fn static_ref<T: StaticResource>(
     app: &App,
     name: &str,
@@ -387,8 +376,6 @@ pub struct AppDef {
     /// recovered on demand via the thread-local capture buffer.
     pub actions: BTreeMap<ActionName, ActionDef>,
     pub shells: BTreeMap<ShellName, ShellDef>,
-    /// Names of parameters that have an `on_change` handler registered.
-    pub param_changes: BTreeSet<ParamName>,
     /// Names of parameters that have a validator attached.
     // spec: PARAM#validators
     pub validators: BTreeSet<ParamName>,

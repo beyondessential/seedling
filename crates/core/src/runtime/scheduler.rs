@@ -97,8 +97,7 @@ pub enum RejectReason {
     /// The application is being torn down, so nothing further may run
     /// against it.
     AppUninstalling,
-    /// A change to the application is being committed, and its `on_change`
-    /// handler is admitted in the hold's place; see [`AppHold`].
+    /// A change to the application is being applied; see [`AppHold`].
     ChangeBeingApplied,
     // spec: OPS#unreadable-operation-state
     /// The persisted operation, its cancel or the persisted queue cannot be
@@ -232,10 +231,9 @@ impl Scheduler {
     /// The only way in from outside this module. [`Self::request`] is the queue
     /// mechanic underneath and stays private, so the phase gate cannot be
     /// skipped by a caller that does not know to make it: a caller that has not
-    /// said what phase the app is in has not said enough to be admitted. Four
-    /// call sites admit operations — an operator action, a param change's
-    /// handler, a scheduled firing and an install — and a rule each applies for
-    /// itself holds only for the ones that know it.
+    /// said what phase the app is in has not said enough to be admitted. Each
+    /// call site that admits an operation — an operator action and a scheduled
+    /// firing — would otherwise have to apply a rule for itself.
     ///
     /// `phase` is read under the scheduler's own lock, so an uninstall that
     /// transitions the app while holding that lock falls wholly before or
@@ -455,9 +453,6 @@ impl Scheduler {
 pub struct AppHold {
     scheduler: Arc<Mutex<Scheduler>>,
     app: AppName,
-    /// Set once [`Self::admit`] has given the hold up, so dropping it does
-    /// not release a hold some later change has taken on the same app.
-    released: bool,
 }
 
 impl AppHold {
@@ -467,52 +462,13 @@ impl AppHold {
         Ok(Self {
             scheduler: Arc::clone(scheduler),
             app: app.clone(),
-            released: false,
         })
-    }
-
-    /// Admit an operation for the held app in the hold's place, under one
-    /// lock so nothing else is admitted between the two. Returns the
-    /// operation's id when it was accepted or queued.
-    pub fn admit(
-        mut self,
-        action: &ActionName,
-        source_generation: u64,
-        target_generation: u64,
-        trigger: &str,
-        phase: &Mutex<AppPhase>,
-        actor: Option<Arc<seedling_protocol::actor::Actor>>,
-    ) -> (ScheduleResult, Option<OperationId>) {
-        self.released = true;
-        let mut scheduler = self.scheduler.lock();
-        scheduler.held.remove(&self.app);
-        let result = scheduler.admit(
-            &self.app,
-            action,
-            serde_json::Map::new(),
-            source_generation,
-            target_generation,
-            trigger,
-            phase,
-            actor,
-        );
-        let operation_id = match result {
-            ScheduleResult::Accepted => scheduler.active().map(|a| a.operation_id.clone()),
-            ScheduleResult::Queued => scheduler
-                .queue_iter()
-                .find(|q| q.app == self.app)
-                .map(|q| q.operation_id.clone()),
-            ScheduleResult::Rejected(_) => None,
-        };
-        (result, operation_id)
     }
 }
 
 impl Drop for AppHold {
     fn drop(&mut self) {
-        if !self.released {
-            self.scheduler.lock().held.remove(&self.app);
-        }
+        self.scheduler.lock().held.remove(&self.app);
     }
 }
 

@@ -747,9 +747,6 @@ pub(super) async fn run_app_shell(
                     // The dynamic resources the closure starts are recorded
                     // against the session before they are started.
                     db: Some(db.clone()),
-                    source_generation: 0,
-                    target_generation: 0,
-                    script_limits: None,
                     cipher: Some(Arc::clone(&cipher)),
                     operation_volume_bindings: operation_volume_bindings.clone(),
                     // Shell sessions don't participate in operator-initiated

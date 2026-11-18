@@ -797,31 +797,6 @@ fn a_held_app_admits_nothing_until_the_hold_ends() {
 
 // spec: OPS#changes-to-an-app
 #[test]
-fn a_handler_queued_in_the_hold_s_place_reports_its_id() {
-    let s = shared();
-    assert_eq!(fire(&s, "app2"), ScheduleResult::Accepted);
-    let hold = AppHold::take(&s, &app("app1")).expect("a free app can be held");
-    let (result, op) = hold.admit(
-        &act("apikey"),
-        1,
-        2,
-        "param_change",
-        &phase(AppPhase::Installed),
-        None,
-    );
-    assert_eq!(result, ScheduleResult::Queued);
-    assert_eq!(
-        op,
-        s.lock()
-            .queue_iter()
-            .find(|q| q.app == app("app1"))
-            .map(|q| q.operation_id.clone())
-    );
-    assert!(op.is_some());
-}
-
-// spec: OPS#changes-to-an-app
-#[test]
 fn an_app_with_an_operation_can_be_held_but_not_by_two_changes() {
     let s = shared();
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
@@ -856,30 +831,4 @@ fn a_dropped_hold_frees_the_app() {
     drop(AppHold::take(&s, &app("app1")).expect("a free app can be held"));
     assert_eq!(s.lock().blocker_for(&app("app1")), None);
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
-}
-
-// spec: OPS#changes-to-an-app
-#[test]
-fn a_refused_handler_frees_the_app() {
-    let s = shared();
-    let first = AppHold::take(&s, &app("app1")).unwrap();
-    let (result, _) = first.admit(
-        &act("apikey"),
-        1,
-        2,
-        "param_change",
-        &phase(AppPhase::Uninstalling),
-        None,
-    );
-    assert_eq!(
-        result,
-        ScheduleResult::Rejected(RejectReason::AppUninstalling)
-    );
-
-    let _second = AppHold::take(&s, &app("app1")).expect("free after the refusal");
-    assert_eq!(
-        fire(&s, "app1"),
-        ScheduleResult::Rejected(RejectReason::ChangeBeingApplied),
-        "the new hold stands"
-    );
 }

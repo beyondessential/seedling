@@ -10,8 +10,8 @@ use super::take::take_closure;
 pub struct Param {
     pub name: ParamName,
     pub value: Option<String>,
-    /// Back-reference to the owning App so that `on_change` can register the
-    /// handler in `AppDef.param_changes` without needing a separate method on App.
+    /// Back-reference to the owning App, which supplies the declared default
+    /// and receives schema and validator registrations.
     pub app: App,
 }
 
@@ -40,41 +40,6 @@ impl CustomType for Param {
                     return Ok(default);
                 }
                 Err(format!("param '{}' is not set", this.name).into())
-            },
-        );
-
-        // spec: PARAM#change-handlers
-        builder.with_fn(
-            "on_change",
-            |this: &mut Self, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
-                // spec: BSL#arguments
-                let closure = take_closure("on_change", "fn", closure)?;
-                ensure_not_validating()?;
-                if crate::runtime::barrier::runtime::is_in_action_closure() {
-                    return Err(format!(
-                        "on_change for parameter '{}' cannot be called from within an action closure",
-                        this.name
-                    )
-                    .into());
-                }
-                {
-                    let def = this.app.def.load();
-                    if def.param_changes.contains(&this.name) {
-                        return Err(format!(
-                            "on_change already registered for parameter '{}'",
-                            this.name
-                        )
-                        .into());
-                    }
-                }
-                let name_clone = this.name.clone();
-                this.app.def.rcu(|d| {
-                    let mut d = (**d).clone();
-                    d.param_changes.insert(name_clone.clone());
-                    d
-                });
-                crate::defs::app::capture_param_change(this.name.clone(), closure);
-                Ok(())
             },
         );
 

@@ -141,7 +141,7 @@ fn is_barrier_hit_pending() -> bool {
 
 // ---------------------------------------------------------------------------
 // Thread-local flag: set while an action closure is executing so that
-// top-level-only registrations (e.g. param.on_change) can detect misuse.
+// top-level-only registrations (e.g. param.validate) can detect misuse.
 // ---------------------------------------------------------------------------
 
 thread_local! {

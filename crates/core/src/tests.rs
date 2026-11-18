@@ -140,9 +140,6 @@ pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
         params: serde_json::Map::new(),
         is_shell: false,
         db: None,
-        source_generation: 0,
-        target_generation: 0,
-        script_limits: None,
         cipher: None,
         operation_volume_bindings: hooks.operation_volume_bindings,
         cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -224,7 +221,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
     // Re-run the script with the TLS capture active to recover FnPtrs,
     // exactly as run_operation does. FnPtrs are never stored persistently.
-    let (actions, shells, param_changes) = {
+    let (actions, shells) = {
         let (mut fresh_scope, fresh_app) =
             defs::scope(Default::default()).expect("the scope builds");
         fresh_app.def.rcu(|old| {
@@ -240,9 +237,8 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
 
         let actions: Vec<_> = captured.actions.into_iter().collect();
         let shells: Vec<_> = captured.shells.into_iter().collect();
-        let param_changes: Vec<_> = captured.param_changes.into_iter().collect();
 
-        (actions, shells, param_changes)
+        (actions, shells)
     };
 
     let empty_param = rhai::Map::new();
@@ -309,36 +305,6 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
         let _ = scope.remove::<Dynamic>("__bsl_closure");
         let _ = scope.remove::<ShellControl>("__bsl_shell");
         let _ = scope.remove::<rhai::Map>("__bsl_param");
-    }
-
-    if !param_changes.is_empty() {
-        let old_app = defs::app::App::default();
-        for (name, closure) in &param_changes {
-            scope.push("__bsl_rt", rt.clone());
-            scope.push("__bsl_closure", closure.clone());
-            scope.push("__bsl_old_app", old_app.clone());
-
-            println!("exercising param change: {name}");
-            let call_script = "__bsl_closure.call(__bsl_rt, __bsl_old_app)";
-            let result = {
-                let _guard = ActionClosureGuard::new(
-                    std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-                        crate::defs::app::AppDef::default(),
-                    ))),
-                    String::new(),
-                    std::collections::HashMap::new(),
-                );
-                eval_merged(engine, scope, script_ast, call_script)
-            };
-            match result {
-                Ok(_) => println!("  ok"),
-                Err(err) => println!("  error: {err}"),
-            }
-
-            let _ = scope.remove::<Dynamic>("__bsl_rt");
-            let _ = scope.remove::<Dynamic>("__bsl_closure");
-            let _ = scope.remove::<Dynamic>("__bsl_old_app");
-        }
     }
 }
 

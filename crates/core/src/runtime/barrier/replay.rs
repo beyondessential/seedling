@@ -298,21 +298,8 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub is_shell: bool,
     /// DB handle for persisting dynamic resources created during the operation.
     pub db: Option<crate::runtime::db::DbHandle>,
-    /// Generation that was current immediately before the change that
-    /// triggered this operation. Used to materialise `old` for `on_change`
-    /// handlers.
-    // spec: OPS#initiating-events
-    pub source_generation: u64,
-    /// Generation produced by the change that triggered this operation, or
-    /// the current generation at dispatch for operator-invoked actions.
-    // spec: OPS#initiating-events
-    pub target_generation: u64,
-    /// Script limits to use when reconstructing the prior `App` for
-    /// `on_change` handlers. Required only when source_generation > 0 and
-    /// the action is a parameter-change handler.
-    pub script_limits: Option<crate::ScriptLimits>,
-    /// Cipher for decrypting secret param history when reconstructing the
-    /// prior `App` for `on_change` handlers.
+    /// Cipher for sealing and opening the secret parameters of a recorded
+    /// `Action.invoke` call.
     pub cipher: Option<std::sync::Arc<crate::runtime::secrets::Cipher>>,
     /// Operation-scoped external volume bindings injected by the runtime.
     /// Empty unless the operation hands a volume to the closure, as a
@@ -360,9 +347,6 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         params,
         is_shell: requested_shell,
         db,
-        source_generation,
-        target_generation: _,
-        script_limits,
         cipher,
         operation_volume_bindings,
         cancel_token,
@@ -436,7 +420,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // the thread-local capture buffer collects them during the re-run and is
     // discarded immediately after. The fresh AppDef is compared against the
     // stored one as an idempotency check, then also discarded.
-    let (closure, is_param_change, is_shell, captured_actions) = {
+    let (closure, is_shell, captured_actions) = {
         let (mut fresh_scope, fresh_app) = match crate::defs::scope(Arc::clone(&app.bundle)) {
             Ok(language) => language,
             // spec: CONST#host-constants
@@ -479,81 +463,19 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
             }
         } else if let Some(c) = captured.actions.get(action_name) {
             (c.clone(), false)
-        } else if let Some(c) = captured.param_changes.get(action_name) {
-            (c.clone(), false)
         } else {
             return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                 format!("Action '{}' not found", action_name).into(),
                 rhai::Position::NONE,
             )));
         };
-        let is_param_change = fresh_app.def.load().param_changes.contains(action_name);
-        (closure, is_param_change, is_shell, captured_actions)
+        (closure, is_shell, captured_actions)
         // captured (minus the cloned actions map kept in captured_actions),
         // fresh_scope, and fresh_app are all dropped here.
     };
 
-    // spec: PARAM#change-handlers
-    // For param-change handlers, materialise `old` from the previous
-    // generation (= source_generation). For other operations, leave it
-    // empty: the spec only defines `old` for on_change handlers, but the
-    // closure-call script still references the variable. A handler is never
-    // invoked with an `old` that does not reflect the previous generation.
-    let old_app = if is_param_change && source_generation > 0 {
-        match (&db, &script_limits, &cipher) {
-            (Some(db_handle), Some(limits), Some(cipher)) => {
-                let app_name_owned = app.def.load().name.clone();
-                let limits = limits.clone();
-                let cipher = std::sync::Arc::clone(cipher);
-                let rebuilt = db_handle.call(move |db| {
-                    generations::reconstruct_app_def(
-                        db,
-                        &app_name_owned,
-                        source_generation,
-                        &limits,
-                        &cipher,
-                    )
-                });
-                match rebuilt {
-                    Ok(a) => a,
-                    Err(e) => {
-                        tracing::error!(
-                            app = %app.def.load().name,
-                            source_generation,
-                            "cannot rebuild the previous generation for on_change: {e}"
-                        );
-                        return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
-                            format!(
-                                "the previous generation ({source_generation}) cannot be rebuilt, \
-                                 so the change handler was not run: {e}"
-                            )
-                            .into(),
-                            rhai::Position::NONE,
-                        )));
-                    }
-                }
-            }
-            _ => {
-                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
-                    "the previous generation cannot be rebuilt without the database, script \
-                     limits and cipher, so the change handler was not run"
-                        .into(),
-                    rhai::Position::NONE,
-                )));
-            }
-        }
-    } else {
-        App::default()
-    };
-
     scope.push("__bsl_rt", rt);
-    // spec: PARAM#change-handlers
-    // A change handler is called with as many of its arguments as it takes.
-    let change_handler_arity = is_param_change
-        .then(|| closure_arity(script_ast, &closure))
-        .flatten();
     scope.push("__bsl_closure", closure);
-    scope.push("__bsl_old_app", old_app);
     let param_map: rhai::Map = params
         .iter()
         .map(|(k, v)| (k.as_str().into(), json_value_to_rhai_dynamic(v)))
@@ -563,9 +485,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         scope.push("__bsl_shell", super::shell::ShellControl::new());
     }
 
-    let call_script = if is_param_change {
-        change_handler_call_script(change_handler_arity)
-    } else if is_shell {
+    let call_script = if is_shell {
         "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
     } else {
         "__bsl_closure.call(__bsl_rt, __bsl_param)"
@@ -574,7 +494,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // Evaluate only the closure call — do NOT re-execute the script body.
     // The closure already captured its entire environment (app, resources,
     // params, etc.) at creation time during run_file.  Re-executing the script
-    // here would run top-level statements such as param.on_change() inside the
+    // here would run top-level statements such as param.validate() inside the
     // ActionClosureGuard, which incorrectly triggers the in-closure guard check.
     let call_ast = engine
         .compile(call_script)
@@ -596,7 +516,6 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
 
     let _ = scope.remove::<Dynamic>("__bsl_rt");
     let _ = scope.remove::<Dynamic>("__bsl_closure");
-    let _ = scope.remove::<Dynamic>("__bsl_old_app");
     let _ = scope.remove::<rhai::Map>("__bsl_param");
     if is_shell {
         let _ = scope.remove::<super::shell::ShellControl>("__bsl_shell");
@@ -656,9 +575,6 @@ fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
     if fresh.shells.keys().ne(stored.shells.keys()) {
         diffs.push("shells");
     }
-    if fresh.param_changes != stored.param_changes {
-        diffs.push("param_changes");
-    }
     if fresh.resources.keys().ne(stored.resources.keys()) {
         diffs.push("resources");
     }
@@ -677,24 +593,3 @@ fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
 
 #[cfg(test)]
 mod tests;
-
-/// The script that calls a change handler declaring `arity` parameters with as
-/// many of `rt` and `old` as it takes. A handler whose arity is unknown, or
-/// above two, is called with both, so one declaring more than two fails when
-/// called, as it must.
-// spec: PARAM#change-handlers
-pub(crate) fn change_handler_call_script(arity: Option<usize>) -> &'static str {
-    match arity {
-        Some(0) => "__bsl_closure.call()",
-        Some(1) => "__bsl_closure.call(__bsl_rt)",
-        _ => "__bsl_closure.call(__bsl_rt, __bsl_old_app)",
-    }
-}
-
-/// How many parameters the closure `closure` declares, not counting the
-/// variables it captured, or `None` if `ast` does not hold it.
-pub(crate) fn closure_arity(ast: &rhai::AST, closure: &rhai::FnPtr) -> Option<usize> {
-    ast.iter_functions()
-        .find(|f| f.name == closure.fn_name())
-        .map(|f| f.params.len().saturating_sub(closure.curry().len()))
-}

@@ -78,9 +78,6 @@ fn barrier_satisfied_on_first_pass() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -127,9 +124,6 @@ fn barrier_suspends_then_resumes() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -160,9 +154,6 @@ fn barrier_suspends_then_resumes() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -210,9 +201,6 @@ fn sequential_barriers() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -242,9 +230,6 @@ fn sequential_barriers() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -274,9 +259,6 @@ fn sequential_barriers() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -336,9 +318,6 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -381,9 +360,6 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -437,9 +413,6 @@ fn barrier_deadline_zero_uses_the_state_default() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -467,9 +440,6 @@ fn barrier_deadline_zero_uses_the_state_default() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -522,9 +492,6 @@ fn replay_idempotency() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -554,9 +521,6 @@ fn replay_idempotency() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -620,9 +584,6 @@ fn rt_stop_acts_as_barrier() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -652,9 +613,6 @@ fn rt_stop_acts_as_barrier() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -706,9 +664,6 @@ fn warm_certs_barrier_uses_cert_oracle() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -757,9 +712,6 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -811,9 +763,6 @@ fn warm_images_barrier_uses_image_oracle() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -861,9 +810,6 @@ fn warm_images_barrier_suspends_when_image_absent() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -932,9 +878,6 @@ fn terminated_eventually_never_times_out() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -985,9 +928,6 @@ fn terminated_eventually_never_times_out() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -1037,9 +977,6 @@ fn cancel_aborts_with_cancelled_result() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token,
@@ -1120,9 +1057,6 @@ fn rt_stop_deadline_is_enforced() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -1153,9 +1087,6 @@ fn rt_stop_deadline_is_enforced() {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -1209,9 +1140,6 @@ fn run_pass_with_db(
             params: serde_json::Map::new(),
             is_shell: false,
             db,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -2357,9 +2285,6 @@ fn default_stop_deadline_of(declarations: &str, stopped: &str) -> Option<u64> {
             params: serde_json::Map::new(),
             is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -2396,102 +2321,6 @@ fn rt_stops_default_deadline_follows_the_longest_stop_timeout() {
     assert_eq!(default_stop_deadline_of(declarations, "unset"), Some(120));
 }
 
-/// Run the `greeting` change handler of `script` at generation 2, with the
-/// app's history in `db` and `previous` as the generation before.
-fn run_change_handler(
-    previous: Option<&str>,
-    script: &str,
-    corrupt_history: bool,
-) -> OperationResult {
-    let (engine, mut scope, app, ast) = setup_with_script(script);
-    let name = seedling_protocol::names::AppName::new("test-app").unwrap();
-    app.def.rcu(|d| {
-        let mut d = (**d).clone();
-        d.name = name.clone();
-        d
-    });
-    let db =
-        crate::runtime::db::DbHandle::from_db(crate::runtime::db::Db::open_in_memory().unwrap());
-    if let Some(previous) = previous {
-        let (n, previous) = (name.clone(), previous.to_owned());
-        db.call(move |db| {
-            crate::runtime::generations::register_script(db, &n, &previous).unwrap();
-            crate::runtime::generations::update_script(db, &n, "").unwrap();
-        });
-    }
-    if corrupt_history {
-        db.call(|db| db.conn.execute_batch("DROP TABLE generations;").unwrap());
-    }
-    let oracle = Arc::new(TestWorldOracle::new());
-    run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: OperationId::new(),
-            app: &app,
-            action_name: "greeting",
-            log: &InMemoryActionLog::new(),
-            world: oracle,
-            registry: registry(),
-            active_progress: None,
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: Some(db),
-            source_generation: 1,
-            target_generation: 2,
-            script_limits: Some(crate::ScriptLimits::default()),
-            cipher: Some(Arc::new(crate::runtime::secrets::Cipher::for_tests())),
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
-        },
-        &mut scope,
-    )
-}
-
-const CHANGE_HANDLER_SCRIPT: &str = r#"
-    app.deployment("web").image("docker.io/library/nginx:latest");
-    app.param("greeting").on_change(|rt, old| {
-        old.deployment("legacy");
-    });
-"#;
-
-// spec: PARAM#change-handlers
-#[test]
-fn old_resolves_resources_from_the_previous_generation() {
-    // `legacy` exists only in the previous definition. Resource lookups on
-    // `old` were answered from the current generation, so this threw.
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        CHANGE_HANDLER_SCRIPT,
-        false,
-    );
-    assert!(
-        matches!(result, OperationResult::Completed),
-        "old did not reflect the previous generation: {result:?}"
-    );
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn a_change_handler_is_not_run_when_the_previous_generation_cannot_be_rebuilt() {
-    // The handler used to run with an empty `old`.
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        CHANGE_HANDLER_SCRIPT,
-        true,
-    );
-    match result {
-        OperationResult::Failed(e) => {
-            assert!(e.to_string().contains("cannot be rebuilt"), "{e}");
-        }
-        other => panic!("the handler ran without a faithful old: {other:?}"),
-    }
-}
-
 // spec: ACN#shells
 #[test]
 fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
@@ -2518,9 +2347,6 @@ fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
                 params: serde_json::Map::new(),
                 is_shell,
                 db: None,
-                source_generation: 0,
-                target_generation: 0,
-                script_limits: None,
                 cipher: None,
                 operation_volume_bindings: std::collections::HashMap::new(),
                 cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
@@ -2537,56 +2363,4 @@ fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
     };
     assert!(thrown(run(true)).contains("the shell ran"));
     assert!(thrown(run(false)).contains("the action ran"));
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn a_change_handler_taking_one_parameter_is_called_with_one() {
-    // It registered but failed when it ran: it was always called with two.
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        r#"
-        app.deployment("web").image("docker.io/library/nginx:latest");
-        app.param("greeting").on_change(|rt| { });
-    "#,
-        false,
-    );
-    assert!(
-        matches!(result, OperationResult::Completed),
-        "a one-parameter handler must run: {result:?}"
-    );
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn a_change_handler_taking_no_parameters_is_called_with_none() {
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        r#"
-        app.deployment("web").image("docker.io/library/nginx:latest");
-        app.param("greeting").on_change(|| { });
-    "#,
-        false,
-    );
-    assert!(
-        matches!(result, OperationResult::Completed),
-        "a zero-parameter handler must run: {result:?}"
-    );
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn a_change_handler_taking_three_parameters_fails_when_called() {
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        r#"
-        app.deployment("web").image("docker.io/library/nginx:latest");
-        app.param("greeting").on_change(|rt, old, extra| { });
-    "#,
-        false,
-    );
-    assert!(
-        matches!(&result, OperationResult::Failed(e) if !e.to_string().contains("cannot be rebuilt")),
-        "a three-parameter handler must fail when called: {result:?}"
-    );
 }

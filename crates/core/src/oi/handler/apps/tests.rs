@@ -479,7 +479,7 @@ fn plan_with_no_proposals_returns_empty_diff() {
     let oi = TestOi::with_app("demo");
     let plan = oi.call("/apps/plan", json!({ "app": "demo" })).unwrap();
     assert!(plan["diff"].as_array().unwrap().is_empty());
-    assert!(plan["on_change_would_fire"].as_array().unwrap().is_empty());
+    assert!(plan["gates_would_run"].as_array().unwrap().is_empty());
     assert_eq!(plan["errors"], json!([]));
 }
 
