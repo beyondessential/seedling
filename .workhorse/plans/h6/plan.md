@@ -52,7 +52,7 @@ Working name: a **step**. A static resource that the runtime keeps converged, li
 Tamanu sketch:
 
 ```rhai
-let migrate = app.step("migrate")
+let migrate = app.gate("migrate")
     .key(version.value())
     .exclusive(parts)                  // api, tasks, sync, fhir, web stopped first
     .run(|rt, last| {
