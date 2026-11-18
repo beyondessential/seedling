@@ -5,11 +5,7 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use crate::{
-    defs::{
-        enums::OnUpdate,
-        gate::GateKeyDigests,
-        resource::Resource,
-    },
+    defs::{enums::OnUpdate, gate::GateKeyDigests, resource::Resource},
     runtime::{
         autonomous_ops,
         db::DbHandle,

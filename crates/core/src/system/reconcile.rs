@@ -1045,7 +1045,14 @@ impl Reconciler {
                             definition_error.as_deref(),
                             &remembered,
                         );
-                        crate::runtime::gates::view(db, &app_name, &def, &state, &stopped, &remembered)
+                        crate::runtime::gates::view(
+                            db,
+                            &app_name,
+                            &def,
+                            &state,
+                            &stopped,
+                            &remembered,
+                        )
                     })
                 }
                 _ => GateView::default(),

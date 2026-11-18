@@ -383,6 +383,20 @@ impl Scheduler {
         Some(next)
     }
 
+    /// Record `generation` as the operation generation of the active
+    /// operation `operation_id`, which was dispatched from the queue and so
+    /// runs against the generation current when it left it.
+    // spec: OPS#initiating-events
+    pub fn set_active_generation(&mut self, operation_id: &OperationId, generation: u64) {
+        if let Some(active) = self
+            .active
+            .as_mut()
+            .filter(|a| a.operation_id == *operation_id)
+        {
+            active.generation = generation;
+        }
+    }
+
     /// Request cancellation of the active operation if it belongs to `app`.
     // spec: OPS#cancellation
     pub fn request_cancel(&self, app: &AppName) -> CancelOutcome {

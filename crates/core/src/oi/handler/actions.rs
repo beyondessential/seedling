@@ -202,10 +202,12 @@ pub(crate) fn invoke_action(
             Ok(json!({ "schedule": "queued", "operation_id": operation_id.0 }))
         }
         lifecycle::Admission::CannotPersist(e) => Err(e),
-        lifecycle::Admission::Rejected(RejectReason::SameAppOperationInProgress) => Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("operation in progress for app: {app_name}"),
-        )),
+        lifecycle::Admission::Rejected(RejectReason::SameAppOperationInProgress) => {
+            Err(OiError::new(
+                ErrorCode::OperationInProgress,
+                format!("operation in progress for app: {app_name}"),
+            ))
+        }
         lifecycle::Admission::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
             ErrorCode::AlreadyQueued,
             format!("already queued for app: {app_name}"),
@@ -220,9 +222,11 @@ pub(crate) fn invoke_action(
             format!("app is being uninstalled: {app_name}"),
         )),
         // spec: OPS#unreadable-operation-state
-        lifecycle::Admission::Rejected(RejectReason::OperationStateUnreadable) => Err(OiError::internal(
-            "the persisted operation state cannot be read, so no operation can start",
-        )),
+        lifecycle::Admission::Rejected(RejectReason::OperationStateUnreadable) => {
+            Err(OiError::internal(
+                "the persisted operation state cannot be read, so no operation can start",
+            ))
+        }
     }
 }
 

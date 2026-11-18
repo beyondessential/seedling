@@ -15,10 +15,10 @@ use seedling_protocol::{
 };
 
 use super::{
-    AppGates, Decision, GateState, Readiness, Remembered, Undetermined, declared_order, decide,
-    dependants_down, evaluate, held_resources, read_readiness, retry_delay, store,
+    AppGates, Decision, GateState, Readiness, Remembered, Undetermined, decide, declared_order,
+    dependants_down, evaluate, held_resources, read_readiness, retry_delay,
     run::{CheckOutcome, check_retry_is_due, eligible_for_check, run_check},
-    unready_targets,
+    store, unready_targets,
 };
 use crate::{
     defs::{app::AppDef, resource::ResourceId},
@@ -118,9 +118,9 @@ async fn sync(state: &Arc<OiState>, app: &Tracked) -> Synced {
         app.definition_error.clone(),
         state.gate_runtime.remembered(&app.name),
     );
-    state.db.call(move |db| {
-        sync_db(db, &name, &def, &cipher, error.as_deref(), &remembered)
-    })
+    state
+        .db
+        .call(move |db| sync_db(db, &name, &def, &cipher, error.as_deref(), &remembered))
 }
 
 /// Bring what is held of an app's gates in the database into line with them.
@@ -210,7 +210,9 @@ fn sync_gate_faults(db: &Db, app: &AppName, gates: &AppGates) {
                 key("gate_failed"),
                 (
                     FaultMeta::default(),
-                    format!("gate {gate} is not satisfied, and its last run did not succeed: {how}"),
+                    format!(
+                        "gate {gate} is not satisfied, and its last run did not succeed: {how}"
+                    ),
                 ),
             );
         }
@@ -238,8 +240,11 @@ fn sync_gate_faults(db: &Db, app: &AppName, gates: &AppGates) {
         ("gate_check_unavailable", unavailable),
         ("gate_state_unreadable", unreadable),
     ] {
-        if let Err(e) = faults::sync_faults(db, &FaultScope::AppKind(app.clone(), kind.to_owned()), &current)
-        {
+        if let Err(e) = faults::sync_faults(
+            db,
+            &FaultScope::AppKind(app.clone(), kind.to_owned()),
+            &current,
+        ) {
             tracing::error!(%app, kind, "cannot bring the gate faults up to date: {e}");
         }
     }
@@ -274,7 +279,12 @@ async fn drive_app(state: &Arc<OiState>, app: &Tracked) {
 /// as it can be.
 // spec: GRUN#checks
 async fn settle_unrecorded(state: &Arc<OiState>, app: &Tracked) {
-    for gate in state.gate_runtime.remembered(&app.name).unrecorded.into_keys() {
+    for gate in state
+        .gate_runtime
+        .remembered(&app.name)
+        .unrecorded
+        .into_keys()
+    {
         let (name, g) = (app.name.clone(), gate.clone());
         match state.db.call(move |db| store::invalidate(db, &name, &g)) {
             Ok(()) => state.gate_runtime.settle_unrecorded(&app.name, &gate),
@@ -413,6 +423,12 @@ async fn apply_check_outcome(
     outcome: CheckOutcome,
 ) {
     let runtime = &state.gate_runtime;
+    // spec: GRUN#uninstall
+    // A check that ends after the app has left the installed phase records
+    // nothing: its gate's state is being deleted, or is gone.
+    if tracked(state, Some(app)).is_empty() {
+        return;
+    }
     match outcome {
         CheckOutcome::Passed => {
             let (a, g) = (app.clone(), gate.clone());
@@ -428,12 +444,10 @@ async fn apply_check_outcome(
         CheckOutcome::Failed(why) => {
             tracing::warn!(%app, %gate, "the check failed, so the gate is no longer satisfied: {why}");
             let (a, g) = (app.clone(), gate.clone());
-            let cleared = state
-                .db
-                .call(move |db| {
-                    store::clear_check_unavailable(db, &a, &g)?;
-                    store::invalidate(db, &a, &g)
-                });
+            let cleared = state.db.call(move |db| {
+                store::clear_check_unavailable(db, &a, &g)?;
+                store::invalidate(db, &a, &g)
+            });
             runtime.note_checked(app, gate);
             runtime.unclear(app, gate);
             if let Err(e) = cleared {
@@ -444,24 +458,22 @@ async fn apply_check_outcome(
         CheckOutcome::Unavailable(why) => {
             tracing::warn!(%app, %gate, "the check could not be run: {why}");
             let (a, g, w) = (app.clone(), gate.clone(), why.clone());
-            let recorded = state.db.call(move |db| {
-                store::record_check_unavailable(db, &a, &g, Timestamp::now(), &w)
-            });
+            let recorded = state
+                .db
+                .call(move |db| store::record_check_unavailable(db, &a, &g, Timestamp::now(), &w));
             // Whether or not it was written, the check is not tried again
             // until a delay that grows with each time it could not be run.
             let failures = match &recorded {
-                Ok(()) => state
-                    .db
-                    .call({
-                        let (a, g) = (app.clone(), gate.clone());
-                        move |db| {
-                            store::load_records(db, &a)
-                                .ok()
-                                .and_then(|mut records| records.remove(&g))
-                                .and_then(Result::ok)
-                                .map_or(1, |record| record.check_failures)
-                        }
-                    }),
+                Ok(()) => state.db.call({
+                    let (a, g) = (app.clone(), gate.clone());
+                    move |db| {
+                        store::load_records(db, &a)
+                            .ok()
+                            .and_then(|mut records| records.remove(&g))
+                            .and_then(Result::ok)
+                            .map_or(1, |record| record.check_failures)
+                    }
+                }),
                 Err(e) => {
                     tracing::error!(%app, %gate, "cannot record that the check could not be run: {e}");
                     1

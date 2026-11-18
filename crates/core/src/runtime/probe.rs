@@ -80,7 +80,11 @@ pub struct ProbeResponse {
 
 /// Evaluate the script again to recover the closures it registered, which the
 /// definition does not keep.
-fn capture_closures(engine: &Engine, script_ast: &AST, app: &App) -> Result<ClosureCapture, String> {
+fn capture_closures(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+) -> Result<ClosureCapture, String> {
     let app_name = app.def.load().name.clone();
     let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle))
         .map_err(|e| format!("script evaluation failed: {e}"))?;
@@ -265,7 +269,10 @@ enum ProbeCall {
     Action(rhai::Map),
     Shell(rhai::Map),
     /// A gate's body, given as many of its arguments as it declares.
-    Gate { arity: usize, last: Dynamic },
+    Gate {
+        arity: usize,
+        last: Dynamic,
+    },
 }
 
 /// Call `closure` under probe mode and report the images it reached.

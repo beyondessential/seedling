@@ -40,8 +40,8 @@ use crate::{
         desired::{DynamicCreator, OperationProgress, insert_dynamic_resource},
         dynamic_cleanup::cleanup_dynamic_resources,
         history::{
-            CurrentOperation, clear_current_operation, find_instances_for_group,
-            load_action_log, query_observations, save_current_operation,
+            CurrentOperation, clear_current_operation, find_instances_for_group, load_action_log,
+            query_observations, save_current_operation,
         },
         identity::ResourceInstance,
         lifecycle::LifecycleState,
@@ -201,7 +201,13 @@ impl Run<'_> {
         };
         let cipher = Arc::clone(&state.cipher);
         let persisted = state.db.call(move |db| {
-            save_current_operation(db, &cipher, &record, &serde_json::Map::new(), &HashMap::new())
+            save_current_operation(
+                db,
+                &cipher,
+                &record,
+                &serde_json::Map::new(),
+                &HashMap::new(),
+            )
         });
         if let Err(e) = persisted {
             return failed(format!("the operation could not be persisted: {e}"));
@@ -316,7 +322,9 @@ impl Run<'_> {
             &self.state.script_limits,
             &self.state.cipher,
         )
-        .map_err(|e| format!("generation {generation}, the gate's last success, cannot be rebuilt: {e}"))?;
+        .map_err(|e| {
+            format!("generation {generation}, the gate's last success, cannot be rebuilt: {e}")
+        })?;
         Ok(Some(rebuilt.unwrap_or_else(|| current.clone())))
     }
 
@@ -483,7 +491,9 @@ impl Run<'_> {
                 signaler,
                 writer,
                 executor,
-                Some(GateInput { last: last.as_ref() }),
+                Some(GateInput {
+                    last: last.as_ref(),
+                }),
                 Persisted::Yes,
             )
         })
@@ -604,7 +614,9 @@ fn still_running(
         for instance in find_instances_for_group(db, app, id.kind, Some(id.name.as_str()))? {
             let observations = query_observations(db, &instance)?;
             match derive_lifecycle_state(&instance, &observations) {
-                LifecycleState::Pending | LifecycleState::Terminated | LifecycleState::Unscheduled => {}
+                LifecycleState::Pending
+                | LifecycleState::Terminated
+                | LifecycleState::Unscheduled => {}
                 other => return Ok(Some(format!("{} ({other:?})", instance.display_name))),
             }
         }

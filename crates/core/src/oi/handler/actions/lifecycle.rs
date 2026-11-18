@@ -368,7 +368,9 @@ pub(crate) fn app_at_generation(
         Some(now) if generation != 0 && now != generation => {
             let (name, limits, cipher) = (app_name.clone(), limits.clone(), Arc::clone(cipher));
             db.call(move |db| {
-                crate::runtime::generations::reconstruct_app_def(db, &name, generation, &limits, &cipher)
+                crate::runtime::generations::reconstruct_app_def(
+                    db, &name, generation, &limits, &cipher,
+                )
             })
             .map(Some)
         }
@@ -656,12 +658,10 @@ pub(crate) fn run_operation_loop(
                 operation_id: operation_id.clone(),
                 app,
                 subject: match (&gate, target.gate()) {
-                    (Some(input), Some(name)) => {
-                        Subject::Gate(GateBody {
-                            name,
-                            last: input.last,
-                        })
-                    }
+                    (Some(input), Some(name)) => Subject::Gate(GateBody {
+                        name,
+                        last: input.last,
+                    }),
                     _ => Subject::Action(action_name),
                 },
                 log: &log,
@@ -968,18 +968,43 @@ pub fn spawn_accepted_operation(
 
         let next = state.scheduler.lock().complete_current();
         if let Some(queued) = next {
+            let generation =
+                dispatch_generation(&state, &queued.app, &queued.operation_id, queued.generation);
             spawn_accepted_operation(
                 Arc::clone(&state),
                 queued.app,
                 queued.target,
                 queued.operation_id,
                 OperationParams::Requested(queued.params),
-                queued.generation,
+                generation,
                 queued.trigger,
                 queued.actor,
             );
         }
     });
+}
+
+/// The generation a request that has just left the queue runs against: the one
+/// current now, as the scheduler's record of the active operation is made to
+/// say, or the one it was requested at where the app is no longer registered.
+// spec: OPS#initiating-events
+fn dispatch_generation(
+    state: &OiState,
+    app: &AppName,
+    operation_id: &OperationId,
+    requested: u64,
+) -> u64 {
+    let current = state
+        .registry
+        .read()
+        .get(app.as_str())
+        .map(|entry| entry.current_generation);
+    let generation = current.unwrap_or(requested);
+    state
+        .scheduler
+        .lock()
+        .set_active_generation(operation_id, generation);
+    generation
 }
 
 /// What came of asking for a lifecycle operation.
@@ -1034,7 +1059,10 @@ pub(crate) fn admit_and_spawn(
                 .map(|q| q.operation_id.clone()),
             ScheduleResult::Rejected(_) => None,
         };
-        (result, operation_id.unwrap_or_else(|| OperationId(String::new())))
+        (
+            result,
+            operation_id.unwrap_or_else(|| OperationId(String::new())),
+        )
     };
     match result {
         ScheduleResult::Accepted => {
@@ -1125,13 +1153,15 @@ pub fn restore_queue(
         );
         match result {
             ScheduleResult::Accepted => {
+                let generation =
+                    dispatch_generation(state, &op.app, &op.operation_id, op.generation);
                 spawn_accepted_operation(
                     Arc::clone(state),
                     op.app,
                     op.target,
                     op.operation_id,
                     OperationParams::Requested(op.params),
-                    op.generation,
+                    generation,
                     op.trigger,
                     op.actor,
                 );

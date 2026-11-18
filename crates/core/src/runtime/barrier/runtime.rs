@@ -1012,12 +1012,14 @@ impl RuntimeInstance {
         let mut kept = Vec::with_capacity(selected.len());
         for (instance, def) in selected {
             let held = match instance.name.as_deref() {
-                Some(name) if matches!(instance.kind, ResourceKind::Deployment | ResourceKind::Job) => {
-                    exclusions
-                        .leaves_out(instance.kind, name)
-                        .map_err(|why| -> Box<EvalAltResult> {
+                Some(name)
+                    if matches!(instance.kind, ResourceKind::Deployment | ResourceKind::Job) =>
+                {
+                    exclusions.leaves_out(instance.kind, name).map_err(
+                        |why| -> Box<EvalAltResult> {
                             format!("cannot tell whether a gate holds {name}: {why}").into()
-                        })?
+                        },
+                    )?
                 }
                 _ => false,
             };

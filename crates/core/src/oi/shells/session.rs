@@ -737,7 +737,12 @@ pub(super) async fn run_app_shell(
             );
             db.call(move |db| {
                 crate::runtime::gates::Exclusions::for_closure(
-                    db, &name, &def, &cipher, &remembered, None,
+                    db,
+                    &name,
+                    &def,
+                    &cipher,
+                    &remembered,
+                    None,
                 )
             })
         };

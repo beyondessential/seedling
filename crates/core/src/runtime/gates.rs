@@ -218,7 +218,7 @@ pub fn evaluate(
         .map(|(name, gate)| {
             let digest = gate.key.digest(cipher);
             let record = match &records {
-                Ok(records) => records.get(name).map(|r| r.clone()),
+                Ok(records) => records.get(name).cloned(),
                 Err(why) => Some(Err(why.clone())),
             };
             (
@@ -248,7 +248,10 @@ fn status_of(
 ) -> GateStatus {
     let (key_digest, key_error) = match digest {
         Ok(digest) => (Some(digest), None),
-        Err(why) => (None, Some(format!("the gate's key cannot be digested: {why}"))),
+        Err(why) => (
+            None,
+            Some(format!("the gate's key cannot be digested: {why}")),
+        ),
     };
     let (record, unreadable) = match record {
         None => (None, None),
@@ -564,11 +567,11 @@ pub fn read_readiness(
             }
         }
         if gate.check.is_some() {
-            wanted.extend(
-                workloads(def).filter(|id| {
-                    workload_targets(def, id).iter().any(|t| matches!(t, AfterTarget::Gate(_)))
-                }),
-            );
+            wanted.extend(workloads(def).filter(|id| {
+                workload_targets(def, id)
+                    .iter()
+                    .any(|t| matches!(t, AfterTarget::Gate(_)))
+            }));
         }
     }
     for id in workloads(def) {
@@ -796,7 +799,9 @@ pub fn dependants_down(
                 .iter()
                 .any(|t| matches!(t, AfterTarget::Gate(g) if g == gate))
         })
-        .filter(|id| !held.contains(*id) && !stopped.contains(&(id.kind, id.name.as_str().to_owned())))
+        .filter(|id| {
+            !held.contains(*id) && !stopped.contains(&(id.kind, id.name.as_str().to_owned()))
+        })
         .any(|id| !readiness.live.contains(id))
 }
 

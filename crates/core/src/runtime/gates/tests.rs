@@ -376,10 +376,7 @@ fn back_off_holds_across_a_restart_of_the_runtime() {
         decide(&status, Vec::new(), at(5_002 + 119)),
         Decision::Hold(NotDue::BackOff(at(5_002 + 120)))
     );
-    assert_eq!(
-        decide(&status, Vec::new(), at(5_002 + 120)),
-        Decision::Run
-    );
+    assert_eq!(decide(&status, Vec::new(), at(5_002 + 120)), Decision::Run);
 }
 
 // spec: GRUN#pauses
@@ -432,12 +429,10 @@ fn def_with_key(key: &str) -> AppDef {
 fn a_gate_is_not_run_while_a_target_is_not_ready() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
-    let def = def(
-        r#"
+    let def = def(r#"
         let one = app.gate("one").key(1);
         app.gate("two").key(2).after(one);
-        "#,
-    );
+        "#);
     let gates = evaluate(&db, &app(), &def, &cipher, None, &Remembered::default());
     let two = &def.gates["two"];
     let unready = unready_targets(&two.after, &gates, &Readiness::default());
@@ -447,14 +442,7 @@ fn a_gate_is_not_run_while_a_target_is_not_ready() {
         Decision::Hold(NotDue::WaitingOn(unready))
     );
 
-    store::record_success(
-        &db,
-        &app(),
-        &gate("one"),
-        &digest(&def, &cipher, "one"),
-        1,
-    )
-    .unwrap();
+    store::record_success(&db, &app(), &gate("one"), &digest(&def, &cipher, "one"), 1).unwrap();
     let gates = evaluate(&db, &app(), &def, &cipher, None, &Remembered::default());
     assert!(unready_targets(&two.after, &gates, &Readiness::default()).is_empty());
 }
@@ -462,13 +450,11 @@ fn a_gate_is_not_run_while_a_target_is_not_ready() {
 // spec: GRUN#initiating-runs
 #[test]
 fn gates_come_in_the_order_the_script_declared_them() {
-    let def = def(
-        r#"
+    let def = def(r#"
         app.gate("zebra").key(1);
         app.gate("apple").key(1);
         app.gate("mango").key(1);
-        "#,
-    );
+        "#);
     let names: Vec<_> = declared_order(&def)
         .into_iter()
         .map(|(name, _)| name.as_str().to_owned())
@@ -479,30 +465,19 @@ fn gates_come_in_the_order_the_script_declared_them() {
 // spec: GATE#start-order
 #[test]
 fn a_job_target_is_ready_by_its_most_recent_instances_outcome() {
-    use crate::runtime::{
-        history::insert_observation,
-        identity::ResourceInstance,
-    };
+    use crate::runtime::{history::insert_observation, identity::ResourceInstance};
     let db = Db::open_in_memory().unwrap();
-    let def = def(
-        r#"
+    let def = def(r#"
         let tool = app.job("tool").image("docker.io/library/tools:1").deadline(60);
         app.gate("tooled").key(1).after(tool);
         app.deployment("web").image("docker.io/library/nginx:1").after(tool);
-        "#,
-    );
+        "#);
     let tool = id(ResourceKind::Job, "tool");
     let instance = ResourceInstance::new_singleton(app(), ResourceKind::Job, "tool");
     let ready = |db: &Db| {
-        read_readiness(
-            db,
-            &app(),
-            &def,
-            &BTreeSet::new(),
-            &Default::default(),
-        )
-        .ready
-        .contains(&tool)
+        read_readiness(db, &app(), &def, &BTreeSet::new(), &Default::default())
+            .ready
+            .contains(&tool)
     };
     assert!(!ready(&db), "a job that has not run is not ready");
 
@@ -534,15 +509,13 @@ fn a_job_target_is_ready_by_its_most_recent_instances_outcome() {
 fn what_a_runtime_handle_leaves_out_is_what_gates_hold_and_the_workloads_waiting_on_them() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
-    let def = def(
-        r#"
+    let def = def(r#"
         let api = app.deployment("api").image("docker.io/library/nginx:1");
         let migrate = app.gate("migrate").key(1).exclusive(api);
         let seed = app.gate("seed").key(1).after(migrate);
         app.deployment("web").image("docker.io/library/nginx:1").after(seed);
         app.deployment("plain").image("docker.io/library/nginx:1");
-        "#,
-    );
+        "#);
     let api = id(ResourceKind::Deployment, "api");
     let web = id(ResourceKind::Deployment, "web");
     let plain = id(ResourceKind::Deployment, "plain");
@@ -552,13 +525,22 @@ fn what_a_runtime_handle_leaves_out_is_what_gates_hold_and_the_workloads_waiting
     assert!(left_out.contains(&web), "web waits through seed on migrate");
     assert!(!left_out.contains(&plain));
 
-    store::set_hold(&db, &app(), &gate("migrate"), &BTreeSet::from([api.clone()])).unwrap();
+    store::set_hold(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &BTreeSet::from([api.clone()]),
+    )
+    .unwrap();
     let gates = evaluate(&db, &app(), &def, &cipher, None, &Remembered::default());
     let left_out = rt_exclusions(&def, &gates, None).unwrap();
     assert!(left_out.contains(&api), "migrate holds api");
 
     let own = rt_exclusions(&def, &gates, Some(&gate("migrate"))).unwrap();
-    assert!(!own.contains(&api), "the gate's own body is not kept from its hold");
+    assert!(
+        !own.contains(&api),
+        "the gate's own body is not kept from its hold"
+    );
     assert!(
         own.contains(&web),
         "web still waits on seed, which is unsatisfied"
@@ -594,7 +576,10 @@ fn holds_that_cannot_be_read_are_an_error_and_not_an_empty_set() {
 
     let stopped = Default::default();
     let view = view(&db, &app(), &def, &gates, &stopped, &Remembered::default());
-    assert!(view.held.is_empty(), "nothing is stopped for what cannot be read");
+    assert!(
+        view.held.is_empty(),
+        "nothing is stopped for what cannot be read"
+    );
     for name in ["api", "sidecar"] {
         assert!(
             view.waiting
@@ -639,7 +624,13 @@ fn a_hold_stays_held_across_a_restart_of_the_runtime() {
     let api = id(ResourceKind::Deployment, "api");
     {
         let db = Db::open(&path).unwrap();
-        store::set_hold(&db, &app(), &gate("migrate"), &BTreeSet::from([api.clone()])).unwrap();
+        store::set_hold(
+            &db,
+            &app(),
+            &gate("migrate"),
+            &BTreeSet::from([api.clone()]),
+        )
+        .unwrap();
     }
 
     let db = Db::open(&path).unwrap();
@@ -664,12 +655,10 @@ fn a_hold_stays_held_across_a_restart_of_the_runtime() {
 fn an_app_is_set_up_once_every_gate_is_satisfied_at_once() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
-    let def = def(
-        r#"
+    let def = def(r#"
         app.gate("one").key(1);
         app.gate("two").key(2);
-        "#,
-    );
+        "#);
     store::record_success(&db, &app(), &gate("one"), &digest(&def, &cipher, "one"), 1).unwrap();
     let gates = evaluate(&db, &app(), &def, &cipher, None, &Remembered::default());
     assert!(!gates.all_satisfied());
@@ -683,14 +672,19 @@ fn an_app_is_set_up_once_every_gate_is_satisfied_at_once() {
 fn a_gate_with_a_check_clears_a_dependant_to_start_from_stopped_only_once_a_check_passed() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
-    let def = def(
-        r#"
+    let def = def(r#"
         let probe = app.job("probe").image("docker.io/library/tools:1").deadline(30);
         let ready = app.gate("ready").key(1).check(probe);
         app.deployment("web").image("docker.io/library/nginx:1").after(ready);
-        "#,
-    );
-    store::record_success(&db, &app(), &gate("ready"), &digest(&def, &cipher, "ready"), 1).unwrap();
+        "#);
+    store::record_success(
+        &db,
+        &app(),
+        &gate("ready"),
+        &digest(&def, &cipher, "ready"),
+        1,
+    )
+    .unwrap();
     let web = id(ResourceKind::Deployment, "web");
     let waits = |remembered: &Remembered| {
         let gates = evaluate(&db, &app(), &def, &cipher, None, remembered);
@@ -706,12 +700,22 @@ fn a_gate_with_a_check_clears_a_dependant_to_start_from_stopped_only_once_a_chec
         cleared: [(gate("ready"), digest(&def, &cipher, "ready"))].into(),
         ..Default::default()
     };
-    assert!(!waits(&cleared), "a check passed for the gate's current key");
+    assert!(
+        !waits(&cleared),
+        "a check passed for the gate's current key"
+    );
     let stale = Remembered {
-        cleared: [(gate("ready"), Cipher::for_tests_with(&[9; 32]).key_digest(b"1").unwrap())].into(),
+        cleared: [(
+            gate("ready"),
+            Cipher::for_tests_with(&[9; 32]).key_digest(b"1").unwrap(),
+        )]
+        .into(),
         ..Default::default()
     };
-    assert!(waits(&stale), "a check that passed for another key clears nothing");
+    assert!(
+        waits(&stale),
+        "a check that passed for another key clears nothing"
+    );
 }
 
 // spec: GATE#start-order
@@ -770,8 +774,14 @@ fn uninstall_deletes_the_records_the_holds_and_the_setup_of_the_app_alone() {
                 [name.as_str()],
             )
             .unwrap();
-        store::record_success(&db, &name, &gate("migrate"), &digest(&def, &cipher, "migrate"), 1)
-            .unwrap();
+        store::record_success(
+            &db,
+            &name,
+            &gate("migrate"),
+            &digest(&def, &cipher, "migrate"),
+            1,
+        )
+        .unwrap();
         store::set_hold(
             &db,
             &name,
