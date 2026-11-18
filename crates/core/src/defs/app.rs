@@ -10,7 +10,7 @@ use crate::runtime::definition::Bundle;
 use super::{
     Holder,
     action::{ActionDef, ShellDef},
-    install::{InstallDef, ParamDef},
+    param_def::ParamDef,
     resource::{Resource, ResourceId, ResourceKind},
 };
 
@@ -18,7 +18,6 @@ mod action;
 mod collection;
 mod deployment;
 mod file;
-mod install;
 mod job;
 mod param;
 mod service;
@@ -36,7 +35,6 @@ mod volume;
 pub(crate) struct ClosureCapture {
     pub actions: BTreeMap<ActionName, FnPtr>,
     pub shells: BTreeMap<ShellName, FnPtr>,
-    pub install: Option<FnPtr>,
     pub param_changes: BTreeMap<ParamName, FnPtr>,
 }
 
@@ -45,8 +43,7 @@ thread_local! {
 }
 
 /// Activate the closure capture buffer on this thread. While active, every
-/// `on_start`, `on_action`, `on_shell`, `on_install`, and `param.on_change`
-/// call will push its `FnPtr` into the buffer in addition to writing metadata
+/// `on_action`, `on_shell`, and `param.on_change` call will push its `FnPtr` into the buffer in addition to writing metadata
 /// into `AppDef`. Has no effect (and causes no allocation) when not active.
 pub(crate) fn begin_closure_capture() {
     CLOSURE_CAPTURE.with(|c| *c.borrow_mut() = Some(ClosureCapture::default()));
@@ -80,14 +77,6 @@ fn capture_shell(name: ShellName, fnptr: FnPtr) {
     CLOSURE_CAPTURE.with(|c| {
         if let Some(ref mut store) = *c.borrow_mut() {
             store.shells.insert(name, fnptr);
-        }
-    });
-}
-
-fn capture_install(fnptr: FnPtr) {
-    CLOSURE_CAPTURE.with(|c| {
-        if let Some(ref mut store) = *c.borrow_mut() {
-            store.install = Some(fnptr);
         }
     });
 }
@@ -398,7 +387,6 @@ pub struct AppDef {
     /// recovered on demand via the thread-local capture buffer.
     pub actions: BTreeMap<ActionName, ActionDef>,
     pub shells: BTreeMap<ShellName, ShellDef>,
-    pub install: Option<InstallDef>,
     /// Names of parameters that have an `on_change` handler registered.
     pub param_changes: BTreeSet<ParamName>,
     /// Names of parameters that have a validator attached.
@@ -523,6 +511,5 @@ impl CustomType for App {
         collection::on_app(&mut builder);
         action::on_app(&mut builder);
         shell::on_app(&mut builder);
-        install::on_app(&mut builder);
     }
 }

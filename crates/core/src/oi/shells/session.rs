@@ -413,7 +413,7 @@ pub(super) fn validate_shell_params(
     state: &OiState,
     schema: &std::collections::BTreeMap<
         seedling_protocol::names::ParamName,
-        crate::defs::install::ParamDef,
+        crate::defs::param_def::ParamDef,
     >,
     submitted: &std::collections::BTreeMap<String, String>,
 ) -> Result<serde_json::Map<String, serde_json::Value>, seedling_protocol::error::OiError> {
@@ -629,7 +629,7 @@ pub(super) async fn run_app_shell(
     shell_name: &ShellName,
     schema: &std::collections::BTreeMap<
         seedling_protocol::names::ParamName,
-        crate::defs::install::ParamDef,
+        crate::defs::param_def::ParamDef,
     >,
     validated_params: serde_json::Map<String, serde_json::Value>,
     stop: &StopSignal,

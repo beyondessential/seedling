@@ -393,18 +393,6 @@ let migrate_db = |rt| {
     ).terminated_eventually().ensure_success();
 };
 
-// ── Install ───────────────────────────────────────────────────────────────────
-
-app.on_install(|rt, _param| {
-    copy_image_defaults.call(rt);
-    render_config.call(rt);
-    provision_db.call(rt);
-    migrate_db.call(rt);
-
-    rt.warm_certs(app).ready();
-    rt.start(app).ready(300);
-}, #{});
-
 // ── Maintenance actions ───────────────────────────────────────────────────────
 
 app.on_action("reconfigure", |rt, _param| {

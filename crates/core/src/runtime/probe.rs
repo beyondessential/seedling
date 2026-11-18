@@ -1,5 +1,5 @@
 //! Handler probe — dry-run execution mode that enumerates container image
-//! references an app's action/shell/install/on_change handlers might pull.
+//! references an app's action, shell and on_change handlers might pull.
 //!
 //! See `spec: IMG#image-discovery` for semantics. The
 //! behaviour of individual `rt.*` calls under probe mode is implemented in
@@ -17,7 +17,7 @@ use seedling_protocol::names::{ActionName, AppName, ParamName};
 use crate::{
     defs::{
         app::{App, begin_closure_capture, end_closure_capture},
-        install::ParamDef,
+        param_def::ParamDef,
     },
     runtime::{
         InstanceRegistry,
@@ -30,12 +30,9 @@ use crate::{
 };
 
 /// Kind of handler being probed. Mirrors the shapes captured by
-/// [`crate::defs::app::ClosureCapture`] plus the `start` handler, which is
-/// captured as an action named `"start"` but surfaced specially.
+/// [`crate::defs::app::ClosureCapture`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandlerKind {
-    Install,
-    Start,
     Action,
     Shell,
     ParamChange,
@@ -44,8 +41,6 @@ pub enum HandlerKind {
 impl HandlerKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            HandlerKind::Install => "install",
-            HandlerKind::Start => "start",
             HandlerKind::Action => "action",
             HandlerKind::Shell => "shell",
             HandlerKind::ParamChange => "param_change",
@@ -115,32 +110,18 @@ pub fn probe_app(
     let def = app.def.load_full();
     let mut handlers: Vec<(String, HandlerKind, FnPtr, BTreeMap<ParamName, ParamDef>)> = Vec::new();
 
-    if let Some(install_closure) = captured.install {
-        let params = def
-            .install
-            .as_ref()
-            .map(|i| i.requirements.clone())
-            .unwrap_or_default();
-        handlers.push((
-            "install".to_owned(),
-            HandlerKind::Install,
-            install_closure,
-            params,
-        ));
-    }
-
     for (name, closure) in &captured.actions {
-        let kind = if name.as_str() == "start" {
-            HandlerKind::Start
-        } else {
-            HandlerKind::Action
-        };
         let params = def
             .actions
             .get(name)
             .map(|a| a.params.clone())
             .unwrap_or_default();
-        handlers.push((name.as_str().to_owned(), kind, closure.clone(), params));
+        handlers.push((
+            name.as_str().to_owned(),
+            HandlerKind::Action,
+            closure.clone(),
+            params,
+        ));
     }
 
     for (name, closure) in &captured.shells {
@@ -464,7 +445,7 @@ mod tests {
                 action.params.insert(
                     ParamName::new("version").unwrap(),
                     ParamDef {
-                        kind: crate::defs::install::ParamKind::Text,
+                        kind: crate::defs::param_def::ParamKind::Text,
                         required: true,
                         default_value: None,
                         description: None,
@@ -518,7 +499,7 @@ mod tests {
                 action.params.insert(
                     ParamName::new("version").unwrap(),
                     ParamDef {
-                        kind: crate::defs::install::ParamKind::Text,
+                        kind: crate::defs::param_def::ParamKind::Text,
                         required: true,
                         default_value: None,
                         description: None,
@@ -575,7 +556,7 @@ mod tests {
                 action.params.insert(
                     ParamName::new("xyz").unwrap(),
                     ParamDef {
-                        kind: crate::defs::install::ParamKind::Text,
+                        kind: crate::defs::param_def::ParamKind::Text,
                         required: true,
                         default_value: None,
                         description: None,

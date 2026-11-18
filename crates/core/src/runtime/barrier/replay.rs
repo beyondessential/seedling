@@ -464,21 +464,12 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         check_idempotent(&fresh_app.def.load(), &app.def.load());
 
         let captured_actions = captured.actions.clone();
-        let (closure, is_install, is_shell) = if action_name == "install" {
-            if let Some(c) = captured.install {
-                (Some(c), true, false)
-            } else {
-                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
-                    "install action not defined in script".into(),
-                    rhai::Position::NONE,
-                )));
-            }
-        } else if requested_shell {
+        let (closure, is_shell) = if requested_shell {
             // spec: ACN#shells
             // A shell is looked up among shells, and an action among
             // actions: a shell and an action may share a name.
             match captured.shells.get(action_name) {
-                Some(c) => (Some(c.clone()), false, true),
+                Some(c) => (c.clone(), true),
                 None => {
                     return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                         format!("Shell '{}' not found", action_name).into(),
@@ -487,22 +478,16 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
                 }
             }
         } else if let Some(c) = captured.actions.get(action_name) {
-            (Some(c.clone()), false, false)
+            (c.clone(), false)
         } else if let Some(c) = captured.param_changes.get(action_name) {
-            (Some(c.clone()), false, false)
-        } else if action_name == "start" {
-            // spec: ACN#start-action
-            // An app that declares no start action is brought up as though
-            // its closure called `rt.start(app)`.
-            (None, false, false)
+            (c.clone(), false)
         } else {
             return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                 format!("Action '{}' not found", action_name).into(),
                 rhai::Position::NONE,
             )));
         };
-        let is_param_change =
-            !is_install && fresh_app.def.load().param_changes.contains(action_name);
+        let is_param_change = fresh_app.def.load().param_changes.contains(action_name);
         (closure, is_param_change, is_shell, captured_actions)
         // captured (minus the cloned actions map kept in captured_actions),
         // fresh_scope, and fresh_app are all dropped here.
@@ -562,18 +547,12 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     };
 
     scope.push("__bsl_rt", rt);
-    let default_start = closure.is_none();
     // spec: PARAM#change-handlers
     // A change handler is called with as many of its arguments as it takes.
-    let change_handler_arity = closure
-        .as_ref()
-        .filter(|_| is_param_change)
-        .and_then(|c| closure_arity(script_ast, c));
-    if let Some(closure) = closure {
-        scope.push("__bsl_closure", closure);
-    } else {
-        scope.push("__bsl_app", app.clone());
-    }
+    let change_handler_arity = is_param_change
+        .then(|| closure_arity(script_ast, &closure))
+        .flatten();
+    scope.push("__bsl_closure", closure);
     scope.push("__bsl_old_app", old_app);
     let param_map: rhai::Map = params
         .iter()
@@ -584,10 +563,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         scope.push("__bsl_shell", super::shell::ShellControl::new());
     }
 
-    let call_script = if default_start {
-        // spec: ACN#start-action
-        "__bsl_rt.start(__bsl_app)"
-    } else if is_param_change {
+    let call_script = if is_param_change {
         change_handler_call_script(change_handler_arity)
     } else if is_shell {
         "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
@@ -620,7 +596,6 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
 
     let _ = scope.remove::<Dynamic>("__bsl_rt");
     let _ = scope.remove::<Dynamic>("__bsl_closure");
-    let _ = scope.remove::<crate::defs::app::App>("__bsl_app");
     let _ = scope.remove::<Dynamic>("__bsl_old_app");
     let _ = scope.remove::<rhai::Map>("__bsl_param");
     if is_shell {
@@ -680,9 +655,6 @@ fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
     }
     if fresh.shells.keys().ne(stored.shells.keys()) {
         diffs.push("shells");
-    }
-    if fresh.install.is_some() != stored.install.is_some() {
-        diffs.push("install handler");
     }
     if fresh.param_changes != stored.param_changes {
         diffs.push("param_changes");

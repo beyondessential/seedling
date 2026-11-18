@@ -14,7 +14,7 @@ fn declare_shell(
     shell_name: ShellName,
     closure: FnPtr,
     description: Option<String>,
-    params: BTreeMap<ParamName, super::super::install::ParamDef>,
+    params: BTreeMap<ParamName, super::super::param_def::ParamDef>,
 ) -> Result<(), Box<EvalAltResult>> {
     // spec: BSL#arguments
     let closure = take_closure("on_shell", "fn", closure)?;

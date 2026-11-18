@@ -369,59 +369,6 @@ let warmup = app.on_action("warm-images", |rt, param| {
     },
 });
 
-app.on_install(|rt, params| {
-    // what
-    rt.warm_certs(app);
-    warmup.invoke();
-
-    setup_db.call(rt);
-
-    let inter = start_intermediate.call(rt);
-    copy_default_config.call(rt, inter);
-    rt.write(app.volume("config"), "/local.json5", local_json5.call());
-    upgrade_db.call(rt, inter);
-
-    rt.start(configure_server.call(app.job())
-        .description("Provision the initial admin user via Tamanu's `provision` subcommand")
-        .mount("/staging", {
-            let vol = app.volume().tmpfs().description("Initial admin provisioning");
-            vol.write("/provision.json5", `{
-                users: {
-                    ${json_str.call(params["email"])}: {
-                        role: "admin",
-                        displayName: ${json_str.call(params["name"])},
-                        password: ${json_str.call(params["password"])},
-                    },
-                },
-            }`);
-            vol
-        })
-        .arg(["provision", "/staging/provision.json5", "--skip-if-not-needed"])
-    ).terminated_eventually().ensure_success();
-
-    // then seedling will do normal bringup
-}, #{
-    params: #{
-        email: #{
-            kind: "email",
-            required: true,
-            default_value: "admin@tamanu.app",
-            description: "Email of the initial admin user",
-        },
-        name: #{
-            kind: "text",
-            required: true,
-            default_value: "Superadmin",
-            description: "Display name of the initial admin user",
-        },
-        password: #{
-            kind: "password",
-            required: true,
-            description: "Password for the initial admin user",
-        },
-    },
-});
-
 app.on_action("reconfigure", |rt, _param| {
     rt.write(app.volume("config"), "/config/local.json5", local_json5.call());
     rt.restart(app.deployment("api"));

@@ -231,9 +231,9 @@ app.deployment("postgres")
     .cap_add("SETGID")
     .pids_limit(pids_budget.call())
     // PGDATA is the only password-agnostic env the entrypoint needs. The
-    // cluster is initdb'd by a dedicated install job (see on_install) so no
-    // POSTGRES_PASSWORD* / POSTGRES_INITDB_ARGS leak into the long-running
-    // deployment's spec — the entrypoint sees PG_VERSION and skips init.
+    // cluster is initdb'd by a dedicated job so no POSTGRES_PASSWORD* /
+    // POSTGRES_INITDB_ARGS leak into the long-running deployment's spec — the
+    // entrypoint sees PG_VERSION and skips init.
     .env("PGDATA", `/data/pg${pg_major.call()}`)
     .mount("/data", data)
     .mount("/var/run/postgresql", socket)
@@ -405,17 +405,6 @@ let reload_server = |rt| {
 };
 
 // ── Install ───────────────────────────────────────────────────────────────────
-
-app.on_install(|rt, _param| {
-    initdb_if_missing.call(rt, pg_major.call());
-    render_config.call(rt);
-    build_bestool_psql.call(rt);
-
-    // Generous deadline: a fresh postgres startup that needs to validate
-    // config and warm caches takes longer than the 30s default, especially
-    // on first install where the image was just pulled.
-    rt.start(app).ready(120);
-}, #{});
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
 

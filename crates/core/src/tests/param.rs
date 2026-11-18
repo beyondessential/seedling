@@ -303,7 +303,7 @@ fn param_used_in_closure_captures_injected_value() {
         r#"
         let ver = app.param("version");
         let dep = app.deployment("web").image("docker.io/library/placeholder:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment().image(`docker.io/library/myapp:${ver.value()}`));
         });
         "#,
@@ -347,7 +347,7 @@ fn on_change_inside_action_closure_throws() {
     let (engine, mut scope, app, ast) = run_test_script(
         r#"
         let p = app.param("version");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             p.on_change(|rt| {});
         });
         "#,
@@ -403,7 +403,7 @@ fn param_schema_builder_methods_set_fields() {
         .expect("param should be declared");
     assert!(matches!(
         schema.kind,
-        crate::defs::install::ParamKind::Email
+        crate::defs::param_def::ParamKind::Email
     ));
     assert!(schema.required);
     assert_eq!(schema.default_value.as_deref(), Some("admin@example.com"));
@@ -416,7 +416,10 @@ fn param_schema_defaults_when_no_builder_methods() {
     let app = run_test_script_app(r#"app.param("host");"#);
     let def = app.def.load();
     let schema = def.params.get("host").expect("param should be declared");
-    assert!(matches!(schema.kind, crate::defs::install::ParamKind::Text));
+    assert!(matches!(
+        schema.kind,
+        crate::defs::param_def::ParamKind::Text
+    ));
     assert!(!schema.required);
     assert!(schema.default_value.is_none());
     assert!(schema.description.is_none());
@@ -430,7 +433,7 @@ fn param_schema_kind_password() {
     let schema = def.params.get("secret").unwrap();
     assert!(matches!(
         schema.kind,
-        crate::defs::install::ParamKind::Password
+        crate::defs::param_def::ParamKind::Password
     ));
 }
 
@@ -442,7 +445,7 @@ fn param_schema_kind_multiline() {
     let schema = def.params.get("motd").unwrap();
     assert!(matches!(
         schema.kind,
-        crate::defs::install::ParamKind::Multiline
+        crate::defs::param_def::ParamKind::Multiline
     ));
 }
 
@@ -457,20 +460,6 @@ fn param_schema_kind_unknown_throws() {
 #[test]
 fn param_schema_kind_volume_rejected_on_static_param() {
     let _ = run_test_script_err(r#"app.param("dst").kind("volume");"#);
-}
-
-// spec: ACN#volume-params
-#[test]
-fn install_param_kind_volume_rejected() {
-    let _ = run_test_script_err(
-        r#"
-        app.on_install(|rt, _param| {}, #{
-            params: #{
-                target: #{ kind: "volume" }
-            }
-        });
-    "#,
-    );
 }
 
 // spec: ACN#volume-params
@@ -493,7 +482,7 @@ fn action_param_kind_volume_accepted() {
             "output".to_owned(),
         ))
         .expect("output param");
-    assert_eq!(param.kind, crate::defs::install::ParamKind::Volume);
+    assert_eq!(param.kind, crate::defs::param_def::ParamKind::Volume);
 }
 
 // spec: ACN#volume-params
@@ -516,7 +505,7 @@ fn shell_param_kind_volume_accepted() {
             "target".to_owned(),
         ))
         .expect("target param");
-    assert_eq!(param.kind, crate::defs::install::ParamKind::Volume);
+    assert_eq!(param.kind, crate::defs::param_def::ParamKind::Volume);
 }
 
 // spec: PARAM#schema
@@ -622,7 +611,7 @@ fn param_schema_kind_random() {
     let schema = def.params.get("nonce").expect("param declared");
     assert!(matches!(
         schema.kind,
-        crate::defs::install::ParamKind::Random
+        crate::defs::param_def::ParamKind::Random
     ));
 }
 
@@ -682,9 +671,7 @@ fn a_validator_cannot_change_the_app_or_its_resources() {
         r#"app.description("changed")"#,
         r#"app.canopy_type("tamanu-central")"#,
         r#"app.on_action("other", |rt, p| {})"#,
-        r#"app.on_start(|rt, p| {})"#,
         r#"app.on_shell("other", |s, p| {})"#,
-        r#"app.on_install(|rt, p| {})"#,
         r#"dep.image("registry.example/api:1")"#,
         r#"dep.scale(2)"#,
         r#"dep.env("KEY", "value")"#,

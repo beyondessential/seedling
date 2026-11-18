@@ -171,49 +171,6 @@ fn app_action_unknown_name_throws() {
     );
 }
 
-// spec: ACN#action-handles
-#[test]
-fn install_is_not_reachable_via_app_action() {
-    let err = invoke_action(
-        r#"
-            app.on_install(|rt, _p| {});
-            app.on_action("outer", |rt, _p| {
-                app.action("install");
-            });
-        "#,
-        "outer",
-        rhai::Map::new(),
-    )
-    .expect_err("install must not be reachable");
-    let msg = err_string(err);
-    assert!(
-        msg.contains("no such action") && msg.contains("install"),
-        "expected install to be hidden, got: {msg}"
-    );
-}
-
-// spec: ACN#action-handles
-#[test]
-fn start_is_callable_by_name() {
-    invoke_action(
-        r#"
-            let counter = #{ ran: false };
-            app.on_start(|rt, _p| {
-                counter.ran = true;
-            });
-            app.on_action("outer", |rt, _p| {
-                app.action("start").invoke();
-                if !counter.ran {
-                    throw "start was not invoked";
-                }
-            });
-        "#,
-        "outer",
-        rhai::Map::new(),
-    )
-    .expect("start must be callable");
-}
-
 // spec: ACN#action-invocation
 // spec: OPS#action-composition
 #[test]

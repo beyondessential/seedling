@@ -5,7 +5,7 @@ use rhai::{CustomType, EvalAltResult, Map, NativeCallContext, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 use siphasher::sip::SipHasher13;
 
-use super::install::ParamDef;
+use super::param_def::ParamDef;
 
 // spec: ACN#param-schemas
 #[derive(Debug, Clone)]
@@ -84,16 +84,12 @@ impl CustomType for Action {
         builder
             .with_name("Action")
             // spec: ACN#scheduled-actions
-            // spec: ACN#start-action
             .with_fn(
                 "on_schedule",
                 |this: &mut Self, expr: &str| -> Result<Self, Box<EvalAltResult>> {
                     super::app::ensure_not_validating()?;
                     if crate::runtime::barrier::runtime::is_in_action_closure() {
                         return Err("on_schedule cannot be called inside an action closure".into());
-                    }
-                    if this.name == "start" {
-                        return Err("on_schedule cannot be called on the start action".into());
                     }
                     validate_cron_expr(expr, &this.app_name, &this.name)
                         .map_err(|e| -> Box<EvalAltResult> { e.into() })?;

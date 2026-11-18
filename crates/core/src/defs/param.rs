@@ -2,7 +2,7 @@ use rhai::{CustomType, EvalAltResult, FnPtr, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
 use super::app::{App, ensure_not_validating};
-use super::install::ParamKind;
+use super::param_def::ParamKind;
 use super::take::take_closure;
 
 // spec: PARAM#declaration

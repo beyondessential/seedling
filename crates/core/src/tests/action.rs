@@ -28,33 +28,6 @@ fn on_action_without_options() {
     assert!(action.description.is_none());
 }
 
-// spec: ACN#start-action
-#[test]
-fn on_start_registers_start_action() {
-    let app = run_test_script_app(
-        r#"
-        app.on_start(|rt, _param| {});
-    "#,
-    );
-    let def = app.def.load();
-    assert!(def.actions.contains_key("start"));
-}
-
-// spec: ACN#start-action
-#[test]
-fn on_start_with_options() {
-    let app = run_test_script_app(
-        r#"
-        app.on_start(|rt, _param| {}, #{
-            description: "Start the application",
-        });
-    "#,
-    );
-    let def = app.def.load();
-    let action = def.actions.get("start").expect("start action should exist");
-    assert_eq!(action.description.as_deref(), Some("Start the application"));
-}
-
 // spec: ACN#shells
 // spec: ACN#shell-control
 #[test]
@@ -116,14 +89,13 @@ fn exercise_shell_return_job() {
     );
 }
 
-// spec: ACN#install-action
 // spec: ACN#param-schemas
 // spec: ACN#param-kinds
 #[test]
-fn on_install_with_requirements() {
+fn an_action_param_schema_declares_kinds_and_defaults() {
     let app = run_test_script_app(
         r#"
-        app.on_install(|rt, reqs| {}, #{
+        app.on_action("setup", |rt, params| {}, #{
             params: #{
                 "admin-email": #{
                     kind: "email",
@@ -139,27 +111,24 @@ fn on_install_with_requirements() {
     "#,
     );
     let def = app.def.load();
-    let install = def.install.as_ref().expect("install should exist");
-    assert_eq!(install.requirements.len(), 2);
-    let email_req = &install.requirements["admin-email"];
-    assert!(matches!(email_req.kind, defs::install::ParamKind::Email));
-    assert_eq!(
-        email_req.default_value.as_deref(),
-        Some("admin@example.com")
-    );
-    let pw_req = &install.requirements["admin-password"];
-    assert!(matches!(pw_req.kind, defs::install::ParamKind::Password));
-    assert!(pw_req.default_value.is_none());
+    let params = &def.actions["setup"].params;
+    assert_eq!(params.len(), 2);
+    let email = &params["admin-email"];
+    assert!(matches!(email.kind, defs::param_def::ParamKind::Email));
+    assert_eq!(email.default_value.as_deref(), Some("admin@example.com"));
+    let pw = &params["admin-password"];
+    assert!(matches!(pw.kind, defs::param_def::ParamKind::Password));
+    assert!(pw.default_value.is_none());
 }
 
 // spec: ACN#param-schemas
 // A `secret` the schema states wins over the kind's implication, in either
 // direction, and one it leaves out defers to the kind.
 #[test]
-fn on_install_requirement_secret_overrides_kind() {
+fn an_action_param_secret_overrides_its_kind() {
     let app = run_test_script_app(
         r#"
-        app.on_install(|rt, reqs| {}, #{
+        app.on_action("setup", |rt, params| {}, #{
             params: #{
                 "plain": #{ kind: "password" },
                 "opted-out": #{ kind: "password", secret: false },
@@ -171,147 +140,47 @@ fn on_install_requirement_secret_overrides_kind() {
     "#,
     );
     let def = app.def.load();
-    let reqs = &def
-        .install
-        .as_ref()
-        .expect("install should exist")
-        .requirements;
-    assert!(reqs["plain"].is_secret());
-    assert!(!reqs["opted-out"].is_secret());
-    assert!(!reqs["opted-out-weak"].is_secret());
-    assert!(reqs["opted-in"].is_secret());
-    assert!(!reqs["text"].is_secret());
-}
-
-// spec: ACN#install-action
-#[test]
-fn on_install_without_requirements() {
-    let app = run_test_script_app(
-        r#"
-        app.on_install(|rt, reqs| {});
-    "#,
-    );
-    let def = app.def.load();
-    let install = def.install.as_ref().expect("install should exist");
-    assert!(install.requirements.is_empty());
+    let params = &def.actions["setup"].params;
+    assert!(params["plain"].is_secret());
+    assert!(!params["opted-out"].is_secret());
+    assert!(!params["opted-out-weak"].is_secret());
+    assert!(params["opted-in"].is_secret());
+    assert!(!params["text"].is_secret());
 }
 
 // spec: ACN#param-kinds
 #[test]
-fn install_requirement_kind_text() {
+fn an_action_param_kind_is_text_unless_declared() {
     let app = run_test_script_app(
         r#"
-        app.on_install(|rt, reqs| {}, #{
+        app.on_action("setup", |rt, params| {}, #{
             params: #{
-                "site-name": #{
-                    kind: "text",
-                    description: "Site name",
-                },
+                "site-name": #{ kind: "text" },
+                "default-kind": #{ description: "Site name" },
+                "motd": #{ kind: "multiline" },
+                "api-key": #{ kind: "weak-password" },
             },
         });
     "#,
     );
     let def = app.def.load();
-    let install = def.install.as_ref().unwrap();
-    let req = &install.requirements["site-name"];
-    assert!(matches!(req.kind, defs::install::ParamKind::Text));
-}
-
-// spec: ACN#param-kinds
-#[test]
-fn install_requirement_kind_defaults_to_text() {
-    let app = run_test_script_app(
-        r#"
-        app.on_install(|rt, reqs| {}, #{
-            params: #{
-                "site-name": #{
-                    description: "Site name",
-                },
-            },
-        });
-    "#,
-    );
-    let def = app.def.load();
-    let install = def.install.as_ref().unwrap();
-    let req = &install.requirements["site-name"];
-    assert!(matches!(req.kind, defs::install::ParamKind::Text));
-}
-
-// spec: ACN#param-kinds
-#[test]
-fn install_requirement_kind_multiline() {
-    let app = run_test_script_app(
-        r#"
-        app.on_install(|rt, reqs| {}, #{
-            params: #{
-                "motd": #{
-                    kind: "multiline",
-                    description: "Message of the day",
-                },
-            },
-        });
-    "#,
-    );
-    let def = app.def.load();
-    let install = def.install.as_ref().unwrap();
-    let req = &install.requirements["motd"];
-    assert!(matches!(req.kind, defs::install::ParamKind::Multiline));
-}
-
-// spec: ACN#param-kinds
-#[test]
-fn install_requirement_kind_weak_password() {
-    let app = run_test_script_app(
-        r#"
-        app.on_install(|rt, reqs| {}, #{
-            params: #{
-                "api-key": #{
-                    kind: "weak-password",
-                    description: "API key",
-                },
-            },
-        });
-    "#,
-    );
-    let def = app.def.load();
-    let install = def.install.as_ref().unwrap();
-    let req = &install.requirements["api-key"];
-    assert!(matches!(req.kind, defs::install::ParamKind::WeakPassword));
-}
-
-// spec: ACN#install-action
-#[test]
-fn exercise_install_action() {
-    exercise(
-        r#"
-        app.on_install(|rt, reqs| {
-            rt.start(app.deployment("web").image("docker.io/library/nginx:latest")).ready();
-        }, #{
-            params: #{
-                "admin-email": #{
-                    kind: "email",
-                    description: "Admin email",
-                },
-            },
-        });
-    "#,
-    );
-}
-
-// spec: ACN#param-kinds
-#[test]
-fn install_requirement_unknown_kind_throws() {
-    let _ = run_test_script_err(
-        r#"
-        app.on_install(|rt, reqs| {}, #{
-            params: #{
-                field: #{
-                    kind: "banana",
-                },
-            },
-        });
-    "#,
-    );
+    let params = &def.actions["setup"].params;
+    assert!(matches!(
+        params["site-name"].kind,
+        defs::param_def::ParamKind::Text
+    ));
+    assert!(matches!(
+        params["default-kind"].kind,
+        defs::param_def::ParamKind::Text
+    ));
+    assert!(matches!(
+        params["motd"].kind,
+        defs::param_def::ParamKind::Multiline
+    ));
+    assert!(matches!(
+        params["api-key"].kind,
+        defs::param_def::ParamKind::WeakPassword
+    ));
 }
 
 // spec: ACN#param-schemas
@@ -334,7 +203,7 @@ fn on_action_with_params() {
     let action = &def.actions["maintenance"];
     assert_eq!(action.params.len(), 1);
     let p = &action.params["contact-email"];
-    assert!(matches!(p.kind, defs::install::ParamKind::Email));
+    assert!(matches!(p.kind, defs::param_def::ParamKind::Email));
     assert_eq!(p.default_value.as_deref(), Some("admin@example.com"));
 }
 
@@ -433,21 +302,6 @@ fn on_schedule_chains_multiple_exprs() {
 
 // spec: ACN#scheduled-actions
 #[test]
-fn on_schedule_rejects_start_action() {
-    let err = run_test_script_err(
-        r#"
-        app.on_start(|rt, _param| {}).on_schedule("0 0 * * *");
-    "#,
-    );
-    let msg = err.to_string();
-    assert!(
-        msg.contains("start"),
-        "error should mention start action: {msg}",
-    );
-}
-
-// spec: ACN#scheduled-actions
-#[test]
 fn on_schedule_rejects_invalid_cron() {
     let _ = run_test_script_err(
         r#"
@@ -458,27 +312,25 @@ fn on_schedule_rejects_invalid_cron() {
 
 // spec: ACN#action-declaration
 #[test]
-fn install_is_reserved_as_an_action_name() {
-    let err = run_test_script_err(r#"app.on_action("install", |rt, _p| {});"#);
-    assert!(err.to_string().contains("reserved"), "{err}");
+fn install_and_start_are_ordinary_action_names() {
+    let app = run_test_script_app(
+        r#"
+        app.on_action("install", |rt, _p| {});
+        app.on_action("start", |rt, _p| {});
+    "#,
+    );
+    let def = app.def.load();
+    assert!(def.actions.contains_key("install"));
+    assert!(def.actions.contains_key("start"));
 }
 
 // spec: ACN#action-declaration
-// spec: ACN#start-action
 #[test]
 fn declaring_an_action_twice_throws() {
-    for script in [
+    let err = run_test_script_err(
         r#"app.on_action("migrate", |rt, _p| {}); app.on_action("migrate", |rt, _p| {});"#,
-        r#"app.on_start(|rt, _p| {}); app.on_start(|rt, _p| {});"#,
-        r#"app.on_action("start", |rt, _p| {}); app.on_start(|rt, _p| {});"#,
-        r#"app.on_start(|rt, _p| {}); app.on_action("start", |rt, _p| {}, #{});"#,
-    ] {
-        let err = run_test_script_err(script);
-        assert!(
-            err.to_string().contains("already declared"),
-            "{script}: {err}"
-        );
-    }
+    );
+    assert!(err.to_string().contains("already declared"), "{err}");
 }
 
 // spec: ACN#shells
@@ -490,26 +342,14 @@ fn declaring_a_shell_twice_throws() {
     assert!(err.to_string().contains("already declared"), "{err}");
 }
 
-// spec: ACN#install-action
-#[test]
-fn a_second_install_action_throws() {
-    let err = run_test_script_err(r#"app.on_install(|rt, _p| {}); app.on_install(|rt, _p| {});"#);
-    assert!(err.to_string().contains("already declared"), "{err}");
-}
-
 // spec: ACN#action-declaration
-// spec: ACN#start-action
 // spec: ACN#shells
-// spec: ACN#install-action
 // spec: ACN#param-schemas
 #[test]
 fn unknown_option_and_param_definition_keys_throw() {
     for script in [
         r#"app.on_action("a", |rt, _p| {}, #{ descripton: "typo" });"#,
-        r#"app.on_start(|rt, _p| {}, #{ params: #{} });"#,
-        r#"app.on_action("start", |rt, _p| {}, #{ params: #{} });"#,
         r#"app.on_shell("s", |rt, sh, _p| {}, #{ param: #{} });"#,
-        r#"app.on_install(|rt, _p| {}, #{ requires: #{} });"#,
         r#"app.on_action("a", |rt, _p| {}, #{ params: #{ x: #{ kinds: "text" } } });"#,
         r#"app.on_action("a", |rt, _p| {}, #{ params: "not a map" });"#,
         r#"app.on_action("a", |rt, _p| {}, #{ params: #{ x: "not a map" } });"#,
@@ -550,17 +390,6 @@ fn on_action_with_a_named_function_throws() {
         "on_action",
         r#"app.on_action("migrate", HANDLER, #{ description: "x" });"#,
     );
-    assert_named_handler_rejected("on_action", r#"app.on_action("start", HANDLER);"#);
-}
-
-// spec: ACN#start-action
-#[test]
-fn on_start_with_a_named_function_throws() {
-    assert_named_handler_rejected("on_start", "app.on_start(HANDLER);");
-    assert_named_handler_rejected(
-        "on_start",
-        r#"app.on_start(HANDLER, #{ description: "x" });"#,
-    );
 }
 
 // spec: ACN#shells
@@ -571,13 +400,6 @@ fn on_shell_with_a_named_function_throws() {
         "on_shell",
         r#"app.on_shell("bash", HANDLER, #{ description: "x" });"#,
     );
-}
-
-// spec: ACN#install-action
-#[test]
-fn on_install_with_a_named_function_throws() {
-    assert_named_handler_rejected("on_install", "app.on_install(HANDLER);");
-    assert_named_handler_rejected("on_install", "app.on_install(HANDLER, #{});");
 }
 
 // spec: ACN#action-declaration
