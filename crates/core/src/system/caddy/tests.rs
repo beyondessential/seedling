@@ -571,7 +571,11 @@ fn tls_routes_for_different_hostnames_share_a_port_by_sni() {
         ],
         ..Default::default()
     };
-    assert!(super::config::conflicting_binds(&config).is_empty());
+    assert!(
+        super::config::render(&config)
+            .conflicting_binds()
+            .is_empty()
+    );
     let json = build_caddy_config(&config);
     let servers = json["apps"]["layer4"]["servers"].as_object().unwrap();
     assert_eq!(servers.len(), 1, "one server for the port");
@@ -607,7 +611,11 @@ fn a_tls_route_beside_an_https_server_is_wrapped_ahead_of_its_tls() {
         l4_routes: vec![tls_route(443, "db.example.com", "[fd5e::2]:5432")],
         ..Default::default()
     };
-    assert!(super::config::conflicting_binds(&config).is_empty());
+    assert!(
+        super::config::render(&config)
+            .conflicting_binds()
+            .is_empty()
+    );
     let json = build_caddy_config(&config);
     assert!(
         json["apps"]["layer4"].is_null(),
@@ -684,7 +692,7 @@ fn dtls_beside_pass_through_udp_is_reported_as_a_double_bind() {
         dtls_routes: vec![dtls_route(5684, "voip.example.com")],
         ..Default::default()
     };
-    let conflicts = super::config::conflicting_binds(&config);
+    let conflicts = super::config::render(&config).conflicting_binds();
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0].to_string(), "udp/5684");
 }
@@ -707,7 +715,7 @@ fn dtls_beside_http3_is_reported_as_a_double_bind() {
         dtls_routes: vec![dtls_route(443, "voip.example.com")],
         ..Default::default()
     };
-    let conflicts = super::config::conflicting_binds(&config);
+    let conflicts = super::config::render(&config).conflicting_binds();
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0].to_string(), "udp/443");
 }
@@ -730,7 +738,7 @@ fn pass_through_beside_a_tls_route_is_reported_as_a_double_bind() {
         l4_routes: vec![pass_through_route(5432, L4Proto::Tcp, "[fd5e::2]:5432")],
         ..Default::default()
     };
-    let conflicts = super::config::conflicting_binds(&config);
+    let conflicts = super::config::render(&config).conflicting_binds();
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0].to_string(), "tcp/5432");
 }
@@ -1590,8 +1598,6 @@ fn ipv6_clients_are_counted_per_64_and_ipv4_per_address() {
 // every route and cert policy on the node, not just the offending ingress.
 #[test]
 fn a_port_declared_as_both_plaintext_and_tls_is_reported() {
-    use crate::system::caddy::config::conflicting_binds;
-
     let mut plain = http_vhost("plain.example.com", "[fd5e::1]:8080");
     plain.port = 8443;
     let mut tls = https_vhost("web.example.com", "[fd5e::2]:8080");
@@ -1610,7 +1616,7 @@ fn a_port_declared_as_both_plaintext_and_tls_is_reported() {
         virtual_hosts: vec![plain, tls],
         ..Default::default()
     };
-    let conflicts = conflicting_binds(&config);
+    let conflicts = super::config::render(&config).conflicting_binds();
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0].to_string(), "tcp/8443");
 }
@@ -1618,8 +1624,6 @@ fn a_port_declared_as_both_plaintext_and_tls_is_reported() {
 // spec: PRX#plaintext-ingresses
 #[test]
 fn distinct_ports_per_protocol_do_not_conflict() {
-    use crate::system::caddy::config::conflicting_binds;
-
     let config = ProxyConfig {
         listeners: vec![
             ProxyListener {
@@ -1641,7 +1645,11 @@ fn distinct_ports_per_protocol_do_not_conflict() {
         ],
         ..Default::default()
     };
-    assert!(conflicting_binds(&config).is_empty());
+    assert!(
+        super::config::render(&config)
+            .conflicting_binds()
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------

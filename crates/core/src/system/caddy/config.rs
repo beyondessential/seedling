@@ -24,33 +24,36 @@ impl std::fmt::Display for Bind {
     }
 }
 
-/// Addresses the rendered configuration binds more than once, across every
-/// server it emits: HTTP, HTTPS and HTTP/3, layer 4, and DTLS.
-///
-/// Caddy refuses a config where two servers bind the same address, and
-/// `POST /config/` is all-or-nothing, so one such pair invalidates every route
-/// and every cert policy on the node, not just the ingress that caused it. The
-/// claims the runtime resolves keep this from happening; this is the check
-/// that a mistake in them fails as one ingress's apply, and not as the whole
-/// document's rejection.
-///
-/// Reported rather than quietly resolved: dropping one side would silently
-/// serve an ingress on a protocol its author did not ask for.
-// spec: PRX#shared-ports
-pub(crate) fn conflicting_binds(config: &ProxyConfig) -> Vec<Bind> {
-    let mut seen: BTreeSet<Bind> = BTreeSet::new();
-    let mut conflicts: BTreeSet<Bind> = BTreeSet::new();
-    for bind in render(config).binds {
-        if !seen.insert(bind.clone()) {
-            conflicts.insert(bind);
-        }
-    }
-    conflicts.into_iter().collect()
+/// A rendered proxy document, with every address its servers bind.
+pub(crate) struct Rendered {
+    pub json: Value,
+    binds: Vec<Bind>,
 }
 
-struct Rendered {
-    json: Value,
-    binds: Vec<Bind>,
+impl Rendered {
+    /// Addresses the document binds more than once, across every server it
+    /// emits: HTTP, HTTPS and HTTP/3, layer 4, and DTLS.
+    ///
+    /// Caddy refuses a config where two servers bind the same address, and
+    /// `POST /config/` is all-or-nothing, so one such pair invalidates every
+    /// route and every cert policy on the node, not just the ingress that
+    /// caused it. The claims the runtime resolves keep this from happening;
+    /// this is the check that a mistake in them fails as one ingress's apply,
+    /// and not as the whole document's rejection.
+    ///
+    /// Reported rather than quietly resolved: dropping one side would silently
+    /// serve an ingress on a protocol its author did not ask for.
+    // spec: PRX#shared-ports
+    pub(crate) fn conflicting_binds(&self) -> Vec<Bind> {
+        let mut seen: BTreeSet<&Bind> = BTreeSet::new();
+        let mut conflicts: BTreeSet<Bind> = BTreeSet::new();
+        for bind in &self.binds {
+            if !seen.insert(bind) {
+                conflicts.insert(bind.clone());
+            }
+        }
+        conflicts.into_iter().collect()
+    }
 }
 
 /// The TLS versions an ingress that terminates TLS accepts.
@@ -63,7 +66,8 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     render(config).json
 }
 
-fn render(config: &ProxyConfig) -> Rendered {
+/// Render the proxy document for `config`, once, with what it binds.
+pub(crate) fn render(config: &ProxyConfig) -> Rendered {
     let mut binds: Vec<Bind> = Vec::new();
     let http_ports: Vec<u16> = config
         .listeners

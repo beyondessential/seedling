@@ -135,12 +135,13 @@ impl CaddyProxy {
         // pushing one would drop every route and cert policy on the node —
         // far past the ingress that caused it.
         // spec: PRX#shared-ports
-        let conflicts = super::config::conflicting_binds(config);
+        let rendered = super::config::render(config);
+        let conflicts = rendered.conflicting_binds();
         if !conflicts.is_empty() {
             return ConflictingListenersSnafu { binds: conflicts }.fail();
         }
 
-        let caddy_json = super::config::build_caddy_config(config);
+        let caddy_json = rendered.json;
         let client = self.get_client().await;
 
         // Dedup against Caddy's current config: when nothing has
