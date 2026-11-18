@@ -118,6 +118,210 @@ pub(crate) fn check_redirect_terminations(def: &super::app::AppDef) -> Result<()
     Ok(())
 }
 
+/// The transport a [`Claim`] is made on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClaimTransport {
+    Tcp,
+    Udp,
+}
+
+impl std::fmt::Display for ClaimTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        })
+    }
+}
+
+/// What a claim on a hostname is a claim of. Claims of one kind for different
+/// hostnames share a port, since the proxy tells their traffic apart by the
+/// name the client sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClaimKind {
+    /// TLS on TCP, which includes HTTPS; told apart by SNI.
+    Tls,
+    /// HTTP/3 on UDP; told apart by SNI.
+    Http3,
+    /// Plaintext HTTP on TCP; told apart by the request's `Host`.
+    PlaintextHttp,
+}
+
+impl std::fmt::Display for ClaimKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Tls => "TLS",
+            Self::Http3 => "HTTP/3",
+            Self::PlaintextHttp => "plaintext HTTP",
+        })
+    }
+}
+
+/// How much of a port a claim takes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClaimScope {
+    /// Traffic passed through or terminated as DTLS carries nothing the proxy
+    /// reads a hostname from, so nothing else can share the port.
+    WholePort,
+    /// The port for one hostname, among claims of the same kind.
+    Hostname { kind: ClaimKind, hostname: String },
+}
+
+/// One transport an ingress serves on its port.
+// spec: PRX#shared-ports
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Claim {
+    pub port: u16,
+    pub transport: ClaimTransport,
+    pub scope: ClaimScope,
+}
+
+impl Claim {
+    pub fn whole_port(port: u16, transport: ClaimTransport) -> Self {
+        Self {
+            port,
+            transport,
+            scope: ClaimScope::WholePort,
+        }
+    }
+
+    pub fn hostname(
+        port: u16,
+        transport: ClaimTransport,
+        kind: ClaimKind,
+        hostname: impl Into<String>,
+    ) -> Self {
+        Self {
+            port,
+            transport,
+            scope: ClaimScope::Hostname {
+                kind,
+                hostname: hostname.into(),
+            },
+        }
+    }
+
+    /// Whether the two claims cannot both be served.
+    ///
+    /// Claims on the same port and transport are served together only when
+    /// both are for a hostname, are of one kind, and name different hostnames.
+    // spec: PRX#shared-ports
+    pub fn conflicts_with(&self, other: &Claim) -> bool {
+        if self.port != other.port || self.transport != other.transport {
+            return false;
+        }
+        match (&self.scope, &other.scope) {
+            (
+                ClaimScope::Hostname {
+                    kind: a_kind,
+                    hostname: a_host,
+                },
+                ClaimScope::Hostname {
+                    kind: b_kind,
+                    hostname: b_host,
+                },
+            ) => a_kind != b_kind || a_host == b_host,
+            _ => true,
+        }
+    }
+
+    /// The hostname the claim is for, if it is for one.
+    pub fn claimed_hostname(&self) -> Option<&str> {
+        match &self.scope {
+            ClaimScope::WholePort => None,
+            ClaimScope::Hostname { hostname, .. } => Some(hostname),
+        }
+    }
+}
+
+impl std::fmt::Display for Claim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.transport, self.port)?;
+        match &self.scope {
+            ClaimScope::WholePort => f.write_str(" (whole port)"),
+            ClaimScope::Hostname { kind, hostname } => write!(f, " ({kind} {hostname})"),
+        }
+    }
+}
+
+impl IngressDef {
+    /// The claims the ingress itself makes, one per transport it serves.
+    // spec: PRX#shared-ports
+    pub fn claims(&self) -> Vec<Claim> {
+        let port = self.port.get();
+        let hostname = self.hostname.as_str();
+        if self.dtls {
+            return vec![Claim::whole_port(port, ClaimTransport::Udp)];
+        }
+        match (self.tls, self.http_terminate) {
+            (true, Some(_)) => vec![
+                Claim::hostname(port, ClaimTransport::Tcp, ClaimKind::Tls, hostname),
+                Claim::hostname(port, ClaimTransport::Udp, ClaimKind::Http3, hostname),
+            ],
+            (true, None) => vec![Claim::hostname(
+                port,
+                ClaimTransport::Tcp,
+                ClaimKind::Tls,
+                hostname,
+            )],
+            (false, Some(_)) => vec![Claim::hostname(
+                port,
+                ClaimTransport::Tcp,
+                ClaimKind::PlaintextHttp,
+                hostname,
+            )],
+            (false, None) => vec![Claim::whole_port(port, ClaimTransport::Tcp)],
+        }
+    }
+
+    /// The claim of the ingress's HTTP redirect: plaintext HTTP on the
+    /// redirect's port.
+    // spec: PRX#shared-ports
+    pub fn redirect_claim(&self) -> Option<Claim> {
+        self.redirect.as_ref().map(|redirect| {
+            Claim::hostname(
+                redirect.port.get(),
+                ClaimTransport::Tcp,
+                ClaimKind::PlaintextHttp,
+                self.hostname.as_str(),
+            )
+        })
+    }
+}
+
+/// Refuse a definition in which two ingresses make conflicting claims on a
+/// port. The redirect of an ingress is a claim of the ingress.
+// spec: ING#identity-within-an-app
+pub(crate) fn check_claim_conflicts(def: &super::app::AppDef) -> Result<(), String> {
+    let mut claimed: Vec<(String, Claim)> = Vec::new();
+    for resource in def.resources.values() {
+        let super::resource::Resource::Ingress(ingress) = resource else {
+            continue;
+        };
+        let ingress_def = ingress.def.lock();
+        for claim in ingress_def
+            .claims()
+            .into_iter()
+            .chain(ingress_def.redirect_claim())
+        {
+            claimed.push((ingress.name.to_string(), claim));
+        }
+    }
+    claimed.sort();
+    for (i, (name, claim)) in claimed.iter().enumerate() {
+        for (other_name, other_claim) in &claimed[i + 1..] {
+            if name != other_name && claim.conflicts_with(other_claim) {
+                return Err(format!(
+                    "ingresses '{name}' and '{other_name}' make conflicting claims on {}/{}: \
+                     {claim} against {other_claim}",
+                    claim.transport, claim.port
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply a `(Terminate, Output)` pair to the ingress's `IngressDef`.
 /// Only the four pairings that match a real protocol stack are
 /// accepted; everything else throws so a script that asks for, say,

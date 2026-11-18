@@ -146,6 +146,7 @@ pub fn register(engine: &mut Engine) {
 // spec: BSL#evaluation
 pub fn check_evaluated(def: &app::AppDef) -> Result<(), String> {
     ingress::check_redirect_terminations(def)?;
+    ingress::check_claim_conflicts(def)?;
     container::check_images_declared(def)?;
     service::check_route_balances(def)
 }

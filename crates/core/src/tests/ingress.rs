@@ -270,7 +270,7 @@ fn multiple_ingresses_on_same_service_coexist() {
         let traffic = app.service("public");
         traffic.ingress("test.example.com", 443).tls(Terminate.Https, Output.Http1).redirect();
         traffic.ingress("test.localhost", 443).tls(Terminate.Https, Output.Http1).redirect();
-        traffic.ingress("test2.localhost", 80);
+        traffic.ingress("test2.localhost", 8080);
     "#,
     );
     let def = app.def.load();
@@ -283,7 +283,7 @@ fn multiple_ingresses_on_same_service_coexist() {
     assert_eq!(ingress_names.len(), 3, "got {ingress_names:?}");
     assert!(ingress_names.contains(&"test.example.com:443".to_owned()));
     assert!(ingress_names.contains(&"test.localhost:443".to_owned()));
-    assert!(ingress_names.contains(&"test2.localhost:80".to_owned()));
+    assert!(ingress_names.contains(&"test2.localhost:8080".to_owned()));
 }
 
 // spec: ING#identity-within-an-app
@@ -454,4 +454,92 @@ fn ingress_on_anonymous_http_service_throws() {
         "run-it",
     );
     assert!(msg.contains("anonymous service"), "got: {msg}");
+}
+
+// spec: ING#identity-within-an-app
+// spec: PRX#shared-ports
+#[test]
+fn ingresses_of_one_kind_for_different_hostnames_share_a_port() {
+    for script in [
+        r#"let s = app.service("web");
+        s.ingress("a.example.com", 443).tls(Terminate.Tls, Output.Tcp);
+        s.ingress("b.example.com", 443).tls(Terminate.Tls, Output.Tcp);"#,
+        r#"let s = app.service("web");
+        s.ingress("a.example.com", 443).tls(Terminate.Tls, Output.Tcp);
+        s.ingress("b.example.com", 443).tls(Terminate.Https, Output.Http1);"#,
+        r#"let s = app.service("web");
+        s.ingress("a.example.com", 443).tls(Terminate.Https, Output.Http1).redirect();
+        s.ingress("b.example.com", 443).tls(Terminate.Https, Output.Http1).redirect();"#,
+    ] {
+        assert!(evaluate(script).is_none(), "evaluates: {script}");
+    }
+}
+
+// spec: ING#identity-within-an-app
+// spec: PRX#shared-ports
+#[test]
+fn conflicting_claims_on_a_port_fail_evaluation_naming_both_ingresses() {
+    for (script, first, second) in [
+        // Pass-through takes its whole TCP port.
+        (
+            r#"let s = app.service("web");
+            s.ingress("a.example.com", 443);
+            s.ingress("b.example.com", 443).tls(Terminate.Tls, Output.Tcp);"#,
+            "a.example.com:443",
+            "b.example.com:443",
+        ),
+        // DTLS takes its whole UDP port, which HTTP/3 on the same port needs.
+        (
+            r#"let s = app.service("web");
+            s.ingress("a.example.com", 443).tls(Terminate.Dtls, Output.Udp);
+            s.ingress("b.example.com", 443).tls(Terminate.Https, Output.Http1);"#,
+            "a.example.com:443",
+            "b.example.com:443",
+        ),
+        // Two DTLS ingresses cannot be told apart by hostname.
+        (
+            r#"let s = app.service("web");
+            s.ingress("a.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+            s.ingress("b.example.com", 5684).tls(Terminate.Dtls, Output.Udp);"#,
+            "a.example.com:5684",
+            "b.example.com:5684",
+        ),
+        // Plaintext HTTP and TLS are different kinds of claim on a TCP port.
+        (
+            r#"let s = app.service("web");
+            s.ingress("a.example.com", 443).tls(Terminate.Https, Output.Http1);
+            s.ingress("b.example.com", 80).tls(Terminate.Https, Output.Http1).redirect(443);"#,
+            "a.example.com:443",
+            "b.example.com:80",
+        ),
+    ] {
+        let err = evaluate(script).expect("the definition fails to evaluate");
+        assert!(
+            err.0.contains(first) && err.0.contains(second),
+            "names both ingresses: {err}"
+        );
+    }
+}
+
+// spec: ING#identity-within-an-app
+#[test]
+fn a_pass_through_ingress_and_a_dtls_ingress_claim_different_transports() {
+    assert!(
+        evaluate(
+            r#"let s = app.service("web");
+            s.ingress("a.example.com", 5684);
+            s.ingress("a.example.com", 5684).tls(Terminate.Dtls, Output.Udp);"#
+        )
+        .is_some_and(|e| e.0.contains("ingress conflict")),
+        "the same hostname and port is one ingress, whatever its termination"
+    );
+    assert!(
+        evaluate(
+            r#"let s = app.service("web");
+            s.ingress("a.example.com", 5684);
+            s.ingress("b.example.com", 5684).tls(Terminate.Dtls, Output.Udp);"#
+        )
+        .is_none(),
+        "TCP pass-through and DTLS on UDP are claims of different transports"
+    );
 }
