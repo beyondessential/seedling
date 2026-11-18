@@ -4958,6 +4958,54 @@ mod tests {
     }
 
     // spec: RCN#desired-state
+    // spec: OPS#shell-sessions
+    // What a shell's closure started was never actuated: nothing read its slot.
+    #[test]
+    fn the_job_a_shell_session_placed_in_its_slot_is_started() {
+        let (oi, _containers, _dir) = with_stub_containers();
+        let mut reconciler = test_reconciler(&oi);
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "app", "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+        )
+        .unwrap();
+        oi.install("app");
+        let job = crate::runtime::identity::ResourceInstance::new_anonymous(
+            AppName::new("app").unwrap(),
+            crate::defs::resource::ResourceKind::Job,
+        );
+        let (definition, _) = anonymous_job_with_anonymous_volume();
+        oi.block_on(
+            oi.state
+                .driver
+                .container
+                .pull_image("docker.io/library/busybox:1.37"),
+        )
+        .unwrap();
+        hold_in_session(
+            &oi,
+            "app",
+            seedling_protocol::names::SessionId::generate(),
+            &job,
+            definition,
+            false,
+        );
+        run_pods(&oi, &mut reconciler, 1);
+
+        assert!(
+            oi.block_on(
+                oi.state
+                    .driver
+                    .process
+                    .unit_state(&crate::system::actuator::unit_name(&job))
+            )
+            .unwrap()
+            .is_some(),
+            "the session's job was started"
+        );
+    }
+
+    // spec: RCN#desired-state
     // A session's resources are desired while the app is installing, holding
     // nothing of its own until its install closure has put something there.
     #[test]

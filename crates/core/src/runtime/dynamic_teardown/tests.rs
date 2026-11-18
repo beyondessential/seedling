@@ -258,24 +258,35 @@ fn a_background_teardown_leaves_the_resources_of_a_session_that_has_a_slot() {
     sessions.open(session);
 
     with_paused_clock(async {
-        let keep = keep_tearing_down(
-            Arc::clone(&h.driver),
-            h.db.clone(),
-            Arc::clone(&scheduler),
-            Arc::clone(&registry),
-            None,
-        );
-        tokio::pin!(keep);
-        tokio::select! {
-            () = &mut keep => panic!("the teardown ended while a session stood"),
-            () = tokio::time::sleep(TEN_MINUTES) => {}
-        }
+        // Nothing is left for it to take, the session being its own to tear
+        // down, so it ends having left the record.
+        tokio::time::timeout(
+            TEN_MINUTES,
+            keep_tearing_down(
+                Arc::clone(&h.driver),
+                h.db.clone(),
+                Arc::clone(&scheduler),
+                Arc::clone(&registry),
+                None,
+            ),
+        )
+        .await
+        .expect("the teardown ends");
         assert_eq!(records(&h), 1, "the session's resource was left alone");
 
         sessions.close(&session);
-        tokio::time::timeout(TEN_MINUTES, keep)
-            .await
-            .expect("the teardown takes the resource once the session has let go");
+        tokio::time::timeout(
+            TEN_MINUTES,
+            keep_tearing_down(
+                Arc::clone(&h.driver),
+                h.db.clone(),
+                Arc::clone(&scheduler),
+                Arc::clone(&registry),
+                None,
+            ),
+        )
+        .await
+        .expect("the teardown takes the resource once the session has let go");
     });
     assert_eq!(records(&h), 0);
 }

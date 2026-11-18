@@ -139,7 +139,11 @@ Shell actions are not lifecycle operations.
 They are interactive sessions that can run concurrently with a lifecycle operation and with each other.
 A shell's closure calls `shell.attach(job)`, which starts the job and blocks until the attachment ends, then returns a `ShellExit`.
 The closure then runs on, and the session ends when it returns.
-A shell creates temporary (dynamic) resources that are cleaned up when the session ends.
+A shell creates temporary (dynamic) resources, and its `rt.start` starts them: the reconciler holds each open session's dynamic resources in the app's desired state beside those of any operation, each session in a slot of its own.
+In a shell, `rt.start` leaves the app's declared resources to whatever else drives them, and `rt.stop` throws if its selection holds one.
+Each dynamic resource is recorded against the session, whose id stands where an operation's does, before it is started.
+When the session ends, its dynamic resources are torn down by the same cleanup an ended operation's are, holding `operation_cleanup_stalled` with the session id as its subject while they are slow to go.
+The session's exit is not held up for that teardown, and a session left by a previous run is torn down at startup like an abandoned operation.
 
 ## Action Closure Suspension and Replay
 

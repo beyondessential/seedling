@@ -336,7 +336,10 @@ app.on_shell("bash", |_rt, shell, _param| {
 // session or stops it, or the connection is lost. It returns a `ShellExit`
 // with `exited()`, `exit_code()` (`()` if the job did not exit), `success()`
 // and `ensure_success()`. The closure then runs on, with `rt` but without the
-// terminal, and the session ends when the closure returns.
+// terminal, and the session ends when the closure returns. Dynamic resources
+// the closure starts are torn down after the session ends. In a shell,
+// `rt.start` places only dynamic resources in the desired state and `rt.stop`
+// throws for a resource the app declares.
 app.on_shell("check", |rt, shell, _param| {
     shell.attach(app.job().image(image.call()).command("sh")).ensure_success();
     rt.start(app.job().image(image.call()).command(["cleanup"])).terminated().ensure_success();
