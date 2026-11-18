@@ -41,8 +41,7 @@ function eventSummary(ev: SeedlingEvent): string {
     case "AppDeregistered": return "deregistered";
     case "AppUpdated": return `updated to gen ${ev.generation ?? "?"}`;
     case "AppPhaseChanged": return `phase → ${ev.phase ?? "?"}`;
-    case "ParamSet": return `param ${ev.name ?? ""} set`;
-    case "ParamUnset": return `param ${ev.name ?? ""} unset`;
+    case "ParamsChanged": return `params ${(ev.changes ?? []).map((c) => c.name).join(", ")} changed`;
     case "OperationStarted": return `${ev.action_name ?? "operation"} started`;
     case "OperationCompleted": return `${ev.action_name ?? "operation"} completed`;
     case "OperationFailed": return `${ev.action_name ?? "operation"} failed: ${ev.error ?? ""}`;

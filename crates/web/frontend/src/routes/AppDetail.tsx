@@ -100,6 +100,7 @@ import type {
   HealthcheckSummary,
   ImagePin,
   ImageSummary,
+  ParamChanges,
   ResourceDef,
   ResourceInstance,
   RestartSummary,
@@ -1002,22 +1003,18 @@ function ResourcesSection({
   );
 }
 
+/** The edits an operator has made to an app's params, held until they are
+ *  applied together as one change. */
+// spec: UI#operator-capabilities
 function ParamsSection({
   appName,
   params,
-  status,
   onRefresh,
 }: {
   appName: string;
   params: AppParam[];
-  status: AppStatus;
   onRefresh: () => void;
 }) {
-  // Params cannot be mutated while the app has an operation in flight; the
-  // backend rejects with operation_in_progress. Disable the edit/add
-  // affordances and explain why, rather than letting users hit a server error.
-  const operationInFlight = status === "installing" || status === "operating";
-  const editsDisabled = operationInFlight;
   const { execute, loading, error, clearError } = useOiAction();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -1025,7 +1022,22 @@ function ParamsSection({
   const [adding, setAdding] = useState(false);
   const [addName, setAddName] = useState("");
   const [addValue, setAddValue] = useState("");
-  const [planning, setPlanning] = useState<{ name: string; value: string } | null>(null);
+  const [staged, setStaged] = useState<ParamChanges>({});
+  const [planning, setPlanning] = useState<ParamChanges | null>(null);
+  const stagedNames = Object.keys(staged).sort();
+  const declared = new Set(params.map((p) => p.name));
+  const undeclaredStaged = stagedNames.filter((n) => !declared.has(n));
+
+  const stage = (name: string, value: string | null) => {
+    setStaged((s) => ({ ...s, [name]: value }));
+  };
+
+  const unstage = (name: string) => {
+    setStaged((s) => {
+      const { [name]: _dropped, ...rest } = s;
+      return rest;
+    });
+  };
 
   const startEdit = (p: AppParam) => {
     setEditing(p.name);
@@ -1053,34 +1065,28 @@ function ParamsSection({
     setAddValue("");
   };
 
-  const saveAdd = async () => {
+  const saveAdd = () => {
     if (!addName.trim()) return;
-    const result = await execute("/apps/params/set", {
-      app: appName,
-      name: addName.trim(),
-      value: addValue,
-    });
-    if (result === null) return;
+    stage(addName.trim(), addValue);
     setAdding(false);
     setAddName("");
     setAddValue("");
-    onRefresh();
   };
 
-  const save = async () => {
+  const save = () => {
     if (!editing) return;
-    const result = await execute("/apps/params/set", {
-      app: appName,
-      name: editing,
-      value: draft,
-    });
-    if (result === null) return;
+    stage(editing, draft);
     setEditing(null);
-    onRefresh();
   };
 
-  const unset = async (paramName: string) => {
-    if ((await execute("/apps/params/unset", { app: appName, name: paramName })) === null) return;
+  const unset = (paramName: string) => {
+    stage(paramName, null);
+    if (editing === paramName) setEditing(null);
+  };
+
+  const apply = async () => {
+    if ((await execute("/apps/params/set", { app: appName, params: staged })) === null) return;
+    setStaged({});
     onRefresh();
   };
 
@@ -1093,7 +1099,7 @@ function ParamsSection({
           value={addName}
           onChange={(e) => setAddName(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void saveAdd();
+            if (e.key === "Enter") saveAdd();
             if (e.key === "Escape") cancelAdd();
           }}
           autoFocus
@@ -1110,7 +1116,7 @@ function ParamsSection({
           value={addValue}
           onChange={(e) => setAddValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void saveAdd();
+            if (e.key === "Enter") saveAdd();
             if (e.key === "Escape") cancelAdd();
           }}
           fullWidth
@@ -1123,15 +1129,15 @@ function ParamsSection({
         <IconActionButton
           safety="read"
           tooltip="Plan this change"
-          onClick={() => setPlanning({ name: addName.trim(), value: addValue })}
+          onClick={() => setPlanning({ ...staged, [addName.trim()]: addValue })}
           disabled={!addName.trim()}
         >
           <ArticleIcon fontSize="small" />
         </IconActionButton>
         <IconActionButton
           safety="write"
-          tooltip="Save"
-          onClick={() => void saveAdd()}
+          tooltip="Stage this change"
+          onClick={saveAdd}
           disabled={loading || !addName.trim()}
         >
           <CheckIcon fontSize="small" />
@@ -1143,16 +1149,71 @@ function ParamsSection({
     </TableRow>
   ) : null;
 
-  const disabledBanner = operationInFlight ? (
-    <Alert severity="info" sx={{ mb: 1 }}>
-      Params are read-only while an operation is in progress for this app.
-    </Alert>
-  ) : null;
+  const pendingBanner =
+    stagedNames.length > 0 ? (
+      <Alert
+        severity="info"
+        action={
+          <Box sx={{ display: "flex", gap: 1 }}>
+            <OutlinedActionButton
+              safety="read"
+              size="small"
+              onClick={() => setPlanning(staged)}
+            >
+              Plan
+            </OutlinedActionButton>
+            <SolidActionButton
+              safety="write"
+              size="small"
+              onClick={() => void apply()}
+              disabled={loading}
+            >
+              Apply
+            </SolidActionButton>
+            <Button size="small" onClick={() => setStaged({})} disabled={loading}>
+              Discard
+            </Button>
+          </Box>
+        }
+      >
+        {stagedNames.length === 1
+          ? "1 change is waiting to be applied."
+          : `${stagedNames.length} changes are waiting to be applied together.`}
+      </Alert>
+    ) : null;
 
-  if (params.length === 0 && !adding) {
+  const stagedValue = (name: string) => {
+    const value = staged[name];
+    return value === null ? (
+      <Box component="span" sx={{ color: "warning.main" }}>
+        unset
+      </Box>
+    ) : (
+      value
+    );
+  };
+
+  const stagedRows = undeclaredStaged.map((name) => (
+    <TableRow key={`staged-${name}`}>
+      <TableCell sx={{ fontFamily: "monospace" }}>{name}</TableCell>
+      <TableCell>
+        <Chip label="not declared" size="small" variant="outlined" />
+      </TableCell>
+      <TableCell sx={{ fontFamily: "monospace" }}>
+        {stagedValue(name)}
+        <Chip label="pending" size="small" color="info" sx={{ ml: 1 }} />
+      </TableCell>
+      <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+        <IconActionButton safety="read" tooltip="Discard this change" onClick={() => unstage(name)}>
+          <ClearIcon fontSize="small" />
+        </IconActionButton>
+      </TableCell>
+    </TableRow>
+  ));
+
+  if (params.length === 0 && !adding && stagedNames.length === 0) {
     return (
       <Stack spacing={1}>
-        {disabledBanner}
         {error && <OiErrorAlert error={error} />}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Typography
@@ -1167,7 +1228,6 @@ function ParamsSection({
             size="small"
             startIcon={<AddIcon fontSize="small" />}
             onClick={startAdd}
-            disabled={editsDisabled}
           >
             Set param
           </OutlinedActionButton>
@@ -1178,7 +1238,7 @@ function ParamsSection({
 
   return (
     <Stack spacing={1}>
-      {disabledBanner}
+      {pendingBanner}
       {error && <OiErrorAlert error={error} />}
       <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
         {!adding && (
@@ -1187,7 +1247,6 @@ function ParamsSection({
             size="small"
             startIcon={<AddIcon fontSize="small" />}
             onClick={startAdd}
-            disabled={editsDisabled}
           >
             Set param
           </OutlinedActionButton>
@@ -1221,7 +1280,7 @@ function ParamsSection({
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && p.kind !== "multiline")
-                          void save();
+                          save();
                         if (e.key === "Escape") cancel();
                       }}
                       autoFocus
@@ -1286,17 +1345,18 @@ function ParamsSection({
                                   size="small"
                                   aria-label="Plan this change"
                                   onClick={() =>
-                                    setPlanning({ name: p.name, value: draft })
+                                    setPlanning({ ...staged, [p.name]: draft })
                                   }
                                 >
                                   <ArticleIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
-                              <Tooltip title="Save">
+                              <Tooltip title="Stage this change">
                                 <span>
                                   <IconButton
                                     size="small"
-                                    onClick={() => void save()}
+                                    aria-label="Stage this change"
+                                    onClick={save}
                                     disabled={loading}
                                   >
                                     <CheckIcon fontSize="small" />
@@ -1352,6 +1412,15 @@ function ParamsSection({
                         p.secret ||
                         p.kind === "password" ||
                         p.kind === "weak-password";
+                      if (p.name in staged) {
+                        const value = staged[p.name];
+                        return (
+                          <>
+                            {value === null || !isMasked ? stagedValue(p.name) : "••••••••"}
+                            <Chip label="pending" size="small" color="info" sx={{ ml: 1 }} />
+                          </>
+                        );
+                      }
                       if (p.secret && p.is_set) {
                         return "••••••••";
                       }
@@ -1384,7 +1453,7 @@ function ParamsSection({
                       safety="write"
                       tooltip={p.value == null && !p.is_set ? "Set" : "Edit"}
                       onClick={() => startEdit(p)}
-                      disabled={loading || editsDisabled}
+                      disabled={loading}
                     >
                       <EditIcon fontSize="small" />
                     </IconActionButton>
@@ -1392,8 +1461,8 @@ function ParamsSection({
                       <IconActionButton
                         safety="dangerous"
                         tooltip="Unset"
-                        onClick={() => void unset(p.name)}
-                        disabled={loading || editsDisabled}
+                        onClick={() => unset(p.name)}
+                        disabled={loading}
                       >
                         <DeleteOutlineIcon fontSize="small" />
                       </IconActionButton>
@@ -1404,16 +1473,26 @@ function ParamsSection({
                         <IconActionButton
                           safety="write"
                           tooltip="Reset to default"
-                          onClick={() => void unset(p.name)}
-                          disabled={loading || editsDisabled}
+                          onClick={() => unset(p.name)}
+                          disabled={loading}
                         >
                           <RestoreIcon fontSize="small" />
                         </IconActionButton>
                       )}
+                    {p.name in staged && (
+                      <IconActionButton
+                        safety="read"
+                        tooltip="Discard this change"
+                        onClick={() => unstage(p.name)}
+                      >
+                        <ClearIcon fontSize="small" />
+                      </IconActionButton>
+                    )}
                   </TableCell>
                 </TableRow>
               ),
             )}
+            {stagedRows}
             {addRow}
           </TableBody>
         </Table>
@@ -1421,8 +1500,7 @@ function ParamsSection({
       {planning && (
         <PlanParamDialog
           appName={appName}
-          name={planning.name}
-          value={planning.value}
+          changes={planning}
           onClose={() => setPlanning(null)}
         />
       )}
@@ -2494,8 +2572,7 @@ const APP_DETAIL_EVENTS: Set<string> = new Set([
   "OperationCompleted",
   "OperationFailed",
   "OperationCancelled",
-  "ParamSet",
-  "ParamUnset",
+  "ParamsChanged",
   "ResourceStateChanged",
   "InstanceHealthChanged",
   "FaultFiled",
@@ -2741,7 +2818,6 @@ export default function AppDetail() {
             <ParamsSection
               appName={name!}
               params={data.params}
-              status={data.status}
               onRefresh={refetch}
             />
           </Section>

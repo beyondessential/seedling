@@ -107,10 +107,10 @@ describe("AppDetail page", () => {
     const { request } = mount(baseFixtures(detail), "dangerous");
     expect(await screen.findByText(/Operation in progress/)).toBeTruthy();
     expect(screen.getByText(/barrier: ready \(33s \/ 120s\)/)).toBeTruthy();
-    // Params are read-only during the operation.
+    // Params stay editable during an operation: a change does not wait for it.
     expect(
-      screen.getByText(/Params are read-only while an operation is in progress/),
-    ).toBeTruthy();
+      (screen.getByRole("button", { name: "Set param" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     // The running action shows a progress row; the other action can't run.
     expect(screen.getByRole("button", { name: /Running…/ })).toBeTruthy();
     const run = screen.getByRole("button", { name: "Run" }) as HTMLButtonElement;

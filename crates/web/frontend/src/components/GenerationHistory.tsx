@@ -25,8 +25,7 @@ const mono = { fontFamily: "monospace" } as const;
 const GENERATION_EVENTS: Set<string> = new Set([
   "AppRegistered",
   "AppUpdated",
-  "ParamSet",
-  "ParamUnset",
+  "ParamsChanged",
   "OperationCompleted",
   "OperationFailed",
   "OperationCancelled",
@@ -35,8 +34,7 @@ const GENERATION_EVENTS: Set<string> = new Set([
 const KIND_LABEL: Record<GenerationEntry["kind"], string> = {
   register: "registered",
   script_update: "script updated",
-  param_set: "param set",
-  param_unset: "param unset",
+  param_change: "params changed",
 };
 
 function outcomeColor(outcome: NonNullable<GenerationEntry["outcome"]>): "success" | "error" | "warning" | "info" {
@@ -70,21 +68,21 @@ function Detail({ entry }: { entry: GenerationEntry }) {
           {provenanceLabel(entry.definition)}
         </Box>
       )}
-      {entry.param_name !== undefined && (
-        <Box component="div" sx={mono}>
-          {entry.param_name}
-          {entry.redacted ? (
+      {entry.params?.map((p) => (
+        <Box component="div" sx={mono} key={p.name}>
+          {p.name}
+          {p.redacted ? (
             <Typography component="span" variant="caption" sx={{ color: "text.secondary", ml: 1 }}>
               values withheld
             </Typography>
           ) : (
             <>
               {": "}
-              {shown(entry.previous_value)} → {shown(entry.new_value)}
+              {shown(p.previous_value)} → {shown(p.new_value)}
             </>
           )}
         </Box>
-      )}
+      ))}
     </>
   );
 }

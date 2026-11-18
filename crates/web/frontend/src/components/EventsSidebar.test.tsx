@@ -50,6 +50,26 @@ describe("EventsSidebar", () => {
     expect(screen.getByText("2")).toBeTruthy();
   });
 
+  it("summarises a change of several params in one row", async () => {
+    renderWithSession(<EventsSidebar />, {
+      events: [
+        {
+          type: "ParamsChanged",
+          timestamp: "2026-07-09T10:00:00Z",
+          app: "shop",
+          changes: [
+            { name: "host", new_value: "h.example" },
+            { name: "port", previous_value: "80", new_value: "8080" },
+          ],
+          generation: 3,
+          previous_generation: 2,
+        },
+      ],
+    });
+    expect(await screen.findByText("params host, port changed")).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "shop" })).toHaveLength(1);
+  });
+
   it("shows infra component status from /infra/status", async () => {
     renderWithSession(<EventsSidebar />, {
       fixtures: { "/infra/status": { proxy: "running", resolver: "stopped" } },

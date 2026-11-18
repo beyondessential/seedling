@@ -106,17 +106,21 @@ describe("DefinitionSection", () => {
   });
 
   // spec: UI#app-definitions
-  it("plans, then applies the definition and one param in one update", async () => {
+  it("plans, then applies the definition and several params in one update", async () => {
     const { request } = mount(fetched, [], {
       "/registries/tags": { tags: ["v2.11.3", "v2.12.0"] },
       "/apps/plan": plan,
-      "/apps/update": { schedule: "accepted", generation: 43 },
+      "/apps/update": { generation: 43 },
     });
     fireEvent.click(screen.getByRole("button", { name: "Update from registry" }));
     const input = await screen.findByLabelText("Tag or reference");
     fireEvent.change(input, { target: { value: "v2.12.0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Change a param" }));
     fireEvent.change(screen.getByLabelText("Param"), { target: { value: "version" } });
     fireEvent.change(screen.getByLabelText("Value"), { target: { value: "2.12.0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Change a param" }));
+    fireEvent.change(screen.getAllByLabelText("Param")[1], { target: { value: "legacy" } });
+    fireEvent.click(screen.getAllByLabelText("Unset")[1]);
     const apply = screen.getByRole("button", { name: "Apply" });
     expect(apply.hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
@@ -124,7 +128,7 @@ describe("DefinitionSection", () => {
       expect(request).toHaveBeenCalledWith("/apps/plan", {
         app: "central",
         proposed_reference: "ghcr.io/org/central-def:v2.12.0",
-        proposed_params: [{ name: "version", value: "2.12.0" }],
+        proposed_params: { version: "2.12.0", legacy: null },
       }),
     );
     await waitFor(() => expect(apply.hasAttribute("disabled")).toBe(false));
@@ -133,10 +137,53 @@ describe("DefinitionSection", () => {
       expect(request).toHaveBeenCalledWith("/apps/update", {
         app: "central",
         reference: "ghcr.io/org/central-def:v2.12.0",
-        param: { name: "version", value: "2.12.0" },
+        params: { version: "2.12.0", legacy: null },
       }),
     );
     expect(request.mock.calls.filter((c) => c[0] === "/apps/update")).toHaveLength(1);
+  });
+
+  // spec: UI#app-definitions
+  it("will not review a parameter named twice", async () => {
+    const { request } = mount(fetched, [], {
+      "/registries/tags": { tags: [] },
+      "/apps/plan": plan,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Update from registry" }));
+    fireEvent.change(await screen.findByLabelText("Tag or reference"), {
+      target: { value: "v2.12.0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Change a param" }));
+    fireEvent.click(screen.getByRole("button", { name: "Change a param" }));
+    for (const field of screen.getAllByLabelText("Param")) {
+      fireEvent.change(field, { target: { value: "version" } });
+    }
+    expect(screen.getAllByText("Named more than once")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Review" }).hasAttribute("disabled")).toBe(true);
+    expect(request.mock.calls.filter((c) => c[0] === "/apps/plan")).toHaveLength(0);
+  });
+
+  // spec: UI#app-definitions
+  it("applies the definition alone when no param is changed", async () => {
+    const { request } = mount(fetched, [], {
+      "/registries/tags": { tags: [] },
+      "/apps/plan": plan,
+      "/apps/update": { generation: 43 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Update from registry" }));
+    fireEvent.change(await screen.findByLabelText("Tag or reference"), {
+      target: { value: "v2.12.0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    const apply = screen.getByRole("button", { name: "Apply" });
+    await waitFor(() => expect(apply.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(apply);
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith("/apps/update", {
+        app: "central",
+        reference: "ghcr.io/org/central-def:v2.12.0",
+      }),
+    );
   });
 
   // spec: UI#app-definitions

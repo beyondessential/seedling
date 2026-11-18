@@ -291,17 +291,24 @@ export type DefinitionProvenance = (
   seedling_versions: string | null;
 };
 
-export type GenerationKind = "register" | "script_update" | "param_set" | "param_unset";
+export type GenerationKind = "register" | "script_update" | "param_change";
+
+/** What a generation did to one parameter. Both values are absent when
+ *  `redacted`. */
+export interface GenerationParam {
+  name: string;
+  previous_value?: string | null;
+  new_value?: string | null;
+  redacted?: boolean;
+}
 
 export interface GenerationEntry {
   generation: number;
   timestamp: string;
   kind: GenerationKind;
   definition?: DefinitionProvenance;
-  param_name?: string;
-  previous_value?: string | null;
-  new_value?: string | null;
-  redacted?: boolean;
+  /** The parameters the generation changed, in ascending order of name. */
+  params?: GenerationParam[];
   script_changed: boolean;
   operation_id: string | null;
   outcome: "pending" | "succeeded" | "cancelled" | "failed" | null;
@@ -353,6 +360,19 @@ export interface LogStreamParams {
   tail?: number;
 }
 
+/** One parameter a `ParamsChanged` or `AppUpdated` event reports as moved. An
+ *  absent value is an unset one; both are absent when `redacted`. */
+export interface ParamChangeEntry {
+  name: string;
+  previous_value?: string;
+  new_value?: string;
+  redacted?: boolean;
+}
+
+/** The parameters a request changes: a string sets the parameter, `null`
+ *  unsets it. */
+export type ParamChanges = Record<string, string | null>;
+
 export interface SeedlingEvent {
   type: string;
   timestamp: string;
@@ -364,7 +384,9 @@ export interface SeedlingEvent {
   previous_generation?: number;
   // AppPhaseChanged
   phase?: string;
-  // ParamSet / ParamUnset
+  // ParamsChanged / AppUpdated
+  changes?: ParamChangeEntry[];
+  // ResourceStopped / ResourceUnstopped
   name?: string;
   // OperationStarted / OperationCompleted / OperationFailed / OperationCancelled
   action_name?: string;

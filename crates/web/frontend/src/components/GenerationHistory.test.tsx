@@ -7,7 +7,7 @@ import { GenerationHistory } from "./GenerationHistory";
 const entry = (generation: number, over: Partial<GenerationEntry> = {}): GenerationEntry => ({
   generation,
   timestamp: "2026-07-09T10:00:00Z",
-  kind: "param_set",
+  kind: "param_change",
   script_changed: false,
   operation_id: null,
   outcome: null,
@@ -20,8 +20,15 @@ describe("GenerationHistory", () => {
     renderWithSession(<GenerationHistory appName="shop" />, {
       fixtures: {
         "/apps/generations": [
-          entry(3, { param_name: "replicas", previous_value: "1", new_value: "2", operation_id: "op", outcome: "failed", error: "handler exited" }),
-          entry(2, { param_name: "token", redacted: true }),
+          entry(4, {
+            params: [
+              { name: "host", previous_value: null, new_value: "h.example" },
+              { name: "port", previous_value: "80", new_value: "8080" },
+              { name: "tls", previous_value: "on", new_value: null },
+            ],
+          }),
+          entry(3, { params: [{ name: "replicas", previous_value: "1", new_value: "2" }], operation_id: "op", outcome: "failed", error: "handler exited" }),
+          entry(2, { params: [{ name: "token", redacted: true }] }),
           entry(1, {
             kind: "register",
             script_changed: true,
@@ -31,6 +38,10 @@ describe("GenerationHistory", () => {
       },
     });
     expect(await screen.findByText("replicas: 1 → 2")).toBeTruthy();
+    // One generation lists each parameter it changed.
+    expect(screen.getByText("host: (unset) → h.example")).toBeTruthy();
+    expect(screen.getByText("port: 80 → 8080")).toBeTruthy();
+    expect(screen.getByText("tls: on → (unset)")).toBeTruthy();
     expect(screen.getByText("failed")).toBeTruthy();
     expect(screen.getByText("handler exited")).toBeTruthy();
     expect(screen.getByText("values withheld")).toBeTruthy();
