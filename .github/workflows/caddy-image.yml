@@ -101,6 +101,8 @@ jobs:
 
   build:
     name: Build and publish
+    # The DTLS module ships in the image, so its tests gate publication.
+    needs: [dtls-module]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
