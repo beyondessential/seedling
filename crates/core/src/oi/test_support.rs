@@ -174,24 +174,10 @@ impl TestOi {
         oi
     }
 
-    /// Mark `name` installed through the immediate (no `on_install`) path.
-    ///
-    /// Installing starts the app's start action, which holds the scheduler
-    /// until it ends; this waits for that, so the app is left installed and
-    /// nothing is in progress.
+    /// Install `name`, leaving it `Installed`.
     pub fn install(&self, name: &str) {
-        self.call("/apps/install/invoke", json!({ "app": name }))
+        self.call("/apps/install", json!({ "app": name }))
             .expect("install app");
-        self.block_on(async {
-            let idle = async {
-                while self.state.scheduler.lock().active().is_some() {
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-            };
-            tokio::time::timeout(std::time::Duration::from_secs(10), idle)
-                .await
-                .expect("the start action ends");
-        });
     }
 
     /// Drive a future on the harness's own runtime.
@@ -496,65 +482,6 @@ mod tests {
                 .unwrap()
         });
         assert_eq!(rows, 1, "the discarded request's record is gone");
-    }
-
-    // spec: OPS#interrupted-operations
-    // spec: OPS#stuck-install-recovery
-    #[test]
-    fn an_install_that_cannot_be_replayed_is_recovered_as_a_stuck_install() {
-        let oi = TestOi::with_app("demo");
-        *oi.state.registry.read().get("demo").unwrap().phase.lock() =
-            crate::runtime::apps::AppPhase::Installing;
-        let name = seedling_protocol::names::AppName::new("demo").unwrap();
-
-        crate::oi::handler::actions::lifecycle::recover_unreplayable_install(&oi.state, &name);
-
-        assert_eq!(
-            *oi.state.registry.read().get("demo").unwrap().phase.lock(),
-            crate::runtime::apps::AppPhase::Uninstalling,
-            "teardown, not NotInstalled, is the way out"
-        );
-        let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
-        assert!(
-            faults
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|f| f["kind"] == "install_interrupted")
-        );
-    }
-
-    // spec: FLT#app-faults
-    #[test]
-    fn a_completed_install_clears_an_interrupted_install_fault() {
-        let oi = TestOi::with_app("demo");
-        let name = seedling_protocol::names::AppName::new("demo").unwrap();
-        oi.state.db.call(move |db| {
-            crate::runtime::faults::file_fault(
-                db,
-                &name,
-                None,
-                None,
-                None,
-                "install_interrupted",
-                "interrupted",
-            )
-            .unwrap();
-        });
-        let active = |oi: &TestOi| {
-            oi.call("/faults/list", json!({ "app": "demo" }))
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|f| f["kind"] == "install_interrupted")
-                .count()
-        };
-        assert_eq!(active(&oi), 1);
-
-        oi.install("demo");
-
-        assert_eq!(active(&oi), 0);
     }
 
     // spec: OPS#unreadable-operation-state

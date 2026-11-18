@@ -83,7 +83,7 @@ pub enum OiEvent {
     },
     // spec: EVT#event-types
     /// Emitted on every transition of `AppPhase`. Phase is one of
-    /// `"not_installed"`, `"installing"`, `"installed"`, `"uninstalling"`.
+    /// `"not_installed"`, `"installed"`, `"uninstalling"`.
     /// The WebUI relies on this to refresh after uninstall completes,
     /// because uninstall is not driven by a BSL operation and therefore
     /// does not emit OperationStarted/OperationCompleted.

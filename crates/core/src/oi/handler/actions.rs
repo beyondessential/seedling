@@ -9,7 +9,7 @@ use serde_json::json;
 use self::lifecycle::spawn_accepted_operation;
 use super::HandlerResult;
 use crate::{
-    defs::install::ParamDef,
+    defs::param_def::ParamDef,
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
@@ -18,7 +18,6 @@ use crate::{
     },
 };
 
-pub(crate) mod install;
 pub mod lifecycle;
 
 #[derive(Deserialize)]
@@ -38,11 +37,7 @@ pub(crate) struct CancelActionParams {
 /// Request cancellation of the currently-active operation for `app`.
 // spec: OPS#cancellation
 // spec: ACI#cancellation
-pub(crate) fn cancel_action(
-    state: &Arc<OiState>,
-    params: CancelActionParams,
-    ctx: &RequestCtx,
-) -> HandlerResult {
+pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
     let app_name = &params.app;
     let outcome = state.scheduler.lock().request_cancel(app_name);
     match outcome {
@@ -68,40 +63,9 @@ pub(crate) fn cancel_action(
             tracing::info!(app = %app_name, operation_id = %op_id.0, "operation cancel requested");
             Ok(json!({ "cancelled": true }))
         }
-        CancelOutcome::NoActiveOp => {
-            // spec: OPS#stuck-install-recovery
-            // The scheduler has no live operation, but the app's persisted
-            // phase may be Installing from a prior run that crashed or whose
-            // post-cancel cleanup failed to revert the phase. Without a
-            // recovery path the operator can neither cancel nor uninstall
-            // such an app — both gates check phase. Treat cancel as "unstick
-            // the phase": drop into Uninstalling so the reconciler tears
-            // down any half-installed resources (the reconciler skips
-            // NotInstalled apps and would otherwise strand containers and
-            // units that the previous install had already created).
-            let stuck_phase = {
-                let reg = state.registry.read();
-                reg.get(app_name.as_str()).map(|e| e.phase.lock().clone())
-            };
-            match stuck_phase {
-                Some(AppPhase::Installing) => {
-                    lifecycle::set_phase_and_persist(
-                        state,
-                        app_name,
-                        AppPhase::Uninstalling,
-                        Some(Arc::clone(&ctx.events.actor)),
-                    );
-                    tracing::warn!(
-                        app = %app_name,
-                        "no active operation but phase was Installing; transitioning to Uninstalling for teardown"
-                    );
-                    Ok(json!({ "cancelled": true, "recovered_stuck_phase": "installing" }))
-                }
-                _ => Err(OiError::not_found(format!(
-                    "no active operation to cancel for app: {app_name}"
-                ))),
-            }
-        }
+        CancelOutcome::NoActiveOp => Err(OiError::not_found(format!(
+            "no active operation to cancel for app: {app_name}"
+        ))),
     }
 }
 
@@ -191,12 +155,6 @@ pub(crate) fn invoke_action(
         // Shells and actions have separate namespaces: a shell of the same
         // name does not stand in the way of the action.
         let def = entry.app.def.load();
-        // spec: ACN#start-action
-        if action_name == "start" {
-            return Err(OiError::not_found(
-                "'start' is a lifecycle action and cannot be manually invoked".to_string(),
-            ));
-        }
         let action_def = def
             .actions
             .get(action_name.as_str())
@@ -369,21 +327,6 @@ mod tests {
             .unwrap_err();
         assert_eq!(code, "not_found");
         assert!(message.contains("action not found"), "message: {message}");
-    }
-
-    // spec: ACN#start-action
-    #[test]
-    fn invoke_start_is_rejected() {
-        let oi = TestOi::with_app("demo");
-        oi.install("demo");
-        let (code, message) = oi
-            .call(
-                "/apps/action/invoke",
-                json!({ "app": "demo", "name": "start" }),
-            )
-            .unwrap_err();
-        assert_eq!(code, "not_found");
-        assert!(message.contains("lifecycle action"), "message: {message}");
     }
 
     // spec: ACN#param-delivery

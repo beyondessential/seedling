@@ -7,10 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    defs::{
-        install::ParamKind,
-        resource::{Resource, ResourceKind},
-    },
+    defs::resource::{Resource, ResourceKind},
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
@@ -31,8 +28,8 @@ use crate::{
 use super::{
     HandlerResult,
     appdef_json::{
-        action_entry_json, install_entry_json, param_schema_entry_json, resource_static_json,
-        scale_bounds_of, shell_entry_json,
+        action_entry_json, param_schema_entry_json, resource_static_json, scale_bounds_of,
+        shell_entry_json,
     },
     definition::{self, DefinitionInput, Resolved},
     params::ParamChanges,
@@ -134,18 +131,16 @@ pub(crate) fn app_blocked(app: &str, doing: &str, blocker: &AppBlocker) -> OiErr
 /// Extract the fields needed to persist an app entry without holding `&AppEntry`.
 pub(crate) fn extract_persist_fields(
     entry: &crate::runtime::apps::AppEntry,
-) -> (AppName, u64, bool, bool, bool) {
+) -> (AppName, u64, bool, bool) {
     use crate::runtime::apps::AppPhase;
     let phase = entry.phase.lock();
     let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
     let uninstalling = matches!(*phase, AppPhase::Uninstalling);
-    let installing = matches!(*phase, AppPhase::Installing);
     (
         entry.name.clone(),
         entry.current_generation,
         installed,
         uninstalling,
-        installing,
     )
 }
 
@@ -156,23 +151,20 @@ pub(crate) fn persist_app_fields(
     generation_n: u64,
     installed: bool,
     uninstalling: bool,
-    installing: bool,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
         // spec: INFRA#database
         "INSERT INTO registered_apps \
-             (name, installed, uninstalling, installing, current_generation) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
+             (name, installed, uninstalling, current_generation) \
+         VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT(name) DO UPDATE SET \
              installed = excluded.installed, \
              uninstalling = excluded.uninstalling, \
-             installing = excluded.installing, \
              current_generation = excluded.current_generation",
         rusqlite::params![
             name,
             installed as i64,
             uninstalling as i64,
-            installing as i64,
             generation_n as i64,
         ],
     )?;
@@ -426,14 +418,10 @@ pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
     }
 }
 
-pub(crate) fn install_requirement_kind_str(kind: ParamKind) -> &'static str {
-    kind.as_str()
-}
-
 pub(crate) fn serialize_param_schema(
     schema: &std::collections::BTreeMap<
         seedling_protocol::names::ParamName,
-        crate::defs::install::ParamDef,
+        crate::defs::param_def::ParamDef,
     >,
 ) -> serde_json::Map<String, Value> {
     schema
@@ -442,7 +430,7 @@ pub(crate) fn serialize_param_schema(
             (
                 k.as_str().to_owned(),
                 json!({
-                    "kind": install_requirement_kind_str(req.kind),
+                    "kind": req.kind.as_str(),
                     "required": req.required,
                     "description": req.description,
                     "default_value": req.default_value,
@@ -643,9 +631,6 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let mut actions_json: Vec<Value> = def.actions.values().map(action_entry_json).collect();
     for s in def.shells.values() {
         actions_json.push(shell_entry_json(s));
-    }
-    if let Some(inst) = &def.install {
-        actions_json.push(install_entry_json(inst));
     }
 
     // spec: APPS#description — overlay live schedule timing onto each action's
@@ -955,15 +940,12 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // spec: APPS#current-operation
     // Surface the in-flight operation (action name, generation transition,
-    // currently-blocking barrier) when the app is Operating or Installing,
-    // from the same scheduler snapshot the status was derived from. An
-    // install runs an action closure and is reported like any other
-    // operation. An uninstall is driven by the reconciler and has no
-    // operation to report.
-    let reported_operation = active.as_ref().filter(|a| {
-        a.app == params.app
-            && matches!(&status, AppStatus::Operating { .. } | AppStatus::Installing)
-    });
+    // currently-blocking barrier) when the app is Operating, from the same
+    // scheduler snapshot the status was derived from. An uninstall is driven
+    // by the reconciler and has no operation to report.
+    let reported_operation = active
+        .as_ref()
+        .filter(|a| a.app == params.app && matches!(&status, AppStatus::Operating { .. }));
     if let Some(op) = reported_operation {
         let op_id = &op.operation_id;
         // spec: APPS#current-operation
@@ -1435,7 +1417,7 @@ pub(crate) fn register_resolved(
         .call(move |db| -> rusqlite::Result<u64> {
             let tx = db.conn.unchecked_transaction()?;
             // The app row first, so the generation rows can FK against it.
-            persist_app_fields(db, &name_owned, 0, false, false, false)?;
+            persist_app_fields(db, &name_owned, 0, false, false)?;
             // spec: GEN#generation-numbers — initial registration creates
             // generation 1.
             let generation = crate::runtime::generations::bump_register(
@@ -1444,7 +1426,7 @@ pub(crate) fn register_resolved(
                 &bundle_owned,
                 &source_owned,
             )?;
-            persist_app_fields(db, &name_owned, generation, false, false, false)?;
+            persist_app_fields(db, &name_owned, generation, false, false)?;
             tx.commit()?;
             Ok(generation)
         })
@@ -1523,12 +1505,6 @@ pub(crate) fn deregister_app(
             let phase = entry.phase.lock();
             match *phase {
                 AppPhase::NotInstalled => {}
-                AppPhase::Installing => {
-                    return Err(OiError::new(
-                        ErrorCode::OperationInProgress,
-                        format!("an install is in progress; wait for it to finish: {name}"),
-                    ));
-                }
                 AppPhase::Uninstalling => {
                     return Err(OiError::new(
                         ErrorCode::RequirementsInvalid,
@@ -1592,6 +1568,70 @@ pub(crate) fn deregister_app(
     Ok(json!({}))
 }
 
+// spec: ACI#install
+pub(crate) fn install_app(state: &OiState, params: AppParams, ctx: &RequestCtx) -> HandlerResult {
+    let name = params.app.as_str();
+
+    let phase_arc = {
+        let reg = state.registry.read();
+        let entry = reg
+            .get(name)
+            .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
+        if !matches!(*entry.phase.lock(), AppPhase::NotInstalled) {
+            return Err(already_installed(name));
+        }
+        if entry.script_error.is_some() {
+            return Err(OiError::script_error(format!(
+                "app has a script error: {name}"
+            )));
+        }
+        Arc::clone(&entry.phase)
+    };
+
+    let hold = super::params::hold_for_change(state, &params.app)?;
+    // The phase was read before the hold, so another install can have landed
+    // in between.
+    if !matches!(*phase_arc.lock(), AppPhase::NotInstalled) {
+        return Err(already_installed(name));
+    }
+
+    // spec: ING#claims-across-apps
+    // The install takes its place after every install before it, and the app
+    // becomes `Installed`, in one durable step: neither is observable without
+    // the other.
+    let name_owned = params.app.clone();
+    let install_seq = state
+        .db
+        .call(move |db| {
+            let seq = AppRegistry::record_install_completed(db, &name_owned)?;
+            transition_phase(&phase_arc, AppPhase::Installed, db, &name_owned)?;
+            Ok::<_, rusqlite::Error>(seq)
+        })
+        .map_err(|e| OiError::internal(format!("recording the install: {e}")))?;
+    if let Some(entry) = state.registry.write().get_mut(name) {
+        entry.install_seq = Some(install_seq);
+    }
+    drop(hold);
+
+    // spec: EVT#event-types
+    state.event_tx.app_phase_changed(
+        &params.app,
+        "installed",
+        Some(Arc::clone(&ctx.events.actor)),
+    );
+    state.tick_notify.notify_one();
+
+    tracing::info!(app = %name, "install accepted; app is now installed");
+    Ok(json!({}))
+}
+
+fn already_installed(name: &str) -> OiError {
+    OiError::new(
+        ErrorCode::AlreadyInstalled,
+        format!("app is already installed: {name}"),
+    )
+}
+
 pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult {
     let name = params.app.as_str();
 
@@ -1602,12 +1642,6 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
             .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
         match *entry.phase.lock() {
             AppPhase::Installed => {}
-            AppPhase::Installing => {
-                return Err(OiError::new(
-                    ErrorCode::OperationInProgress,
-                    format!("install is in progress; cannot uninstall yet: {name}"),
-                ));
-            }
             AppPhase::NotInstalled | AppPhase::Uninstalling => {
                 return Err(OiError::new(
                     ErrorCode::NotInstalled,

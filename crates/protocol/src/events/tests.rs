@@ -135,8 +135,8 @@ fn app_lifecycle_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.app_phase_changed(&app, "installing", None)),
-        json!({"type": "AppPhaseChanged", "app": "web", "phase": "installing"})
+        shape(|tx| tx.app_phase_changed(&app, "installed", None)),
+        json!({"type": "AppPhaseChanged", "app": "web", "phase": "installed"})
     );
 }
 

@@ -373,8 +373,7 @@ pub(crate) struct DiscoverParams {
     /// proposed script would introduce.
     #[serde(default)]
     pub proposed_script: Option<String>,
-    /// Per-handler supplied param values: handler kind (`"install"`,
-    /// `"start"`, `"action"`, `"shell"` or `"param_change"`), then handler
+    /// Per-handler supplied param values: handler kind (`"action"`, `"shell"` or `"param_change"`), then handler
     /// name, then param name to string.
     // spec: IMGM#image-discovery
     #[serde(default)]

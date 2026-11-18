@@ -71,7 +71,7 @@ fn register_with_failing_script_files_script_error_fault() {
 
     // The script-error gate also blocks install.
     let (code, _) = oi
-        .call("/apps/install/invoke", json!({ "app": "broken" }))
+        .call("/apps/install", json!({ "app": "broken" }))
         .unwrap_err();
     assert_eq!(code, "script_error");
 }
@@ -310,20 +310,6 @@ fn uninstall_answers_each_phase_as_the_spec_says() {
         .call("/apps/uninstall", json!({ "app": "demo" }))
         .unwrap_err();
     assert_eq!(code, "not_installed", "while Uninstalling");
-
-    let installing = TestOi::with_app("fresh");
-    *installing
-        .state
-        .registry
-        .read()
-        .get("fresh")
-        .unwrap()
-        .phase
-        .lock() = AppPhase::Installing;
-    let (code, _) = installing
-        .call("/apps/uninstall", json!({ "app": "fresh" }))
-        .unwrap_err();
-    assert_eq!(code, "operation_in_progress", "while Installing");
 }
 
 // spec: TRD#uninstall-admission
@@ -1841,4 +1827,108 @@ fn an_app_cannot_be_removed_while_a_session_on_it_has_a_slot() {
     sessions.close(&session);
     oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
     assert!(!oi.state.registry.read().is_registered("demo"));
+}
+
+// spec: ACI#install
+#[test]
+fn install_takes_only_the_app_and_moves_it_straight_to_installed() {
+    use crate::runtime::apps::AppPhase;
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    let mut events = oi.state.event_tx.subscribe();
+
+    let result = oi.call("/apps/install", json!({ "app": "demo" })).unwrap();
+
+    assert_eq!(result, json!({}));
+    assert_eq!(
+        *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+        AppPhase::Installed
+    );
+    let phase_event = loop {
+        if let OiEvent::AppPhaseChanged { app, phase, .. } =
+            events.try_recv().expect("an AppPhaseChanged event")
+        {
+            break (app.to_string(), phase);
+        }
+    };
+    assert_eq!(phase_event, ("demo".to_owned(), "installed".to_owned()));
+    assert!(
+        oi.state.scheduler.lock().active().is_none(),
+        "no operation runs for an install"
+    );
+    let persisted: bool = oi.state.db.call(|db| {
+        db.conn
+            .query_row(
+                "SELECT installed FROM registered_apps WHERE name = 'demo'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    });
+    assert!(persisted);
+}
+
+// spec: ACI#install
+#[test]
+fn install_refusals() {
+    let oi = TestOi::with_app("demo");
+
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "ghost" }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+
+    oi.install("demo");
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "already_installed", "while Installed");
+
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "already_installed", "while Uninstalling");
+}
+
+// spec: ACI#install
+#[test]
+fn install_is_refused_while_a_change_to_the_app_is_being_applied() {
+    use crate::runtime::{apps::AppPhase, scheduler::AppHold};
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::with_app("demo");
+    let name = AppName::new("demo").unwrap();
+    let hold = AppHold::take(&oi.state.scheduler, &name).expect("nothing holds the app");
+
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert_eq!(
+        *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+        AppPhase::NotInstalled
+    );
+
+    drop(hold);
+    oi.call("/apps/install", json!({ "app": "demo" })).unwrap();
+}
+
+// spec: ING#claims-across-apps
+#[test]
+fn installs_are_ordered_by_when_they_completed() {
+    let oi = TestOi::with_app("first");
+    oi.call(
+        "/apps/create",
+        json!({ "app": "second", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+
+    oi.install("second");
+    oi.install("first");
+
+    let seq = |app: &str| oi.state.registry.read().get(app).unwrap().install_seq;
+    assert!(seq("second").unwrap() < seq("first").unwrap());
 }
