@@ -142,10 +142,24 @@ pub(crate) fn render(config: &ProxyConfig) -> Rendered {
             // Both TLS versions are named rather than left to the proxy's
             // defaults, so a change of those cannot narrow what an ingress
             // accepts.
+            let mut policy = tls_versions();
+            // spec: PRX#shared-ports
+            // The one policy matches the names the server answers to. A
+            // handshake with no SNI, or one naming none of them, matches no
+            // policy and is refused, rather than being given whatever
+            // certificate the proxy would pick for it and then served by
+            // the `Host` it sends.
+            let hostnames: BTreeSet<&str> = config
+                .virtual_hosts
+                .iter()
+                .filter(|vh| vh.tls_acme && vh.port == port)
+                .map(|vh| vh.hostname.as_str())
+                .collect();
+            policy["match"] = json!({ "sni": hostnames });
             let mut server = json!({
                 "listen": [format!(":{port}")],
                 "routes": routes,
-                "tls_connection_policies": [tls_versions()],
+                "tls_connection_policies": [policy],
             });
             // spec: PRX#shared-ports
             // A TLS-terminating ingress that is not HTTP shares the port by

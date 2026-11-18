@@ -2599,3 +2599,43 @@ fn a_cached_config_from_before_dtls_termination_still_parses_and_renders_as_it_d
     );
     assert!(json["apps"]["seedling_dtls"].is_null());
 }
+
+// spec: PRX#shared-ports
+#[test]
+fn an_https_server_answers_only_to_the_names_it_serves() {
+    let mut other = https_vhost("other.example.com", "[fd5e::2]:8080");
+    other.redirect = None;
+    let mut elsewhere = https_vhost("elsewhere.example.com", "[fd5e::3]:8080");
+    elsewhere.port = 8443;
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Https,
+            },
+            ProxyListener {
+                port: 8443,
+                proto: ProxyListenerProto::Https,
+            },
+        ],
+        virtual_hosts: vec![
+            https_vhost("web.example.com", "[fd5e::1]:8080"),
+            other,
+            elsewhere,
+        ],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let policies =
+        &json["apps"]["http"]["servers"]["seedling_https_443"]["tls_connection_policies"];
+    assert_eq!(
+        policies.as_array().unwrap().len(),
+        1,
+        "no policy to fall back to"
+    );
+    assert_eq!(
+        policies[0]["match"]["sni"],
+        serde_json::json!(["other.example.com", "web.example.com"]),
+        "a name served on another port is not answered here"
+    );
+}
