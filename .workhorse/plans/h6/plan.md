@@ -33,7 +33,9 @@ Seedling has two halves that meet badly: the resource graph is level-triggered a
 - The start action is removed; boot order comes from `after`. After a Deployment means its instances are running and healthy, after a Job that it completed successfully; satisfied steps don't re-run at boot.
 - `after` stays within one app. Apps never depend on other apps: a definition depends on a contract the operator fulfils (Tamanu's database), which it can gate on with a step whose check probes that contract.
 - A step's run holds only its dependants and its exclusive selection; the rest of the app keeps converging.
-- Install action: liked in principle, pending the summary of what removing it loses (below).
+- The install action is removed. Install moves the app straight to `Installed` and the steps' first runs do the setup. Install parameters go; one-off operator input is an ordinary action run after install, and an app that needs it starts unprovisioned until the operator runs it.
+- A step's check is a container command (exit 0 is satisfied), not a closure. It runs before the step's dependants start from stopped (at boot and after the step's own run), and on an optional interval.
+- A key is any BSL value; maps and arrays are digested in a canonical form.
 
 ### Design so far
 
@@ -74,6 +76,18 @@ What else it subsumes:
 - V14's Retry upgrade action and readiness check (a step keyed on the database URL and crypto key that every part comes after), and the install's first migration (the step's first run).
 - The start action.
 - The install action, subject to the summary below.
+
+### Proposed defaults (not yet put to the user individually)
+
+- `after` orders starts only. A dependant waits for its target before starting; it is not stopped when the target later goes down. Only `exclusive` stops anything. A target the operator has stopped or scaled to zero keeps its dependants waiting, and status says what they wait on.
+- A cycle in `after` throws at evaluation.
+- A body that succeeds while the step's check then fails counts as a failed run, so a check that never passes backs off rather than looping.
+- Before the exclusive stop, the runtime pulls the images the step's body and its dependants' new specs need; a failed pull fails the run with nothing stopped.
+- Unsatisfied steps run in `after` order, then in declaration order, one lifecycle operation at a time as today. Operator and scheduled actions queue alongside them.
+- A step's body gets the full `rt`. When its run ends, the app returns to its whole graph as after any operation, apart from what the step holds.
+- Uninstalling clears step records, so a reinstall repeats every first run.
+- Faults: a withholding `step_failed` per step (app `faulted`), filed on a failed run and cleared on success.
+- Interface: steps and their state (satisfied, pending, running, failed) in `/apps/show`; `/apps/steps/retry`; a step event; `apps step retry` in the CLI; a retry button in the console. `/apps/plan` reports the steps a change would make unsatisfied, in place of `on_change_would_fire`. Image discovery probes step bodies and checks in place of install, start and `on_change` handlers.
 
 ### Removing the install action
 
