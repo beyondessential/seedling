@@ -41,8 +41,7 @@ pub type Generation = u64;
 pub enum Kind {
     Register,
     ScriptUpdate,
-    ParamSet,
-    ParamUnset,
+    ParamChange,
 }
 
 impl Kind {
@@ -50,8 +49,7 @@ impl Kind {
         match self {
             Self::Register => "register",
             Self::ScriptUpdate => "script_update",
-            Self::ParamSet => "param_set",
-            Self::ParamUnset => "param_unset",
+            Self::ParamChange => "param_change",
         }
     }
 
@@ -59,8 +57,7 @@ impl Kind {
         match s {
             "register" => Some(Self::Register),
             "script_update" => Some(Self::ScriptUpdate),
-            "param_set" => Some(Self::ParamSet),
-            "param_unset" => Some(Self::ParamUnset),
+            "param_change" => Some(Self::ParamChange),
             _ => None,
         }
     }
@@ -95,19 +92,27 @@ impl Outcome {
     }
 }
 
+/// What a generation did to one parameter, as the history holds it.
 #[derive(Debug, Clone)]
 // spec: GEN#history-entries
-pub struct HistoryEntry {
-    pub generation: Generation,
-    pub created_at: String,
-    pub kind: Kind,
-    pub param_name: Option<String>,
+pub struct HistoryParam {
+    pub name: String,
     pub previous_value: Option<String>,
     pub new_value: Option<String>,
     /// True when the previous value was stored encrypted (redact in responses).
     pub previous_value_redacted: bool,
     /// True when the new value was stored encrypted (redact in responses).
     pub new_value_redacted: bool,
+}
+
+#[derive(Debug, Clone)]
+// spec: GEN#history-entries
+pub struct HistoryEntry {
+    pub generation: Generation,
+    pub created_at: String,
+    pub kind: Kind,
+    /// The parameters the generation changed, in ascending order of name.
+    pub params: Vec<HistoryParam>,
     pub bundle_hash: String,
     /// For `Register` and `ScriptUpdate`: how the installed definition
     /// reached the runtime.
@@ -289,15 +294,6 @@ pub struct ParamChange<'a> {
     pub previous_is_secret: bool,
 }
 
-impl ParamChange<'_> {
-    fn kind(&self) -> Kind {
-        match self.new_value {
-            Some(_) => Kind::ParamSet,
-            None => Kind::ParamUnset,
-        }
-    }
-}
-
 fn encrypt(cipher: &Cipher, value: Option<&str>) -> rusqlite::Result<Option<Vec<u8>>> {
     value
         .map(|v| {
@@ -315,7 +311,7 @@ fn insert_register_or_update(
     kind: Kind,
     bundle: &Bundle,
     source: &Source,
-    param: Option<(&ParamChange<'_>, &Cipher)>,
+    changes: Option<(&[ParamChange<'_>], &Cipher)>,
 ) -> rusqlite::Result<Generation> {
     db.atomically(|db| {
         store_bundle(db, bundle)?;
@@ -333,8 +329,8 @@ fn insert_register_or_update(
                 source.to_db()
             ],
         )?;
-        if let Some((change, cipher)) = param {
-            write_param_change(db, app, gen_n, change, cipher)?;
+        if let Some((changes, cipher)) = changes {
+            write_param_changes(db, app, gen_n, changes, cipher)?;
         }
         db.conn.execute(
             "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
@@ -356,16 +352,16 @@ pub fn bump_register(
 }
 
 /// Bump the generation for a definition update, recording the parameter
-/// change made alongside it, if any. Identical bundle content reuses the
+/// changes made alongside it, if any. Identical bundle content reuses the
 /// existing stored bundle.
 pub fn bump_script_update(
     db: &Db,
     app: &AppName,
     bundle: &Bundle,
     source: &Source,
-    param: Option<(&ParamChange<'_>, &Cipher)>,
+    changes: Option<(&[ParamChange<'_>], &Cipher)>,
 ) -> rusqlite::Result<Generation> {
-    insert_register_or_update(db, app, Kind::ScriptUpdate, bundle, source, param)
+    insert_register_or_update(db, app, Kind::ScriptUpdate, bundle, source, changes)
 }
 
 /// Register `app` from a lone script, pushed by nobody known.
@@ -401,54 +397,54 @@ fn current_bundle_hash(db: &Db, app: &AppName) -> rusqlite::Result<String> {
     stmt.query_row([app], |row| row.get::<_, String>(0))
 }
 
-/// Write a parameter change onto a history row, each of its two values in
-/// the column its own storage calls for.
+/// Write the parameter changes of a generation, each of the two values of
+/// each in the column its own storage calls for.
 // spec: SEC#generation-history
-fn write_param_change(
+fn write_param_changes(
     db: &Db,
     app: &AppName,
     generation: Generation,
-    change: &ParamChange<'_>,
+    changes: &[ParamChange<'_>],
     cipher: &Cipher,
 ) -> rusqlite::Result<()> {
-    let (previous, previous_ct) = if change.previous_is_secret {
-        (None, encrypt(cipher, change.previous)?)
-    } else {
-        (change.previous, None)
-    };
-    let (new_value, new_ct) = if change.is_secret {
-        (None, encrypt(cipher, change.new_value)?)
-    } else {
-        (change.new_value, None)
-    };
-    db.conn.execute(
-        "UPDATE generations
-            SET param_name = ?1,
-                previous_value = ?2,
-                previous_value_ciphertext = ?3,
-                new_value = ?4,
-                new_value_ciphertext = ?5
-          WHERE app = ?6 AND generation = ?7",
-        rusqlite::params![
-            change.name,
-            previous,
-            previous_ct,
-            new_value,
-            new_ct,
-            app,
-            generation as i64
-        ],
-    )?;
+    for change in changes {
+        let (previous, previous_ct) = if change.previous_is_secret {
+            (None, encrypt(cipher, change.previous)?)
+        } else {
+            (change.previous, None)
+        };
+        let (new_value, new_ct) = if change.is_secret {
+            (None, encrypt(cipher, change.new_value)?)
+        } else {
+            (change.new_value, None)
+        };
+        db.conn.execute(
+            "INSERT INTO generation_params
+                (app, generation, param_name, previous_value,
+                 previous_value_ciphertext, new_value, new_value_ciphertext)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                app,
+                generation as i64,
+                change.name,
+                previous,
+                previous_ct,
+                new_value,
+                new_ct
+            ],
+        )?;
+    }
     Ok(())
 }
 
-/// Bump the generation for a parameter set or unset, under the definition
-/// the app is already running. `new_value` of `None` is an unset.
+/// Bump the generation for a change to one or more parameters, under the
+/// definition the app is already running. A `new_value` of `None` unsets.
 // spec: SEC#generation-history
+// spec: PRM#parameter-changes
 pub fn bump_param_change(
     db: &Db,
     app: &AppName,
-    change: &ParamChange<'_>,
+    changes: &[ParamChange<'_>],
     cipher: &Cipher,
 ) -> rusqlite::Result<Generation> {
     // spec: GEN#generation-numbers
@@ -459,9 +455,9 @@ pub fn bump_param_change(
             "INSERT INTO generations
                 (app, generation, created_at, kind, bundle_hash)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![app, gen_n as i64, now(), change.kind().as_str(), hash],
+            rusqlite::params![app, gen_n as i64, now(), Kind::ParamChange.as_str(), hash],
         )?;
-        write_param_change(db, app, gen_n, change, cipher)?;
+        write_param_changes(db, app, gen_n, changes, cipher)?;
         db.conn.execute(
             "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
             rusqlite::params![gen_n as i64, app],
@@ -537,55 +533,83 @@ pub fn list(
     let limit = limit.min(200) as i64;
     let entries = if let Some(before) = before {
         let mut stmt = db.conn.prepare(
-            "SELECT generation, created_at, kind, param_name, previous_value,
-                    new_value, bundle_hash, operation_id, outcome, outcome_error,
-                    previous_value_ciphertext, new_value_ciphertext, provenance
+            "SELECT generation, created_at, kind, bundle_hash, operation_id,
+                    outcome, outcome_error, provenance
              FROM generations
              WHERE app = ?1 AND generation < ?2
              ORDER BY generation DESC
              LIMIT ?3",
         )?;
-        rows_to_entries(stmt.query(rusqlite::params![app, before as i64, limit])?)?
+        rows_to_entries(
+            db,
+            app,
+            stmt.query(rusqlite::params![app, before as i64, limit])?,
+        )?
     } else {
         let mut stmt = db.conn.prepare(
-            "SELECT generation, created_at, kind, param_name, previous_value,
-                    new_value, bundle_hash, operation_id, outcome, outcome_error,
-                    previous_value_ciphertext, new_value_ciphertext, provenance
+            "SELECT generation, created_at, kind, bundle_hash, operation_id,
+                    outcome, outcome_error, provenance
              FROM generations
              WHERE app = ?1
              ORDER BY generation DESC
              LIMIT ?2",
         )?;
-        rows_to_entries(stmt.query(rusqlite::params![app, limit])?)?
+        rows_to_entries(db, app, stmt.query(rusqlite::params![app, limit])?)?
     };
     Ok(entries)
 }
 
-fn rows_to_entries(mut rows: rusqlite::Rows<'_>) -> rusqlite::Result<Vec<HistoryEntry>> {
+fn rows_to_entries(
+    db: &Db,
+    app: &AppName,
+    mut rows: rusqlite::Rows<'_>,
+) -> rusqlite::Result<Vec<HistoryEntry>> {
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         let kind_str: String = row.get(2)?;
-        let outcome_str: Option<String> = row.get(8)?;
-        let prev_ct: Option<Vec<u8>> = row.get(10)?;
-        let new_ct: Option<Vec<u8>> = row.get(11)?;
-        let provenance: Option<String> = row.get(12)?;
+        let outcome_str: Option<String> = row.get(5)?;
+        let provenance: Option<String> = row.get(7)?;
+        let generation = row.get::<_, i64>(0)? as Generation;
         out.push(HistoryEntry {
-            generation: row.get::<_, i64>(0)? as Generation,
+            generation,
             created_at: row.get(1)?,
             kind: Kind::parse(&kind_str).unwrap_or(Kind::Register),
-            param_name: row.get(3)?,
-            previous_value: row.get(4)?,
-            new_value: row.get(5)?,
-            previous_value_redacted: prev_ct.is_some(),
-            new_value_redacted: new_ct.is_some(),
-            bundle_hash: row.get(6)?,
+            params: params_of(db, app, generation)?,
+            bundle_hash: row.get(3)?,
             provenance: provenance.as_deref().and_then(|p| Source::from_db(p).ok()),
-            operation_id: row.get(7)?,
+            operation_id: row.get(4)?,
             outcome: outcome_str.as_deref().and_then(Outcome::parse),
-            outcome_error: row.get(9)?,
+            outcome_error: row.get(6)?,
         });
     }
     Ok(out)
+}
+
+/// The parameters a generation changed, in ascending order of name.
+fn params_of(
+    db: &Db,
+    app: &AppName,
+    generation: Generation,
+) -> rusqlite::Result<Vec<HistoryParam>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT param_name, previous_value, previous_value_ciphertext,
+                new_value, new_value_ciphertext
+         FROM generation_params
+         WHERE app = ?1 AND generation = ?2
+         ORDER BY param_name ASC",
+    )?;
+    stmt.query_map(rusqlite::params![app, generation as i64], |row| {
+        let previous_ct: Option<Vec<u8>> = row.get(2)?;
+        let new_ct: Option<Vec<u8>> = row.get(4)?;
+        Ok(HistoryParam {
+            name: row.get(0)?,
+            previous_value: row.get(1)?,
+            new_value: row.get(3)?,
+            previous_value_redacted: previous_ct.is_some(),
+            new_value_redacted: new_ct.is_some(),
+        })
+    })?
+    .collect()
 }
 
 /// Look up a single generation entry.
@@ -595,19 +619,22 @@ pub fn get(
     generation: Generation,
 ) -> rusqlite::Result<Option<HistoryEntry>> {
     let mut stmt = db.conn.prepare(
-        "SELECT generation, created_at, kind, param_name, previous_value,
-                new_value, bundle_hash, operation_id, outcome, outcome_error,
-                previous_value_ciphertext, new_value_ciphertext, provenance
+        "SELECT generation, created_at, kind, bundle_hash, operation_id,
+                outcome, outcome_error, provenance
          FROM generations
          WHERE app = ?1 AND generation = ?2",
     )?;
-    let mut entries = rows_to_entries(stmt.query(rusqlite::params![app, generation as i64])?)?;
+    let mut entries = rows_to_entries(
+        db,
+        app,
+        stmt.query(rusqlite::params![app, generation as i64])?,
+    )?;
     Ok(entries.pop())
 }
 
 /// Build the parameter map at a specific generation by walking history.
 /// For each parameter, the most recent change at or before `generation` is
-/// taken, whether a ParamSet, a ParamUnset, or a ScriptUpdate that changed it
+/// taken, whether in a `param_change` or in a `script_update` that changed it
 /// alongside its definition; an unset (or no change) yields None.
 // spec: SEC#generation-history
 // spec: GEN#reconstruction
@@ -618,12 +645,9 @@ pub fn param_map_at(
     cipher: &Cipher,
 ) -> Result<BTreeMap<String, String>, Error> {
     let mut stmt = db.conn.prepare(
-        "SELECT param_name, kind, new_value, new_value_ciphertext
-         FROM generations
-         WHERE app = ?1
-           AND generation <= ?2
-           AND param_name IS NOT NULL
-           AND kind IN ('param_set', 'param_unset', 'script_update')
+        "SELECT param_name, new_value, new_value_ciphertext
+         FROM generation_params
+         WHERE app = ?1 AND generation <= ?2
          ORDER BY param_name ASC, generation DESC",
     )?;
     let mut map: BTreeMap<String, String> = BTreeMap::new();
@@ -636,31 +660,26 @@ pub fn param_map_at(
             continue;
         }
         last_param = Some(name.clone());
-        let kind: String = row.get(1)?;
-        let plaintext: Option<String> = row.get(2)?;
-        let ciphertext: Option<Vec<u8>> = row.get(3)?;
-        // A ScriptUpdate row unset its parameter when it recorded no new
-        // value in either column.
-        let sets = kind == "param_set"
-            || (kind == "script_update" && (plaintext.is_some() || ciphertext.is_some()));
-        if sets {
-            let value = if let Some(ct) = ciphertext {
-                match cipher.decrypt(&ct) {
-                    Ok(s) => Some(s.expose_secret().to_owned()),
-                    Err(e) => {
-                        tracing::error!(app = %app, param = %name, "failed to decrypt param history for reconstruction: {e}");
-                        return Err(Error::UnreadableParam {
-                            param: name,
-                            reason: e.to_string(),
-                        });
-                    }
+        let plaintext: Option<String> = row.get(1)?;
+        let ciphertext: Option<Vec<u8>> = row.get(2)?;
+        // A change unset its parameter when it recorded no new value in
+        // either column.
+        let value = if let Some(ct) = ciphertext {
+            match cipher.decrypt(&ct) {
+                Ok(s) => Some(s.expose_secret().to_owned()),
+                Err(e) => {
+                    tracing::error!(app = %app, param = %name, "failed to decrypt param history for reconstruction: {e}");
+                    return Err(Error::UnreadableParam {
+                        param: name,
+                        reason: e.to_string(),
+                    });
                 }
-            } else {
-                plaintext
-            };
-            if let Some(v) = value {
-                map.insert(name, v);
             }
+        } else {
+            plaintext
+        };
+        if let Some(v) = value {
+            map.insert(name, v);
         }
     }
     Ok(map)

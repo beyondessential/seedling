@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 81);
+    assert_eq!(version, 82);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 81);
+    assert_eq!(version, 82);
 }
 
 // spec: APPS#persistence
@@ -486,4 +486,84 @@ fn a_cached_canopy_server_id_with_no_recorded_key_is_dropped() {
         )
         .expect("row");
     assert_eq!((id, key), (None, None));
+}
+
+// spec: GEN#history-entries
+// spec: SEC#generation-history
+#[test]
+fn single_parameter_history_rows_move_to_the_per_parameter_table() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO registered_apps (name, installed, uninstalling, current_generation)
+                 VALUES ('web', 0, 0, 5);
+             INSERT INTO generations (app, generation, created_at, kind, bundle_hash)
+                 VALUES ('web', 1, 't', 'register', 'h');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, previous_value, new_value, bundle_hash)
+                 VALUES ('web', 2, 't', 'param_set', 'mode', NULL, 'x', 'h');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, previous_value, new_value, bundle_hash)
+                 VALUES ('web', 3, 't', 'script_update', 'mode', 'x', 'y', 'h');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, previous_value, new_value, bundle_hash)
+                 VALUES ('web', 4, 't', 'param_unset', 'mode', 'y', NULL, 'h');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, new_value_ciphertext, bundle_hash)
+                 VALUES ('web', 5, 't', 'param_set', 'key', x'0102', 'h');",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let kinds: Vec<String> = db
+        .conn
+        .prepare("SELECT kind FROM generations WHERE app = 'web' ORDER BY generation")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        kinds,
+        [
+            "register",
+            "param_change",
+            "script_update",
+            "param_change",
+            "param_change"
+        ]
+    );
+
+    type Row = (i64, String, Option<String>, Option<String>, Option<Vec<u8>>);
+    let rows: Vec<Row> = db
+        .conn
+        .prepare(
+            "SELECT generation, param_name, previous_value, new_value, new_value_ciphertext
+             FROM generation_params WHERE app = 'web' ORDER BY generation",
+        )
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (2, "mode".into(), None, Some("x".into()), None),
+            (3, "mode".into(), Some("x".into()), Some("y".into()), None),
+            (4, "mode".into(), Some("y".into()), None, None),
+            (5, "key".into(), None, None, Some(vec![1, 2])),
+        ]
+    );
+
+    let dropped: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('generations')
+             WHERE name IN ('param_name', 'previous_value', 'new_value',
+                            'previous_value_ciphertext', 'new_value_ciphertext')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dropped, 0, "the old per-generation columns are gone");
 }
