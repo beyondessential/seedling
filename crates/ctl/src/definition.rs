@@ -375,23 +375,29 @@ mod github {
     }
 }
 
-/// The parameter change `ctl apps update` carries alongside a definition.
-// spec: CLI#parameter-change-on-update
-pub(super) fn param_change(
-    set: Option<&str>,
-    unset: Option<&str>,
-) -> Result<Option<Value>, String> {
-    match (set, unset) {
-        (Some(_), Some(_)) => Err("--set and --unset cannot be combined".to_owned()),
-        (Some(pair), None) => {
-            let (name, value) = pair
-                .split_once('=')
-                .ok_or_else(|| format!("--set takes name=value, got {pair:?}"))?;
-            Ok(Some(json!({ "name": name, "value": value })))
-        }
-        (None, Some(name)) => Ok(Some(json!({ "name": name, "value": Value::Null }))),
-        (None, None) => Ok(None),
+/// The `params` object of a parameter change: each `name=value` of `set`
+/// sets a parameter to the string `value`, and each name of `unset` unsets one.
+///
+/// Refuses a `set` argument without `=` and a parameter changed more than
+/// once, whether by repeating it or by both setting and unsetting it. Whether
+/// anything is changed is for the caller to decide.
+// spec: CLI#parameter-changes
+pub(super) fn param_changes(set: &[String], unset: &[String]) -> Result<Map<String, Value>, String> {
+    let mut changes = Map::new();
+    let mut add = |name: &str, value: Value| match changes.insert(name.to_owned(), value) {
+        Some(_) => Err(format!("parameter {name:?} is changed more than once")),
+        None => Ok(()),
+    };
+    for pair in set {
+        let (name, value) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("a parameter to set takes name=value, got {pair:?}"))?;
+        add(name, json!(value))?;
     }
+    for name in unset {
+        add(name, Value::Null)?;
+    }
+    Ok(changes)
 }
 
 /// Write a bundle from `/apps/bundle` into a new folder.

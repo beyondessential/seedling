@@ -44,18 +44,18 @@ pub(super) enum AppsCommand {
     Remove { app: AppName },
     /// Uninstall an app (stop all resources). The app can be deregistered once done.
     Uninstall { app: AppName },
-    /// Replace an app's definition, optionally changing one parameter in
-    /// the same step
+    /// Replace an app's definition, optionally changing parameters in the
+    /// same step
     Update {
         app: AppName,
         #[command(flatten)]
         definition: DefinitionArgs,
-        /// Set a parameter alongside the definition, as name=value
-        #[arg(long, value_name = "NAME=VALUE", conflicts_with = "unset")]
-        set: Option<String>,
-        /// Unset a parameter alongside the definition
+        /// Set a parameter alongside the definition, as name=value (repeatable)
+        #[arg(long, value_name = "NAME=VALUE")]
+        set: Vec<String>,
+        /// Unset a parameter alongside the definition (repeatable)
         #[arg(long, value_name = "NAME")]
-        unset: Option<String>,
+        unset: Vec<String>,
     },
     /// Write an app's definition bundle into a new folder
     Export {
@@ -66,7 +66,7 @@ pub(super) enum AppsCommand {
         generation: Option<u64>,
     },
     /// Manage app parameters
-    Param {
+    Params {
         #[command(subcommand)]
         command: ParamCommand,
     },
@@ -182,10 +182,12 @@ pub(super) enum AppsCommand {
         /// A proposed definition, fetched from this OCI reference
         #[arg(long = "ref")]
         proposed_reference: Option<String>,
-        /// Proposed param change as `name=value` (repeatable). Use `name=` to
-        /// model unsetting.
-        #[arg(long = "param")]
+        /// Proposed parameter to set, as `name=value` (repeatable)
+        #[arg(long = "param", value_name = "NAME=VALUE")]
         proposed_params: Vec<String>,
+        /// Proposed parameter to unset (repeatable)
+        #[arg(long = "unset", value_name = "NAME")]
+        proposed_unset: Vec<String>,
     },
 }
 
@@ -274,14 +276,16 @@ pub(super) enum ScaleDirection {
 
 #[derive(Subcommand)]
 pub(super) enum ParamCommand {
-    /// Set a param value
+    /// Set and unset parameters, all in one change
     Set {
         app: AppName,
-        name: String,
-        value: String,
+        /// Parameters to set, as name=value
+        #[arg(value_name = "NAME=VALUE")]
+        set: Vec<String>,
+        /// Unset a parameter (repeatable)
+        #[arg(long, value_name = "NAME")]
+        unset: Vec<String>,
     },
-    /// Unset a param value
-    Unset { app: AppName, name: String },
 }
 
 /// Parse `key=value` install params.
@@ -427,17 +431,16 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             set,
             unset,
         } => {
-            // spec: CLI#parameter-change-on-update
-            let param =
-                definition::param_change(set.as_deref(), unset.as_deref()).unwrap_or_else(|e| {
-                    tracing::error!("{e}");
-                    std::process::exit(1);
-                });
+            // spec: CLI#parameter-changes
+            let changes = definition::param_changes(&set, &unset).unwrap_or_else(|e| {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            });
             let definition = require_definition(&definition).await;
             let mut params = definition.fields(DefinitionKeys::APP);
             params.insert("app".to_owned(), serde_json::json!(app));
-            if let Some(param) = param {
-                params.insert("param".to_owned(), param);
+            if !changes.is_empty() {
+                params.insert("params".to_owned(), serde_json::Value::Object(changes));
             }
             print_result(
                 client
@@ -466,23 +469,22 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 Err(e) => print_result(Err(e)),
             }
         }
-        AppsCommand::Param { command } => match command {
-            ParamCommand::Set { app, name, value } => {
+        AppsCommand::Params { command } => match command {
+            // spec: CLI#parameter-changes
+            ParamCommand::Set { app, set, unset } => {
+                let changes = definition::param_changes(&set, &unset).unwrap_or_else(|e| {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                });
+                if changes.is_empty() {
+                    tracing::error!("give at least one parameter to set or --unset");
+                    std::process::exit(1);
+                }
                 print_result(
                     client
                         .request(
                             "/apps/params/set",
-                            serde_json::json!({ "app": app, "name": name, "value": value }),
-                        )
-                        .await,
-                );
-            }
-            ParamCommand::Unset { app, name } => {
-                print_result(
-                    client
-                        .request(
-                            "/apps/params/unset",
-                            serde_json::json!({ "app": app, "name": name }),
+                            serde_json::json!({ "app": app, "params": changes }),
                         )
                         .await,
                 );
@@ -680,6 +682,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             proposed_script_file,
             proposed_reference,
             proposed_params,
+            proposed_unset,
         } => {
             let mut params = serde_json::json!({ "app": app });
             let proposed = resolve_or_exit(&DefinitionArgs {
@@ -692,20 +695,14 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     params[key] = value;
                 }
             }
-            if !proposed_params.is_empty() {
-                let parsed: Vec<serde_json::Value> = proposed_params
-                    .iter()
-                    .map(|spec| match spec.split_once('=') {
-                        Some((name, "")) => {
-                            serde_json::json!({ "name": name, "value": serde_json::Value::Null })
-                        }
-                        Some((name, value)) => serde_json::json!({ "name": name, "value": value }),
-                        None => {
-                            serde_json::json!({ "name": spec, "value": serde_json::Value::Null })
-                        }
-                    })
-                    .collect();
-                params["proposed_params"] = serde_json::Value::Array(parsed);
+            // spec: CLI#parameter-changes
+            let changes =
+                definition::param_changes(&proposed_params, &proposed_unset).unwrap_or_else(|e| {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                });
+            if !changes.is_empty() {
+                params["proposed_params"] = serde_json::Value::Object(changes);
             }
             print_result(client.request("/apps/plan", params).await);
         }
@@ -782,9 +779,9 @@ mod tests {
     }
 
     // spec: CLI#definition-sources
-    // spec: CLI#parameter-change-on-update
+    // spec: CLI#parameter-changes
     #[test]
-    fn update_takes_a_reference_and_one_param_change() {
+    fn update_takes_a_reference_and_several_param_changes() {
         let cli = TestCli::try_parse_from([
             "t",
             "update",
@@ -793,10 +790,19 @@ mod tests {
             "ghcr.io/org/def:2.12",
             "--set",
             "version=v2.12",
+            "--set",
+            "port=8080",
+            "--unset",
+            "old",
+            "--unset",
+            "older",
         ])
         .expect("parses");
         let AppsCommand::Update {
-            definition, set, ..
+            definition,
+            set,
+            unset,
+            ..
         } = cli.cmd
         else {
             panic!("expected Update");
@@ -806,19 +812,66 @@ mod tests {
             Some("ghcr.io/org/def:2.12")
         );
         assert_eq!(definition.source, None);
-        assert_eq!(set.as_deref(), Some("version=v2.12"));
+        assert_eq!(set, ["version=v2.12", "port=8080"]);
+        assert_eq!(unset, ["old", "older"]);
 
         assert!(
             TestCli::try_parse_from(["t", "update", "web", "./def", "--ref", "x/y:1"]).is_err(),
             "a source and a reference are exclusive"
         );
-        assert!(
-            TestCli::try_parse_from([
-                "t", "update", "web", "./def", "--set", "a=b", "--unset", "c"
-            ])
-            .is_err(),
-            "one parameter change at most"
-        );
+        let cli = TestCli::try_parse_from([
+            "t", "update", "web", "./def", "--set", "a=b", "--unset", "c",
+        ])
+        .expect("setting and unsetting different parameters together parses");
+        assert!(matches!(cli.cmd, AppsCommand::Update { .. }));
+    }
+
+    // spec: CLI#parameter-changes
+    #[test]
+    fn params_set_takes_pairs_and_unsets() {
+        let cli = TestCli::try_parse_from([
+            "t", "params", "set", "web", "a=1", "b=two=2", "--unset", "c", "--unset", "d",
+        ])
+        .expect("parses");
+        let AppsCommand::Params {
+            command: ParamCommand::Set { app, set, unset },
+        } = cli.cmd
+        else {
+            panic!("expected params set");
+        };
+        assert_eq!(app.as_str(), "web");
+        assert_eq!(set, ["a=1", "b=two=2"]);
+        assert_eq!(unset, ["c", "d"]);
+
+        let cli = TestCli::try_parse_from(["t", "params", "set", "web", "--unset", "c", "x=1"])
+            .expect("pairs may follow an unset");
+        let AppsCommand::Params {
+            command: ParamCommand::Set { set, unset, .. },
+        } = cli.cmd
+        else {
+            panic!("expected params set");
+        };
+        assert_eq!(set, ["x=1"]);
+        assert_eq!(unset, ["c"]);
+    }
+
+    // spec: CLI#parameter-changes
+    #[test]
+    fn plan_takes_proposed_params_and_unsets() {
+        let cli = TestCli::try_parse_from([
+            "t", "plan", "web", "--param", "a=1", "--param", "b=2", "--unset", "c",
+        ])
+        .expect("parses");
+        let AppsCommand::Plan {
+            proposed_params,
+            proposed_unset,
+            ..
+        } = cli.cmd
+        else {
+            panic!("expected Plan");
+        };
+        assert_eq!(proposed_params, ["a=1", "b=2"]);
+        assert_eq!(proposed_unset, ["c"]);
     }
 
     // spec: CLI#action-shell-and-install-parameters
