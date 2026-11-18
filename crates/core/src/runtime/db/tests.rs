@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 88);
+    assert_eq!(version, 82);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 88);
+    assert_eq!(version, 82);
 }
 
 // spec: APPS#persistence
@@ -571,7 +571,7 @@ fn single_parameter_history_rows_move_to_the_per_parameter_table() {
 // spec: ACI#install
 #[test]
 fn an_app_part_way_through_an_install_is_installed_and_the_removed_actions_leave_the_queue() {
-    let db = Db::open_in_memory_through(82).expect("open at v82");
+    let db = Db::open_in_memory_through(81).expect("open at v81");
     db.conn
         .execute_batch(
             "INSERT INTO registered_apps (name, installed, uninstalling, installing, current_generation)
@@ -583,7 +583,7 @@ fn an_app_part_way_through_an_install_is_installed_and_the_removed_actions_leave
                         ('install', 'fresh', 'install', 'operator', 1, 1, x'00'),
                         ('action', 'live', 'backup', 'operator', 1, 1, x'00');",
         )
-        .expect("seed v82 data");
+        .expect("seed v81 data");
 
     db.finish_migrations().expect("migrate to the latest");
 
@@ -627,7 +627,7 @@ fn an_app_part_way_through_an_install_is_installed_and_the_removed_actions_leave
 // spec: OPS#changes-to-an-app
 #[test]
 fn requests_queued_for_a_parameter_change_leave_the_queue() {
-    let db = Db::open_in_memory_through(83).expect("open at v83");
+    let db = Db::open_in_memory_through(81).expect("open at v81");
     db.conn
         .execute_batch(
             "INSERT INTO queued_operations
@@ -635,7 +635,7 @@ fn requests_queued_for_a_parameter_change_leave_the_queue() {
                  VALUES ('action', 'live', 'backup', 'operator', 1, 1, x'00'),
                         ('change', 'live', 'mode', 'param_change', 1, 2, x'00');",
         )
-        .expect("seed v83 data");
+        .expect("seed v81 data");
 
     db.finish_migrations().expect("migrate to the latest");
 
@@ -653,7 +653,7 @@ fn requests_queued_for_a_parameter_change_leave_the_queue() {
 // spec: OPS#initiating-events
 #[test]
 fn a_persisted_operation_keeps_its_target_generation_as_its_generation() {
-    let db = Db::open_in_memory_through(84).expect("open at v84");
+    let db = Db::open_in_memory_through(81).expect("open at v81");
     db.conn
         .execute_batch(
             "INSERT INTO current_operation
@@ -663,7 +663,7 @@ fn a_persisted_operation_keeps_its_target_generation_as_its_generation() {
                  (operation_id, app, action, trigger, source_generation, target_generation, params_ciphertext)
                  VALUES ('waiting', 'live', 'backup', 'operator', 4, 5, x'00');",
         )
-        .expect("seed v84 data");
+        .expect("seed v81 data");
 
     db.finish_migrations().expect("migrate to the latest");
 
@@ -699,7 +699,7 @@ fn a_persisted_operation_keeps_its_target_generation_as_its_generation() {
 // spec: GEN#history-entries
 #[test]
 fn a_generation_keeps_its_history_and_loses_the_operation_outcome() {
-    let db = Db::open_in_memory_through(85).expect("open at v85");
+    let db = Db::open_in_memory_through(81).expect("open at v81");
     db.conn
         .execute_batch(
             "INSERT INTO generations
@@ -707,7 +707,7 @@ fn a_generation_keeps_its_history_and_loses_the_operation_outcome() {
                  VALUES ('live', 1, 't', 'register', 'h', NULL, NULL, NULL),
                         ('live', 2, 't', 'param_change', 'h', 'op', 'failed', 'boom');",
         )
-        .expect("seed v85 data");
+        .expect("seed v81 data");
 
     db.finish_migrations().expect("migrate to the latest");
 
@@ -739,12 +739,12 @@ fn a_generation_keeps_its_history_and_loses_the_operation_outcome() {
 // spec: GRUN#app-setup
 #[test]
 fn gate_storage_exists_and_an_installed_app_is_already_set_up() {
-    let db = Db::open_in_memory_through(86).expect("open at v86");
+    let db = Db::open_in_memory_through(81).expect("open at v81");
     db.conn
         .execute_batch(
             "INSERT INTO registered_apps (name, installed) VALUES ('live', 1), ('fresh', 0);",
         )
-        .expect("seed v86 data");
+        .expect("seed v81 data");
 
     db.finish_migrations().expect("migrate to the latest");
 

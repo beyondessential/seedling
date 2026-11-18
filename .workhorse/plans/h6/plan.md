@@ -179,10 +179,10 @@ Grounded in the code as of the rebase over F6 and G6.
 
 Build order, with the labels used in commit history and conversation (these are labels for slices of the steps below, not extra work). Tick the steps as each lands; a stage is done when every step it names is ticked.
 
-- **A, several parameters per change:** done (migration v82; Parameters and generations, the parameter parts of Operator Interface, CLI and Console).
-- **B1, install and start actions removed:** done (migration v83).
-- **B2, `on_change` and edge-triggered plumbing removed:** done (migrations v84 to v86).
-- **G1, BSL gates and storage:** done (migration v87; the BSL steps, the keyed digest, the spec hash).
+- **A, several parameters per change:** done (Parameters and generations, the parameter parts of Operator Interface, CLI and Console).
+- **B1, install and start actions removed:** done.
+- **B2, `on_change` and edge-triggered plumbing removed:** done.
+- **G1, BSL gates and storage:** done (the BSL steps, the keyed digest, the spec hash).
 - **G2, gate runtime and reconciler:** built but not audited; its steps stay unticked until each is checked against its code and test. Gate runs, checks, holds and start order exist in code; `AppStatus::Installing` derivation and the image probe's `HandlerKind::Gate` landed with it.
 - **G3, gate surfaces:** not started. `/apps/show` gates, `held_by`, `waiting_on`; `/apps/gates/run`; `/apps/restart` and `/apps/resource/stop` for held resources; `gates_would_run`; `apps gate run`; the console's gate parts; the OI and event tests.
 - **G4, definitions, docs and test cases:** not started. The demo definitions, docs, test cases, citations for the gate code.
@@ -193,7 +193,7 @@ Build order, with the labels used in commit history and conversation (these are 
 
 ### Storage
 
-- [x] Migration v82 (`runtime/db/migrations/v82.sql` or `.rs`, registered in `runtime/db.rs`, version asserts in `runtime/db/tests.rs`):
+- [x] One migration for the whole card, v82 (`runtime/db/migrations/v82.sql`, registered in `runtime/db.rs`, version asserts in `runtime/db/tests.rs`). Seedling is unshipped and the card is one piece of work, so any further schema change goes into this file, never a new version; its tests seed a v81 database and migrate to the latest:
   - [x] `gate_records`: app, gate, key digest, generation of last success, valid, consecutive failures, last failure time and description, paused-for key digest
   - [x] `gate_holds`: app, gate, covered resources
   - [x] `registered_apps.set_up`; drop `installing`, moving installing apps to installed

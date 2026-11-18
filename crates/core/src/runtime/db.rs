@@ -168,17 +168,10 @@ const SQL_V80: &str = include_str!("db/migrations/v80.sql");
 // spec: OPS#shell-sessions
 const SQL_V81: &str = include_str!("db/migrations/v81.sql");
 // spec: GEN#history-entries
-const SQL_V82: &str = include_str!("db/migrations/v82.sql");
 // spec: ACI#install
-const SQL_V83: &str = include_str!("db/migrations/v83.sql");
-// spec: OPS#changes-to-an-app
-const SQL_V84: &str = include_str!("db/migrations/v84.sql");
-// spec: OPS#operation-generation
-const SQL_V85: &str = include_str!("db/migrations/v85.sql");
-// spec: GEN#history-entries
-const SQL_V86: &str = include_str!("db/migrations/v86.sql");
-const SQL_V87: &str = include_str!("db/migrations/v87.sql");
-const SQL_V88: &str = include_str!("db/migrations/v88.sql");
+// spec: OPS#initiating-events
+// spec: GRUN#gate-state
+const SQL_V82: &str = include_str!("db/migrations/v82.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -584,36 +577,6 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 82,
         sql: SQL_V82,
-        custom_run: None,
-    },
-    Migration {
-        version: 83,
-        sql: SQL_V83,
-        custom_run: None,
-    },
-    Migration {
-        version: 84,
-        sql: SQL_V84,
-        custom_run: None,
-    },
-    Migration {
-        version: 85,
-        sql: SQL_V85,
-        custom_run: None,
-    },
-    Migration {
-        version: 86,
-        sql: SQL_V86,
-        custom_run: None,
-    },
-    Migration {
-        version: 87,
-        sql: SQL_V87,
-        custom_run: None,
-    },
-    Migration {
-        version: 88,
-        sql: SQL_V88,
         custom_run: None,
     },
 ];
