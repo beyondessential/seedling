@@ -687,3 +687,246 @@ fn rt_start_fails_when_the_dynamic_resource_cannot_be_recorded() {
         "nothing was placed in the desired state"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gate bodies
+// ---------------------------------------------------------------------------
+
+use super::GateInput;
+use crate::defs::app::App;
+use seedling_protocol::names::GateName;
+
+fn evaluated(script: &str) -> App {
+    let (app, err) = crate::runtime::apps::evaluate_script(
+        &AppName::new("demo").unwrap(),
+        script,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    );
+    assert!(err.is_none(), "the script evaluates: {err:?}");
+    app
+}
+
+/// Run the gate `name` of `app` as the dispatcher does, with `last` as the
+/// runtime built it, against `db`.
+fn run_gate_body(
+    app: &App,
+    script: &str,
+    name: &str,
+    last: Option<&App>,
+    db: &DbHandle,
+    operation_id: &str,
+) -> OperationEnd {
+    {
+        let (n, script) = (AppName::new("demo").unwrap(), script.to_owned());
+        db.call(move |db| {
+            let _ = generations::register_script(db, &n, &script);
+        });
+    }
+    let tx = new_event_channel();
+    let op_ctx = tx.operation(
+        AppName::new("demo").unwrap(),
+        OperationTarget::Gate(GateName::new(name).unwrap()),
+        operation_id,
+        1,
+        None,
+    );
+    super::run_operation_loop(
+        app,
+        db.clone(),
+        Ok(BoundParams {
+            params: serde_json::Map::new(),
+            bindings: HashMap::new(),
+        }),
+        Arc::new(RwLock::new(None)),
+        Arc::new(Notify::new()),
+        &op_ctx,
+        &crate::ScriptLimits::default(),
+        Arc::new(Cipher::for_tests()),
+        &crate::runtime::gates::GateRuntime::new(),
+        Arc::new(CancelToken::new()),
+        None,
+        None,
+        None,
+        Some(GateInput { last }),
+        Persisted::No,
+    )
+}
+
+fn failure_of(end: OperationEnd) -> String {
+    match end {
+        OperationEnd::Failed(why) | OperationEnd::NotRun(why) => why,
+        OperationEnd::Completed => panic!("the body completed"),
+        OperationEnd::Cancelled => panic!("the body was cancelled"),
+    }
+}
+
+// spec: GATE#body
+#[test]
+fn a_gate_body_is_called_with_as_many_arguments_as_it_declares() {
+    for (declared, body) in [
+        ("no parameters", "|| { }"),
+        ("a runtime handle", "|rt| { rt.restart(app.deployment(\"web\")); }"),
+        (
+            "a runtime handle and last",
+            "|rt, last| { if last != () { throw \"last is not the unit value\"; } }",
+        ),
+    ] {
+        let script = format!(
+            r#"
+            app.deployment("web").image("docker.io/library/nginx:1");
+            app.gate("gated").key(1).run({body});
+            "#
+        );
+        let app = evaluated(&script);
+        let db = DbHandle::open_in_memory().unwrap();
+        let end = run_gate_body(&app, &script, "gated", None, &db, "op");
+        assert!(
+            matches!(end, OperationEnd::Completed),
+            "a body declaring {declared} runs: {}",
+            match end {
+                OperationEnd::Failed(why) | OperationEnd::NotRun(why) => why,
+                _ => String::new(),
+            }
+        );
+    }
+}
+
+// spec: GATE#body
+#[test]
+fn a_gate_body_declaring_more_than_two_parameters_fails_when_called() {
+    let script = r#"
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.gate("gated").key(1).run(|rt, last, extra| { });
+    "#;
+    let app = evaluated(script);
+    let db = DbHandle::open_in_memory().unwrap();
+    let why = failure_of(run_gate_body(&app, script, "gated", None, &db, "op"));
+    assert!(why.contains("at most two"), "{why}");
+}
+
+// spec: GATE#body
+#[test]
+fn last_is_the_app_at_the_last_success_and_the_unit_value_where_there_is_none() {
+    let script = r#"
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.gate("gated").key(1).run(|rt, last| {
+            // Only the earlier generation has this deployment.
+            last.deployment("old");
+        });
+    "#;
+    let earlier = r#"
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.deployment("old").image("docker.io/library/nginx:1");
+    "#;
+    let current = evaluated(script);
+    let db = DbHandle::open_in_memory().unwrap();
+
+    let last = evaluated(earlier);
+    assert!(
+        matches!(
+            run_gate_body(&current, script, "gated", Some(&last), &db, "op-last"),
+            OperationEnd::Completed
+        ),
+        "`last` shows the app as it was at the last success"
+    );
+    failure_of(run_gate_body(&current, script, "gated", None, &db, "op-none"));
+    failure_of(run_gate_body(&current, script, "gated", Some(&current), &db, "op-current"));
+}
+
+// spec: RT#resources-a-gate-holds
+#[test]
+fn rt_start_leaves_out_what_a_gate_holds_and_what_waits_on_it_except_in_that_gates_body() {
+    use crate::runtime::barrier::replay::DbActionLog;
+
+    let script = r#"
+        let api = app.deployment("api").image("docker.io/library/nginx:1");
+        let migrate = app.gate("migrate").key(1).exclusive(api).run(|rt| { rt.start(api); });
+        app.deployment("web").image("docker.io/library/nginx:1").after(migrate);
+        app.deployment("plain").image("docker.io/library/nginx:1");
+        app.on_action("poke", |rt, _p| { rt.start(app); });
+    "#;
+    let name = AppName::new("demo").unwrap();
+    let app = evaluated(script);
+    let started = |target: OperationTarget, db: &DbHandle, id: &str| -> Vec<String> {
+        let log = DbActionLog::new(db.clone(), OperationId(id.to_owned()), name.clone(), target);
+        let mut names: Vec<_> = log
+            .load()
+            .unwrap()
+            .into_iter()
+            .flat_map(|entry| entry.resources)
+            .filter_map(|resource| resource.name)
+            .collect();
+        names.sort();
+        names
+    };
+
+    // An action's `rt.start(app)` leaves out the held selection and what waits
+    // on the gate, and starts the rest.
+    let db = DbHandle::open_in_memory().unwrap();
+    {
+        let name = name.clone();
+        let script = script.to_owned();
+        db.call(move |db| {
+            generations::register_script(db, &name, &script).unwrap();
+            let api = crate::defs::resource::ResourceId {
+                kind: crate::defs::resource::ResourceKind::Deployment,
+                name: Arc::new("api".to_owned()),
+            };
+            crate::runtime::gates::store::set_hold(
+                db,
+                &name,
+                &GateName::new("migrate").unwrap(),
+                &[api].into(),
+            )
+            .unwrap();
+        });
+    }
+    let tx = new_event_channel();
+    let op_ctx = tx.operation(
+        name.clone(),
+        ActionName::new("poke").unwrap().into(),
+        "poke-op",
+        1,
+        None,
+    );
+    let end = super::run_operation_loop(
+        &app,
+        db.clone(),
+        Ok(BoundParams {
+            params: serde_json::Map::new(),
+            bindings: HashMap::new(),
+        }),
+        Arc::new(RwLock::new(None)),
+        Arc::new(Notify::new()),
+        &op_ctx,
+        &crate::ScriptLimits::default(),
+        Arc::new(Cipher::for_tests()),
+        &crate::runtime::gates::GateRuntime::new(),
+        Arc::new(CancelToken::new()),
+        None,
+        None,
+        None,
+        None,
+        Persisted::No,
+    );
+    assert!(matches!(end, OperationEnd::Completed));
+    assert_eq!(
+        started(ActionName::new("poke").unwrap().into(), &db, "poke-op"),
+        vec!["plain"],
+        "api is held and web waits on the unsatisfied gate"
+    );
+
+    // The gate's own body is not kept from its hold.
+    let end = run_gate_body(&app, script, "migrate", None, &db, "gate-op");
+    assert!(matches!(end, OperationEnd::Completed));
+    assert_eq!(
+        started(
+            OperationTarget::Gate(GateName::new("migrate").unwrap()),
+            &db,
+            "gate-op"
+        ),
+        vec!["api"],
+        "the gate's body starts what it holds"
+    );
+}

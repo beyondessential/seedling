@@ -984,6 +984,212 @@ fn stopped_deployment_scales_to_zero_unscheduling_existing_instances() {
 }
 
 // -----------------------------------------------------------------------
+// Gates
+// -----------------------------------------------------------------------
+
+fn gated_def(script: &str) -> AppDef {
+    let (app, error) = crate::runtime::apps::evaluate_script(
+        &app_name("myapp"),
+        script,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    );
+    assert!(error.is_none(), "the definition evaluates: {error:?}");
+    (*app.def.load_full()).clone()
+}
+
+fn held_by(
+    def: &AppDef,
+    gate: &str,
+    names: &[&str],
+) -> crate::runtime::gates::GateView {
+    use crate::runtime::gates::store::Holds;
+    let resources = names
+        .iter()
+        .map(|name| ResourceId {
+            kind: ResourceKind::Deployment,
+            name: Arc::new((*name).to_owned()),
+        })
+        .collect();
+    let holds = Holds::from([(
+        seedling_protocol::names::GateName::new(gate).unwrap(),
+        resources,
+    )]);
+    crate::runtime::gates::GateView {
+        held: crate::runtime::gates::held_resources(def, &holds),
+        waiting: Default::default(),
+    }
+}
+
+// spec: RCN#gate-holds
+#[test]
+fn a_resource_a_gate_holds_is_desired_unscheduled_whatever_its_scale() {
+    let def = gated_def(
+        r#"
+        let api = app.deployment("api").image("docker.io/library/nginx:1").scale(1..=5);
+        app.deployment("web").image("docker.io/library/nginx:1").scale(2..=4);
+        app.gate("migrate").key(1).exclusive(api);
+        "#,
+    );
+    let registry = EphemeralInstanceRegistry::new();
+    let scales = custom_effective_scales(&[("api", 1, 5, 3), ("web", 2, 4, 4)]);
+    let steady = compute(
+        &app_name("myapp"),
+        &def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
+    assert_eq!(steady.resources.len(), 7, "three api and four web");
+
+    let view = held_by(&def, "migrate", &["api"]);
+    let held = compute(
+        &app_name("myapp"),
+        &def,
+        None,
+        &registry,
+        &scales,
+        &view.keep_down(&StoppedSet::new()),
+    )
+    .unwrap();
+    let of = |name: &str| -> Vec<_> {
+        held.resources
+            .iter()
+            .filter(|r| r.instance.name.as_deref() == Some(name))
+            .collect()
+    };
+    assert_eq!(of("api").len(), 3, "the instances that exist are kept");
+    assert!(
+        of("api")
+            .iter()
+            .all(|r| r.desired == LifecycleState::Unscheduled && r.demoted),
+        "each is brought down, whatever the scale decision says"
+    );
+    assert_eq!(of("web").len(), 4);
+    assert!(
+        of("web").iter().all(|r| r.desired == LifecycleState::Ready),
+        "web is not held and keeps converging"
+    );
+}
+
+// spec: RCN#gate-holds
+#[test]
+fn a_job_a_gate_holds_is_desired_unscheduled() {
+    let def = gated_def(
+        r#"
+        let tool = app.job("tool").image("docker.io/library/tools:1");
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.gate("migrate").key(1).exclusive(tool);
+        "#,
+    );
+    let registry = EphemeralInstanceRegistry::new();
+    let scales = default_effective_scales(&def);
+    let view = crate::runtime::gates::GateView {
+        held: crate::runtime::gates::held_resources(
+            &def,
+            &crate::runtime::gates::store::Holds::from([(
+                seedling_protocol::names::GateName::new("migrate").unwrap(),
+                [ResourceId {
+                    kind: ResourceKind::Job,
+                    name: Arc::new("tool".to_owned()),
+                }]
+                .into(),
+            )]),
+        ),
+        waiting: Default::default(),
+    };
+    let state = compute(
+        &app_name("myapp"),
+        &def,
+        None,
+        &registry,
+        &scales,
+        &view.keep_down(&StoppedSet::new()),
+    )
+    .unwrap();
+    let map = to_map(state);
+    assert_eq!(map["tool"], LifecycleState::Unscheduled);
+    assert_eq!(map["web"], LifecycleState::Ready);
+}
+
+// spec: RCN#gate-holds
+#[test]
+fn the_job_of_a_gates_check_is_never_in_the_steady_desired_state() {
+    let def = gated_def(
+        r#"
+        app.deployment("api").image("docker.io/library/nginx:1");
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        app.job("other").image("docker.io/library/tools:1").deadline(5);
+        app.gate("ready").key(1).check(probe);
+        "#,
+    );
+    let registry = EphemeralInstanceRegistry::new();
+    let scales = default_effective_scales(&def);
+    let state = compute(
+        &app_name("myapp"),
+        &def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
+    let names: Vec<_> = state
+        .resources
+        .iter()
+        .filter_map(|r| r.instance.name.clone())
+        .collect();
+    assert!(!names.contains(&"probe".to_owned()), "{names:?}");
+    assert!(names.contains(&"other".to_owned()), "a Job that checks nothing is");
+    assert!(names.contains(&"api".to_owned()));
+}
+
+// spec: RCN#desired-state
+#[test]
+fn a_gate_run_holds_the_steady_state_with_what_its_body_placed_over_it() {
+    let def = gated_def(
+        r#"
+        let api = app.deployment("api").image("docker.io/library/nginx:1");
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.gate("migrate").key(1).exclusive(api);
+        "#,
+    );
+    let registry = EphemeralInstanceRegistry::new();
+    let scales = default_effective_scales(&def);
+    let view = held_by(&def, "migrate", &["api"]);
+    let down = view.keep_down(&StoppedSet::new());
+
+    let mut progress = OperationProgress::new();
+    progress.gate_run = true;
+    // The instances exist before the gate holds them down.
+    compute(
+        &app_name("myapp"),
+        &def,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
+    let idle = compute(&app_name("myapp"), &def, Some(&progress), &registry, &scales, &down)
+        .unwrap();
+    let map = to_map(idle);
+    assert_eq!(map["web"], LifecycleState::Ready, "the rest of the app keeps converging");
+    assert_eq!(map["api"], LifecycleState::Unscheduled, "the selection stays held");
+
+    let api = dep("myapp", "api");
+    let mut progress = OperationProgress::from_log(&[log_entry(CallKind::Start, vec![api])]);
+    progress.gate_run = true;
+    let started = compute(&app_name("myapp"), &def, Some(&progress), &registry, &scales, &down)
+        .unwrap();
+    let map = to_map(started);
+    assert_eq!(map["api"], LifecycleState::Ready, "the body starts what it holds");
+    assert_eq!(map["web"], LifecycleState::Ready);
+}
+
+// -----------------------------------------------------------------------
 // from_log — non-lifecycle call kinds
 // -----------------------------------------------------------------------
 

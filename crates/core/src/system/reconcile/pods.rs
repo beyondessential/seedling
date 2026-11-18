@@ -1475,6 +1475,105 @@ mod update_tests {
         );
     }
 
+    fn waiting(names: &[&str]) -> GateView {
+        let mut view = GateView::default();
+        for name in names {
+            view.waiting.insert(
+                crate::defs::resource::ResourceId {
+                    kind: ResourceKind::Deployment,
+                    name: std::sync::Arc::new((*name).to_owned()),
+                },
+                Vec::new(),
+            );
+        }
+        view
+    }
+
+    // spec: GATE#start-order
+    #[test]
+    fn a_workload_waiting_on_a_target_keeps_its_stale_running_instances() {
+        let (a, b, c, d) = (desired("a"), desired("b"), desired("c"), desired("d"));
+        // `a` waits and is stale and running; `b` is stale and running but does
+        // not wait; `c` waits and is stale but stopped; `d` waits and is not stale.
+        let observed = [
+            observed(&a, true, true),
+            observed(&b, true, true),
+            observed(&c, true, false),
+            observed(&d, false, true),
+        ];
+        let (waiting, kept) = instances_waiting_on_targets(&waiting(&["a", "c", "d"]), &observed);
+        let names = |ids: &[&DesiredResource]| -> HashSet<String> {
+            ids.iter().map(|d| d.instance.display_name.clone()).collect()
+        };
+        assert_eq!(waiting, names(&[&a, &c, &d]));
+        assert_eq!(
+            kept,
+            names(&[&a]),
+            "only a stale instance that is running is kept running"
+        );
+    }
+
+    // spec: GATE#start-order
+    #[test]
+    fn a_workload_waiting_on_a_target_starts_no_instance() {
+        use crate::system::reconcile::tests::test_reconciler;
+
+        const IMAGE: &str = "docker.io/library/nginx:1.29";
+        let oi = crate::oi::test_support::TestOi::new();
+        let reconciler = test_reconciler(&oi);
+        let job = crate::defs::job::Job {
+            name: std::sync::Arc::new("migrate".to_owned()),
+            def: Default::default(),
+            frozen: false,
+            anon_id: None,
+        };
+        job.def.lock().pod.lock().container.lock().image = Some(IMAGE.to_owned());
+        let dr = DesiredResource {
+            instance: ResourceInstance::new_singleton(
+                seedling_protocol::names::AppName::new("demo").unwrap(),
+                ResourceKind::Job,
+                "migrate",
+            ),
+            desired: LifecycleState::Ready,
+            definition: Resource::Job(job),
+            demoted: false,
+        };
+
+        let act = |wait: bool| {
+            oi.block_on(async {
+                oi.state.container_runtime.pull_image(IMAGE).await.unwrap();
+                let none = HashSet::new();
+                let no_observations = HashSet::new();
+                actuate_one_pod(
+                    &reconciler.actuator,
+                    &reconciler.db,
+                    AppPriority::default(),
+                    &GateKeyDigests::default(),
+                    observed(&dr, false, false),
+                    false,
+                    false,
+                    wait,
+                    &no_observations,
+                    &none,
+                    &none,
+                    &none,
+                )
+                .await
+            })
+        };
+        let waiting = act(true).expect("the instance is acted on");
+        assert!(
+            waiting.started_instance.is_none(),
+            "a workload waiting on a target starts nothing"
+        );
+        let free = act(false).expect("the instance is acted on");
+        assert_eq!(
+            free.started_instance.as_ref().map(|i| i.id),
+            Some(dr.instance.id),
+            "the same instance starts once it waits on nothing"
+        );
+    }
+
     // spec: UPD#rolling-updates
     #[test]
     fn a_rolling_update_is_not_held_by_this_rule() {

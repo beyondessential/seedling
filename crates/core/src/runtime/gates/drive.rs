@@ -180,8 +180,9 @@ fn sync_db(
 
     sync_gate_faults(db, app, &gates);
 
-    let held = match &gates.holds {
-        Ok(holds) => held_resources(def, holds).into_keys().collect(),
+    // What is held is read again, as the part above may have released holds.
+    let held = match store::load_holds(db, app) {
+        Ok(holds) => held_resources(def, &holds).into_keys().collect(),
         Err(_) => BTreeSet::new(),
     };
     let stopped = stopped::load_stopped(db, app).unwrap_or_else(|e| {
@@ -235,17 +236,61 @@ fn sync_gate_faults(db: &Db, app: &AppName, gates: &AppGates) {
             );
         }
     }
-    for (kind, current) in [
+    for (kind, mut current) in [
         ("gate_failed", failed),
         ("gate_check_unavailable", unavailable),
         ("gate_state_unreadable", unreadable),
     ] {
-        if let Err(e) = faults::sync_faults(
-            db,
-            &FaultScope::AppKind(app.clone(), kind.to_owned()),
-            &current,
-        ) {
+        let scope = FaultScope::AppKind(app.clone(), kind.to_owned());
+        keep_what_cannot_be_told(db, &scope, gates, kind, &mut current);
+        if let Err(e) = faults::sync_faults(db, &scope, &current) {
             tracing::error!(%app, kind, "cannot bring the gate faults up to date: {e}");
+        }
+    }
+}
+
+/// Carry over the active faults of gates whose state cannot be told.
+///
+/// A gate whose definition fails to evaluate, or whose record cannot be read,
+/// is neither failed nor not failed: the absence of the fault from what was
+/// worked out is not evidence that the fault has gone. The record that says a
+/// check could not be run is only unreadable along with the whole record.
+// spec: GRUN#gate-state
+// spec: FLT#filing-and-clearing
+fn keep_what_cannot_be_told(
+    db: &Db,
+    scope: &FaultScope,
+    gates: &AppGates,
+    kind: &str,
+    current: &mut BTreeMap<FaultKey, (FaultMeta, String)>,
+) {
+    let unknown: BTreeSet<&GateName> = gates
+        .gates
+        .iter()
+        .filter(|(_, status)| match &status.state {
+            GateState::Undetermined(Undetermined::Definition(_)) => kind == "gate_failed",
+            GateState::Undetermined(Undetermined::Record(_)) => {
+                kind != "gate_state_unreadable"
+            }
+            _ => false,
+        })
+        .map(|(name, _)| name)
+        .collect();
+    if unknown.is_empty() {
+        return;
+    }
+    let active = match faults::list_active_faults_in_scope(db, scope) {
+        Ok(active) => active,
+        Err(e) => {
+            tracing::error!(kind, "cannot read the active gate faults: {e}");
+            return;
+        }
+    };
+    for record in active {
+        if unknown.iter().any(|gate| gate.as_str() == record.subject) {
+            current
+                .entry(FaultKey::new(&record.app, record.kind, record.subject))
+                .or_insert((FaultMeta::default(), record.description));
         }
     }
 }
@@ -532,3 +577,6 @@ async fn initiate_runs(state: &Arc<OiState>, app: &Tracked, synced: &Synced) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

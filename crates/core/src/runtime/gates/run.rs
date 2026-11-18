@@ -827,3 +827,6 @@ pub fn eligible_for_check(status: &GateStatus) -> bool {
         GateState::Satisfied | GateState::Undetermined(Undetermined::Check(_))
     )
 }
+
+#[cfg(test)]
+mod tests;

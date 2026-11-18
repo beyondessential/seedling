@@ -616,7 +616,7 @@ pub fn any_active_fault_of_kind(db: &crate::runtime::db::Db, kind: &str) -> rusq
 /// A global sweep such as ingress conflicts runs every tick; reading every
 /// active fault in the database and discarding all but one kind would make
 /// that cost grow with the total fault count rather than with the kind's.
-fn list_active_faults_in_scope(
+pub fn list_active_faults_in_scope(
     db: &crate::runtime::db::Db,
     scope: &FaultScope,
 ) -> rusqlite::Result<Vec<FaultRecord>> {

@@ -1931,3 +1931,78 @@ fn installs_are_ordered_by_when_they_completed() {
     let seq = |app: &str| oi.state.registry.read().get(app).unwrap().install_seq;
     assert!(seq("second").unwrap() < seq("first").unwrap());
 }
+
+const GATED_SCRIPT: &str = r#"
+    let migrate = app.gate("migrate").key(1);
+    app.deployment("web").image("docker.io/library/nginx:1.29").after(migrate);
+"#;
+
+fn status_of(oi: &TestOi, app: &str) -> String {
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == app)
+        .unwrap()["status"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+// spec: APPS#status-derivation
+#[test]
+fn an_installed_app_is_installing_until_every_gate_has_been_satisfied_at_once() {
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": GATED_SCRIPT }),
+    )
+    .unwrap();
+    oi.install("demo");
+    assert_eq!(status_of(&oi, "demo"), "installing");
+
+    let name = AppName::new("demo").unwrap();
+    oi.state
+        .db
+        .call(move |db| crate::runtime::gates::store::mark_set_up(db, &name).unwrap());
+    assert_ne!(status_of(&oi, "demo"), "installing");
+}
+
+// spec: APPS#status-derivation
+// spec: GRUN#app-setup
+#[test]
+fn an_app_that_declares_no_gates_is_not_installing_once_installed() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    assert_ne!(status_of(&oi, "demo"), "installing");
+}
+
+// spec: APPS#status-derivation
+#[test]
+fn a_withholding_gate_fault_outranks_installing() {
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": GATED_SCRIPT }),
+    )
+    .unwrap();
+    oi.install("demo");
+    let name = AppName::new("demo").unwrap();
+    oi.state.db.call(move |db| {
+        crate::runtime::faults::file_fault(
+            db,
+            &name,
+            None,
+            None,
+            None,
+            "gate_failed",
+            "gate migrate is not satisfied",
+        )
+        .unwrap();
+    });
+    assert_eq!(status_of(&oi, "demo"), "faulted");
+}

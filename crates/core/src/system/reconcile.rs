@@ -4838,6 +4838,89 @@ mod tests {
         assert_eq!(stop_failed_faults(&oi, &job), 0);
     }
 
+    // spec: GRUN#uninstall
+    // The records of the app's gates, their holds and the record that it is
+    // set up go with the uninstall, so that installing again runs every gate
+    // as for the first time. While they cannot be deleted the app stays
+    // `Uninstalling`.
+    #[test]
+    fn an_uninstall_deletes_the_state_of_the_gates_and_waits_while_it_cannot() {
+        use seedling_protocol::names::GateName;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": r#"
+                    let api = app.deployment("api").image("docker.io/library/nginx:1");
+                    app.gate("migrate").key(1).exclusive(api);
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let app = AppName::new("app").unwrap();
+        let gate = GateName::new("migrate").unwrap();
+        {
+            let (app, gate) = (app.clone(), gate.clone());
+            oi.state.db.call(move |db| {
+                crate::runtime::gates::store::begin_run(db, &app, &gate).unwrap();
+                crate::runtime::gates::store::set_hold(
+                    db,
+                    &app,
+                    &gate,
+                    &[crate::defs::resource::ResourceId {
+                        kind: crate::defs::resource::ResourceKind::Deployment,
+                        name: Arc::new("api".to_owned()),
+                    }]
+                    .into(),
+                )
+                .unwrap();
+                crate::runtime::gates::store::mark_set_up(db, &app).unwrap();
+                db.conn
+                    .execute_batch(
+                        "CREATE TRIGGER keep_holds BEFORE DELETE ON gate_holds
+                         BEGIN SELECT RAISE(ABORT, 'locked'); END;",
+                    )
+                    .unwrap();
+            });
+        }
+        let state = |oi: &crate::oi::test_support::TestOi| {
+            let app = app.clone();
+            oi.state.db.call(move |db| {
+                (
+                    crate::runtime::gates::store::load_records(db, &app).unwrap().len(),
+                    crate::runtime::gates::store::load_holds(db, &app).unwrap().len(),
+                    crate::runtime::gates::store::is_set_up(db, &app).unwrap(),
+                )
+            })
+        };
+        assert_eq!(state(&oi), (1, 1, true));
+
+        oi.call("/apps/uninstall", serde_json::json!({ "app": "app" }))
+            .unwrap();
+        let mut reconciler = test_reconciler(&oi);
+        tear_down(&oi, &mut reconciler, "app");
+        assert_eq!(
+            phase_of(&oi, "app"),
+            AppPhase::Uninstalling,
+            "the app is not moved to NotInstalled while the gate state remains"
+        );
+        assert_eq!(
+            state(&oi),
+            (1, 1, true),
+            "a deletion that fails leaves all of it, not part"
+        );
+
+        oi.state.db.call(|db| {
+            db.conn.execute_batch("DROP TRIGGER keep_holds;").unwrap();
+        });
+        tear_down(&oi, &mut reconciler, "app");
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        assert_eq!(state(&oi), (0, 0, false));
+    }
+
     /// How many `stop_failed` faults are active for `instance`.
     fn stop_failed_faults(
         oi: &crate::oi::test_support::TestOi,
