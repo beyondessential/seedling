@@ -24,14 +24,23 @@ From V14's specs (SDDEF, SDUPG) on its branch, not the demo definitions in this 
 
 Seedling has two halves that meet badly: the resource graph is level-triggered and unordered (the reconciler converges on it, a missed iteration costs nothing), while actions and `on_change` are edge-triggered and ordered (a missed event is lost). Every gap V14 hit sits at that boundary: a default that moved without an event (H6), a retry that is not an event (V14's Retry upgrade action), and a failed handler after which the level-triggered side starts the new release anyway (J6). The start action exists only because the graph has no ordering.
 
+### Decided
+
+- `on_change` is removed, not kept alongside. Ordered reactions become steps; configuration in environment variables or mounted content is spec-hash content the update strategies already roll.
+- A step's body is a closure with `rt`. A Job-only form may come later as shorthand.
+- Scope is the full model: steps, `after` on steps and on resources, and folding in the start and install actions.
+
+### Design so far
+
 Working name: a **step**. A static resource that the runtime keeps converged, like any other.
 
 - **Key**: a value the definition computes in the static context, e.g. `version.value()`, or a digest of rendered config. The step is satisfied when its last success was for the current key. Where the key came from (stored value, default, derived value, definition update) does not matter.
-- **Body**: an action closure run as a lifecycle operation whenever the step is unsatisfied. It receives `last`, the app at the step's last success (none on first run), rather than the previous generation, so a version that moved twice while failing still upgrades from the release the database was last migrated to.
-- **Ordering**: `resource.after(step)` keeps a resource's instances for a new key from starting until the step has succeeded for that key. Existing instances keep running until then and then roll by their update strategy, because the step's key is part of the dependant's spec hash. `step.exclusive(selection)` stops the selection before the body runs.
-- **Failure**: an unsatisfied step holds its dependants and files a fault; it retries with growing back-off up to a cap (no terminal give-up), and an operator can retry it at once.
-- **Durable state**: per step, the key and generation of its last success, written when the body succeeds.
+- **Body**: a closure run as a lifecycle operation whenever the step is unsatisfied. It receives `last`, the app at the step's last success, or none on its first run. A version that moved twice while failing still upgrades from the release the database was last migrated to, and the first run is how a body tells install from upgrade.
+- **Ordering**: `resource.after(step)` keeps a resource's instances for a new key from starting until the step has succeeded for that key. Existing instances keep running until then and then roll by their update strategy, because the step's key is part of the dependant's spec hash. `step.exclusive(selection)` stops the selection before the body runs and keeps it stopped until the step succeeds. `step.after(step)` chains steps.
+- **Failure**: an unsatisfied step holds its dependants and files a fault; it retries with growing back-off up to a cap (no terminal give-up), and an operator can retry it at once. Cancelling a step's run pauses its retries until an operator retries it.
+- **Durable state**: per step, a digest of the key and the generation of its last success, written when the body succeeds. Only a digest is stored, since a key may carry a secret (e.g. a password-rotation step keyed on the password); `last` is reconstructed from generation history.
 - **Undeterminable key** (evaluation fails): the step is neither satisfied nor unsatisfied; nothing is started, stopped or run for it.
+- **Changes**: with nothing per-parameter left to trigger, a change may set or unset several parameters at once.
 
 Tamanu sketch:
 
@@ -48,33 +57,33 @@ parts.after(migrate);                  // new release starts only once migrated
 supervisor.after(migrate);             // rolls last, never stopped by the step
 ```
 
-What it subsumes or replaces:
+Other cases from the demo definitions, as steps:
 
-- `on_change`: configuration in environment variables or mounted content is spec-hash content the update strategies already roll; ordered reactions are steps keyed on what they depend on.
-- The one-parameter-per-change rule (#M6): nothing per-parameter is left to trigger, so several parameters can change at once.
+- Postgres major upgrade: a step keyed on the major, `last` giving the major to upgrade from; refusing a downgrade is a validator or a failing body.
+- Postgres password rotation: a non-exclusive step keyed on the password, whose body runs `ALTER USER` against the running server.
+- Postgres config rendered into a volume: either mounted content in the spec hash, or a step keyed on the rendered config's digest that the server comes after.
+
+What else it subsumes:
+
 - J6 for upgrades: a failed step holds its dependants by construction, across reboots.
 - V14's Retry upgrade action and readiness check (a step keyed on the database URL and crypto key that every part comes after), and the install's first migration (the step's first run).
-- Possibly the start action, if `after` is enough to order a boot.
+- The start action, if `after` on resources orders a boot.
+- The install action, if one-off operator input moves to ordinary actions (V14's Provision).
 
 Prior art: Kubernetes controllers (level-triggered reconcile) and init containers (per-pod gating); make and Bazel (re-run a recipe when its input key changes); systemd ordering (`After=`, `ExecCondition=`).
 
-## Parked: effective-value change handlers
+## Explicitly rejected
 
-Drafted as specs, then backed out pending the wider question. Agreed as recommendations if the per-parameter model survives:
+- Effective-value `on_change` (fire when the value `value()` returns moves), with a `multiple_handlers` refusal for changes that would fire more than one handler. It fixed the triggers but kept the edge-triggered model.
+- A definition-update hook that runs on every definition update.
+- Keeping `on_change` alongside steps.
 
-- `on_change` fires when a change moves the parameter's effective value (what `value()` returns: stored value, else default), and only then. Set, unset and definition update are one kind of event; pinning a parameter to its current effective value fires nothing. The effective value before a change is the previous definition at the previous values; after, the new definition at the new values. The handler the new definition registers runs, with `old` as today.
-- A change that would fire more than one handler is refused, with a new `multiple_handlers` wire error naming the parameters. Pinning all but one first, then unsetting each afterwards, sequences them. `/apps/plan`'s `on_change_would_fire` shows the list beforehand.
-- A parameter counts as moved only if both generations declare it; a newly declared parameter starts at its value in the new generation.
-- On an installed app whose current values evaluate, a parameter change whose proposed values fail to evaluate is refused, so a skipped upgrade can't hide behind a broken intermediate generation.
-- Validators stay as they are: they get no `old`, so they can't guard a transition.
+## Superseded: desired-state hold for generation-initiated operations
 
-## Kept: desired-state hold for generation-initiated operations
-
-Specced in Reconciliation (RCN#desired-state): from the commit of a generation whose change initiates an operation until that operation ends, including while queued, the app's desired state is held as for an operation in progress.
-
-- Code gap: `crates/core/src/system/reconcile.rs` holds an `Installed` app's desired state only while `active_progress` is set or `start_pending` is true. `active_progress` is first written once the closure runs, so a `param_change` handler that is queued, or admitted but not yet running, leaves the new generation's whole graph as the desired state. The hold has to be in place before the new definition is visible to the reconciler, e.g. a flag like `start_pending` set in the step that swaps `app.def`.
+Specced in Reconciliation (RCN#desired-state) before the pivot: from the commit of a generation whose change initiates an operation until that operation ends, including while queued, the app's desired state is held. With `on_change` gone no change initiates an operation, so this gives way to the step holds above; the code gap it covered (`crates/core/src/system/reconcile.rs` holding only while `active_progress` or `start_pending` is set) applies to step runs too, which have to hold their dependants from the moment the step becomes unsatisfied, including while queued.
 
 ## Docs to update
 
-- `docs/bsl-scripting.md`: the `on_change` comment near the version example.
+- `docs/bsl-scripting.md`: `on_change`, `on_start` and `on_install` sections and examples.
 - `docs/runtime-overview.md`: initiating-events table.
+- The demo definitions in `apps/` move to steps.
