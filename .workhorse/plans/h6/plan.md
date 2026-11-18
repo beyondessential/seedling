@@ -11,6 +11,15 @@ Problems with the current model:
 - One handler per parameter, at most one per change. The Tamanu demos repeat the same "render config, restart servers" handler for every config parameter, and there's no way to order work across parameters.
 - Handlers do two different jobs: re-applying state the reconciler can't see (config rendered into a volume by a job, then a restart), and ordered transitions between generations (stop, migrate, start). The first exists because that state sits outside the resource graph, where update strategies would roll it with no handler.
 
+### What Tamanu's production definitions need (tamanu/V14)
+
+From V14's specs (SDDEF, SDUPG) on its branch, not the demo definitions in this repo:
+
+- Every parameter but the version is configuration passed as environment variables (no config file), and "changing one restarts the parts using it, with the new value". The patient portal URL adds or removes the portal and its ingress. All of that is resource-graph content that update strategies already roll, so none of it needs a handler.
+- The version is the one ordered transition: pull the new images, tell the supervisor an upgrade started, stop every part but the supervisor, run migrations, start the new parts, replace the supervisor. It has to happen whenever the version that applies changes: a set, a definition update moving the default (re-fetching a floating tag), or a definition and version crossing a minor together.
+- A failed migration leaves the parts down with a fault (J6's guard and hold), a **Retry upgrade** action reruns the upgrade to the version already set, and moving to an older release in the minor runs the same procedure.
+- V14's review proposed the rule "the parts run the release the database is migrated to", a condition on state rather than a reaction to a change.
+
 ## Parked: effective-value change handlers
 
 Drafted as specs, then backed out pending the wider question. Agreed as recommendations if the per-parameter model survives:
