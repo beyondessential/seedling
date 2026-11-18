@@ -175,37 +175,40 @@ Grounded in the code as of the rebase over F6 and G6.
 
 ## Build steps
 
-### Progress
+### Stages
 
-- Stage A (several parameters per change): done. Migration v82.
-- Stage B1 (install and start actions, install parameters removed): done. Migration v83. `AppStatus::Installing` stays as a variant nothing derives yet; the gate stage derives it in `runtime/apps/status.rs::steady` from the setup record.
-- Stage B2 (`on_change`, `param_change` trigger, source/target generation, generation outcomes removed): done. Migrations v84 to v86.
-- Stage G1 (BSL `Gate`, `after`, `GateDef` on `AppDef`, end-of-evaluation checks, migration v87 with `gate_records`/`gate_holds`/`set_up`, `Cipher::key_digest`, spec hash folding in direct gate keys): done. Exclusive selections resolve through a thread-local drained by `defs::finish_evaluation`.
-- Left for gates: `HandlerKind::Gate` and check entry in the image probe; `gates_would_run` in `/apps/plan` (the console already reads it); `gates`, `held_by`, `waiting_on` in `/apps/show`; `/apps/gates/run`; `GateStateChanged`; the gate tables and `registered_apps.set_up`.
-- Then definitions, docs, test cases.
+Build order, with the labels used in commit history and conversation (these are labels for slices of the steps below, not extra work). Tick the steps as each lands; a stage is done when every step it names is ticked.
+
+- **A, several parameters per change:** done (migration v82; Parameters and generations, the parameter parts of Operator Interface, CLI and Console).
+- **B1, install and start actions removed:** done (migration v83).
+- **B2, `on_change` and edge-triggered plumbing removed:** done (migrations v84 to v86).
+- **G1, BSL gates and storage:** done (migration v87; the BSL steps, the keyed digest, the spec hash).
+- **G2, gate runtime and reconciler:** built but not audited; its steps stay unticked until each is checked against its code and test. Gate runs, checks, holds and start order exist in code; `AppStatus::Installing` derivation and the image probe's `HandlerKind::Gate` landed with it.
+- **G3, gate surfaces:** not started. `/apps/show` gates, `held_by`, `waiting_on`; `/apps/gates/run`; `/apps/restart` and `/apps/resource/stop` for held resources; `gates_would_run`; `apps gate run`; the console's gate parts; the OI and event tests.
+- **G4, definitions, docs and test cases:** not started. The demo definitions, docs, test cases, citations for the gate code.
 
 ### Baseline
 
-- [ ] Run `cargo clippy`, `cargo fmt --check`, `etc/ci/check-spec-style.sh` and the `etc/ci/` greps on the rebased branch and fix anything outstanding (the citation check is expected to fail only on the removed sections)
+- [x] Run `cargo clippy`, `cargo fmt --check`, `etc/ci/check-spec-style.sh` and the `etc/ci/` greps on the rebased branch and fix anything outstanding (the citation check is expected to fail only on the removed sections)
 
 ### Storage
 
-- [ ] Migration v82 (`runtime/db/migrations/v82.sql` or `.rs`, registered in `runtime/db.rs`, version asserts in `runtime/db/tests.rs`):
-  - [ ] `gate_records`: app, gate, key digest, generation of last success, valid, consecutive failures, last failure time and description, paused-for key digest
-  - [ ] `gate_holds`: app, gate, covered resources
-  - [ ] `registered_apps.set_up`; drop `installing`, moving installing apps to installed
-  - [ ] `generation_params` child table; move `param_set`/`param_unset` rows and `script_update` rows with a parameter into it, set kind `param_change`, drop `param_name`/`previous_value`/`new_value` and their ciphertext columns, and `operation_id`/`outcome`/`outcome_error`
-  - [ ] `current_operation` and `queued_operations`: one `generation` column and a `gate` column beside the action; drop queued `boot`, `install` and `param_change` rows
-- [ ] Keyed digest helper in `runtime/secrets.rs`, with a test that the digest differs across secret keys and is stable for one
+- [x] Migration v82 (`runtime/db/migrations/v82.sql` or `.rs`, registered in `runtime/db.rs`, version asserts in `runtime/db/tests.rs`):
+  - [x] `gate_records`: app, gate, key digest, generation of last success, valid, consecutive failures, last failure time and description, paused-for key digest
+  - [x] `gate_holds`: app, gate, covered resources
+  - [x] `registered_apps.set_up`; drop `installing`, moving installing apps to installed
+  - [x] `generation_params` child table; move `param_set`/`param_unset` rows and `script_update` rows with a parameter into it, set kind `param_change`, drop `param_name`/`previous_value`/`new_value` and their ciphertext columns, and `operation_id`/`outcome`/`outcome_error`
+  - [x] `current_operation` and `queued_operations`: one `generation` column and a `gate` column beside the action; drop queued `boot`, `install` and `param_change` rows
+- [x] Keyed digest helper in `runtime/secrets.rs`, with a test that the digest differs across secret keys and is stable for one
 
 ### BSL
 
-- [ ] `defs/gate.rs`: `Gate` builder (`key`, `run`, `check`, `exclusive`, `after`) registered in `defs::register`, `app.gate(name)` in `defs/app/gate.rs`; static-context and frozen checks as Deployment/Job do; conversions through `defs::take`
-- [ ] Key canonicalisation and the JSON-representable check, throwing on anything else
-- [ ] `check`: named Job with a deadline, one gate per Job; `exclusive`: no dynamic resources; resolution of `exclusive(app)` at the end of evaluation
-- [ ] `after` on `PodDef::mixin` (Deployment and Job), static context only
-- [ ] End-of-evaluation checks: `after` cycles, exclusive selection holding a target, check Job in its own gate's selection or ordered after it
-- [ ] Remove `Param::on_change` (`defs/param.rs`), `app.on_start` and the `"start"`/`"install"` name rules in `defs/app/action.rs`, `app.on_install` and `defs/app/install.rs`; move `ParamDef`/`ParamKind` out of `defs/install.rs` and update every import
+- [x] `defs/gate.rs`: `Gate` builder (`key`, `run`, `check`, `exclusive`, `after`) registered in `defs::register`, `app.gate(name)` in `defs/app/gate.rs`; static-context and frozen checks as Deployment/Job do; conversions through `defs::take`
+- [x] Key canonicalisation and the JSON-representable check, throwing on anything else
+- [x] `check`: named Job with a deadline, one gate per Job; `exclusive`: no dynamic resources; resolution of `exclusive(app)` at the end of evaluation
+- [x] `after` on `PodDef::mixin` (Deployment and Job), static context only
+- [x] End-of-evaluation checks: `after` cycles, exclusive selection holding a target, check Job in its own gate's selection or ordered after it
+- [x] Remove `Param::on_change` (`defs/param.rs`), `app.on_start` and the `"start"`/`"install"` name rules in `defs/app/action.rs`, `app.on_install` and `defs/app/install.rs`; move `ParamDef`/`ParamKind` out of `defs/install.rs` and update every import
 - [ ] `run_operation` (`runtime/barrier/replay.rs`): dispatch a gate body from the capture, call it with `rt` and `last` by arity, build `last` with `generations::reconstruct_app_def` at the gate's last success or pass unit; drop the install, start-default and change-handler paths and `change_handler_call_script`; `check_idempotent` compares gates
 - [ ] `rt` exclusions (`runtime/barrier/runtime.rs`): `extract_instances`/`do_start_or_query`/`do_stop` leave out gate-held resources and workloads waiting on an unsatisfied gate, except the running gate's own; `rt.restart` throws on them; a shell's `Started` leaves them out too
 
@@ -222,52 +225,52 @@ Grounded in the code as of the rebase over F6 and G6.
 
 ### Operations and lifecycle
 
-- [ ] Collapse source/target generation across `runtime/scheduler.rs`, `runtime/history.rs`, `oi/handler/actions/lifecycle.rs`, `runtime/barrier/replay.rs`, `oi/shells/session.rs`, `runtime/gc.rs`
+- [x] Collapse source/target generation across `runtime/scheduler.rs`, `runtime/history.rs`, `oi/handler/actions/lifecycle.rs`, `runtime/barrier/replay.rs`, `oi/shells/session.rs`, `runtime/gc.rs`
 - [ ] Persist and restore gate runs (`gate` instead of an action) in the current-operation and queue records; replay a gate run
-- [ ] `lifecycle.rs`: drop `enter_installing_phase`, `finalize_install`, `revert_install_phase`, `recover_unreplayable_install`, `initiate_start`, `start_pending`; completion returns to steady state; cancelled and failed gate runs file `gate_failed`, not `operation_failed`/`operation_cancelled`; drop the outcome writes to generation history
-- [ ] `oi/handler/actions.rs::cancel_action`: drop the Installing path
-- [ ] `runtime/scheduler.rs`: drop `AppHold::admit` and `ChangeBeingApplied` uses tied to `on_change`; keep the change hold blocking operation admission
-- [ ] `crates/daemon/src/main.rs`: drop boot starts and install replay; the startup sweep moves only `NotInstalled` apps with recorded instances to `Uninstalling`
-- [ ] `runtime/schedules.rs`: phase check without `Installing`
+- [ ] `lifecycle.rs`: drop `enter_installing_phase`, `finalize_install`, `revert_install_phase`, `recover_unreplayable_install`, `initiate_start`, `start_pending`; completion returns to steady state; cancelled and failed gate runs file `gate_failed`, not `operation_failed`/`operation_cancelled`; drop the outcome writes to generation history (open here: completion returning to steady state and `gate_failed` for cancelled and failed gate runs; the install-era removals are done)
+- [x] `oi/handler/actions.rs::cancel_action`: drop the Installing path
+- [x] `runtime/scheduler.rs`: drop `AppHold::admit` and `ChangeBeingApplied` uses tied to `on_change`; keep the change hold blocking operation admission
+- [x] `crates/daemon/src/main.rs`: drop boot starts and install replay; the startup sweep moves only `NotInstalled` apps with recorded instances to `Uninstalling`
+- [x] `runtime/schedules.rs`: phase check without `Installing`
 
 ### Reconciler
 
 - [ ] `runtime/desired.rs::compute_steady`: gate holds as `Unscheduled` whatever the scale, start order, check Jobs out of the desired state; gate run desired state as steady plus the body's starts and stops
-- [ ] `system/reconcile.rs`: drop the `Installing` and `start_pending` branches; `AppEntry::is_steady` without `start_pending`; gate state evaluated per iteration through `runtime/gates.rs`
+- [ ] `system/reconcile.rs`: drop the `Installing` and `start_pending` branches; `AppEntry::is_steady` without `start_pending`; gate state evaluated per iteration through `runtime/gates.rs` (done: the `Installing` and `start_pending` branches are gone; open: gate state evaluated per iteration)
 - [ ] `system/reconcile/pods.rs`: no new instance of a waiting workload; no stale instance stopped while its workload waits, under rolling, replace or Job
-- [ ] `system/actuator.rs::desired_spec_hash`: fold in the direct gate targets' key digests
+- [x] `system/actuator.rs::desired_spec_hash`: fold in the direct gate targets' key digests
 - [ ] Job readiness as a target from the most recent instance's outcome
 
 ### Parameters and generations
 
-- [ ] `runtime/generations.rs`: `Kind::ParamChange` with a list; `bump_param_change` takes several changes; `param_map_at` and `reconstruct_app_def` read the child table; `script_update` with several parameters
-- [ ] `oi/handler/params.rs`: `/apps/params/set` with `params` (refusals for empty, duplicate names, bad names, non-string values), one generation and one `ParamsChanged`; remove `unset_param` and `schedule_on_change`; `hold_for_change` refuses only a concurrent change
-- [ ] `oi/handler/apps.rs::update_app`: `params` object with the same refusals; `AppUpdated` with `changes`
-- [ ] `oi/handler/apps.rs::dry_run_plan`: `proposed_params` object, `gates_would_run` in place of `on_change_would_fire`
+- [x] `runtime/generations.rs`: `Kind::ParamChange` with a list; `bump_param_change` takes several changes; `param_map_at` and `reconstruct_app_def` read the child table; `script_update` with several parameters
+- [x] `oi/handler/params.rs`: `/apps/params/set` with `params` (refusals for empty, duplicate names, bad names, non-string values), one generation and one `ParamsChanged`; remove `unset_param` and `schedule_on_change`; `hold_for_change` refuses only a concurrent change
+- [x] `oi/handler/apps.rs::update_app`: `params` object with the same refusals; `AppUpdated` with `changes`
+- [ ] `oi/handler/apps.rs::dry_run_plan`: `proposed_params` object, `gates_would_run` in place of `on_change_would_fire` (done: `proposed_params` object; open: `gates_would_run` is an always-empty placeholder until gate state feeds it)
 
 ### Operator Interface and protocol
 
-- [ ] `crates/protocol/src/events.rs`: `ParamsChanged` and the change entry shape shared with `AppUpdated`; drop `ParamSet`/`ParamUnset` and `AppUpdatedParam`; operation events with `operation_generation` and optional `gate`; `GateStateChanged`; builders on both senders; wire-shape tests in `events/tests.rs`
-- [ ] `crates/protocol/src/error.rs`: drop `InstallInProgress`
-- [ ] `oi/handler.rs` routing: `/apps/install` (app only, refusals per ACI) in place of `/apps/install/invoke`; drop `/apps/params/unset`; add `/apps/gates/run` with the refusals in CTL; delete `oi/handler/actions/install.rs` and its tests
+- [x] `crates/protocol/src/events.rs`: `ParamsChanged` and the change entry shape shared with `AppUpdated`; drop `ParamSet`/`ParamUnset` and `AppUpdatedParam`; operation events with `operation_generation` and optional `gate`; `GateStateChanged`; builders on both senders; wire-shape tests in `events/tests.rs`
+- [x] `crates/protocol/src/error.rs`: drop `InstallInProgress`
+- [ ] `oi/handler.rs` routing: `/apps/install` (app only, refusals per ACI) in place of `/apps/install/invoke`; drop `/apps/params/unset`; add `/apps/gates/run` with the refusals in CTL; delete `oi/handler/actions/install.rs` and its tests (done: `/apps/install`, `/apps/params/unset` dropped; open: `/apps/gates/run`)
 - [ ] `/apps/show`: `gates`, per-resource `held_by` and `waiting_on`, `current_operation` with `gate` and `generation`, action kinds without `install`; `/apps/list` with `gate`; status from the setup record and gate faults (`runtime/apps/status.rs`)
-- [ ] `/apps/generations`: `param_change` with a `params` list; no operation outcome
+- [x] `/apps/generations`: `param_change` with a `params` list; no operation outcome
 - [ ] `/apps/restart` refused while a gate holds the deployment; `/apps/resource/stop` accepted for a held resource
-- [ ] `oi/test_support.rs`: `TestOi::install` against `/apps/install`
+- [x] `oi/test_support.rs`: `TestOi::install` against `/apps/install`
 
 ### CLI
 
-- [ ] `crates/ctl/src/apps.rs`: `apps install <app>` without parameters (drop `parse_install_params`); `apps params set <app> name=value... --unset name...`; drop `apps params unset`; `apps update --set/--unset` repeatable, refusing a parameter named twice (`definition::param_change` in `crates/ctl/src/definition.rs`); `apps plan --param` building the object, with `--unset`
+- [x] `crates/ctl/src/apps.rs`: `apps install <app>` without parameters (drop `parse_install_params`); `apps params set <app> name=value... --unset name...`; drop `apps params unset`; `apps update --set/--unset` repeatable, refusing a parameter named twice (`definition::param_change` in `crates/ctl/src/definition.rs`); `apps plan --param` building the object, with `--unset`
 - [ ] `apps gate run <app> <gate>` as a `GateCommand` beside `ParamCommand`
 
 ### Console
 
 - [ ] `crates/web/frontend/src/lib/types.ts`: gates, `held_by`, `waiting_on`, `CurrentOperation.gate`/`generation`, `GenerationKind` and entry `params`, `PlanResponse.gates_would_run`, event fields; drop install requirement types
-- [ ] `routes/AppDetail.tsx`: install without the parameter dialog; params section staging several edits into one `/apps/params/set`; a gates section with state and a run button; held and waiting markers on resources; current-operation banner for gate runs; event lists
-- [ ] `components/UpdateDefinitionDialog.tsx` and `PlanParamDialog.tsx`: several parameter changes; `PlanDiff.tsx` reads `gates_would_run`
-- [ ] `components/GenerationHistory.tsx` and `EventsSidebar.tsx`: `param_change` lists, `ParamsChanged`, `GateStateChanged`
-- [ ] `crates/web/src/actor_activity.rs` and `event_broker.rs` tests: new event names
-- [ ] Frontend tests listed against these files (`AppDetail.test.tsx`, `AppDetail.resources.test.tsx`, `AppDetail.fixtures.ts`, `GenerationHistory.test.tsx`, `DefinitionSection.test.tsx`, `PlanDiff.test.tsx`, `EditScript.test.tsx`)
+- [ ] `routes/AppDetail.tsx`: install without the parameter dialog; params section staging several edits into one `/apps/params/set`; a gates section with state and a run button; held and waiting markers on resources; current-operation banner for gate runs; event lists (done: install without the dialog, staged params; open: gates section, held and waiting markers, gate banner)
+- [ ] `components/UpdateDefinitionDialog.tsx` and `PlanParamDialog.tsx`: several parameter changes; `PlanDiff.tsx` reads `gates_would_run` (done: several parameter changes; open: `PlanDiff` reading real `gates_would_run`)
+- [x] `components/GenerationHistory.tsx` and `EventsSidebar.tsx`: `param_change` lists, `ParamsChanged`, `GateStateChanged`
+- [x] `crates/web/src/actor_activity.rs` and `event_broker.rs` tests: new event names
+- [ ] Frontend tests listed against these files (`AppDetail.test.tsx`, `AppDetail.resources.test.tsx`, `AppDetail.fixtures.ts`, `GenerationHistory.test.tsx`, `DefinitionSection.test.tsx`, `PlanDiff.test.tsx`, `EditScript.test.tsx`) (done for the parameter and install files; open for gates)
 
 ### Images
 
@@ -275,8 +278,8 @@ Grounded in the code as of the rebase over F6 and G6.
 
 ### Tests
 
-- [ ] Rewrite the BSL tests that use the removed handlers (`crates/core/src/tests/param.rs`, `barrier.rs`, `action.rs`, `runtime.rs`, `app.rs`, `action_call.rs`) onto actions and gates, deleting those that only covered `on_change`, `on_start` or `on_install`
-- [ ] New BSL tests for `Gate`: builder errors, key equality, cycles and self-waits, `last` at the last success
+- [x] Rewrite the BSL tests that use the removed handlers (`crates/core/src/tests/param.rs`, `barrier.rs`, `action.rs`, `runtime.rs`, `app.rs`, `action_call.rs`) onto actions and gates, deleting those that only covered `on_change`, `on_start` or `on_install`
+- [x] New BSL tests for `Gate`: builder errors, key equality, cycles and self-waits, `last` at the last success
 - [ ] Gate runtime tests that sever in-memory state between the record write and its read: hold across a restart, pause across a restart, back-off across a restart, unreadable record leaving the gate undetermined
 - [ ] Reconciler tests: held selection stays down whatever the scale, waiting workload keeps its stale instances, check Job never in the desired state, spec hash moves with a direct gate key only
 - [ ] OI tests: multi-parameter set and update refusals, events and history; `/apps/install`; `/apps/gates/run` refusals; changes accepted while an operation runs
