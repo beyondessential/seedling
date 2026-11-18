@@ -65,12 +65,12 @@ Calling any other method that changes the app, its parameters' schemas or its ac
 
 A script MAY create an anonymous resource only in the action context, by calling `app.deployment()`, `app.job()`, `app.service()` or `app.volume()` with no arguments.
 Calling any of these with no arguments in the static context MUST throw.
-An anonymous resource remains open to its builder methods for the rest of the lifecycle operation that created it.
+An anonymous resource remains open to its builder methods for the rest of the lifecycle operation or [shell session](../interface/shells.md#shell-session) that created it.
 
 ## Dynamic resource lifetime
 
-A dynamic resource MUST exist only for the lifecycle operation that created it.
-The runtime MUST clean up every dynamic resource when that lifecycle operation ends.
+A dynamic resource MUST exist only for the lifecycle operation or shell session that created it.
+The runtime MUST clean up every dynamic resource when that lifecycle operation or shell session ends.
 
 ## App description
 

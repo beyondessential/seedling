@@ -202,5 +202,9 @@ If the entry at the call's position records a different action than the one bein
 A shell session is not a lifecycle operation.
 The runtime MUST allow a shell session to run beside a lifecycle operation and beside other shell sessions.
 
-Resources a shell session creates are dynamic, and the runtime MUST clean them up when the session ends.
+Resources a shell session creates are [dynamic](../language/app.md#dynamic-resource-lifetime), and the reconciler actuates those the session's closure starts as [desired state](reconciliation.md#desired-state) specifies.
+Before it places a session's dynamic resource in the desired state, the runtime MUST record it durably against the session, and MUST NOT start a resource whose record it could not write.
+
+When a session ends, the runtime MUST tear down its dynamic resources as it does an ended operation's, under [completion](#completion), holding [`operation_cleanup_stalled`](faults.md#app-faults) for the session where they are not all gone within a minute of its end or their records cannot be read.
+A session's dynamic resources left behind by a previous run of the runtime are torn down as [abandoned replay](suspension.md#abandoned-replay) specifies.
 The runtime MUST NOT persist a shell session's parameters, and MUST NOT replay a session after a restart.
