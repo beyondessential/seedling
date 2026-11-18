@@ -1533,15 +1533,8 @@ function ActionInvokeDialog({
   };
 
   const handleSubmit = async () => {
-    const method =
-      action.kind === "install"
-        ? "/apps/install/invoke"
-        : "/apps/action/invoke";
-    const params =
-      action.kind === "install"
-        ? { app: appName, params: values }
-        : { app: appName, name: action.name, params: values };
-    if ((await execute(method, params)) === null) return;
+    const request = { app: appName, name: action.name, params: values };
+    if ((await execute("/apps/action/invoke", request)) === null) return;
     onSuccess();
     handleClose();
   };
@@ -1549,7 +1542,7 @@ function ActionInvokeDialog({
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontFamily: "monospace", pb: 1 }}>
-        {action.kind === "install" ? "Install" : `Run: ${action.name}`}
+        {`Run: ${action.name}`}
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
@@ -1581,7 +1574,7 @@ function ActionInvokeDialog({
           onClick={handleSubmit}
           disabled={loading || paramsBlocker(paramEntries, values) !== null}
         >
-          {loading ? "Running…" : action.kind === "install" ? "Install" : "Run"}
+          {loading ? "Running…" : "Run"}
         </SolidActionButton>
       </DialogActions>
     </Dialog>
@@ -1590,111 +1583,54 @@ function ActionInvokeDialog({
 
 function InstallSection({
   appName,
-  installAction,
   hasScriptError,
-  faults,
   onRefresh,
 }: {
   appName: string;
-  installAction: AppAction | undefined;
   hasScriptError: boolean;
-  faults: FaultRecord[];
   onRefresh: () => void;
 }) {
   const { execute, loading } = useOiAction();
-  const [dialogOpen, setDialogOpen] = useState(false);
-
-  const hasParams =
-    installAction && Object.keys(installAction.params).length > 0;
-  // Surface the most-recent operation_failed fault so operators who land here
-  // after a failed install (or just after uninstall) can see what went wrong
-  // and jump straight to the logs, without having to hunt for the Logs button.
-  const operationFailures = faults.filter((f) => f.kind === "operation_failed");
 
   const handleInstall = async () => {
-    if (hasParams) {
-      setDialogOpen(true);
-    } else {
-      if ((await execute("/apps/install/invoke", { app: appName, params: {} })) === null) return;
-      onRefresh();
-    }
+    if ((await execute("/apps/install", { app: appName })) === null) return;
+    onRefresh();
   };
 
   return (
-    <>
-      <Box
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 2,
+        py: 6,
+      }}
+    >
+      <Typography
         sx={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 2,
-          py: 6,
+          color: "text.secondary",
         }}
       >
-        <Typography
-          sx={{
-            color: "text.secondary",
-          }}
-        >
-          This app has not been installed yet.
-        </Typography>
-        <SolidActionButton
-          safety="write"
-          size="large"
-          onClick={() => void handleInstall()}
-          disabled={loading || hasScriptError}
-        >
-          {loading ? "Installing…" : "Install"}
-        </SolidActionButton>
-        {installAction && (
-          <Typography
-            variant="caption"
-            sx={{ color: "text.secondary", textAlign: "center", maxWidth: 480 }}
-          >
-            Runs the app's{" "}
-            <Box component="code" sx={{ fontFamily: "monospace" }}>
-              on_install
-            </Box>{" "}
-            action
-            {installAction.description ? ` — ${installAction.description}` : ""}
-            .
-          </Typography>
-        )}
-        {operationFailures.length > 0 && (
-          <Alert severity="error" sx={{ width: "100%", mt: 2 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              The last install attempt failed:
-            </Typography>
-            {operationFailures.map((f) => (
-              <Typography
-                key={f.id}
-                variant="body2"
-                sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}
-              >
-                {f.description}
-              </Typography>
-            ))}
-          </Alert>
-        )}
-        <Button
-          size="small"
-          startIcon={<ArticleIcon />}
-          component={Link}
-          to={`/apps/${appName}/logs`}
-        >
-          View logs from previous runs
-        </Button>
-      </Box>
-      {installAction && (
-        <ActionInvokeDialog
-          appName={appName}
-          action={installAction}
-          open={dialogOpen}
-          onClose={() => setDialogOpen(false)}
-          onSuccess={onRefresh}
-        />
-      )}
-    </>
+        This app has not been installed yet.
+      </Typography>
+      <SolidActionButton
+        safety="write"
+        size="large"
+        onClick={() => void handleInstall()}
+        disabled={loading || hasScriptError}
+      >
+        {loading ? "Installing…" : "Install"}
+      </SolidActionButton>
+      <Button
+        size="small"
+        startIcon={<ArticleIcon />}
+        component={Link}
+        to={`/apps/${appName}/logs`}
+      >
+        View logs from previous runs
+      </Button>
+    </Box>
   );
 }
 
@@ -1803,16 +1739,9 @@ function ActionsSection({
             </TableRow>
           </TableHead>
           <TableBody>
-            {/* The install action is invoked from the dedicated Install
-                button in InstallSection, and the App detail Actions
-                section only renders for already-installed apps anyway —
-                so hide the install row, which would otherwise sit there
-                permanently un-invokable. */}
             {actions
-              .filter((a) => a.kind !== "install")
               .map((a) => {
-                const isInvokable =
-                  a.kind !== "shell" && a.kind !== "lifecycle";
+                const isInvokable = a.kind !== "shell";
                 const isRunning = a.name === operatingAction;
                 const canRun = isInvokable && canInvoke;
                 return (
@@ -2925,11 +2854,9 @@ export default function AppDetail() {
           {data.status === "not_installed" ? (
             <InstallSection
               appName={name!}
-              installAction={data.actions.find((a) => a.kind === "install")}
               hasScriptError={data.faults.some(
                 (f) => f.kind === "script_error",
               )}
-              faults={data.faults}
               onRefresh={refetch}
             />
           ) : (

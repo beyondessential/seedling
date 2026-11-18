@@ -116,14 +116,6 @@ export const params: AppParam[] = [
   },
 ];
 
-export const installAction: AppAction = {
-  name: "on_install",
-  description: "Set up the database",
-  kind: "install",
-  params: {},
-  schedules: [],
-};
-
 export const backupAction: AppAction = {
   name: "backup",
   description: "Back up the data volume",
@@ -209,7 +201,7 @@ export function makeDetail(overrides: Partial<AppDetail> = {}): AppDetail {
     stopped_resources: [],
     params,
     unknown_params: [],
-    actions: [installAction, backupAction, reindexAction, dbShellAction],
+    actions: [backupAction, reindexAction, dbShellAction],
     ...overrides,
   };
 }

@@ -5,7 +5,6 @@ import {
   backupAction,
   baseFixtures,
   healthcheck,
-  installAction,
   makeDetail,
   makeFault,
   makeWebDeployment,
@@ -468,7 +467,7 @@ describe("AppDetail actions", () => {
   // spec: UI#shells
   it("collects shell params in a dialog before opening the session", async () => {
     const detail = makeDetail({
-      actions: [installAction, backupAction, reindexAction, psqlShellAction],
+      actions: [backupAction, reindexAction, psqlShellAction],
     });
     const { openShell } = mount(baseFixtures(detail), "write");
     expect(await screen.findByText("psql")).toBeTruthy();

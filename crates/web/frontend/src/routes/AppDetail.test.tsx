@@ -1,10 +1,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { AppAction } from "../lib/types";
 import { renderWithSession } from "../test/harness";
 import {
   baseFixtures,
-  installAction,
   makeDetail,
   makeFault,
 } from "./AppDetail.fixtures";
@@ -181,81 +179,32 @@ describe("AppDetail page", () => {
   });
 
   describe("not-installed app", () => {
-    const notInstalled = (install: AppAction) =>
+    const notInstalled = () =>
       makeDetail({
         status: "not_installed",
         resources: [],
         params: [],
-        actions: [install],
+        actions: [],
       });
 
-    it("offers install directly when the install action takes no params", async () => {
-      const { request } = mount(baseFixtures(notInstalled(installAction)), "write");
+    it("offers install directly, with only the app", async () => {
+      const { request } = mount(baseFixtures(notInstalled()), "write");
       expect(
         await screen.findByText("This app has not been installed yet."),
       ).toBeTruthy();
       expect(screen.getByRole("button", { name: "Deregister" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Uninstall" })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Install" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
       await waitFor(() =>
-        expect(callsTo(request, "/apps/install/invoke")).toEqual([
-          ["/apps/install/invoke", { app: "myapp", params: {} }],
+        expect(callsTo(request, "/apps/install")).toEqual([
+          ["/apps/install", { app: "myapp" }],
         ]),
       );
-    });
-
-    // spec: UI#operator-capabilities
-    it("collects install requirements in a dialog before invoking", async () => {
-      const withParams: AppAction = {
-        ...installAction,
-        params: {
-          site_name: {
-            kind: "string",
-            required: true,
-            description: "Display name for the site",
-            default_value: null,
-          },
-        },
-      };
-      const { request } = mount(baseFixtures(notInstalled(withParams)), "write");
-      fireEvent.click(await screen.findByRole("button", { name: "Install" }));
-      const dialog = await screen.findByRole("dialog");
-      const input = within(dialog).getByLabelText(/site_name/);
-      fireEvent.change(input, { target: { value: "My Shop" } });
-      fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
-      await waitFor(() =>
-        expect(callsTo(request, "/apps/install/invoke")).toEqual([
-          ["/apps/install/invoke", { app: "myapp", params: { site_name: "My Shop" } }],
-        ]),
-      );
-    });
-
-    it("shows the last failed install attempt", async () => {
-      const detail = notInstalled(installAction);
-      detail.faults = [
-        makeFault({
-          id: "fault-op",
-          kind: "operation_failed",
-          resource_type: undefined,
-          resource_name: undefined,
-          instance_id: undefined,
-          description: "install handler panicked: db unreachable",
-        }),
-      ];
-      mount(baseFixtures(detail));
-      expect(
-        await screen.findByText("The last install attempt failed:"),
-      ).toBeTruthy();
-      expect(
-        screen.getAllByText(/install handler panicked: db unreachable/).length,
-      ).toBeGreaterThan(0);
     });
 
     it("deregisters the app through the confirm dialog", async () => {
-      const { request } = mount(
-        baseFixtures(notInstalled(installAction)),
-        "dangerous",
-      );
+      const { request } = mount(baseFixtures(notInstalled()), "dangerous");
       fireEvent.click(await screen.findByRole("button", { name: "Deregister" }));
       const dialog = await screen.findByRole("dialog");
       expect(within(dialog).getByText(/cannot be undone/)).toBeTruthy();

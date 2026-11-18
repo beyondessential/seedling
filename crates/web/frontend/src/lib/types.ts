@@ -243,8 +243,8 @@ export interface ActionSchedule {
 export interface AppAction {
   name: string;
   description: string | null;
-  kind: "action" | "shell" | "install" | "lifecycle";
-  params: Record<string, InstallRequirement>;
+  kind: "action" | "shell";
+  params: Record<string, ParamSchema>;
   schedules: ActionSchedule[];
 }
 
@@ -261,7 +261,7 @@ export interface CurrentOperation {
   } | null;
 }
 
-export interface InstallRequirement {
+export interface ParamSchema {
   kind: string;
   required: boolean;
   description: string;
@@ -779,12 +779,7 @@ export interface ImagePin {
   expires_at: string | null;
 }
 
-export type HandlerKind =
-  | "install"
-  | "start"
-  | "action"
-  | "shell"
-  | "param_change";
+export type HandlerKind = "action" | "shell" | "param_change";
 
 export interface HandlerProbe {
   name: string;

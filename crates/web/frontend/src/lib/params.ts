@@ -1,7 +1,7 @@
-import type { InstallRequirement } from "./types";
+import type { ParamSchema } from "./types";
 import { isStrongPassword } from "./passwordStrength";
 
-export type ParamEntries = [string, InstallRequirement][];
+export type ParamEntries = [string, ParamSchema][];
 
 /** The values an action's inputs start with: each param's `default_value`. */
 // spec: ACN#param-schemas
