@@ -5,7 +5,8 @@ use std::{
 
 use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
-use seedling_protocol::names::{ActionName, AppName, ParamName, SessionId};
+use seedling_protocol::events::OperationTarget;
+use seedling_protocol::names::{AppName, ParamName, SessionId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
@@ -80,13 +81,15 @@ pub enum AppPhase {
 }
 
 // spec: APPS#status-derivation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum AppStatus {
     NotInstalled,
     Installing,
     Uninstalling,
-    Operating { action_name: ActionName },
+    /// An operation of the app's is running: an action, or a gate's run.
+    Operating {
+        operation: OperationTarget,
+    },
     Running,
     Degraded,
     Faulted,

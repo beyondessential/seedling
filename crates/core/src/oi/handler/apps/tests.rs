@@ -318,6 +318,7 @@ fn uninstall_answers_each_phase_as_the_spec_says() {
 // what the closure was still driving. Only the scheduler knows.
 #[test]
 fn uninstall_is_refused_while_an_action_holds_the_app() {
+    use seedling_protocol::events::OperationTarget;
     use seedling_protocol::names::{ActionName, AppName};
 
     let oi = TestOi::with_app("demo");
@@ -327,7 +328,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     let action = ActionName::new("backup").expect("action name");
     oi.state.scheduler.lock().admit(
         &app,
-        &action,
+        &OperationTarget::Action(action),
         serde_json::Map::new(),
         1,
         "test",
@@ -362,6 +363,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
 // be named whether it is running or waiting.
 #[test]
 fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
+    use seedling_protocol::events::OperationTarget;
     use seedling_protocol::names::{ActionName, AppName};
 
     let oi = TestOi::with_app("demo");
@@ -377,7 +379,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     let mut sched = oi.state.scheduler.lock();
     sched.admit(
         &other,
-        &backup,
+        &OperationTarget::Action(backup.clone()),
         serde_json::Map::new(),
         1,
         "test",
@@ -386,7 +388,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     );
     let queued = sched.admit(
         &demo,
-        &backup,
+        &OperationTarget::Action(backup),
         serde_json::Map::new(),
         1,
         "test",
@@ -1358,11 +1360,12 @@ fn deregistering_discards_the_external_mappings_made_for_the_app() {
 /// Admit `action` for the installed app `app`, as the scheduler would for an
 /// operator invocation.
 fn admit(oi: &TestOi, app: &str, action: &str) {
+    use seedling_protocol::events::OperationTarget;
     use seedling_protocol::names::{ActionName, AppName};
 
     oi.state.scheduler.lock().admit(
         &AppName::new(app).expect("app name"),
-        &ActionName::new(action).expect("action name"),
+        &OperationTarget::Action(ActionName::new(action).expect("action name")),
         serde_json::Map::new(),
         1,
         "test",

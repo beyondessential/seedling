@@ -164,7 +164,7 @@ fn settled(snapshot: &Snapshot, active: Option<&ActiveOperation>) -> Option<AppS
     // An operation outranks the app not being installed.
     if let Some(op) = active.filter(|a| a.app == snapshot.name) {
         return Some(AppStatus::Operating {
-            action_name: op.action.clone(),
+            operation: op.target.clone(),
         });
     }
     match snapshot.phase {

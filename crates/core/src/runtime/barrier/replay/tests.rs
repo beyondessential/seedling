@@ -58,7 +58,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             DbHandle::open_in_memory().expect("in-memory DB"),
             op.clone(),
             app_name(),
-            action_name("start"),
+            action_name("start").into(),
         )
     };
 
@@ -164,7 +164,7 @@ fn db_action_log_sequential_barriers() {
         DbHandle::open_in_memory().expect("in-memory DB"),
         op.clone(),
         app_name(),
-        action_name("start"),
+        action_name("start").into(),
     );
 
     // Pass 1: frontend not Scheduled -> suspend

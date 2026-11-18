@@ -243,6 +243,7 @@ mod tests {
     // scheduler is what distinguishes a derived count from a constant.
     #[test]
     fn status_counts_an_operation_in_progress() {
+        use seedling_protocol::events::OperationTarget;
         use seedling_protocol::names::{ActionName, AppName};
 
         let oi = TestOi::new();
@@ -253,7 +254,7 @@ mod tests {
         let action = ActionName::new("install").expect("action name");
         oi.state.scheduler.lock().admit(
             &app,
-            &action,
+            &OperationTarget::Action(action),
             serde_json::Map::new(),
             1,
             "test",
@@ -275,6 +276,7 @@ mod tests {
     /// Register `app`, installed, with an action, and hold the scheduler with
     /// an operation of another app so that a request for `app` queues.
     fn oi_with_a_busy_scheduler(app: &str) -> TestOi {
+        use seedling_protocol::events::OperationTarget;
         use seedling_protocol::names::{ActionName, AppName};
         let oi = TestOi::new();
         oi.call(
@@ -286,7 +288,7 @@ mod tests {
             crate::runtime::apps::AppPhase::Installed;
         oi.state.scheduler.lock().admit(
             &AppName::new("blocker").unwrap(),
-            &ActionName::new("install").unwrap(),
+            &OperationTarget::Action(ActionName::new("install").unwrap()),
             serde_json::Map::new(),
             1,
             "test",
@@ -446,7 +448,9 @@ mod tests {
         let oi = oi_with_a_busy_scheduler("demo");
         let queued = |app: &str, id: &str| crate::runtime::scheduler::QueuedOperation {
             app: seedling_protocol::names::AppName::new(app).unwrap(),
-            action: seedling_protocol::names::ActionName::new("refresh").unwrap(),
+            target: seedling_protocol::events::OperationTarget::Action(
+                seedling_protocol::names::ActionName::new("refresh").unwrap(),
+            ),
             operation_id: crate::runtime::barrier::OperationId(id.to_owned()),
             params: serde_json::Map::new(),
             generation: 1,
@@ -504,7 +508,7 @@ mod tests {
                 .scheduler
                 .lock()
                 .active()
-                .is_none_or(|a| a.action != "refresh"),
+                .is_none_or(|a| a.target.name() != "refresh"),
             "the refused request did not start"
         );
         oi.state.scheduler.lock().set_state_unreadable(false);

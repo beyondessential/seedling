@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, ParamName, SiteVolumeName};
 use serde::Deserialize;
 use serde_json::json;
@@ -176,6 +177,7 @@ pub(crate) fn invoke_action(
             .map(|e| e.current_generation)
             .unwrap_or(0)
     };
+    let target = OperationTarget::Action(action_name.clone());
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
         // spec: TRD#uninstall-admission
@@ -185,7 +187,7 @@ pub(crate) fn invoke_action(
         // decision is made where every admission passes rather than here.
         let result = sched.admit(
             app_name,
-            action_name,
+            &target,
             action_params.clone(),
             current_generation,
             "operator",
@@ -209,7 +211,7 @@ pub(crate) fn invoke_action(
             spawn_accepted_operation(
                 Arc::clone(state),
                 app_name.clone(),
-                action_name.clone(),
+                target,
                 op_id,
                 lifecycle::OperationParams::Requested(action_params),
                 current_generation,

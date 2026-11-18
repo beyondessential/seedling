@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use jiff::{SignedDuration, Timestamp};
 use parking_lot::Mutex;
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, ParamName};
 
 use crate::defs::action::parse_cron_expr;
@@ -201,7 +202,7 @@ pub fn check_due_schedules(
             // scheduler reads it again under its own lock.
             let result = scheduler.admit(
                 &row.app,
-                &row.action,
+                &OperationTarget::Action(row.action.clone()),
                 serde_json::Map::new(),
                 generation,
                 "schedule",

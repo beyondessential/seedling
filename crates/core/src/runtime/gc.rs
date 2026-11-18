@@ -356,7 +356,7 @@ mod tests {
             &CurrentOperation {
                 operation_id: current_op.clone(),
                 app: app_name("app"),
-                action_name: action_name("start"),
+                target: action_name("start").into(),
                 generation: 1,
             },
             &serde_json::Map::new(),

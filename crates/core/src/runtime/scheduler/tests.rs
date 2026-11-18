@@ -9,8 +9,12 @@ fn app(s: &str) -> AppName {
     AppName::new(s).unwrap()
 }
 
-fn act(s: &str) -> ActionName {
+fn aname(s: &str) -> ActionName {
     ActionName::new_unchecked(s)
+}
+
+fn act(s: &str) -> OperationTarget {
+    OperationTarget::Action(ActionName::new_unchecked(s))
 }
 
 // -----------------------------------------------------------------------
@@ -151,7 +155,7 @@ fn empty_scheduler_accepts_first_request() {
     );
     let active = s.active().expect("should be active");
     assert_eq!(active.app, "app1");
-    assert_eq!(active.action, "start");
+    assert_eq!(active.target, act("start"));
 }
 
 // spec: OPS#concurrency
@@ -385,7 +389,7 @@ fn complete_current_dequeues_next_and_makes_it_active() {
 
     let next = s.complete_current().expect("should dequeue app2");
     assert_eq!(next.app, "app2");
-    assert_eq!(next.action, "deploy");
+    assert_eq!(next.target, act("deploy"));
 
     let active = s.active().expect("app2 should now be active");
     assert_eq!(active.app, "app2");
@@ -476,9 +480,9 @@ fn push_call_with_no_cycle_succeeds() {
         "operator",
         None,
     );
-    assert!(s.push_call(&act("start")).is_ok());
-    assert!(s.push_call(&act("setup")).is_ok());
-    assert!(s.push_call(&act("configure")).is_ok());
+    assert!(s.push_call(&aname("start")).is_ok());
+    assert!(s.push_call(&aname("setup")).is_ok());
+    assert!(s.push_call(&aname("configure")).is_ok());
 }
 
 // spec: OPS#cycles
@@ -493,8 +497,8 @@ fn push_call_detects_direct_cycle() {
         "operator",
         None,
     );
-    s.push_call(&act("start")).unwrap();
-    let err = s.push_call(&act("start")).unwrap_err();
+    s.push_call(&aname("start")).unwrap();
+    let err = s.push_call(&aname("start")).unwrap_err();
     assert_eq!(err.action, "start");
     assert_eq!(err.stack, vec!["start"]);
 }
@@ -511,10 +515,10 @@ fn push_call_detects_transitive_cycle() {
         "operator",
         None,
     );
-    s.push_call(&act("start")).unwrap();
-    s.push_call(&act("setup")).unwrap();
-    s.push_call(&act("configure")).unwrap();
-    let err = s.push_call(&act("start")).unwrap_err();
+    s.push_call(&aname("start")).unwrap();
+    s.push_call(&aname("setup")).unwrap();
+    s.push_call(&aname("configure")).unwrap();
+    let err = s.push_call(&aname("start")).unwrap_err();
     assert_eq!(err.action, "start");
     assert_eq!(err.stack, vec!["start", "setup", "configure"]);
 }
@@ -531,10 +535,10 @@ fn pop_call_allows_reuse_of_action_name() {
         "operator",
         None,
     );
-    s.push_call(&act("setup")).unwrap();
+    s.push_call(&aname("setup")).unwrap();
     s.pop_call();
     // After popping "setup", pushing it again must not be a cycle.
-    assert!(s.push_call(&act("setup")).is_ok());
+    assert!(s.push_call(&aname("setup")).is_ok());
 }
 
 // spec: OPS#completion
@@ -557,8 +561,8 @@ fn complete_current_clears_call_stack() {
         "operator",
         None,
     );
-    s.push_call(&act("start")).unwrap();
-    s.push_call(&act("setup")).unwrap();
+    s.push_call(&aname("start")).unwrap();
+    s.push_call(&aname("setup")).unwrap();
 
     s.complete_current();
     assert!(s.call_stack().is_empty());
@@ -766,7 +770,7 @@ fn an_app_with_an_operation_can_be_held_but_not_by_two_changes() {
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
     let hold = AppHold::take(&s, &app("app1")).expect("an operation does not refuse a change");
     assert_eq!(
-        s.lock().active().map(|a| a.action.clone()),
+        s.lock().active().map(|a| a.target.clone()),
         Some(act("nightly")),
         "the operation goes on"
     );

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
 use seedling_protocol::{
-    events::EventSenderWithActor,
+    events::{EventSenderWithActor, OperationTarget},
     names::{ActionName, AppName, SessionId, ShellName},
 };
 use tokio::{io::AsyncWriteExt, sync::Notify};
@@ -715,7 +715,8 @@ pub(super) async fn run_app_shell(
             Arc::new(DbInstanceRegistry::new(db.clone()));
         // Shell names follow the same bsl.name rules as action names; reuse
         // ActionName as the identifier written into the action log.
-        let shell_as_action = ActionName::new_unchecked(shell_name_for_task.as_str());
+        let shell_as_action =
+            OperationTarget::Action(ActionName::new_unchecked(shell_name_for_task.as_str()));
         let log = DbActionLog::new(
             db.clone(),
             op_id_for_log.clone(),

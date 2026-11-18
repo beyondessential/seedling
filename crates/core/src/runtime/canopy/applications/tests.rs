@@ -13,7 +13,9 @@ fn db() -> Db {
 
 fn operating() -> AppStatus {
     AppStatus::Operating {
-        action_name: ActionName::new_unchecked("migrate"),
+        operation: seedling_protocol::events::OperationTarget::Action(ActionName::new_unchecked(
+            "migrate",
+        )),
     }
 }
 

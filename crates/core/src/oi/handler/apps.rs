@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, ParamName};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -496,8 +497,11 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                     .as_str(),
                 "description": description,
             });
-            if let AppStatus::Operating { action_name } = &standing.status {
-                obj["action_name"] = json!(action_name);
+            if let AppStatus::Operating { operation } = &standing.status {
+                match operation {
+                    OperationTarget::Action(action) => obj["action_name"] = json!(action),
+                    OperationTarget::Gate(gate) => obj["gate"] = json!(gate),
+                }
             }
             obj
         })
@@ -995,11 +999,15 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 .unwrap_or(Value::Null)
         };
 
-        desc["current_operation"] = json!({
-            "action_name": op.action,
+        let mut current = json!({
             "barrier": barrier_json,
             "generation": op.generation,
         });
+        match &op.target {
+            OperationTarget::Action(action) => current["action_name"] = json!(action),
+            OperationTarget::Gate(gate) => current["gate"] = json!(gate),
+        }
+        desc["current_operation"] = current;
     }
 
     Ok(desc)

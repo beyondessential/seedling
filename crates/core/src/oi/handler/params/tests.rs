@@ -416,6 +416,7 @@ fn a_param_change_initiates_no_operation() {
 // spec: OPS#changes-to-an-app
 #[test]
 fn a_param_change_is_accepted_while_an_operation_runs_for_the_app() {
+    use seedling_protocol::events::OperationTarget;
     use seedling_protocol::names::{ActionName, AppName};
 
     let oi = TestOi::new();
@@ -433,7 +434,7 @@ fn a_param_change_is_accepted_while_an_operation_runs_for_the_app() {
     oi.install("demo");
     oi.state.scheduler.lock().admit(
         &AppName::new_unchecked("demo"),
-        &ActionName::new_unchecked("backup"),
+        &OperationTarget::Action(ActionName::new_unchecked("backup")),
         serde_json::Map::new(),
         1,
         "test",
@@ -449,8 +450,8 @@ fn a_param_change_is_accepted_while_an_operation_runs_for_the_app() {
         .unwrap();
     assert_eq!(result["generation"], 2);
     assert_eq!(
-        oi.state.scheduler.lock().active().map(|a| a.action.clone()),
-        Some(ActionName::new_unchecked("backup")),
+        oi.state.scheduler.lock().active().map(|a| a.target.clone()),
+        Some(OperationTarget::Action(ActionName::new_unchecked("backup"))),
         "the operation goes on"
     );
 }
@@ -786,13 +787,14 @@ fn a_change_is_refused_while_another_is_being_applied() {
 // spec: OPS#changes-to-an-app
 #[test]
 fn a_change_is_accepted_while_an_operation_runs_for_the_app() {
+    use seedling_protocol::events::OperationTarget;
     use seedling_protocol::names::{ActionName, AppName};
 
     let oi = oi_with_params_app();
     oi.install("demo");
     oi.state.scheduler.lock().admit(
         &AppName::new_unchecked("demo"),
-        &ActionName::new_unchecked("backup"),
+        &OperationTarget::Action(ActionName::new_unchecked("backup")),
         serde_json::Map::new(),
         1,
         "test",
@@ -812,7 +814,7 @@ fn a_change_is_accepted_while_an_operation_runs_for_the_app() {
             .scheduler
             .lock()
             .active()
-            .map(|a| a.action.as_str().to_owned()),
+            .map(|a| a.target.name().to_owned()),
         Some("backup".to_owned()),
         "the operation goes on"
     );

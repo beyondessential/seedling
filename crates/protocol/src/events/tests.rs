@@ -949,7 +949,12 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.deployment_restarted(&app, "srv", "op-2");
     sender.resource_stopped(&app, "deployment", "srv");
     sender.resource_unstopped(&app, "deployment", "srv");
-    sender.gate_state_changed(&app, &GateName::new("migrate").unwrap(), "satisfied", "running");
+    sender.gate_state_changed(
+        &app,
+        &GateName::new("migrate").unwrap(),
+        "satisfied",
+        "running",
+    );
     sender.held_volume_created(held, &app, "data", "uninstall");
     sender.held_volume_deleted(held);
     sender.held_volume_restored(held, "recovered");

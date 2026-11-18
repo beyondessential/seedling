@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
 use seedling_protocol::{
-    events::{OiEvent, new_event_channel},
+    events::{OiEvent, OperationTarget, new_event_channel},
     names::{ActionName, AppName},
 };
 use tokio::sync::Notify;
@@ -55,7 +55,7 @@ fn run_poke(cancel: bool, break_persistence: bool) -> Run {
     let events = tx.subscribe();
     let op_ctx = tx.operation(
         name,
-        ActionName::new("poke").unwrap(),
+        ActionName::new("poke").unwrap().into(),
         operation_id.0.clone(),
         1,
         None,
@@ -145,7 +145,7 @@ fn an_operation_that_cannot_be_persisted_does_not_run_its_closure() {
         run.db.clone(),
         id,
         AppName::new("demo").unwrap(),
-        ActionName::new("poke").unwrap(),
+        ActionName::new("poke").unwrap().into(),
     );
     assert!(log.load().unwrap().is_empty(), "the closure made no call");
 }
@@ -166,7 +166,7 @@ fn a_replayed_closure_restarts_the_deployment_only_once() {
     let run = |db: &DbHandle| {
         let op_ctx = tx.operation(
             name.clone(),
-            ActionName::new("bounce").unwrap(),
+            ActionName::new("bounce").unwrap().into(),
             operation_id.0.clone(),
             1,
             None,
@@ -239,7 +239,7 @@ fn an_operation_runs_against_its_generation_not_the_current_one() {
     let tx = new_event_channel();
     let op_ctx = tx.operation(
         name.clone(),
-        ActionName::new("poke").unwrap(),
+        ActionName::new("poke").unwrap().into(),
         "op-1",
         1,
         None,
@@ -344,7 +344,7 @@ fn a_replayed_operation_binds_its_volumes_under_their_persisted_names() {
     )]);
 
     let app = AppName::new("demo").unwrap();
-    let action = ActionName::new("fill").unwrap();
+    let action = OperationTarget::Action(ActionName::new("fill").unwrap());
     let operation_id = OperationId::new();
     let admitted = oi.state.scheduler.lock().request_with_id(
         &app,
@@ -612,7 +612,7 @@ fn rt_start_fails_when_the_dynamic_resource_cannot_be_recorded() {
     let tx = new_event_channel();
     let op_ctx = tx.operation(
         name,
-        ActionName::new("work").unwrap(),
+        ActionName::new("work").unwrap().into(),
         operation_id.0.clone(),
         1,
         None,

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::params;
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::events::OperationTarget;
+use seedling_protocol::names::{ActionName, AppName, GateName};
 
 use crate::defs::resource::ResourceKind;
 use crate::runtime::barrier::{ActionLogEntry, BarrierRecord, CallKind, OperationId};
@@ -640,9 +641,10 @@ pub fn insert_action_log_entry(
     db: &Db,
     operation_id: &OperationId,
     app: &AppName,
-    action_name: &ActionName,
+    action_name: &(impl AsRef<str> + ?Sized),
     entry: &ActionLogEntry,
 ) -> rusqlite::Result<()> {
+    let action_name = action_name.as_ref();
     let resources_json = serde_json::to_string(&entry.resources).unwrap_or_default();
     // spec: SUSP#barrier-anchoring
     // Every barrier of the call goes in `barriers`. The four single-record
@@ -795,8 +797,39 @@ pub fn load_action_log(
 pub struct CurrentOperation {
     pub operation_id: OperationId,
     pub app: AppName,
-    pub action_name: ActionName,
+    pub target: OperationTarget,
     pub generation: u64,
+}
+
+/// The `action`/`gate` column pair that records `target`: one is the name and
+/// the other is null.
+fn target_columns(target: &OperationTarget) -> (Option<&str>, Option<&str>) {
+    match target {
+        OperationTarget::Action(action) => (Some(action.as_str()), None),
+        OperationTarget::Gate(gate) => (None, Some(gate.as_str())),
+    }
+}
+
+/// The target a row's `action`/`gate` columns record, or a conversion
+/// failure for a row that records both or neither, or a name that is not one.
+fn target_of_columns(
+    action: Option<String>,
+    gate: Option<String>,
+) -> Result<OperationTarget, rusqlite::Error> {
+    fn bad(why: String) -> rusqlite::Error {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, why.into())
+    }
+    match (action, gate) {
+        (Some(action), None) => ActionName::new(&action)
+            .map(OperationTarget::Action)
+            .map_err(|e| bad(format!("operation action {action:?}: {e}"))),
+        (None, Some(gate)) => GateName::new(&gate)
+            .map(OperationTarget::Gate)
+            .map_err(|e| bad(format!("operation gate {gate:?}: {e}"))),
+        _ => Err(bad(
+            "an operation records an action or a gate, not both nor neither".into(),
+        )),
+    }
 }
 
 // spec: OPS#persistence, SUSP#replay
@@ -824,6 +857,7 @@ pub fn save_current_operation(
     let ciphertext = cipher
         .encrypt(&secrecy::SecretString::new(plaintext.into()))
         .map_err(OperationPersistError::Cipher)?;
+    let (action, gate) = target_columns(&op.target);
     db.conn
         .execute(
             // spec: HIST#durability
@@ -836,20 +870,22 @@ pub fn save_current_operation(
             // The column was added by a later migration than the statement,
             // which is exactly how this kind of bug arrives.
             "INSERT INTO current_operation
-                (singleton, operation_id, app, action_name,
+                (singleton, operation_id, app, action_name, gate,
                  generation, params_ciphertext, volume_bindings)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(singleton) DO UPDATE SET
                 operation_id = excluded.operation_id,
                 app = excluded.app,
                 action_name = excluded.action_name,
+                gate = excluded.gate,
                 generation = excluded.generation,
                 params_ciphertext = excluded.params_ciphertext,
                 volume_bindings = excluded.volume_bindings",
             params![
                 op.operation_id.0,
                 op.app,
-                op.action_name,
+                action,
+                gate,
                 op.generation as i64,
                 ciphertext,
                 volume_bindings,
@@ -946,15 +982,15 @@ impl From<rusqlite::Error> for OperationPersistError {
 // spec: SUSP#replay
 pub fn load_current_operation(db: &Db) -> rusqlite::Result<Option<CurrentOperation>> {
     let result = db.conn.query_row(
-        "SELECT operation_id, app, action_name, generation
+        "SELECT operation_id, app, action_name, gate, generation
          FROM current_operation WHERE singleton = 1",
         [],
         |row| {
             Ok(CurrentOperation {
                 operation_id: OperationId(row.get(0)?),
                 app: row.get(1)?,
-                action_name: row.get(2)?,
-                generation: row.get::<_, i64>(3)? as u64,
+                target: target_of_columns(row.get(2)?, row.get(3)?)?,
+                generation: row.get::<_, i64>(4)? as u64,
             })
         },
     );
@@ -987,14 +1023,16 @@ pub fn save_queued_operation(
         .map(serde_json::to_string)
         .transpose()
         .map_err(OperationPersistError::Json)?;
+    let (action, gate) = target_columns(&op.target);
     db.conn.execute(
         "INSERT INTO queued_operations
-            (operation_id, app, action, trigger, generation, params_ciphertext, actor)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (operation_id, app, action, gate, trigger, generation, params_ciphertext, actor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             op.operation_id.0,
             op.app,
-            op.action,
+            action,
+            gate,
             op.trigger,
             op.generation as i64,
             ciphertext,
@@ -1025,23 +1063,23 @@ pub fn load_queued_operations(
 ) -> Result<Vec<crate::runtime::scheduler::QueuedOperation>, OperationPersistError> {
     use secrecy::ExposeSecret;
     let mut stmt = db.conn.prepare(
-        "SELECT operation_id, app, action, trigger, generation, params_ciphertext, actor
+        "SELECT operation_id, app, action, gate, trigger, generation, params_ciphertext, actor
            FROM queued_operations ORDER BY seq",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, AppName>(1)?,
-            row.get::<_, ActionName>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, Vec<u8>>(5)?,
-            row.get::<_, Option<String>>(6)?,
+            target_of_columns(row.get(2)?, row.get(3)?)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, Vec<u8>>(6)?,
+            row.get::<_, Option<String>>(7)?,
         ))
     })?;
     let mut out = Vec::new();
     for row in rows {
-        let (id, app, action, trigger, generation, ciphertext, actor) = row?;
+        let (id, app, target, trigger, generation, ciphertext, actor) = row?;
         let plaintext = cipher
             .decrypt(&ciphertext)
             .map_err(OperationPersistError::Cipher)?;
@@ -1054,7 +1092,7 @@ pub fn load_queued_operations(
             .map(std::sync::Arc::new);
         out.push(crate::runtime::scheduler::QueuedOperation {
             app,
-            action,
+            target,
             operation_id: OperationId(id),
             params,
             generation: generation as u64,

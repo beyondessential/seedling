@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Scope};
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName};
 use tokio::sync::Notify;
 
@@ -126,7 +127,7 @@ pub struct DbActionLog {
     db: crate::runtime::db::DbHandle,
     operation_id: super::OperationId,
     app: AppName,
-    action_name: ActionName,
+    target: OperationTarget,
 }
 
 impl DbActionLog {
@@ -134,13 +135,13 @@ impl DbActionLog {
         db: crate::runtime::db::DbHandle,
         operation_id: super::OperationId,
         app: AppName,
-        action_name: ActionName,
+        target: OperationTarget,
     ) -> Self {
         Self {
             db,
             operation_id,
             app,
-            action_name,
+            target,
         }
     }
 }
@@ -149,12 +150,12 @@ impl DbActionLog {
     fn commit_checked(&self, entries: &[super::ActionLogEntry]) -> Result<(), String> {
         let op_id = self.operation_id.clone();
         let app = self.app.clone();
-        let action_name = self.action_name.clone();
+        let target = self.target.clone();
         let entries = entries.to_vec();
         self.db
             .call(move |db| {
                 for entry in &entries {
-                    history::insert_action_log_entry(db, &op_id, &app, &action_name, entry)?;
+                    history::insert_action_log_entry(db, &op_id, &app, target.name(), entry)?;
                 }
                 Ok::<_, rusqlite::Error>(())
             })
@@ -168,7 +169,7 @@ impl ActionLog for DbActionLog {
             self.db.clone(),
             self.operation_id.clone(),
             self.app.clone(),
-            self.action_name.clone(),
+            self.target.clone(),
         );
         Some(Arc::new(move |entries| log.commit_checked(entries)))
     }
@@ -183,13 +184,13 @@ impl ActionLog for DbActionLog {
     fn commit(&self, entries: &[super::ActionLogEntry]) {
         let op_id = self.operation_id.clone();
         let app = self.app.clone();
-        let action_name = self.action_name.clone();
+        let target = self.target.clone();
         // spec: RCN#reconciliation-loop
         let entries = entries.to_vec();
         self.db.call(move |db| {
             for entry in &entries {
                 if let Err(e) =
-                    history::insert_action_log_entry(db, &op_id, &app, &action_name, entry)
+                    history::insert_action_log_entry(db, &op_id, &app, target.name(), entry)
                 {
                     // UNIQUE constraint violations are expected during replay —
                     // the same entry is committed again idempotently.
@@ -207,7 +208,7 @@ impl ActionLog for DbActionLog {
                     }
                     tracing::warn!(
                         app = %app,
-                        action = %action_name,
+                        operation = %target,
                         call_index = entry.call_index,
                         "failed to commit action log entry: {e}",
                     );

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use parking_lot::RwLock;
-use seedling_protocol::events::OperationEventCtx;
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::events::{OperationEventCtx, OperationTarget};
+use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
 
 use crate::{
@@ -380,7 +380,8 @@ fn run_operation_loop(
     executor: Option<Arc<dyn crate::runtime::barrier::Executor>>,
 ) -> bool {
     let app_name = &op_ctx.app;
-    let action_name = &op_ctx.action_name;
+    let target = &op_ctx.target;
+    let action_name = target.name();
     let operation_id = OperationId(op_ctx.operation_id.clone());
 
     // spec: ACN#volume-params
@@ -492,7 +493,7 @@ fn run_operation_loop(
         db.clone(),
         operation_id.clone(),
         app_name.clone(),
-        action_name.clone(),
+        target.clone(),
     );
     let world = Arc::new(DbWorldOracle::new(db.clone()));
     let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(db.clone()));
@@ -503,7 +504,7 @@ fn run_operation_loop(
     let record = CurrentOperation {
         operation_id: operation_id.clone(),
         app: app_name.clone(),
-        action_name: action_name.clone(),
+        target: target.clone(),
         generation: op_ctx.operation_generation,
     };
     let params_for_persist = params.clone();
@@ -541,7 +542,7 @@ fn run_operation_loop(
                 script_ast: &ast,
                 operation_id: operation_id.clone(),
                 app,
-                action_name: action_name.as_str(),
+                action_name,
                 log: &log,
                 world: Arc::clone(&world),
                 registry: Arc::clone(&registry),
@@ -732,7 +733,7 @@ fn phase_event_name(phase: &AppPhase) -> &'static str {
 pub fn spawn_accepted_operation(
     state: Arc<OiState>,
     app_name: AppName,
-    action_name: ActionName,
+    target: OperationTarget,
     operation_id: OperationId,
     params: OperationParams,
     generation: u64,
@@ -762,7 +763,7 @@ pub fn spawn_accepted_operation(
         // spec: WIRE#actor-attribution
         let op_ctx = event_tx.operation(
             app_name.clone(),
-            action_name.clone(),
+            target.clone(),
             &operation_id.0,
             generation,
             actor,
@@ -796,12 +797,10 @@ pub fn spawn_accepted_operation(
         // operator-supplied volume reference, looked up to a host path and
         // exposed to the action closure as a per-operation external volume
         // binding via the standard `<key>_volume` convention.
-        let schema = app
-            .def
-            .load()
-            .actions
-            .get(action_name.as_str())
-            .map(|a| a.params.clone())
+        let schema = target
+            .action()
+            .and_then(|action| app.def.load().actions.get(action.as_str()).cloned())
+            .map(|a| a.params)
             .unwrap_or_default();
         let bound = match params {
             OperationParams::Requested(params) => {
@@ -845,7 +844,7 @@ pub fn spawn_accepted_operation(
             .await
         };
         if let Err(e) = ran {
-            tracing::error!(app = %app_name, action = %action_name, "operation task failed: {e}");
+            tracing::error!(app = %app_name, operation = %target, "operation task failed: {e}");
         }
 
         cleanup_dynamic_resources(
@@ -866,7 +865,7 @@ pub fn spawn_accepted_operation(
             spawn_accepted_operation(
                 Arc::clone(&state),
                 queued.app,
-                queued.action,
+                queued.target,
                 queued.operation_id,
                 OperationParams::Requested(queued.params),
                 queued.generation,
@@ -926,7 +925,7 @@ pub fn restore_queue(
     for op in queued {
         let registered = state.registry.read().get(op.app.as_str()).is_some();
         if !registered {
-            tracing::warn!(app = %op.app, action = %op.action, "queued operation names an unregistered app; discarding");
+            tracing::warn!(app = %op.app, operation = %op.target, "queued operation names an unregistered app; discarding");
             let id = op.operation_id.clone();
             state.db.call(move |db| {
                 let _ = crate::runtime::history::clear_queued_operation(db, &id);
@@ -935,7 +934,7 @@ pub fn restore_queue(
         }
         let result = state.scheduler.lock().request_with_id(
             &op.app,
-            &op.action,
+            &op.target,
             op.params.clone(),
             op.generation,
             &op.trigger,
@@ -947,7 +946,7 @@ pub fn restore_queue(
                 spawn_accepted_operation(
                     Arc::clone(state),
                     op.app,
-                    op.action,
+                    op.target,
                     op.operation_id,
                     OperationParams::Requested(op.params),
                     op.generation,
@@ -957,7 +956,7 @@ pub fn restore_queue(
             }
             ScheduleResult::Queued => {}
             ScheduleResult::Rejected(reason) => {
-                tracing::warn!(app = %op.app, action = %op.action, ?reason, "restored queued operation refused; discarding");
+                tracing::warn!(app = %op.app, operation = %op.target, ?reason, "restored queued operation refused; discarding");
                 let id = op.operation_id.clone();
                 state.db.call(move |db| {
                     let _ = crate::runtime::history::clear_queued_operation(db, &id);

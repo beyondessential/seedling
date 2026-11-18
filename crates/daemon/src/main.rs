@@ -1000,7 +1000,7 @@ async fn main() {
                             seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
                                 Arc::clone(&oi_state_for_sched),
                                 fire.app,
-                                fire.action,
+                                seedling_protocol::events::OperationTarget::Action(fire.action),
                                 op_id,
                                 seedling_core::oi::handler::actions::lifecycle::OperationParams::Requested(
                                     serde_json::Map::new(),
@@ -1197,7 +1197,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
     if let Some(op) = &persisted_operation {
         tracing::info!(
             app = %op.app,
-            action = %op.action_name,
+            operation = %op.target,
             operation_id = %op.operation_id.0,
             "found interrupted operation; will replay after startup"
         );
@@ -1375,7 +1375,7 @@ fn start_replay(
     };
 
     let app_name = op.app.clone();
-    let action_name = op.action_name.clone();
+    let target = op.target.clone();
 
     // Check that the app is still registered. If the previous run
     // deregistered mid-operation (shouldn't happen, but defensive), drop
@@ -1416,7 +1416,7 @@ fn start_replay(
             Ok((None, _)) => {
                 tracing::warn!(
                     app = %app_name,
-                    action = %action_name,
+                    operation = %target,
                     "interrupted operation has no persisted params (legacy row); replaying with empty map"
                 );
                 (serde_json::Map::new(), Default::default())
@@ -1424,7 +1424,7 @@ fn start_replay(
             Err(e) => {
                 tracing::error!(
                     app = %app_name,
-                    action = %action_name,
+                    operation = %target,
                     "failed to read interrupted operation params: {e}"
                 );
                 state.db.call(|db| {
@@ -1445,7 +1445,7 @@ fn start_replay(
         tracing::warn!(
             app = %app_name,
             ?phase,
-            action = %action_name,
+            operation = %target,
             "interrupted operation but app is not Installed; clearing row"
         );
         state.db.call(|db| {
@@ -1459,7 +1459,7 @@ fn start_replay(
     let params_for_sched = params.clone();
     let sched_result = state.scheduler.lock().request_with_id(
         &app_name,
-        &action_name,
+        &target,
         params_for_sched,
         op.generation,
         "replay",
@@ -1491,7 +1491,7 @@ fn start_replay(
 
     tracing::info!(
         app = %app_name,
-        action = %action_name,
+        operation = %target,
         operation_id = %op.operation_id.0,
         "replaying interrupted operation"
     );
@@ -1499,7 +1499,7 @@ fn start_replay(
     seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
         state,
         app_name,
-        action_name,
+        target,
         op.operation_id,
         seedling_core::oi::handler::actions::lifecycle::OperationParams::Replayed {
             params,

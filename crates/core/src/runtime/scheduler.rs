@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName};
 
 use crate::runtime::apps::AppPhase;
@@ -19,7 +20,8 @@ use crate::runtime::identity::InstanceId;
 #[derive(Debug, Clone)]
 pub struct ActiveOperation {
     pub app: AppName,
-    pub action: ActionName,
+    /// The action it runs, or the gate whose run it is.
+    pub target: OperationTarget,
     pub operation_id: OperationId,
     /// The generation current when the operation was dispatched.
     // spec: OPS#initiating-events
@@ -35,10 +37,10 @@ pub struct ActiveOperation {
 #[derive(Debug, Clone)]
 pub struct QueuedOperation {
     pub app: AppName,
-    pub action: ActionName,
+    pub target: OperationTarget,
     pub operation_id: OperationId,
-    /// Action params passed by the invoker. For install actions, contains the
-    /// validated requirements. Empty map for actions with no params.
+    /// Action params passed by the invoker. Empty map for actions with no
+    /// params, and for a gate run.
     // spec: OPS#persistence
     pub params: serde_json::Map<String, serde_json::Value>,
     // spec: OPS#initiating-events
@@ -100,10 +102,10 @@ pub enum RejectReason {
 /// What keeps an operation from being admitted for an app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppBlocker {
-    /// The named action is the scheduler's active operation.
-    Active(ActionName),
-    /// The named action is queued behind another app's operation.
-    Queued(ActionName),
+    /// The action or gate run is the scheduler's active operation.
+    Active(OperationTarget),
+    /// The action or gate run is queued behind another app's operation.
+    Queued(OperationTarget),
     /// A change to the app is being applied; see [`AppHold`].
     Change,
 }
@@ -111,8 +113,16 @@ pub enum AppBlocker {
 impl std::fmt::Display for AppBlocker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Active(action) => write!(f, "'{action}' is in progress"),
-            Self::Queued(action) => write!(f, "'{action}' is queued"),
+            Self::Active(OperationTarget::Action(action)) => {
+                write!(f, "'{action}' is in progress")
+            }
+            Self::Active(OperationTarget::Gate(gate)) => {
+                write!(f, "a run of gate '{gate}' is in progress")
+            }
+            Self::Queued(OperationTarget::Action(action)) => write!(f, "'{action}' is queued"),
+            Self::Queued(OperationTarget::Gate(gate)) => {
+                write!(f, "a run of gate '{gate}' is queued")
+            }
             Self::Change => f.write_str("a change to it is being applied"),
         }
     }
@@ -193,10 +203,10 @@ impl Scheduler {
     /// queued operation, or a change to it that holds it.
     pub fn blocker_for(&self, app: &AppName) -> Option<AppBlocker> {
         if let Some(active) = self.active.as_ref().filter(|a| a.app == *app) {
-            return Some(AppBlocker::Active(active.action.clone()));
+            return Some(AppBlocker::Active(active.target.clone()));
         }
         if let Some(queued) = self.queue.iter().find(|q| q.app == *app) {
-            return Some(AppBlocker::Queued(queued.action.clone()));
+            return Some(AppBlocker::Queued(queued.target.clone()));
         }
         self.held.contains(app).then_some(AppBlocker::Change)
     }
@@ -218,7 +228,7 @@ impl Scheduler {
     }
 
     // spec: TRD#uninstall-admission
-    /// Admit a lifecycle operation for `app` / `action`, subject to its phase.
+    /// Admit a lifecycle operation for `app` / `target`, subject to its phase.
     ///
     /// The only way in from outside this module. [`Self::request`] is the queue
     /// mechanic underneath and stays private, so the phase gate cannot be
@@ -237,7 +247,7 @@ impl Scheduler {
     pub fn admit(
         &mut self,
         app: &AppName,
-        action: &ActionName,
+        target: &OperationTarget,
         params: serde_json::Map<String, serde_json::Value>,
         generation: u64,
         trigger: &str,
@@ -247,10 +257,10 @@ impl Scheduler {
         if matches!(*phase.lock(), AppPhase::Uninstalling) {
             return ScheduleResult::Rejected(RejectReason::AppUninstalling);
         }
-        self.request(app, action, params, generation, trigger, actor)
+        self.request(app, target, params, generation, trigger, actor)
     }
 
-    /// Request a lifecycle operation for `app` / `action`.
+    /// Request a lifecycle operation for `app` / `target`.
     ///
     /// - If no operation is active: the operation starts immediately.
     /// - If a different app is active and this app is not yet queued: queued.
@@ -262,7 +272,7 @@ impl Scheduler {
     fn request(
         &mut self,
         app: &AppName,
-        action: &ActionName,
+        target: &OperationTarget,
         params: serde_json::Map<String, serde_json::Value>,
         generation: u64,
         trigger: &str,
@@ -270,7 +280,7 @@ impl Scheduler {
     ) -> ScheduleResult {
         self.request_with_id(
             app,
-            action,
+            target,
             params,
             generation,
             trigger,
@@ -289,7 +299,7 @@ impl Scheduler {
     pub fn request_with_id(
         &mut self,
         app: &AppName,
-        action: &ActionName,
+        target: &OperationTarget,
         params: serde_json::Map<String, serde_json::Value>,
         generation: u64,
         trigger: &str,
@@ -309,7 +319,7 @@ impl Scheduler {
                 self.call_stack.clear();
                 self.active = Some(ActiveOperation {
                     app: app.clone(),
-                    action: action.clone(),
+                    target: target.clone(),
                     operation_id,
                     generation,
                     cancel_token: Arc::new(CancelToken::new()),
@@ -327,7 +337,7 @@ impl Scheduler {
                 }
                 self.queue.push_back(QueuedOperation {
                     app: app.clone(),
-                    action: action.clone(),
+                    target: target.clone(),
                     operation_id,
                     params,
                     generation,
@@ -365,7 +375,7 @@ impl Scheduler {
         let next = self.queue.pop_front()?;
         self.active = Some(ActiveOperation {
             app: next.app.clone(),
-            action: next.action.clone(),
+            target: next.target.clone(),
             operation_id: next.operation_id.clone(),
             generation: next.generation,
             cancel_token: Arc::new(CancelToken::new()),
