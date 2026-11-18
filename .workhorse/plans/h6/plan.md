@@ -123,7 +123,10 @@ Drafted: Gates and start order (GATE), Gate runs (GRUN), and the removal of chan
 - `/apps/show` gains `gates` and per-resource `waiting_on`; a `GateStateChanged` event; `/apps/gates/run` and `apps gate run`; `/apps/plan` reports `gates_would_run`.
 - Gate faults (`gate_failed`, `gate_check_unavailable`, `gate_state_unreadable`) are withholding, so an app whose gate is failing reads `faulted`; `installing` is derived from a gate with no last success.
 
-Still to draft: several parameters per change (params, update, events, generation history, CLI, console), pending the API shape.
+- Several parameters per change: `/apps/params/set` takes `params` (name to string, or `null` to unset) and `/apps/params/unset` goes; `/apps/update` and `/apps/plan` take the same object; `ParamSet`/`ParamUnset` become `ParamsChanged` with `changes`, a shape `AppUpdated` shares; history kind `param_change` with a `params` list; `apps params set <app> a=1 --unset b` and repeatable `--set`/`--unset` on `apps update`.
+- Code citations of removed sections (`PARAM#change-handlers`, `ACN#start-action`, `ACN#install-action`, `ACI#install-parameters`, `ACI#install-completion`, `OPS#stuck-install-recovery`, `OPS#parameter-changes`, `PRM#parameter-set`, `PRM#parameter-unset`, `CLI#parameter-change-on-update`, `CLI#action-shell-and-install-parameters`) go with the code changes.
+
+Next: spec review, then revisit J6 against the gate specs, then plan implementation.
 
 ## Other cards in flight
 

@@ -42,26 +42,27 @@ If a stored definition fails to evaluate when it is loaded, the runtime MUST fil
 ## Generations
 
 Every registered app has a current generation.
-The runtime MUST bump it on each successful `/apps/update`, and on each [parameter set](params.md#parameter-set) or [unset](params.md#parameter-unset) that is not a no-op.
-The runtime MUST keep each generation's definition and parameter change durably for as long as the app is registered, as [generation history](../runtime/generation.md#history-entries) specifies.
+The runtime MUST bump it on each successful `/apps/update`, and on each [parameter change](params.md#parameter-changes) that is not a no-op.
+The runtime MUST keep each generation's definition and parameter changes durably for as long as the app is registered, as [generation history](../runtime/generation.md#history-entries) specifies.
 
 ## Update
 
-`/apps/update` replaces an app's definition, and MAY change one parameter in the same step.
+`/apps/update` replaces an app's definition, and MAY change parameters in the same step.
 
 | parameter | type | required | meaning |
 | --- | --- | --- | --- |
 | `app` | string | yes | the app's name |
 | `script`, `bundle`, `reference`, `origin` | | | the new definition, as [definition sources](definitions.md#definition-sources) specifies |
-| `param` | object | no | `{ "name": <string>, "value": <string or null> }`, where a string sets the parameter and `null` unsets it |
+| `params` | object | no | parameter changes, in the form of `params` in [parameter changes](params.md#parameter-changes) |
 
-The result is `{ "generation": <integer> }`, as for a [parameter set](params.md#parameter-set).
+The result is `{ "generation": <integer> }`, as for a [parameter change](params.md#parameter-changes).
 
-The server MUST refuse the request with `not_found` if the app is not registered.
+The server MUST refuse the request with `requirements_invalid` if a member of `params` has a name that breaks the [naming rules](../language/overview.md#names).
+It MUST refuse it with `not_found` if the app is not registered.
 It MUST refuse it with `operation_in_progress` if another change to the app is being applied.
 
 The server MUST evaluate the new definition with the [proposed values](params.md#proposed-values), then validate those values against it.
-If `param` gives the parameter's stored value, the update changes no parameter.
+A member of `params` that gives a parameter's stored value, or `null` for a parameter with no stored value, changes nothing.
 
 If the definition cannot be fetched, breaks the bundle rules, does not support the running Seedling version, fails to parse or evaluate, or fails validation, the server MUST refuse the request with the matching error and MUST leave everything observable as it was.
 It MUST store no bundle and no parameter value, MUST NOT bump the generation, MUST NOT file or clear any fault, and the app MUST keep running its existing [resource graph](../overview.md#resource-graph).
@@ -70,7 +71,7 @@ Every piece of state derived from the definition MUST stay as it was, so that a 
 > [!NOTE]
 > State derived from the definition includes held volume data, clamped scaling decisions, port forwards to the app's services, and action schedules.
 
-On success the server MUST record the new definition and the parameter change together in a single generation bump, with a `script_update` history entry.
+On success the server MUST record the new definition and the parameter changes together in a single generation bump, with a `script_update` history entry.
 It MUST then emit an `AppUpdated` [event](events.md#app-events).
 
 An update that moves the key of one of the app's [gates](../language/gate.md) leaves it unsatisfied, and the runtime runs it as [gate runs](../runtime/gates.md) specify.
@@ -398,12 +399,18 @@ The server MUST refuse the request with `not_found` if the app is not registered
 | --- | --- | --- |
 | `generation` | integer | the generation |
 | `timestamp` | string | the timestamp of the change |
-| `kind` | string | `register`, `script_update`, `param_set` or `param_unset` |
+| `kind` | string | `register`, `script_update` or `param_change` |
 | `definition` | object | present for `register` and `script_update`: the definition provenance of the definition the generation installed |
-| `param_name` | string | present for `param_set` and `param_unset`, and for a `script_update` that changed a parameter |
-| `previous_value` | string or null | present when `param_name` is and `redacted` is not: the value before the change, or `null` where the parameter was unset |
-| `new_value` | string or null | present when `param_name` is and `redacted` is not: the value after the change, or `null` where the change unset it |
-| `redacted` | boolean | present, and true, when the values are withheld |
+| `params` | array | present for `param_change`, and for a `script_update` that changed parameters: one entry per parameter whose stored value the change moved, in ascending order of name |
 | `script_changed` | boolean | true for `register` and `script_update`, false otherwise |
+
+Each entry of `params` has these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `name` | string | the parameter's name |
+| `previous_value` | string or null | present when `redacted` is not: the value before the change, or `null` where the parameter was unset |
+| `new_value` | string or null | present when `redacted` is not: the value after the change, or `null` where the change unset it |
+| `redacted` | boolean | present, and true, when the values are withheld |
 
 The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was [protected](../runtime/secrets.md#storage) when the change was recorded.

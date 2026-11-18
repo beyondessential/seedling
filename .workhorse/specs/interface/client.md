@@ -125,11 +125,14 @@ The CLI MUST report an error and send no request when the folder holds no files,
 When reading a folder, the CLI MUST leave out version-control metadata directories, such as `.git` and `.jj`, and anything a `.seedignore` file in the folder or one of its subfolders excludes, read as gitignore patterns.
 If a symlink or other non-regular file is not left out, the CLI MUST report an error naming it and send no request.
 
-## Parameter change on update
+## Parameter changes
 
-`apps update` MUST accept one parameter change alongside the definition, as `--set name=value` or `--unset name`, and MUST NOT accept both.
-The CLI MUST send the change as `param`, an object whose `name` is the parameter's name and whose `value` is the new value, or `null` for `--unset`.
-If `--set` is given an argument without `=`, the CLI MUST report an error and send no request.
+`apps params set <app> [name=value]... [--unset <name>]...` MUST send every change it is given in one [parameter change](params.md#parameter-changes) request.
+Each `name=value` argument MUST set the parameter `name` to the string `value`, split at the first `=`, and each `--unset name` MUST unset the parameter `name`.
+
+`apps update` MUST accept parameter changes alongside the definition, as `--set name=value` and `--unset name`, each of which MAY be repeated, and MUST send them as `params` in the one [update](apps.md#update) request.
+
+The CLI MUST report an error and send no request when an argument that sets a parameter has no `=`, when one command changes the same parameter more than once, or when `apps params set` is given no change.
 
 ## Definition export
 

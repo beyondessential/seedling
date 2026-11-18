@@ -67,11 +67,10 @@ A member marked "optional" is absent where it has no value.
 | --- | --- | --- |
 | `AppRegistered` | `app`, `generation` | as [registration](apps.md#registration) specifies |
 | `AppDeregistered` | `app` | as [deregistration](apps.md#removal) specifies |
-| `AppUpdated` | `app`, `generation`, `previous_generation`, `definition` (object); and `name`, `previous_value`, `new_value` when a parameter changed alongside | as [definition update](apps.md#update) specifies |
+| `AppUpdated` | `app`, `generation`, `previous_generation`, `definition` (object), `changes` (array, optional) | as [definition update](apps.md#update) specifies |
 | `AppPhaseChanged` | `app`, `phase` | on every change of an app's [install phase](../overview.md#install-phase) |
 | `AppPriorityChanged` | `app`, `priority` (string), `previous_priority` (string) | as [priority change](app-control.md#app-priority) specifies |
-| `ParamSet` | `app`, `name`, `previous_value` (string, optional), `new_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [setting a parameter](params.md#parameter-set) specifies |
-| `ParamUnset` | `app`, `name`, `previous_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [unsetting a parameter](params.md#parameter-unset) specifies |
+| `ParamsChanged` | `app`, `changes` (array), `generation`, `previous_generation` | as [parameter changes](params.md#parameter-changes) specify |
 | `ScaleChanged` | `app`, `deployment`, `scale` (integer), `previous_scale` (integer or null), `bounds_low`, `bounds_high` (integers) | when a deployment's scale changes, by [operator request](app-control.md#scaling) or [autonomously](../runtime/autonomous.md#scale) |
 | `DeploymentRestarted` | `app`, `deployment`, `restart_id` (string) | as [deployment restart](app-control.md#deployment-restart) specifies |
 | `ResourceStopped` | `app`, `kind` (string), `name` | as [stopping a resource](app-control.md#resource-stop) specifies |
@@ -81,9 +80,10 @@ A member marked "optional" is absent where it has no value.
 `previous_scale` in `ScaleChanged` is the deployment's effective scale before the change, and `null` where it cannot be read.
 `restart_id` in `DeploymentRestarted` is the restart's identifier, as [deployment restart](app-control.md#deployment-restart) defines it.
 `definition` in `AppUpdated` is the [definition provenance](definitions.md#provenance-reporting) of the new definition.
-In `AppUpdated`, `previous_value` and `new_value` MUST be `null` for an unset value and for a secret parameter.
 `phase` in `AppPhaseChanged` is one of `"not_installed"`, `"installed"` and `"uninstalling"`.
-In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](../runtime/secrets.md#generation-history) require.
+`changes` in `ParamsChanged` and `AppUpdated` holds one entry for each parameter whose stored value the change moved, in ascending order of name, and is absent from an `AppUpdated` that changed no parameter.
+Each entry has the members `name`, `previous_value` (string, optional), `new_value` (string, optional) and `redacted` (`true`, optional), where an absent value is an unset one.
+An entry for a secret parameter MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](../runtime/secrets.md#generation-history) require.
 
 ### Operation events
 
