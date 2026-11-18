@@ -175,6 +175,13 @@ Grounded in the code as of the rebase over F6 and G6.
 
 ## Build steps
 
+### Progress
+
+- Stage A (several parameters per change) is built and committed: migration v82 (`generation_params` only), `/apps/params/set` with `params`, `ParamsChanged`, CLI and console changes. The remaining storage work needs v83 or later.
+- Temporary shims for the next stage to delete: `schedule_on_change` fires at most one handler per change; `/apps/plan` still reports `on_change_would_fire`; `/apps/generations` still emits `operation_id` and `outcome`.
+- Next: stage B (remove `on_change`, the start and install actions, install parameters, operation outcomes on generations), then gates (BSL, runtime, reconciler, interface), then definitions, docs and tests.
+- Spec questions raised by stage A: PRM refuses a repeated parameter name in one request, which only the raw request text can show; PRM's plan section should say whether an empty `proposed_params` is refused.
+
 ### Baseline
 
 - [ ] Run `cargo clippy`, `cargo fmt --check`, `etc/ci/check-spec-style.sh` and the `etc/ci/` greps on the rebased branch and fix anything outstanding (the citation check is expected to fail only on the removed sections)
