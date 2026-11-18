@@ -7,13 +7,55 @@ use seedling_protocol::{
 };
 use tokio::sync::Notify;
 
-use super::{BoundParams, run_operation_loop};
+use super::{BoundParams, OperationEnd, Persisted, end_action};
 use crate::runtime::{
     barrier::{CancelToken, OperationId, replay::ActionLog as _},
     db::DbHandle,
     faults, generations,
     secrets::Cipher,
 };
+
+/// Run an action's closure to its end and report it as the dispatcher does,
+/// saying whether it completed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are those of the loop it runs"
+)]
+fn run_operation_loop(
+    app: &crate::defs::app::App,
+    db: DbHandle,
+    bound: Result<BoundParams, String>,
+    active_progress: Arc<RwLock<Option<crate::runtime::OperationProgress>>>,
+    tick_notify: Arc<Notify>,
+    op_ctx: &seedling_protocol::events::OperationEventCtx,
+    limits: &crate::ScriptLimits,
+    cipher: Arc<Cipher>,
+    cancel_token: Arc<CancelToken>,
+    signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
+    writer: Option<Arc<dyn crate::runtime::barrier::VolumeWriter>>,
+    executor: Option<Arc<dyn crate::runtime::barrier::Executor>>,
+) -> bool {
+    let end = super::run_operation_loop(
+        app,
+        db.clone(),
+        bound,
+        active_progress,
+        tick_notify,
+        op_ctx,
+        limits,
+        cipher,
+        &crate::runtime::gates::GateRuntime::new(),
+        cancel_token,
+        signaler,
+        writer,
+        executor,
+        None,
+        Persisted::No,
+    );
+    let completed = matches!(end, OperationEnd::Completed);
+    end_action(&db, op_ctx, end);
+    completed
+}
 
 const SCRIPT: &str = r#"
     app.deployment("web").image("docker.io/library/nginx:1");

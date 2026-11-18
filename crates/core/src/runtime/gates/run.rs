@@ -253,7 +253,17 @@ impl Run<'_> {
             };
             match run_check(state, name, &self.gate, job, Some(&self.cancel)).await {
                 CheckOutcome::Passed => checked = true,
-                CheckOutcome::Failed(why) => return failed(format!("its check failed: {why}")),
+                CheckOutcome::Failed(why) => {
+                    // The check ran to an outcome, which ends whatever kept
+                    // an earlier one from being run.
+                    let (app, gate) = (name.clone(), self.gate.clone());
+                    state.db.call(move |db| {
+                        if let Err(e) = store::clear_check_unavailable(db, &app, &gate) {
+                            tracing::error!(%app, %gate, "cannot record that the check ran to an outcome: {e}");
+                        }
+                    });
+                    return failed(format!("its check failed: {why}"));
+                }
                 CheckOutcome::Unavailable(why) => {
                     let (app, gate, why_for_record) =
                         (name.clone(), self.gate.clone(), why.clone());
