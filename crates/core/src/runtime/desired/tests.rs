@@ -1066,8 +1066,16 @@ fn dynamic_resource_records_round_trip_in_db() {
     let db = Db::open_in_memory().expect("open");
     let inst_a = dep("app-a", "scratch");
     let inst_b = dep("app-b", "other");
-    insert_dynamic_resource(&db, &inst_a, "op-1", Some("scratch volume")).expect("insert a");
-    insert_dynamic_resource(&db, &inst_b, "op-2", None).expect("insert b");
+    insert_dynamic_resource(
+        &db,
+        &inst_a,
+        "op-1",
+        DynamicCreator::Operation,
+        Some("scratch volume"),
+    )
+    .expect("insert a");
+    insert_dynamic_resource(&db, &inst_b, "op-2", DynamicCreator::Operation, None)
+        .expect("insert b");
 
     let all = list_dynamic_resources(&db).expect("list all");
     assert_eq!(all.len(), 2);

@@ -12,6 +12,7 @@ pub mod canopy;
 pub mod db;
 pub mod definition;
 pub mod desired;
+pub mod dynamic_cleanup;
 pub mod dynamic_teardown;
 pub mod external_service_mappings;
 pub mod external_volume_mappings;

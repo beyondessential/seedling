@@ -1783,3 +1783,62 @@ fn an_instance_reports_the_state_of_its_health_check() {
         "an earlier container's check is not this one's"
     );
 }
+
+// spec: APPS#dynamic-resources
+#[test]
+fn a_dynamic_resource_reports_the_operation_or_the_session_that_created_it() {
+    use crate::{
+        defs::resource::ResourceKind,
+        runtime::{
+            desired::{DynamicCreator, insert_dynamic_resource},
+            identity::ResourceInstance,
+        },
+    };
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    let app = || "demo".parse().unwrap();
+    let by_operation = ResourceInstance::new_anonymous(app(), ResourceKind::Job);
+    let by_session = ResourceInstance::new_anonymous(app(), ResourceKind::Job);
+    let (op, session) = (by_operation.clone(), by_session.clone());
+    oi.state.db.call(move |db| {
+        insert_dynamic_resource(db, &op, "op-1", DynamicCreator::Operation, None).unwrap();
+        insert_dynamic_resource(db, &session, "sess-1", DynamicCreator::ShellSession, None)
+            .unwrap();
+    });
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let dynamic = desc["dynamic_resources"].as_array().unwrap();
+    let of = |instance: &ResourceInstance| {
+        dynamic
+            .iter()
+            .find(|r| r["instances"][0]["id"] == instance.id.to_hex())
+            .unwrap_or_else(|| panic!("{} is reported", instance.display_name))
+    };
+    let operation = of(&by_operation);
+    assert_eq!(operation["operation_id"], "op-1");
+    assert_eq!(operation["session_id"], json!(null));
+    let session = of(&by_session);
+    assert_eq!(session["operation_id"], json!(null));
+    assert_eq!(session["session_id"], "sess-1");
+}
+
+// spec: APPS#removal
+#[test]
+fn an_app_cannot_be_removed_while_a_session_on_it_has_a_slot() {
+    let oi = TestOi::with_app("demo");
+    let session = seedling_protocol::names::SessionId::generate();
+    let sessions = std::sync::Arc::clone(&oi.state.registry.read().get("demo").unwrap().sessions);
+    sessions.open(session);
+
+    let (code, message) = oi
+        .call("/apps/remove", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(!message.contains("  "), "{message:?}");
+    assert!(oi.state.registry.read().is_registered("demo"));
+
+    sessions.close(&session);
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+    assert!(!oi.state.registry.read().is_registered("demo"));
+}

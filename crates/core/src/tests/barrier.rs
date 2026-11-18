@@ -1058,7 +1058,7 @@ fn cancel_aborts_with_cancelled_result() {
 // spec: SUSP#re-evaluation-cadence
 #[test]
 fn dynamic_poll_interval_follows_piecewise_schedule() {
-    use crate::oi::handler::actions::lifecycle::dynamic_poll_interval;
+    use crate::runtime::dynamic_cleanup::dynamic_poll_interval;
     use std::time::Duration;
     // Lower band: 2s for small waits.
     assert_eq!(dynamic_poll_interval(0), Duration::from_secs(2));

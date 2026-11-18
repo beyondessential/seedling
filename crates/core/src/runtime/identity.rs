@@ -66,6 +66,19 @@ pub struct ResourceInstance {
 }
 
 impl ResourceInstance {
+    /// Whether this is an instance of a resource the app's definition
+    /// declares, a static resource, rather than of a dynamic one an action or
+    /// shell closure created.
+    ///
+    /// A closure can name only a declared resource, so a named instance is a
+    /// declared one and an anonymous instance a dynamic one. Whether a
+    /// definition was recorded for the instance does not tell them apart: one
+    /// is recorded for a declared Job or Ingress an operation starts too.
+    // spec: APP#static-resource
+    pub fn is_declared(&self) -> bool {
+        self.name.is_some()
+    }
+
     // spec: IDN#instance-identity
     // spec: IDN#job-instances
     pub fn new_singleton(app: AppName, kind: ResourceKind, name: impl Into<String>) -> Self {

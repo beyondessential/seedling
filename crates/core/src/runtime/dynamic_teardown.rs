@@ -11,11 +11,12 @@ use std::{
     time::Duration,
 };
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use seedling_protocol::names::AppName;
 
 use crate::{
     runtime::{
+        apps::AppRegistry,
         db::DbHandle,
         desired::{DynamicResourceRecord, list_dynamic_resources},
         faults,
@@ -240,16 +241,42 @@ pub fn clear_finished_operations(
     });
 }
 
-/// The operations whose dynamic resources are not to be torn down here: the
-/// one running, and those queued, which includes an operation being replayed.
-fn live_operations(scheduler: &Mutex<Scheduler>) -> HashSet<String> {
-    let scheduler = scheduler.lock();
-    scheduler
-        .active()
-        .map(|op| op.operation_id.0.clone())
+/// The records a startup teardown takes: every one but those of the operation
+/// about to be replayed, which the replay adopts, and those of the sessions in
+/// `live`, which are the runtime's own, run since startup began.
+///
+/// A session a previous run left is never live, as sessions are never
+/// replayed, so its resources are always torn down.
+// spec: SUSP#abandoned-replay
+// spec: OPS#shell-sessions
+pub fn unspared(
+    records: Vec<DynamicResourceRecord>,
+    replay: Option<&str>,
+    live_sessions: &HashSet<String>,
+) -> Vec<DynamicResourceRecord> {
+    records
         .into_iter()
-        .chain(scheduler.queue_iter().map(|op| op.operation_id.0.clone()))
+        .filter(|r| Some(r.operation_id.as_str()) != replay)
+        .filter(|r| !live_sessions.contains(&r.operation_id))
         .collect()
+}
+
+/// The operations and shell sessions whose dynamic resources are not to be
+/// torn down here: the operation running, and those queued, which includes an
+/// operation being replayed, and every session open or still tearing its own
+/// resources down.
+// spec: OPS#shell-sessions
+fn live_owners(scheduler: &Mutex<Scheduler>, registry: &RwLock<AppRegistry>) -> HashSet<String> {
+    let mut live = registry.read().live_sessions();
+    let scheduler = scheduler.lock();
+    live.extend(
+        scheduler
+            .active()
+            .map(|op| op.operation_id.0.clone())
+            .into_iter()
+            .chain(scheduler.queue_iter().map(|op| op.operation_id.0.clone())),
+    );
+    live
 }
 
 /// Keep tearing down dynamic resources a first teardown left, until none is
@@ -271,6 +298,7 @@ pub async fn keep_tearing_down(
     driver: Arc<System>,
     db: DbHandle,
     scheduler: Arc<Mutex<Scheduler>>,
+    registry: Arc<RwLock<AppRegistry>>,
     mut left: Option<Vec<DynamicResourceRecord>>,
 ) {
     let started = tokio::time::Instant::now();
@@ -304,7 +332,7 @@ pub async fn keep_tearing_down(
             None => match db.call(list_dynamic_resources) {
                 Ok(all) => {
                     db.call(faults::clear_dynamic_resources_unreadable);
-                    let live = live_operations(&scheduler);
+                    let live = live_owners(&scheduler, &registry);
                     all.into_iter()
                         .filter(|r| !live.contains(&r.operation_id))
                         .collect()

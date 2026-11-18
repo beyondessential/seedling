@@ -51,12 +51,20 @@ Every other resource MUST resolve to its one instance.
 
 `rt.start(selection)` MUST place every resource of the selection in the app's [desired state](../overview.md#desired-state), and returns a [`Started`](#started) over those resources.
 
+In a [shell](action.md#shells)'s closure, `rt.start` MUST place in the desired state only the [dynamic resources](app.md#dynamic-resource-lifetime) of the selection, and MUST NOT change the desired state of its [static resources](app.md#static-resource).
+The `Started` it returns MUST still hold every resource of the selection.
+
+> [!NOTE]
+> A shell is not a lifecycle operation, so it leaves the app's declared resources to the steady state or to the operation in progress, and can still wait on them.
+
 ### Stopping resources
 
 `rt.stop(selection)` and `rt.stop(selection, deadline: number)` MUST remove every resource of the selection from the app's desired state, then wait until all of them have reached Terminated, and return no value.
 `deadline` is read as for [barriers](#barriers), with the default given there for `rt.stop`.
 If the deadline passes first, `rt.stop` MUST throw.
 While it waits, the action closure is suspended as [suspension](../runtime/suspension.md#rtstop) specifies.
+
+In a shell's closure, `rt.stop` MUST throw, without changing the desired state, when its selection holds a static resource.
 
 ### Querying resources
 

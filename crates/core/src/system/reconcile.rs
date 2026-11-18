@@ -24,7 +24,7 @@ use crate::{
         AppPhase, InstanceRegistry,
         apps::{AppRegistry, transition_phase},
         db::DbHandle,
-        desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
+        desired::{DesiredState, EffectiveScales, compute, compute_uninstalling, merge_sessions},
         gc::InstanceGcConfig,
         health::InstanceHealth,
         identity::InstanceId,
@@ -959,11 +959,18 @@ impl Reconciler {
             // calls populate active_progress and the reconciler actuates the
             // resources placed into the desired state. Only NotInstalled
             // apps — those that have neither been installed nor have an
-            // install currently in flight — are skipped.
+            // install currently in flight — are skipped, unless a shell
+            // session that has ended is still tearing down what it started:
+            // nothing else stops those resources.
             match phase {
                 AppPhase::Installed | AppPhase::Installing | AppPhase::Uninstalling => {}
-                AppPhase::NotInstalled => continue,
+                AppPhase::NotInstalled if entry.sessions.is_empty() => continue,
+                AppPhase::NotInstalled => {}
             }
+            // Read before the progress is held, as it reads the progress
+            // itself. A snapshot that went unsteady since is rechecked before
+            // the GC sweeps by it.
+            let steady = entry.is_steady();
             let progress = entry.active_progress.read();
             let app_def_arc = entry.app.def.load_full();
             let app_def = (*app_def_arc).clone();
@@ -994,7 +1001,9 @@ impl Reconciler {
             };
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
-                AppPhase::NotInstalled => unreachable!(),
+                // spec: OPS#shell-sessions
+                // An app that is not installed desires nothing of its own.
+                AppPhase::NotInstalled => Ok(DesiredState::default()),
                 // spec: RCN#desired-state
                 // While Installing, the install closure drives every
                 // resource into desired state explicitly via rt.start.
@@ -1038,9 +1047,26 @@ impl Reconciler {
                     &stopped_set,
                 ),
             };
+            // Read in place, as the operation's progress is, rather than
+            // copied each tick.
+            let session_slots = entry.sessions.slots();
+            let session_guards: Vec<_> = session_slots.iter().map(|slot| slot.read()).collect();
+            let sessions: Vec<&crate::runtime::OperationProgress> =
+                session_guards.iter().filter_map(|g| g.as_ref()).collect();
             let desired = match desired {
-                Ok(d) => {
+                Ok(mut d) => {
                     self.clear_desired_state_fault(&name);
+                    // spec: RCN#desired-state
+                    // Each open shell session's dynamic resources join the
+                    // desired state whatever phase the app is in and whatever
+                    // else it holds. Where the app is going or gone, they are
+                    // held stopped.
+                    merge_sessions(
+                        &mut d,
+                        &app_def,
+                        &sessions,
+                        matches!(phase, AppPhase::Uninstalling | AppPhase::NotInstalled),
+                    );
                     d
                 }
                 Err(e) => {
@@ -1061,9 +1087,10 @@ impl Reconciler {
                 }
             };
             let warm_cert_hostnames = (*progress)
-                .as_ref()
-                .map(|p| p.warm_cert_hostnames.clone())
-                .unwrap_or_default();
+                .iter()
+                .chain(sessions.iter().copied())
+                .flat_map(|p| p.warm_cert_hostnames.iter().cloned())
+                .collect();
             // spec: PRIO#priority-setting
             // Read once for the whole tick above; an app with no stored
             // decision stands at the default.
@@ -1072,11 +1099,6 @@ impl Reconciler {
                 .and_then(|p| p.as_ref().ok())
                 .copied()
                 .unwrap_or_default();
-            let steady = phase == AppPhase::Installed
-                && progress.is_none()
-                && !entry
-                    .start_pending
-                    .load(std::sync::atomic::Ordering::Acquire);
             snapshots.push(AppSnapshot {
                 name,
                 desired,
@@ -4851,6 +4873,210 @@ mod tests {
         }
         let registry = oi.state.registry.read();
         *registry.get(app).unwrap().active_progress.write() = Some(progress);
+    }
+
+    /// Place `instance` in the slot of `session`, a shell session open on
+    /// `app`, with `definition`, at `Ready` or, where `stopped`, at
+    /// `Unscheduled`.
+    fn hold_in_session(
+        oi: &crate::oi::test_support::TestOi,
+        app: &str,
+        session: seedling_protocol::names::SessionId,
+        instance: &crate::runtime::identity::ResourceInstance,
+        definition: Resource,
+        stopped: bool,
+    ) {
+        let mut progress = crate::runtime::OperationProgress::new();
+        if stopped {
+            progress.stopped(instance.clone());
+            progress.dynamic_defs.insert(instance.clone(), definition);
+        } else {
+            progress.started_dynamic(instance.clone(), definition);
+        }
+        let sessions = Arc::clone(&oi.state.registry.read().get(app).unwrap().sessions);
+        *sessions.open(session).write() = Some(progress);
+    }
+
+    /// The instances `app`'s desired state holds, and whether its snapshot
+    /// is steady.
+    fn desired_instances(
+        reconciler: &Reconciler,
+        app: &str,
+    ) -> (
+        std::collections::HashSet<crate::runtime::identity::InstanceId>,
+        bool,
+    ) {
+        let (apps, _) = reconciler.snapshot_all_apps();
+        let snapshot = apps
+            .iter()
+            .find(|snapshot| snapshot.name.as_str() == app)
+            .expect("the app is snapshotted");
+        (
+            snapshot
+                .desired
+                .resources
+                .iter()
+                .map(|resource| resource.instance.id)
+                .collect(),
+            snapshot.steady,
+        )
+    }
+
+    // spec: RCN#desired-state
+    // The reconciler read one progress per app, the operation's, so what a
+    // shell's closure started was in no desired state and was never actuated.
+    #[test]
+    fn what_a_shell_session_started_is_desired_beside_what_the_operation_started() {
+        use seedling_protocol::names::SessionId;
+
+        let oi = crate::oi::test_support::TestOi::with_app("app");
+        oi.install("app");
+        let reconciler = test_reconciler(&oi);
+        let (definition, _) = anonymous_job_with_anonymous_volume();
+        let anonymous = || {
+            crate::runtime::identity::ResourceInstance::new_anonymous(
+                AppName::new("app").unwrap(),
+                crate::defs::resource::ResourceKind::Job,
+            )
+        };
+        let (operation_job, first_job, second_job) = (anonymous(), anonymous(), anonymous());
+        let (first, second) = (SessionId::generate(), SessionId::generate());
+
+        let (steady, _) = desired_instances(&reconciler, "app");
+        hold_in_session(&oi, "app", first, &first_job, definition.clone(), false);
+        let sessions = Arc::clone(&oi.state.registry.read().get("app").unwrap().sessions);
+        let empty = SessionId::generate();
+        sessions.open(empty);
+        let (_, steady_with_empty_slot) = desired_instances(&reconciler, "app");
+        assert!(
+            !steady_with_empty_slot,
+            "a session that has placed nothing yet still breaks steadiness"
+        );
+        sessions.close(&empty);
+        let (with_session, still_steady) = desired_instances(&reconciler, "app");
+        assert!(
+            with_session.contains(&first_job.id),
+            "a session's resource is desired with no operation running"
+        );
+        assert_eq!(with_session.len(), steady.len() + 1);
+        assert!(!still_steady, "an app with a session is not steady");
+
+        hold_in_operation(&oi, "app", &operation_job, definition.clone(), false);
+        hold_in_session(&oi, "app", second, &second_job, definition, false);
+        let (all, _) = desired_instances(&reconciler, "app");
+        assert_eq!(
+            all,
+            [operation_job.id, first_job.id, second_job.id].into(),
+            "the operation's and each session's resources are all desired"
+        );
+
+        sessions.close(&first);
+        let (all, _) = desired_instances(&reconciler, "app");
+        assert_eq!(
+            all,
+            [operation_job.id, second_job.id].into(),
+            "closing one session drops its resources alone"
+        );
+    }
+
+    // spec: RCN#desired-state
+    // spec: OPS#shell-sessions
+    // What a shell's closure started was never actuated: nothing read its slot.
+    #[test]
+    fn the_job_a_shell_session_placed_in_its_slot_is_started() {
+        let (oi, _containers, _dir) = with_stub_containers();
+        let mut reconciler = test_reconciler(&oi);
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "app", "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+        )
+        .unwrap();
+        oi.install("app");
+        let job = crate::runtime::identity::ResourceInstance::new_anonymous(
+            AppName::new("app").unwrap(),
+            crate::defs::resource::ResourceKind::Job,
+        );
+        let (definition, _) = anonymous_job_with_anonymous_volume();
+        oi.block_on(
+            oi.state
+                .driver
+                .container
+                .pull_image("docker.io/library/busybox:1.37"),
+        )
+        .unwrap();
+        hold_in_session(
+            &oi,
+            "app",
+            seedling_protocol::names::SessionId::generate(),
+            &job,
+            definition,
+            false,
+        );
+        run_pods(&oi, &mut reconciler, 1);
+
+        assert!(
+            oi.block_on(
+                oi.state
+                    .driver
+                    .process
+                    .unit_state(&crate::system::actuator::unit_name(&job))
+            )
+            .unwrap()
+            .is_some(),
+            "the session's job was started"
+        );
+    }
+
+    // spec: RCN#desired-state
+    // spec: OPS#shell-sessions
+    // A session's resources are desired while the app is installing, and held
+    // stopped while it uninstalls and once it is no longer installed: the
+    // reconciler skipped an app that was not installed, so the teardown of a
+    // session that outlasted its app's uninstall was never actuated.
+    #[test]
+    fn a_session_resource_is_desired_whatever_the_app_phase() {
+        let oi = crate::oi::test_support::TestOi::with_app("app");
+        oi.install("app");
+        let reconciler = test_reconciler(&oi);
+        let (definition, _) = anonymous_job_with_anonymous_volume();
+        let job = crate::runtime::identity::ResourceInstance::new_anonymous(
+            AppName::new("app").unwrap(),
+            crate::defs::resource::ResourceKind::Job,
+        );
+        hold_in_session(
+            &oi,
+            "app",
+            seedling_protocol::names::SessionId::generate(),
+            &job,
+            definition,
+            false,
+        );
+
+        for phase in [
+            AppPhase::Installing,
+            AppPhase::Uninstalling,
+            AppPhase::NotInstalled,
+        ] {
+            *oi.state.registry.read().get("app").unwrap().phase.lock() = phase.clone();
+            let (apps, _) = reconciler.snapshot_all_apps();
+            let desired = &apps
+                .iter()
+                .find(|snapshot| snapshot.name.as_str() == "app")
+                .unwrap()
+                .desired;
+            let held = desired
+                .resources
+                .iter()
+                .find(|resource| resource.instance.id == job.id)
+                .unwrap_or_else(|| panic!("the session's job is desired while {phase:?}"));
+            if phase != AppPhase::Installing {
+                assert_eq!(
+                    held.desired,
+                    LifecycleState::Unscheduled,
+                    "an app going or gone holds it stopped"
+                );
+            }
+        }
     }
 
     /// Run the pods phase `ticks` times.

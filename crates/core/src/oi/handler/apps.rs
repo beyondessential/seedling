@@ -16,7 +16,7 @@ use crate::{
         AppPhase,
         apps::{AppRegistry, AppStatus, status as app_status},
         definition::{Bundle, Source, version},
-        desired::list_dynamic_resources_for_app,
+        desired::{DynamicCreator, list_dynamic_resources_for_app},
         faults,
         health::{InstanceHealth, declares_healthcheck, read_health},
         history::{find_instances_for_group, read_lifecycle},
@@ -894,7 +894,15 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         "name": display_name,
                         "type": kind_str,
                         "anonymous": rec.resource_name.is_none(),
-                        "operation_id": rec.operation_id,
+                        // spec: APPS#dynamic-resources
+                        "operation_id": match rec.creator {
+                            DynamicCreator::Operation => Value::String(rec.operation_id.clone()),
+                            DynamicCreator::ShellSession => Value::Null,
+                        },
+                        "session_id": match rec.creator {
+                            DynamicCreator::Operation => Value::Null,
+                            DynamicCreator::ShellSession => Value::String(rec.operation_id.clone()),
+                        },
                         // spec: BSL#descriptions
                         "description": rec.description,
                         "instances": [{
@@ -1505,6 +1513,24 @@ pub(crate) fn deregister_app(
     // Reject if an operation is active or queued for this app.
     if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
         return Err(app_blocked(name, "remove", &blocker));
+    }
+
+    // spec: APPS#removal
+    // A session's teardown is driven through the app's entry, and the records
+    // it has yet to tear down are spared only while the entry holds its slot.
+    if state
+        .registry
+        .read()
+        .get(name)
+        .is_some_and(|entry| !entry.sessions.is_empty())
+    {
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!(
+                "a shell session is open on the app or still tearing down what it started; \
+                 wait for it to finish: {name}"
+            ),
+        ));
     }
 
     // Reject if the app is not in the NotInstalled phase. The message

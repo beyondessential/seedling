@@ -5,7 +5,7 @@ use seedling_protocol::{
     events::EventSenderWithActor,
     names::{ActionName, AppName, SessionId, ShellName},
 };
-use tokio::io::AsyncWriteExt;
+use tokio::{io::AsyncWriteExt, sync::Notify};
 
 use super::registry::{ShellSession, StopSignal};
 use crate::{
@@ -13,6 +13,7 @@ use crate::{
     oi::state::OiState,
     runtime::{
         AppPhase,
+        apps::{SessionSlot, SessionSlots},
         barrier::{
             OperationId,
             oracle::DbWorldOracle,
@@ -22,6 +23,7 @@ use crate::{
                 clear_shell_attach_ctx, set_shell_attach_ctx,
             },
         },
+        dynamic_cleanup::cleanup_dynamic_resources,
         identity::{InstanceVariant, ResourceInstance},
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
@@ -165,6 +167,7 @@ pub(crate) async fn open_shell_session(
         return;
     }
 
+    let session_id = SessionId::generate();
     // All registry access is done in a synchronous closure so no lock guard
     // crosses an await point (parking_lot guards are not Send).
     let lookup: Result<_, (&str, String)> = (|| {
@@ -182,14 +185,38 @@ pub(crate) async fn open_shell_session(
                 None => return Err(("not_found", format!("shell not found: {shell_name}"))),
             }
         };
-        Ok((entry.app.clone(), shell_params_schema))
+        // spec: RCN#desired-state
+        // spec: APPS#removal
+        // The slot is opened under the same look at the registry that found
+        // the app installed, so the app cannot be removed between the two,
+        // and stands until the session's dynamic resources are gone after it
+        // has ended.
+        let slot = entry.sessions.open(session_id);
+        Ok((
+            entry.app.clone(),
+            shell_params_schema,
+            Arc::clone(&entry.sessions),
+            slot,
+            Arc::clone(&entry.tick_notify),
+        ))
     })();
-    let (app, shell_params_schema) = match lookup {
+    let (app, shell_params_schema, sessions, slot, tick_notify) = match lookup {
         Ok(v) => v,
         Err((code, msg)) => {
             reject(&mut send, code, msg).await;
             return;
         }
+    };
+    // spec: OPS#shell-sessions
+    // However the session ends, refused before it began, panicking or dropped
+    // included, its resources are torn down and its slot let go.
+    let teardown = SessionTeardown {
+        state: Arc::clone(&state),
+        app_name: app_name.clone(),
+        session_id,
+        sessions,
+        slot: Arc::clone(&slot),
+        tick_notify: Arc::clone(&tick_notify),
     };
 
     // spec: ACN#param-delivery
@@ -234,7 +261,6 @@ pub(crate) async fn open_shell_session(
         }
     };
 
-    let session_id = SessionId::generate();
     let stop = StopSignal::new();
     let session = ShellSession::starting(
         session_id,
@@ -285,6 +311,11 @@ pub(crate) async fn open_shell_session(
         validated_params,
         &stop,
         Arc::clone(&host) as Arc<dyn ShellHost>,
+        SessionProgress {
+            id: session_id,
+            slot: Arc::clone(&slot),
+            tick_notify: Arc::clone(&tick_notify),
+        },
     )
     .await;
     let outcome = session_outcome(&run, stop.is_requested(), *host.job_exit.lock());
@@ -303,6 +334,74 @@ pub(crate) async fn open_shell_session(
         app = %app_name, shell = %shell_name, exit_code = %outcome.exit_code,
         "shell session ended"
     );
+
+    // spec: OPS#shell-sessions
+    // The session is over for its client; tearing its dynamic resources down
+    // takes as long as it takes.
+    drop(teardown);
+}
+
+/// Starts tearing down a session's dynamic resources when it is dropped,
+/// which is when the session has ended, by whatever path.
+pub(super) struct SessionTeardown {
+    pub(super) state: Arc<OiState>,
+    pub(super) app_name: AppName,
+    pub(super) session_id: SessionId,
+    pub(super) sessions: Arc<SessionSlots>,
+    pub(super) slot: SessionSlot,
+    pub(super) tick_notify: Arc<Notify>,
+}
+
+impl Drop for SessionTeardown {
+    // spec: OPS#shell-sessions
+    fn drop(&mut self) {
+        let teardown = tear_down_session_resources(
+            Arc::clone(&self.state),
+            self.app_name.clone(),
+            self.session_id,
+            Arc::clone(&self.sessions),
+            Arc::clone(&self.slot),
+            Arc::clone(&self.tick_notify),
+        );
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(teardown);
+            }
+            // Only when the runtime itself is going: the records stay, and
+            // the next start tears their resources down.
+            Err(e) => {
+                tracing::error!(
+                    app = %self.app_name, session = %self.session_id,
+                    "cannot tear down the session's dynamic resources now: {e}"
+                );
+            }
+        }
+    }
+}
+
+/// Tears down the dynamic resources a session that has ended created, then
+/// lets go of its slot in the app's desired state.
+// spec: APP#dynamic-resource-lifetime
+// spec: OPS#shell-sessions
+pub(super) async fn tear_down_session_resources(
+    state: Arc<OiState>,
+    app_name: AppName,
+    session_id: SessionId,
+    sessions: Arc<SessionSlots>,
+    slot: SessionSlot,
+    tick_notify: Arc<Notify>,
+) {
+    cleanup_dynamic_resources(
+        &state.db,
+        &state.driver,
+        &app_name,
+        &session_id.to_string(),
+        &slot,
+        &tick_notify,
+    )
+    .await;
+    sessions.close(&session_id);
+    tick_notify.notify_one();
 }
 
 /// Validate the params a client submitted for a shell, as an action's are.
@@ -459,6 +558,15 @@ pub(super) struct ShellRun {
     pub(super) progress: Arc<ShellProgress>,
 }
 
+/// What a session's closure shares with the reconciler: the session's id, the
+/// slot its dynamic resources are placed in, and the wake-up for the
+/// reconciler.
+pub(super) struct SessionProgress {
+    pub(super) id: SessionId,
+    pub(super) slot: SessionSlot,
+    pub(super) tick_notify: Arc<Notify>,
+}
+
 /// How a session ended: the exit code for its exit frame, and why if it failed.
 pub(super) struct SessionOutcome {
     pub(super) exit_code: i32,
@@ -526,9 +634,16 @@ pub(super) async fn run_app_shell(
     validated_params: serde_json::Map<String, serde_json::Value>,
     stop: &StopSignal,
     host: Arc<dyn ShellHost>,
+    session: SessionProgress,
 ) -> ShellRun {
     let progress = Arc::new(ShellProgress::default());
-    let operation_id = OperationId::new();
+    // spec: OPS#shell-sessions
+    // The session's id stands where an operation's does, in the action log and
+    // against the dynamic resources the closure creates.
+    let operation_id = OperationId(session.id.to_string());
+    let SessionProgress {
+        slot, tick_notify, ..
+    } = session;
     // spec: ACN#volume-params
     // A binding that cannot be made fails the session without running the
     // closure.
@@ -623,17 +738,15 @@ pub(super) async fn run_app_shell(
                     log: &log,
                     world: Arc::clone(&world),
                     registry: Arc::clone(&registry),
-                    active_progress: None,
-                    tick_notify: None,
+                    active_progress: Some(Arc::clone(&slot)),
+                    tick_notify: Some(Arc::clone(&tick_notify)),
                     params: validated_params.clone(),
                     // spec: OPS#shell-sessions
                     is_shell: true,
                     // spec: OPS#shell-sessions
-                    // Passing None means rt.start_* calls do not persist
-                    // dynamic resources to the desired state, so resources
-                    // created within a shell session disappear when the
-                    // session's replay context is dropped.
-                    db: None,
+                    // The dynamic resources the closure starts are recorded
+                    // against the session before they are started.
+                    db: Some(db.clone()),
                     source_generation: 0,
                     target_generation: 0,
                     script_limits: None,

@@ -649,12 +649,12 @@ impl Reconciler {
 /// does not hold may simply have failed to load, so it gets no entry.
 // spec: GC#unscheduled-instances
 fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDesiredState {
-    let still_steady = |entry: &AppEntry| {
-        *entry.phase.lock() == AppPhase::Installed && entry.active_progress.read().is_none()
-    };
     let mut known = KnownDesiredState::default();
     for app in apps.iter().filter(|app| app.steady) {
-        if registry.get(app.name.as_str()).is_some_and(still_steady) {
+        if registry
+            .get(app.name.as_str())
+            .is_some_and(AppEntry::is_steady)
+        {
             known.insert_app(
                 &app.name,
                 app.desired
@@ -667,7 +667,9 @@ fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDes
     }
     for name in registry.names() {
         if registry.get(name.as_str()).is_some_and(|entry| {
-            *entry.phase.lock() == AppPhase::NotInstalled && entry.active_progress.read().is_none()
+            *entry.phase.lock() == AppPhase::NotInstalled
+                && entry.active_progress.read().is_none()
+                && entry.sessions.is_empty()
         }) {
             known.insert_app(&name, []);
         }
@@ -877,6 +879,7 @@ mod tests {
     }
 
     // spec: GC#unscheduled-instances
+    // spec: RCN#desired-state
     #[test]
     fn only_apps_with_a_known_desired_state_are_swept() {
         let scaled = || ResourceInstance::new_scaled(app("demo"), ResourceKind::Deployment, "web");
@@ -887,12 +890,25 @@ mod tests {
         // Its snapshot was steady, but an operation has started since.
         register(&mut reg, "busy", AppPhase::Installed);
         *reg.get("busy").unwrap().active_progress.write() = Some(Default::default());
+        // Likewise, but for a shell session that has opened.
+        register(&mut reg, "sessioned", AppPhase::Installed);
+        reg.get("sessioned")
+            .unwrap()
+            .sessions
+            .open(seedling_protocol::names::SessionId::generate());
         register(&mut reg, "installing", AppPhase::Installing);
         register(&mut reg, "absent", AppPhase::NotInstalled);
+        // Not installed, but a session that has ended is still tearing down.
+        register(&mut reg, "ended", AppPhase::NotInstalled);
+        reg.get("ended")
+            .unwrap()
+            .sessions
+            .open(seedling_protocol::names::SessionId::generate());
 
         let apps = [
             steady_snapshot("steady", &[&member], &[&excess]),
             steady_snapshot("busy", &[&member], &[]),
+            steady_snapshot("sessioned", &[&member], &[]),
             // Snapshotted, but no longer held by the registry.
             steady_snapshot("unloaded", &[&member], &[]),
         ];
@@ -902,6 +918,8 @@ mod tests {
         assert!(known.sweepable("steady", excess.id));
         assert!(known.sweepable("steady", unrelated.id));
         assert!(!known.sweepable("busy", unrelated.id));
+        assert!(!known.sweepable("sessioned", unrelated.id));
+        assert!(!known.sweepable("ended", unrelated.id));
         assert!(!known.sweepable("installing", unrelated.id));
         assert!(!known.sweepable("unloaded", unrelated.id));
         assert!(known.sweepable("absent", unrelated.id));

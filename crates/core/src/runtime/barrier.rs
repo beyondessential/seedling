@@ -309,6 +309,12 @@ pub struct ReplayContext {
     /// secret value fails rather than recording it in the clear.
     // spec: SEC#storage
     pub cipher: Option<Arc<crate::runtime::secrets::Cipher>>,
+    /// The closure is a shell session's rather than a lifecycle operation's.
+    /// The dynamic resources it starts are recorded against the session, and
+    /// its `rt.start` and `rt.stop` act on dynamic resources only.
+    // spec: RT#starting-resources
+    // spec: RT#stopping-resources
+    pub is_shell: bool,
 }
 
 /// Synchronous side-effect handle the BSL `rt.signal` call uses to actually
@@ -449,6 +455,7 @@ impl ReplayContext {
             executor: None,
             early_commit: None,
             cipher: None,
+            is_shell: false,
         }
     }
 

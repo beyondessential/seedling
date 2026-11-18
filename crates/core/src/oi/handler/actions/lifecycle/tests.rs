@@ -418,8 +418,14 @@ fn recorded_dynamic_job(
     );
     let (recorded, operation_id) = (job.clone(), operation_id.to_owned());
     oi.state.db.call(move |db| {
-        crate::runtime::desired::insert_dynamic_resource(db, &recorded, &operation_id, None)
-            .unwrap();
+        crate::runtime::desired::insert_dynamic_resource(
+            db,
+            &recorded,
+            &operation_id,
+            crate::runtime::desired::DynamicCreator::Operation,
+            None,
+        )
+        .unwrap();
         for kind in ["container_running", "container_exited", "container_removed"] {
             crate::runtime::history::insert_observation(
                 db,
@@ -495,7 +501,14 @@ fn a_dynamic_resource_list_that_cannot_be_read_is_not_nothing_to_clean_up() {
 
     let app = app();
     with_paused_clock(async {
-        let cleanup = super::cleanup_dynamic_resources(&oi.state, &app, "op-1", &progress, &notify);
+        let cleanup = crate::runtime::dynamic_cleanup::cleanup_dynamic_resources(
+            &oi.state.db,
+            &oi.state.driver,
+            &app,
+            "op-1",
+            &progress,
+            &notify,
+        );
         tokio::pin!(cleanup);
         tokio::select! {
             () = &mut cleanup => panic!("the cleanup ended without reading its records"),
@@ -541,7 +554,14 @@ fn the_cleanup_does_not_give_up_on_a_resource_that_is_slow_to_go() {
 
     let app = app();
     with_paused_clock(async {
-        let cleanup = super::cleanup_dynamic_resources(&oi.state, &app, "op-1", &progress, &notify);
+        let cleanup = crate::runtime::dynamic_cleanup::cleanup_dynamic_resources(
+            &oi.state.db,
+            &oi.state.driver,
+            &app,
+            "op-1",
+            &progress,
+            &notify,
+        );
         tokio::pin!(cleanup);
         tokio::select! {
             () = &mut cleanup => panic!("the cleanup gave up while the network stood"),

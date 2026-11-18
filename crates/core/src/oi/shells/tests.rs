@@ -11,8 +11,8 @@ use tokio::io::AsyncWrite;
 use super::{
     registry::{ShellSession, StopSignal},
     session::{
-        LiveShell, SessionIo, SessionOutcome, SessionStreams, run_app_shell, run_to_exit,
-        session_outcome,
+        LiveShell, SessionIo, SessionOutcome, SessionProgress, SessionStreams, run_app_shell,
+        run_to_exit, session_outcome,
     },
 };
 use crate::{
@@ -20,7 +20,10 @@ use crate::{
         state::OiState,
         test_support::{Loopback, TestOi, loopback},
     },
-    runtime::barrier::shell::{ShellExecTarget, ShellExit, ShellHost},
+    runtime::{
+        apps::SessionSlot,
+        barrier::shell::{ShellExecTarget, ShellExit, ShellHost},
+    },
     system::types::ExecHandle,
 };
 
@@ -304,6 +307,15 @@ impl ShellHost for FakeHost {
     }
 }
 
+/// A session run to its end, with the app it ran on.
+struct ShellRan {
+    oi: TestOi,
+    outcome: SessionOutcome,
+    session_id: SessionId,
+    /// The slot the session placed its dynamic resources in.
+    slot: SessionSlot,
+}
+
 /// Run the `tools` shell of a `demo` app declared by `script`, with `params`,
 /// against `host`, stopping the session after `stop_after` if given, and say
 /// how the session ended.
@@ -313,6 +325,18 @@ fn run_shell(
     host: &Arc<FakeHost>,
     stop_after: Option<std::time::Duration>,
 ) -> SessionOutcome {
+    run_shell_session(script, params, host, stop_after, |_| {}).outcome
+}
+
+/// As [`run_shell`], keeping the app and the session's slot for inspection,
+/// and calling `setup` on the app before the session runs.
+fn run_shell_session(
+    script: &str,
+    params: serde_json::Value,
+    host: &Arc<FakeHost>,
+    stop_after: Option<std::time::Duration>,
+    setup: impl FnOnce(&TestOi),
+) -> ShellRan {
     use seedling_protocol::names::ShellName;
 
     let oi = TestOi::new();
@@ -321,7 +345,8 @@ fn run_shell(
         serde_json::json!({ "app": "demo", "script": script }),
     )
     .unwrap();
-    let (app, schema) = {
+    setup(&oi);
+    let (app, schema, sessions, tick_notify) = {
         let reg = oi.state.registry.read();
         let entry = reg.get("demo").unwrap();
         let schema = entry
@@ -333,11 +358,18 @@ fn run_shell(
             .unwrap()
             .params
             .clone();
-        (entry.app.clone(), schema)
+        (
+            entry.app.clone(),
+            schema,
+            Arc::clone(&entry.sessions),
+            Arc::clone(&entry.tick_notify),
+        )
     };
     let params = params.as_object().cloned().unwrap_or_default();
     let stop = StopSignal::new();
-    oi.block_on(async {
+    let session_id = SessionId::generate();
+    let slot = sessions.open(session_id);
+    let outcome = oi.block_on(async {
         if let Some(after) = stop_after {
             let stop = stop.clone();
             tokio::spawn(async move {
@@ -354,6 +386,11 @@ fn run_shell(
             params,
             &stop,
             Arc::clone(host) as Arc<dyn ShellHost>,
+            SessionProgress {
+                id: session_id,
+                slot: Arc::clone(&slot),
+                tick_notify,
+            },
         )
         .await;
         let job_exit = host
@@ -363,7 +400,13 @@ fn run_shell(
             .and_then(|exit| exit.exit_code())
             .filter(|_| host.attachments() > 0);
         session_outcome(&run, stop.is_requested(), job_exit)
-    })
+    });
+    ShellRan {
+        oi,
+        outcome,
+        session_id,
+        slot,
+    }
 }
 
 const TOOLS_JOB: &str = r#"
@@ -574,4 +617,291 @@ fn params_a_shell_declares_no_schema_for_still_reach_its_closure() {
         params["greeting"], "hello",
         "an undeclared param was dropped"
     );
+}
+
+const SHELL_JOB: &str = "docker.io/library/busybox:1.37";
+
+/// The records of the dynamic resources a session created.
+fn session_records(ran: &ShellRan) -> Vec<crate::runtime::desired::DynamicResourceRecord> {
+    let id = ran.session_id.to_string();
+    ran.oi.state.db.call(move |db| {
+        crate::runtime::desired::list_dynamic_resources_for_operation(db, &id).unwrap()
+    })
+}
+
+/// What the session has placed in its app's desired state, as the reconciler
+/// reads it.
+fn session_desired(ran: &ShellRan) -> Vec<crate::runtime::DesiredResource> {
+    let app_def = ran
+        .oi
+        .state
+        .registry
+        .read()
+        .get("demo")
+        .unwrap()
+        .app
+        .def
+        .load_full();
+    let slot = ran.slot.read();
+    let progress: Vec<_> = slot.iter().collect();
+    let mut state = crate::runtime::DesiredState::default();
+    crate::runtime::desired::merge_sessions(&mut state, &app_def, &progress, false);
+    state.resources
+}
+
+// spec: OPS#shell-sessions
+// spec: RCN#desired-state
+// A shell closure ran with no database and no progress, so what it started
+// was in no desired state.
+#[test]
+fn what_a_shell_closure_starts_is_desired_and_recorded_against_the_session() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{
+            shell.attach(tools);
+            rt.start(app.job().image("{SHELL_JOB}").command("true"));
+        }});"#
+    );
+    let ran = run_shell_session(
+        &script,
+        serde_json::json!({}),
+        &FakeHost::answering(Ok(ShellExit::exited(0))),
+        None,
+        |_| {},
+    );
+    assert_eq!(ran.outcome.reason, None);
+
+    let desired = session_desired(&ran);
+    assert_eq!(desired.len(), 1, "the one job is desired");
+    assert_eq!(desired[0].desired, crate::runtime::LifecycleState::Ready);
+    assert!(desired[0].instance.name.is_none(), "it is anonymous");
+
+    let records = session_records(&ran);
+    assert_eq!(records.len(), 1, "the job is recorded against the session");
+    assert_eq!(records[0].instance_id, desired[0].instance.id.to_hex());
+    assert_eq!(
+        records[0].creator,
+        crate::runtime::desired::DynamicCreator::ShellSession
+    );
+}
+
+// spec: RT#starting-resources
+#[test]
+fn a_shell_closure_starting_a_declared_resource_leaves_the_desired_state_alone() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{
+            shell.attach(tools);
+            rt.start(tools);
+        }});"#
+    );
+    let ran = run_shell_session(
+        &script,
+        serde_json::json!({}),
+        &FakeHost::answering(Ok(ShellExit::exited(0))),
+        None,
+        |_| {},
+    );
+    assert_eq!(ran.outcome.reason, None, "the call returned a Started");
+    assert!(
+        session_desired(&ran).is_empty(),
+        "the declared job was not placed in the desired state"
+    );
+    assert!(session_records(&ran).is_empty(), "and nothing was recorded");
+}
+
+// spec: RT#stopping-resources
+#[test]
+fn a_shell_closure_stopping_a_declared_resource_throws() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{
+            shell.attach(tools);
+            rt.stop(tools);
+        }});"#
+    );
+    let ran = run_shell_session(
+        &script,
+        serde_json::json!({}),
+        &FakeHost::answering(Ok(ShellExit::exited(0))),
+        None,
+        |_| {},
+    );
+    let reason = ran.outcome.reason.clone().expect("the session failed");
+    assert!(reason.contains("declared by the app"), "{reason}");
+    assert!(session_desired(&ran).is_empty());
+}
+
+// spec: OPS#shell-sessions
+// The record is all that finds a resource again after a restart, so one that
+// cannot be written is not started.
+#[test]
+fn a_shell_resource_that_cannot_be_recorded_is_not_started() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{
+            shell.attach(tools);
+            rt.start(app.job().image("{SHELL_JOB}").command("true"));
+        }});"#
+    );
+    let ran = run_shell_session(
+        &script,
+        serde_json::json!({}),
+        &FakeHost::answering(Ok(ShellExit::exited(0))),
+        None,
+        |oi| {
+            oi.state.db.call(|db| {
+                db.conn.execute("DROP TABLE dynamic_resources", []).unwrap();
+            });
+        },
+    );
+    let reason = ran.outcome.reason.clone().expect("the session failed");
+    assert!(reason.contains("could not record"), "{reason}");
+    assert!(
+        session_desired(&ran).is_empty(),
+        "nothing was placed in the desired state"
+    );
+}
+
+// spec: OPS#shell-sessions
+// spec: FLT#app-faults
+// The session's resources are torn down after it ends, by the same cleanup an
+// operation's are, holding `operation_cleanup_stalled` for the session.
+#[test]
+fn a_session_whose_resources_are_slow_to_go_holds_the_stall_fault_by_its_id() {
+    let oi = TestOi::with_app("demo");
+    let session_id = SessionId::generate();
+    let owner = session_id.to_string();
+    let job = crate::runtime::identity::ResourceInstance::new_anonymous(
+        "demo".parse().unwrap(),
+        crate::defs::resource::ResourceKind::Job,
+    );
+    let (recorded, owner_for_record) = (job.clone(), owner.clone());
+    oi.state.db.call(move |db| {
+        crate::runtime::desired::insert_dynamic_resource(
+            db,
+            &recorded,
+            &owner_for_record,
+            crate::runtime::desired::DynamicCreator::ShellSession,
+            None,
+        )
+        .unwrap();
+        for kind in ["container_running", "container_exited", "container_removed"] {
+            crate::runtime::history::insert_observation(
+                db,
+                &recorded,
+                kind,
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        }
+    });
+    let network = format!("seedling-{}", job.display_name);
+    oi.block_on(oi.state.driver.container.create_network(
+        &network,
+        "fd00:0:0:1::/64".parse().unwrap(),
+        None,
+    ))
+    .unwrap();
+    let (sessions, tick_notify) = {
+        let reg = oi.state.registry.read();
+        let entry = reg.get("demo").unwrap();
+        (Arc::clone(&entry.sessions), Arc::clone(&entry.tick_notify))
+    };
+    let slot = sessions.open(session_id);
+
+    let stalled = || {
+        oi.state.db.call(|db| {
+            crate::runtime::faults::list_active_faults(db, None)
+                .unwrap()
+                .into_iter()
+                .filter(|f| f.kind == crate::runtime::faults::OPERATION_CLEANUP_STALLED)
+                .map(|f| f.subject)
+                .collect::<Vec<_>>()
+        })
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let teardown = super::session::tear_down_session_resources(
+                Arc::clone(&oi.state),
+                "demo".parse().unwrap(),
+                session_id,
+                Arc::clone(&sessions),
+                Arc::clone(&slot),
+                tick_notify,
+            );
+            tokio::pin!(teardown);
+            tokio::select! {
+                () = &mut teardown => panic!("the teardown ended while the network stood"),
+                () = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+            }
+            assert!(stalled().is_empty(), "not within the first minute");
+            assert!(!sessions.is_empty(), "the slot stands while it tears down");
+            tokio::select! {
+                () = &mut teardown => panic!("the teardown ended while the network stood"),
+                () = tokio::time::sleep(std::time::Duration::from_secs(600)) => {}
+            }
+            assert_eq!(stalled(), vec![owner.clone()], "held past a minute");
+
+            oi.state
+                .driver
+                .container
+                .remove_network(&network)
+                .await
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(600), teardown)
+                .await
+                .expect("the teardown ends once the network is gone");
+        });
+    assert!(stalled().is_empty(), "cleared once torn down");
+    assert!(sessions.is_empty(), "the slot is let go");
+    assert!(
+        oi.state
+            .db
+            .call(move |db| {
+                crate::runtime::desired::list_dynamic_resources_for_operation(db, &owner).unwrap()
+            })
+            .is_empty(),
+        "the record is forgotten"
+    );
+}
+
+// spec: OPS#shell-sessions
+// The slot was let go only on the session's ordinary end, so a session task
+// that panicked or was dropped kept its app from ever being steady again.
+#[test]
+fn a_session_dropped_mid_run_still_lets_go_of_its_slot() {
+    let oi = TestOi::with_app("demo");
+    let (sessions, tick_notify) = {
+        let reg = oi.state.registry.read();
+        let entry = reg.get("demo").unwrap();
+        (Arc::clone(&entry.sessions), Arc::clone(&entry.tick_notify))
+    };
+    let session_id = SessionId::generate();
+    let slot = sessions.open(session_id);
+    let teardown = super::session::SessionTeardown {
+        state: Arc::clone(&oi.state),
+        app_name: "demo".parse().unwrap(),
+        session_id,
+        sessions: Arc::clone(&sessions),
+        slot,
+        tick_notify,
+    };
+
+    oi.block_on(async {
+        let running = tokio::spawn(async move {
+            let _teardown = teardown;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        running.abort();
+        let _ = running.await;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !sessions.is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the slot is let go");
+    });
 }
