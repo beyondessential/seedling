@@ -364,6 +364,9 @@ pub fn merge_sessions(
     sessions: &[&OperationProgress],
     hold_stopped: bool,
 ) {
+    if sessions.is_empty() {
+        return;
+    }
     let mut held: HashSet<InstanceId> = state
         .resources
         .iter()
