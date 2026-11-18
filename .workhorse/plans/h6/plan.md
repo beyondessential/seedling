@@ -141,8 +141,7 @@ Next: plan implementation.
 
 ## Other cards in flight
 
-- F6 (shell sessions' dynamic resources, implemented, not merged): no conflict in behaviour. It edits the same places: the desired-state section of Reconciliation, Lifecycle operations, the runtime handle, `system/reconcile.rs`, `runtime/desired.rs` and `oi/handler/actions/lifecycle.rs`. Expect to rebase over it.
-- G6 (DTLS termination, implemented, not merged): proxy and ingress only; overlaps in `system/reconcile.rs` and the faults spec, textually.
+- F6 (shell sessions' dynamic resources) and G6 (DTLS termination): merged, and this card is rebased over them. F6's shell `rt.start` returns a `Started` over its whole selection, now less what a gate holds.
 - J6 (guards and holds): absorbed and cancelled. A gate's exclusive selection is its guard, held through failure, cancel and restart and released when the gate is satisfied. Taken from it: `rt.start`/`rt.stop` leave held resources out; an operator stop of a held resource is accepted and outlasts the hold; scaling decisions take effect once the hold ends; a restart of a held deployment is refused; `/apps/show` reports `held_by` per resource.
 
 ## Explicitly rejected

@@ -52,7 +52,7 @@ Every other resource MUST resolve to its one instance.
 `rt.start(selection)` MUST place every resource of the selection in the app's [desired state](../overview.md#desired-state), and returns a [`Started`](#started) over those resources.
 
 In a [shell](action.md#shells)'s closure, `rt.start` MUST place in the desired state only the [dynamic resources](app.md#dynamic-resource-lifetime) of the selection, and MUST NOT change the desired state of its [static resources](app.md#static-resource).
-The `Started` it returns MUST still hold every resource of the selection.
+The `Started` it returns MUST still hold every resource of the selection, other than those [a gate holds](#resources-a-gate-holds).
 
 > [!NOTE]
 > A shell is not a lifecycle operation, so it leaves the app's declared resources to the steady state or to the operation in progress, and can still wait on them.
