@@ -252,7 +252,7 @@ aborted: the replacement is stopped, the running proxy stays active and
 serving, and a `caddy_failed` fault names the rejection until an upgrade
 succeeds. A bring-up failure's `caddy_failed` clears once an iteration
 finds the proxy healthy. Both clear when the proxy is stopped because no
-app is installed or installing, as do `resolver_failed` and the NAT64
+app is installed, as do `resolver_failed` and the NAT64
 translator.
 
 ### nftables ingress rules
@@ -559,7 +559,7 @@ No pool4 is configured, so Jool masquerades translated IPv4 traffic
 using the host's primary IPv4 address.
 
 The translator is set up by the reconciler, before any pod is touched,
-whenever an app is installed or installing, and torn down when none is
+whenever an app is installed, and torn down when none is
 (an uninstalling app counts as installed for this). The daemon sets
 nothing up at startup: a host that starts with no app installed carries
 no translator, and one left by an earlier run is removed on the first

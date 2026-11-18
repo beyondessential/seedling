@@ -61,7 +61,7 @@ document.
    simply don't instantiate it.
 5. **There is no bespoke bootstrap CLI.** The operator-facing flow is just
    the standard surfaces: `templates/instantiate` to create the
-   `seedling-web` app from the built-in template, then `apps/install/invoke`
+   `seedling-web` app from the built-in template, then `apps/install`
    when ready, then `ingresses site attach` to give the web UI a hostname.
    Everything else — keypair generation, key authorisation, OI mapping
    creation, client-key delivery into the install action — is performed
@@ -234,7 +234,7 @@ registration, in addition to the standard registration:
    it.
 3. Stores the encrypted private key under the operation's secret-param
    storage, keyed by the synthetic install-param name `client-key`.
-   When `apps/install/invoke` later runs, the daemon merges this key
+   When `apps/install` later runs, the daemon merges this key
    into the operator-supplied params before validation. The key never
    passes through the OI on the wire.
 4. For each `external_service` slot the AppDef declares whose name is
@@ -524,7 +524,7 @@ still applies to the seedling-web binary's own infrequent calls to
   amendment in phase 4.
 - **Synthesised install-param delivery shape.** The plan stores the
   daemon-generated client key as a synthetic install param the daemon
-  merges in at `apps/install/invoke` time. Alternative shapes: a runtime-
+  merges in at `apps/install` time. Alternative shapes: a runtime-
   scoped param-binding analogous to operation-scoped volume bindings, or
   a `rt.*` builder that exposes the key directly to the install closure
   without it being a param at all. Choose during phase 4.

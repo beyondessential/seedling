@@ -75,8 +75,7 @@ seedling-ctl apps params set postgres version=18.3 password=devpassword
 seedling-ctl apps install postgres
 ```
 
-Params set through `apps params set` persist across script updates; install
-params passed positionally do not reach `app.param()` values.
+Params set through `apps params set` persist across script updates.
 
 If an install fails partway, `apps uninstall` then `apps install` resets the
 reconciler's view cleanly; clearing faults alone can leave it oscillating
