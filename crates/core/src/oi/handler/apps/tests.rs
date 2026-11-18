@@ -1831,10 +1831,11 @@ fn an_app_cannot_be_removed_while_a_session_on_it_has_a_slot() {
     let sessions = std::sync::Arc::clone(&oi.state.registry.read().get("demo").unwrap().sessions);
     sessions.open(session);
 
-    let (code, _) = oi
+    let (code, message) = oi
         .call("/apps/remove", json!({ "app": "demo" }))
         .unwrap_err();
     assert_eq!(code, "operation_in_progress");
+    assert!(!message.contains("  "), "{message:?}");
     assert!(oi.state.registry.read().is_registered("demo"));
 
     sessions.close(&session);

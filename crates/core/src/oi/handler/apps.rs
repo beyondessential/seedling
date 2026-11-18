@@ -1527,7 +1527,8 @@ pub(crate) fn deregister_app(
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!(
-                "a shell session is open on the app or still tearing down what it started;                  wait for it to finish: {name}"
+                "a shell session is open on the app or still tearing down what it started; \
+                 wait for it to finish: {name}"
             ),
         ));
     }
