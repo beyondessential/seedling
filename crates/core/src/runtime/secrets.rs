@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use orion::aead;
+use orion::{
+    aead, auth,
+    hazardous::kdf::hkdf::{Hkdf, SHA512},
+};
 
 use secrecy::{ExposeSecret, SecretString};
 
@@ -13,6 +16,30 @@ use crate::runtime::db::Db;
 // spec: SEC#storage
 pub struct Cipher {
     key: aead::SecretKey,
+    digest_key: auth::SecretKey,
+}
+
+/// The context the key digests' subkey is derived under, so that no other use
+/// of the secret key can produce the same key.
+const KEY_DIGEST_CONTEXT: &[u8] = b"seedling gate key digest v1";
+
+/// A digest of a gate key under the secret key, which tells keys apart
+/// without holding them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct KeyDigest([u8; KeyDigest::LEN]);
+
+impl KeyDigest {
+    pub const LEN: usize = 32;
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// The digest `bytes` holds, or `None` where they are not the length of
+    /// one, as a damaged record's would not be.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        bytes.try_into().ok().map(Self)
+    }
 }
 
 #[derive(Debug)]
@@ -104,13 +131,36 @@ impl Cipher {
             }
             let bytes = std::fs::read(path)?;
             let key = aead::SecretKey::try_from(bytes.as_slice())?;
-            return Ok(Self { key });
+            return Self::from_key(key);
         }
 
         let key = aead::SecretKey::generate()?;
         // spec: INFRA#file-permissions
         seedling_protocol::keys::write_new_private_file(path, key.unprotected_as_ref())?;
-        Ok(Self { key })
+        Self::from_key(key)
+    }
+
+    fn from_key(key: aead::SecretKey) -> Result<Self, Error> {
+        let mut subkey = [0u8; 32];
+        Hkdf::<SHA512>::derive_key(
+            &[],
+            key.unprotected_as_ref(),
+            Some(KEY_DIGEST_CONTEXT),
+            &mut subkey,
+        )?;
+        let digest_key = auth::SecretKey::try_from(&subkey[..])?;
+        Ok(Self { key, digest_key })
+    }
+
+    /// The digest of `canonical` under a subkey derived from the secret key.
+    ///
+    /// The same bytes digest the same under one secret key and differently
+    /// under another, and the digest holds nothing the bytes could be
+    /// recovered from.
+    // spec: GRUN#outcome
+    pub fn key_digest(&self, canonical: &[u8]) -> Result<KeyDigest, Error> {
+        let tag = auth::authenticate(&self.digest_key, canonical)?;
+        KeyDigest::from_bytes(tag.unprotected_as_ref()).ok_or(Error::BadEncoding)
     }
 
     // spec: SEC#storage
@@ -126,8 +176,13 @@ impl Cipher {
 
     #[cfg(test)]
     pub fn for_tests() -> Self {
-        let key = aead::SecretKey::try_from(&[42u8; 32]).expect("valid test key");
-        Self { key }
+        Self::for_tests_with(&[42u8; 32])
+    }
+
+    #[cfg(test)]
+    pub fn for_tests_with(key: &[u8; 32]) -> Self {
+        let key = aead::SecretKey::try_from(key).expect("valid test key");
+        Self::from_key(key).expect("a key derives its subkey")
     }
 }
 
@@ -201,10 +256,39 @@ mod tests {
         let ct = cipher
             .encrypt(&SecretString::new("secret".into()))
             .expect("encrypt");
-        let other = Cipher {
-            key: aead::SecretKey::try_from(&[1u8; 32]).expect("valid key"),
-        };
+        let other = Cipher::for_tests_with(&[1u8; 32]);
         assert!(other.decrypt(&ct).is_err());
+    }
+
+    // spec: GRUN#outcome
+    #[test]
+    fn a_key_digest_is_stable_for_one_secret_key_and_differs_across_secret_keys() {
+        let first = Cipher::for_tests_with(&[1u8; 32]);
+        let again = Cipher::for_tests_with(&[1u8; 32]);
+        let other = Cipher::for_tests_with(&[2u8; 32]);
+        let bytes = b"{\"version\":\"1.2.3\"}";
+
+        let digest = first.key_digest(bytes).expect("digests");
+        assert_eq!(digest, again.key_digest(bytes).expect("digests"));
+        assert_ne!(digest, other.key_digest(bytes).expect("digests"));
+        assert_ne!(digest, first.key_digest(b"other").expect("digests"));
+    }
+
+    // spec: GRUN#outcome
+    #[test]
+    fn a_key_digest_is_not_a_plain_hash_of_the_key() {
+        use sha2::{Digest, Sha256};
+        let digest = Cipher::for_tests().key_digest(b"1").expect("digests");
+        assert_eq!(digest.as_bytes().len(), KeyDigest::LEN);
+        assert_ne!(digest.as_bytes(), Sha256::digest(b"1").as_slice());
+    }
+
+    // spec: GRUN#outcome
+    #[test]
+    fn a_digest_round_trips_through_its_bytes_and_a_wrong_length_is_refused() {
+        let digest = Cipher::for_tests().key_digest(b"1").expect("digests");
+        assert_eq!(KeyDigest::from_bytes(digest.as_bytes()), Some(digest));
+        assert_eq!(KeyDigest::from_bytes(&digest.as_bytes()[1..]), None);
     }
 
     // spec: SEC#secret-key
