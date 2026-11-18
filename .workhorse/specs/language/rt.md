@@ -72,7 +72,8 @@ The resource's instances MUST stay as they were held until the closure starts or
 ### Held resources
 
 A runtime handle method other than `rt.guard` MUST NOT change the desired state of a held resource.
-`rt.start`, `rt.stop` and `rt.query` MUST leave held resources out of the resources they act on, out of the `Started` they return, and out of every barrier they wait on.
+`rt.start` and `rt.stop` MUST leave held resources out of the resources they act on, out of the `Started` they return, and out of every barrier they wait on.
+`rt.query` MUST include held resources in the `Started` it returns, and a script narrows them in or out with the `held` key of [`select`](#started).
 `rt.restart` of a held deployment MUST throw.
 
 > [!NOTE]
@@ -188,7 +189,9 @@ Each call MUST write at most once, including when the action closure is replayed
 
 A `Started` is an opaque value standing for the instances a runtime handle method resolved its selection to.
 A `Started` MUST offer the [Collection](collection.md#collection) methods `one`, `only`, `except` and `select`, each returning a `Started` over the instances it selects instead of the resources themselves.
-These methods MUST judge an instance by the resource type and name of its resource.
+These methods MUST judge an instance by the resource type and name of its resource, except for the `held` key below.
+On a `Started`, `select` MUST also accept the key `held`, a boolean.
+An instance matches `held: true` when its resource is [held](../overview.md#held-resource) at the time of the call, and `held: false` when it is not.
 `one()` on a `Started` holding no instances MUST return unit.
 A `Started` returned by a Collection method MUST keep the barriers of the `Started` it came from.
 
