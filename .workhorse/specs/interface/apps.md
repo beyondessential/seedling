@@ -145,7 +145,7 @@ The server MUST refuse it with `not_found` if the app is not registered.
 | `priority` | string | the app's [app priority](app-control.md#app-priority) |
 | `faults` | array | the [fault records](faults.md#fault-records) of the app's active faults that concern no resource, such as a script error |
 | `resources` | array | the app's declared [resources](#resources) |
-| `dynamic_resources` | array | the [dynamic resources](#dynamic-resources) its lifecycle operations created |
+| `dynamic_resources` | array | the [dynamic resources](#dynamic-resources) its lifecycle operations and shell sessions created |
 | `stopped_resources` | array | the app's stopped resources, as [resource stop](app-control.md#resource-stop) specifies |
 | `params` | array | the app's declared [parameters](#parameters) |
 | `unknown_params` | array | its [unknown parameters](params.md#unknown-parameter) |
@@ -272,7 +272,7 @@ Its `balance` is the service's.
 
 ### Dynamic resources
 
-A dynamic resource is one a lifecycle operation's action closure created, rather than one the definition declares.
+A dynamic resource is one a lifecycle operation's action closure or a [shell session](shells.md#shell-session)'s closure created, rather than one the definition declares.
 The server MUST report dynamic resources only for an app whose status is not `not_installed`.
 
 | member | type | meaning |
@@ -280,7 +280,8 @@ The server MUST report dynamic resources only for an app whose status is not `no
 | `name` | string | the resource's name, or its instance's display name where it is anonymous |
 | `type` | string | as for a declared resource |
 | `anonymous` | boolean | whether the closure created it without a name |
-| `operation_id` | string | the operation that created it |
+| `operation_id` | string or null | the operation that created it, or `null` where a shell session did |
+| `session_id` | string or null | the `session_id` of the shell session that created it, or `null` where an operation did |
 | `description` | string or null | the [description](../language/overview.md#descriptions) the closure gave it |
 | `instances` | array | its single instance, with the members of a declared resource's instance except `restarts` |
 | `faults` | array | the fault records of the active faults concerning its instance |

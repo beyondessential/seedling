@@ -207,4 +207,5 @@ Before it places a session's dynamic resource in the desired state, the runtime 
 
 When a session ends, the runtime MUST tear down its dynamic resources as it does an ended operation's, under [completion](#completion), holding [`operation_cleanup_stalled`](faults.md#app-faults) for the session where they are not all gone within a minute of its end or their records cannot be read.
 A session's dynamic resources left behind by a previous run of the runtime are torn down as [abandoned replay](suspension.md#abandoned-replay) specifies.
+The runtime MUST NOT hold a session open, nor delay its [exit frame](../interface/shells.md#session-end), while its dynamic resources are torn down.
 The runtime MUST NOT persist a shell session's parameters, and MUST NOT replay a session after a restart.

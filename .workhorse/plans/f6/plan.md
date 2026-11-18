@@ -1,0 +1,9 @@
+# F6: start the resources a shell closure creates
+
+## Technical notes
+
+- The reconciler reads one progress per app, `AppEntry::active_progress`, which only works because one operation runs per host. Shell sessions need a progress each, kept in a per-app map keyed by session beside that slot. `compute` merges every open session's dynamic resources into the desired state, whatever the app's phase or `start_pending` holds (RCN#desired-state). A session only touches dynamic instances, so merging cannot clash with the operation's entries.
+- The shell's `run_operation` call gets a database and the session's progress. `rt.start` then records each dynamic resource before placing it, as it already does for operations (`runtime.rs`, the `insert_dynamic_resource` path). In a shell, the static resources of a selection are left out of the progress (RT#starting-resources), and `rt.stop` throws if its selection holds one (RT#stopping-resources).
+- Today the dynamic-resource records hold an `operation_id`, while a session's action log runs under a fresh internal `OperationId` that is not the operator-visible `session_id`. `/apps` must report `session_id` for a session's resources and `operation_id` null (APPS#dynamic-resources), so the record has to carry which kind created it: either a new column via a new migration block, or recording against the session id with a kind marker. Never edit an existing migration.
+- When a session ends, its progress entry is dropped from the map and its resources are handed to the same retrying teardown that ended operations use (`dynamic_teardown.rs`), with `operation_cleanup_stalled` keyed by the session id as the subject. The exit frame does not wait for that teardown (OPS#shell-sessions).
+- The startup teardown already removes every record not spared for a replay. Sessions are never replayed, so their records are always torn down.
