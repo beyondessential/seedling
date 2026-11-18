@@ -355,14 +355,14 @@ fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> D
 ///
 /// A session only ever places dynamic instances, which no operation's
 /// progress and no steady state holds, so its entries cannot clash with
-/// theirs. For an app being uninstalled, every instance is held `Unscheduled`
-/// and a session's is held so too.
+/// theirs. Where `hold_stopped`, as for an app being uninstalled or no longer
+/// installed, each is held `Unscheduled` whatever the session last put it in.
 // spec: RCN#desired-state
 pub fn merge_sessions(
     state: &mut DesiredState,
     app_def: &AppDef,
     sessions: &[&OperationProgress],
-    uninstalling: bool,
+    hold_stopped: bool,
 ) {
     let mut held: HashSet<InstanceId> = state
         .resources
@@ -375,7 +375,7 @@ pub fn merge_sessions(
             if !held.insert(resource.instance.id) {
                 continue;
             }
-            if uninstalling {
+            if hold_stopped {
                 resource.desired = LifecycleState::Unscheduled;
             }
             state.resources.push(resource);

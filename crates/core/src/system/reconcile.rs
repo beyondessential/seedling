@@ -959,10 +959,13 @@ impl Reconciler {
             // calls populate active_progress and the reconciler actuates the
             // resources placed into the desired state. Only NotInstalled
             // apps — those that have neither been installed nor have an
-            // install currently in flight — are skipped.
+            // install currently in flight — are skipped, unless a shell
+            // session that has ended is still tearing down what it started:
+            // nothing else stops those resources.
             match phase {
                 AppPhase::Installed | AppPhase::Installing | AppPhase::Uninstalling => {}
-                AppPhase::NotInstalled => continue,
+                AppPhase::NotInstalled if entry.sessions.is_empty() => continue,
+                AppPhase::NotInstalled => {}
             }
             let progress = entry.active_progress.read();
             let app_def_arc = entry.app.def.load_full();
@@ -994,7 +997,9 @@ impl Reconciler {
             };
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
-                AppPhase::NotInstalled => unreachable!(),
+                // spec: OPS#shell-sessions
+                // An app that is not installed desires nothing of its own.
+                AppPhase::NotInstalled => Ok(DesiredState::default()),
                 // spec: RCN#desired-state
                 // While Installing, the install closure drives every
                 // resource into desired state explicitly via rt.start.
@@ -1050,8 +1055,14 @@ impl Reconciler {
                     // spec: RCN#desired-state
                     // Each open shell session's dynamic resources join the
                     // desired state whatever phase the app is in and whatever
-                    // else it holds.
-                    merge_sessions(&mut d, &app_def, &sessions, phase == AppPhase::Uninstalling);
+                    // else it holds. Where the app is going or gone, they are
+                    // held stopped.
+                    merge_sessions(
+                        &mut d,
+                        &app_def,
+                        &sessions,
+                        matches!(phase, AppPhase::Uninstalling | AppPhase::NotInstalled),
+                    );
                     d
                 }
                 Err(e) => {
@@ -5023,10 +5034,13 @@ mod tests {
     }
 
     // spec: RCN#desired-state
-    // A session's resources are desired while the app is installing, holding
-    // nothing of its own until its install closure has put something there.
+    // spec: OPS#shell-sessions
+    // A session's resources are desired while the app is installing, and held
+    // stopped while it uninstalls and once it is no longer installed: the
+    // reconciler skipped an app that was not installed, so the teardown of a
+    // session that outlasted its app's uninstall was never actuated.
     #[test]
-    fn a_session_resource_is_desired_while_the_app_is_installing_or_uninstalling() {
+    fn a_session_resource_is_desired_whatever_the_app_phase() {
         let oi = crate::oi::test_support::TestOi::with_app("app");
         oi.install("app");
         let reconciler = test_reconciler(&oi);
@@ -5044,7 +5058,11 @@ mod tests {
             false,
         );
 
-        for phase in [AppPhase::Installing, AppPhase::Uninstalling] {
+        for phase in [
+            AppPhase::Installing,
+            AppPhase::Uninstalling,
+            AppPhase::NotInstalled,
+        ] {
             *oi.state.registry.read().get("app").unwrap().phase.lock() = phase.clone();
             let (apps, _) = reconciler.snapshot_all_apps();
             let desired = &apps
@@ -5057,11 +5075,11 @@ mod tests {
                 .iter()
                 .find(|resource| resource.instance.id == job.id)
                 .unwrap_or_else(|| panic!("the session's job is desired while {phase:?}"));
-            if phase == AppPhase::Uninstalling {
+            if phase != AppPhase::Installing {
                 assert_eq!(
                     held.desired,
                     LifecycleState::Unscheduled,
-                    "an uninstall holds it stopped"
+                    "an app going or gone holds it stopped"
                 );
             }
         }
