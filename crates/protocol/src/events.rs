@@ -13,14 +13,39 @@ use crate::{
     },
 };
 
-/// A parameter changed in the same step as a definition update. Values are
-/// `None` for an unset, and for a secret parameter.
-// spec: EVT#event-types
-#[derive(Debug, Clone, Serialize)]
-pub struct AppUpdatedParam {
+/// One parameter whose stored value a change moved. An absent value is an
+/// unset one; an entry for a secret parameter carries neither value and sets
+/// `redacted`.
+// spec: EVT#app-events
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ParamChangeEntry {
     pub name: ParamName,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub new_value: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub redacted: bool,
+}
+
+impl ParamChangeEntry {
+    pub fn new(name: ParamName, previous_value: Option<String>, new_value: Option<String>) -> Self {
+        Self {
+            name,
+            previous_value,
+            new_value,
+            redacted: false,
+        }
+    }
+
+    pub fn redacted(name: ParamName) -> Self {
+        Self {
+            name,
+            previous_value: None,
+            new_value: None,
+            redacted: true,
+        }
+    }
 }
 
 // spec: EVT#event-types
@@ -49,9 +74,10 @@ pub enum OiEvent {
         previous_generation: Option<u64>,
         /// The new definition's provenance.
         definition: serde_json::Value,
-        /// The parameter changed alongside the definition, if any.
-        #[serde(flatten, skip_serializing_if = "Option::is_none")]
-        param: Option<AppUpdatedParam>,
+        /// The parameters changed alongside the definition, in ascending
+        /// order of name; absent when none changed.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        changes: Vec<ParamChangeEntry>,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -68,33 +94,11 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // spec: EVT#event-types
-    // spec: PRM#parameter-storage
-    ParamSet {
+    // spec: EVT#app-events
+    ParamsChanged {
         timestamp: Timestamp,
         app: AppName,
-        name: ParamName,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        previous_value: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        new_value: Option<String>,
-        #[serde(skip_serializing_if = "is_false")]
-        redacted: bool,
-        generation: u64,
-        previous_generation: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Arc<Actor>>,
-    },
-    // spec: EVT#event-types
-    // spec: PRM#parameter-storage
-    ParamUnset {
-        timestamp: Timestamp,
-        app: AppName,
-        name: ParamName,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        previous_value: Option<String>,
-        #[serde(skip_serializing_if = "is_false")]
-        redacted: bool,
+        changes: Vec<ParamChangeEntry>,
         generation: u64,
         previous_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -702,7 +706,7 @@ impl EventSender {
         generation: u64,
         previous_generation: Option<u64>,
         definition: serde_json::Value,
-        param: Option<AppUpdatedParam>,
+        changes: Vec<ParamChangeEntry>,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::AppUpdated {
@@ -711,7 +715,26 @@ impl EventSender {
             generation,
             previous_generation,
             definition,
-            param,
+            changes,
+            actor,
+        });
+    }
+
+    // spec: PRM#parameter-changes
+    pub fn params_changed(
+        &self,
+        app: &AppName,
+        changes: Vec<ParamChangeEntry>,
+        generation: u64,
+        previous_generation: u64,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::ParamsChanged {
+            timestamp: now(),
+            app: app.clone(),
+            changes,
+            generation,
+            previous_generation,
             actor,
         });
     }
@@ -1398,23 +1421,6 @@ impl EventSender {
         }
     }
 
-    /// Build a context for param-change events (set/unset).
-    pub fn param_change(
-        &self,
-        app: AppName,
-        generation: u64,
-        previous_generation: u64,
-        actor: Option<Arc<Actor>>,
-    ) -> ParamEventCtx {
-        ParamEventCtx {
-            tx: self.clone(),
-            app,
-            generation,
-            previous_generation,
-            actor,
-        }
-    }
-
     // spec: AUD#entries
     pub fn template_created(&self, name: &TemplateName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::TemplateCreated {
@@ -1534,14 +1540,14 @@ impl EventSenderWithActor {
         generation: u64,
         previous_generation: Option<u64>,
         definition: serde_json::Value,
-        param: Option<AppUpdatedParam>,
+        changes: Vec<ParamChangeEntry>,
     ) {
         self.inner.app_updated(
             app,
             generation,
             previous_generation,
             definition,
-            param,
+            changes,
             Some(Arc::clone(&self.actor)),
         );
     }
@@ -1596,18 +1602,21 @@ impl EventSenderWithActor {
         )
     }
 
-    pub fn param_change(
+    // spec: PRM#parameter-changes
+    pub fn params_changed(
         &self,
-        app: AppName,
+        app: &AppName,
+        changes: Vec<ParamChangeEntry>,
         generation: u64,
         previous_generation: u64,
-    ) -> ParamEventCtx {
-        self.inner.param_change(
+    ) {
+        self.inner.params_changed(
             app,
+            changes,
             generation,
             previous_generation,
             Some(Arc::clone(&self.actor)),
-        )
+        );
     }
 
     // spec: CTL#deployment-restart
@@ -1995,74 +2004,6 @@ impl OperationEventCtx {
             source_generation: self.source_generation,
             target_generation: self.target_generation,
             error: error.to_owned(),
-            actor: self.actor.clone(),
-        });
-    }
-}
-
-/// Context for parameter-change events (set / unset).
-#[derive(Clone)]
-pub struct ParamEventCtx {
-    tx: EventSender,
-    app: AppName,
-    generation: u64,
-    previous_generation: u64,
-    actor: Option<Arc<Actor>>,
-}
-
-impl ParamEventCtx {
-    pub fn set(&self, name: &ParamName, previous_value: Option<&str>, new_value: &str) {
-        self.tx.emit(OiEvent::ParamSet {
-            timestamp: now(),
-            app: self.app.clone(),
-            name: name.clone(),
-            previous_value: previous_value.map(str::to_owned),
-            new_value: Some(new_value.to_owned()),
-            redacted: false,
-            generation: self.generation,
-            previous_generation: self.previous_generation,
-            actor: self.actor.clone(),
-        });
-    }
-
-    // spec: PRM#parameter-storage
-    pub fn set_redacted(&self, name: &ParamName) {
-        self.tx.emit(OiEvent::ParamSet {
-            timestamp: now(),
-            app: self.app.clone(),
-            name: name.clone(),
-            previous_value: None,
-            new_value: None,
-            redacted: true,
-            generation: self.generation,
-            previous_generation: self.previous_generation,
-            actor: self.actor.clone(),
-        });
-    }
-
-    pub fn unset(&self, name: &ParamName, previous_value: &str) {
-        self.tx.emit(OiEvent::ParamUnset {
-            timestamp: now(),
-            app: self.app.clone(),
-            name: name.clone(),
-            previous_value: Some(previous_value.to_owned()),
-            redacted: false,
-            generation: self.generation,
-            previous_generation: self.previous_generation,
-            actor: self.actor.clone(),
-        });
-    }
-
-    // spec: PRM#parameter-storage
-    pub fn unset_redacted(&self, name: &ParamName) {
-        self.tx.emit(OiEvent::ParamUnset {
-            timestamp: now(),
-            app: self.app.clone(),
-            name: name.clone(),
-            previous_value: None,
-            redacted: true,
-            generation: self.generation,
-            previous_generation: self.previous_generation,
             actor: self.actor.clone(),
         });
     }

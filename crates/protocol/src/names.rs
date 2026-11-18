@@ -232,8 +232,8 @@ bsl_name_newtype! {
     /// `app.param("...")` or an action's `params` block.
     ///
     /// Used as a `BTreeMap` key in [`AppDef::params`], in the
-    /// per-action `params` maps, and as the identifier in `ParamSet`/
-    /// `ParamUnset` events.
+    /// per-action `params` maps, and as the identifier of an entry in
+    /// `ParamsChanged` events.
     ParamName
 }
 
