@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 86);
+    assert_eq!(version, 87);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 86);
+    assert_eq!(version, 87);
 }
 
 // spec: APPS#persistence
@@ -733,4 +733,58 @@ fn a_generation_keeps_its_history_and_loses_the_operation_outcome() {
         )
         .unwrap();
     assert_eq!(dropped, 0);
+}
+
+// spec: GRUN#gate-state
+// spec: GRUN#app-setup
+#[test]
+fn gate_storage_exists_and_an_installed_app_is_already_set_up() {
+    let db = Db::open_in_memory_through(86).expect("open at v86");
+    db.conn
+        .execute_batch(
+            "INSERT INTO registered_apps (name, installed) VALUES ('live', 1), ('fresh', 0);",
+        )
+        .expect("seed v86 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let set_up: Vec<(String, bool)> = db
+        .conn
+        .prepare("SELECT name, set_up FROM registered_apps ORDER BY name")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        set_up,
+        [("fresh".to_owned(), false), ("live".to_owned(), true)]
+    );
+
+    db.conn
+        .execute_batch(
+            "INSERT INTO gate_records (app, gate, key_digest, success_generation, valid)
+                 VALUES ('live', 'migrate', x'00', 3, 1);
+             INSERT INTO gate_holds (app, gate, kind, name)
+                 VALUES ('live', 'migrate', 'deployment', 'api');",
+        )
+        .expect("gate rows insert");
+    let failures: i64 = db
+        .conn
+        .query_row(
+            "SELECT consecutive_failures FROM gate_records WHERE app = 'live'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(failures, 0, "a record starts with no failures");
+    assert!(
+        db.conn
+            .execute(
+                "INSERT INTO gate_records (app, gate, valid) VALUES ('live', 'migrate', 0)",
+                [],
+            )
+            .is_err(),
+        "a gate has one record per app"
+    );
 }
