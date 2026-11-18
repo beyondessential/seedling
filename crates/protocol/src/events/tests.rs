@@ -184,7 +184,7 @@ fn operation_lifecycle_events_wire_shape() {
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 3, None)
+            .operation(app.clone(), action.clone().into(), "op-1", 3, None)
             .started("operator")),
         json!({
             "type": "OperationStarted",
@@ -198,7 +198,7 @@ fn operation_lifecycle_events_wire_shape() {
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 3, None)
+            .operation(app.clone(), action.clone().into(), "op-1", 3, None)
             .completed()),
         json!({
             "type": "OperationCompleted",
@@ -211,7 +211,7 @@ fn operation_lifecycle_events_wire_shape() {
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 3, None)
+            .operation(app.clone(), action.clone().into(), "op-1", 3, None)
             .failed("container exploded")),
         json!({
             "type": "OperationFailed",
@@ -220,6 +220,58 @@ fn operation_lifecycle_events_wire_shape() {
             "operation_id": "op-1",
             "operation_generation": 3,
             "error": "container exploded",
+        })
+    );
+}
+
+// spec: EVT#operation-events
+#[test]
+fn a_gate_runs_events_carry_the_gate_and_no_action() {
+    let app = app();
+    let gate = GateName::new("migrate").unwrap();
+
+    assert_eq!(
+        shape(|tx| tx
+            .operation(app.clone(), gate.clone().into(), "op-2", 4, None)
+            .started("gate")),
+        json!({
+            "type": "OperationStarted",
+            "app": "web",
+            "gate": "migrate",
+            "operation_id": "op-2",
+            "operation_generation": 4,
+            "trigger": "gate",
+        })
+    );
+
+    assert_eq!(
+        shape(|tx| tx
+            .operation(app.clone(), gate.clone().into(), "op-2", 4, None)
+            .cancelled()),
+        json!({
+            "type": "OperationCancelled",
+            "app": "web",
+            "gate": "migrate",
+            "operation_id": "op-2",
+            "operation_generation": 4,
+        })
+    );
+}
+
+// spec: EVT#app-events
+#[test]
+fn gate_state_changed_wire_shape() {
+    let app = app();
+    let gate = GateName::new("migrate").unwrap();
+
+    assert_eq!(
+        shape(|tx| tx.gate_state_changed(&app, &gate, "satisfied", "running", None)),
+        json!({
+            "type": "GateStateChanged",
+            "app": "web",
+            "gate": "migrate",
+            "state": "satisfied",
+            "previous_state": "running",
         })
     );
 }
@@ -886,7 +938,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.app_phase_changed(&app, "installed");
     sender.scale(app.clone(), "srv", 0, 4).changed(2, Some(1));
     sender
-        .operation(app.clone(), action.clone(), "op-1", 1)
+        .operation(app.clone(), action.clone().into(), "op-1", 1)
         .started("operator");
     sender.params_changed(
         &app,
@@ -897,6 +949,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.deployment_restarted(&app, "srv", "op-2");
     sender.resource_stopped(&app, "deployment", "srv");
     sender.resource_unstopped(&app, "deployment", "srv");
+    sender.gate_state_changed(&app, &GateName::new("migrate").unwrap(), "satisfied", "running");
     sender.held_volume_created(held, &app, "data", "uninstall");
     sender.held_volume_deleted(held);
     sender.held_volume_restored(held, "recovered");
@@ -972,5 +1025,5 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
         );
         count += 1;
     }
-    assert_eq!(count, 42, "every delegate emitted exactly one event");
+    assert_eq!(count, 43, "every delegate emitted exactly one event");
 }

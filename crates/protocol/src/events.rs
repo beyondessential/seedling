@@ -8,8 +8,8 @@ use crate::{
     actor::Actor,
     names::{
         ActionName, AppName, AppServiceName, ExternalServiceName, ExternalVolumeName, ForwardId,
-        HeldVolumeId, OfferId, ParamName, ServiceRef, SessionId, ShellName, SiteIngressName,
-        TemplateName, VolumeRef,
+        GateName, HeldVolumeId, OfferId, ParamName, ServiceRef, SessionId, ShellName,
+        SiteIngressName, TemplateName, VolumeRef,
     },
 };
 
@@ -45,6 +45,59 @@ impl ParamChangeEntry {
             new_value: None,
             redacted: true,
         }
+    }
+}
+
+/// What a lifecycle operation runs: an action's closure, or a gate run.
+// spec: EVT#operation-events
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperationTarget {
+    Action(ActionName),
+    Gate(GateName),
+}
+
+impl OperationTarget {
+    pub fn action(&self) -> Option<&ActionName> {
+        match self {
+            Self::Action(action) => Some(action),
+            Self::Gate(_) => None,
+        }
+    }
+
+    pub fn gate(&self) -> Option<&GateName> {
+        match self {
+            Self::Action(_) => None,
+            Self::Gate(gate) => Some(gate),
+        }
+    }
+
+    /// The action's or gate's name, for a log line or a label.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Action(action) => action.as_str(),
+            Self::Gate(gate) => gate.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for OperationTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Action(action) => write!(f, "{action}"),
+            Self::Gate(gate) => write!(f, "gate {gate}"),
+        }
+    }
+}
+
+impl From<ActionName> for OperationTarget {
+    fn from(action: ActionName) -> Self {
+        Self::Action(action)
+    }
+}
+
+impl From<GateName> for OperationTarget {
+    fn from(gate: GateName) -> Self {
+        Self::Gate(gate)
     }
 }
 
@@ -109,7 +162,10 @@ pub enum OiEvent {
     OperationStarted {
         timestamp: Timestamp,
         app: AppName,
-        action_name: ActionName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action_name: Option<ActionName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateName>,
         operation_id: String,
         operation_generation: u64,
         trigger: String,
@@ -120,7 +176,10 @@ pub enum OiEvent {
     OperationCompleted {
         timestamp: Timestamp,
         app: AppName,
-        action_name: ActionName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action_name: Option<ActionName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateName>,
         operation_id: String,
         operation_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,7 +189,10 @@ pub enum OiEvent {
     OperationFailed {
         timestamp: Timestamp,
         app: AppName,
-        action_name: ActionName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action_name: Option<ActionName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateName>,
         operation_id: String,
         operation_generation: u64,
         error: String,
@@ -141,7 +203,10 @@ pub enum OiEvent {
     OperationCancelled {
         timestamp: Timestamp,
         app: AppName,
-        action_name: ActionName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action_name: Option<ActionName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateName>,
         operation_id: String,
         operation_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -286,6 +351,16 @@ pub enum OiEvent {
         app: AppName,
         kind: String,
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // spec: EVT#app-events
+    GateStateChanged {
+        timestamp: Timestamp,
+        app: AppName,
+        gate: GateName,
+        state: String,
+        previous_state: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -1377,6 +1452,25 @@ impl EventSender {
         });
     }
 
+    // spec: EVT#app-events
+    pub fn gate_state_changed(
+        &self,
+        app: &AppName,
+        gate: &GateName,
+        state: &str,
+        previous_state: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::GateStateChanged {
+            timestamp: now(),
+            app: app.clone(),
+            gate: gate.clone(),
+            state: state.to_owned(),
+            previous_state: previous_state.to_owned(),
+            actor,
+        });
+    }
+
     // spec: CTL#resource-stop
     pub fn resource_unstopped(
         &self,
@@ -1400,7 +1494,7 @@ impl EventSender {
     pub fn operation(
         &self,
         app: AppName,
-        action_name: ActionName,
+        target: OperationTarget,
         operation_id: impl Into<String>,
         operation_generation: u64,
         actor: Option<Arc<Actor>>,
@@ -1408,7 +1502,7 @@ impl EventSender {
         OperationEventCtx {
             tx: self.clone(),
             app,
-            action_name,
+            target,
             operation_id: operation_id.into(),
             operation_generation,
             actor,
@@ -1581,13 +1675,13 @@ impl EventSenderWithActor {
     pub fn operation(
         &self,
         app: AppName,
-        action_name: ActionName,
+        target: OperationTarget,
         operation_id: impl Into<String>,
         operation_generation: u64,
     ) -> OperationEventCtx {
         self.inner.operation(
             app,
-            action_name,
+            target,
             operation_id,
             operation_generation,
             Some(Arc::clone(&self.actor)),
@@ -1631,6 +1725,12 @@ impl EventSenderWithActor {
     pub fn resource_unstopped(&self, app: &AppName, kind: &str, name: &str) {
         self.inner
             .resource_unstopped(app, kind, name, Some(Arc::clone(&self.actor)));
+    }
+
+    // spec: EVT#app-events
+    pub fn gate_state_changed(&self, app: &AppName, gate: &GateName, state: &str, previous: &str) {
+        self.inner
+            .gate_state_changed(app, gate, state, previous, Some(Arc::clone(&self.actor)));
     }
 
     // spec: ACTU#held-volumes
@@ -1941,7 +2041,7 @@ impl EventSenderWithActor {
 pub struct OperationEventCtx {
     tx: EventSender,
     pub app: AppName,
-    pub action_name: ActionName,
+    pub target: OperationTarget,
     pub operation_id: String,
     pub operation_generation: u64,
     actor: Option<Arc<Actor>>,
@@ -1952,7 +2052,8 @@ impl OperationEventCtx {
         self.tx.emit(OiEvent::OperationStarted {
             timestamp: now(),
             app: self.app.clone(),
-            action_name: self.action_name.clone(),
+            action_name: self.target.action().cloned(),
+            gate: self.target.gate().cloned(),
             operation_id: self.operation_id.clone(),
             operation_generation: self.operation_generation,
             trigger: trigger.to_owned(),
@@ -1964,7 +2065,8 @@ impl OperationEventCtx {
         self.tx.emit(OiEvent::OperationCompleted {
             timestamp: now(),
             app: self.app.clone(),
-            action_name: self.action_name.clone(),
+            action_name: self.target.action().cloned(),
+            gate: self.target.gate().cloned(),
             operation_id: self.operation_id.clone(),
             operation_generation: self.operation_generation,
             actor: self.actor.clone(),
@@ -1976,7 +2078,8 @@ impl OperationEventCtx {
         self.tx.emit(OiEvent::OperationCancelled {
             timestamp: now(),
             app: self.app.clone(),
-            action_name: self.action_name.clone(),
+            action_name: self.target.action().cloned(),
+            gate: self.target.gate().cloned(),
             operation_id: self.operation_id.clone(),
             operation_generation: self.operation_generation,
             actor: self.actor.clone(),
@@ -1987,7 +2090,8 @@ impl OperationEventCtx {
         self.tx.emit(OiEvent::OperationFailed {
             timestamp: now(),
             app: self.app.clone(),
-            action_name: self.action_name.clone(),
+            action_name: self.target.action().cloned(),
+            gate: self.target.gate().cloned(),
             operation_id: self.operation_id.clone(),
             operation_generation: self.operation_generation,
             error: error.to_owned(),
