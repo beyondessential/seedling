@@ -16,11 +16,6 @@ A named string value that an operator may store for an app, declared by the app'
 
 The value an operator has stored for a parameter, where there is one.
 
-### Effective value
-
-The value [`param.value()`](#values) returns for a parameter: its stored value, or else its declared default.
-A parameter with neither has no effective value.
-
 ## Declaration
 
 `app.param(name: string)` MUST return a `Param` for the parameter `name`.
@@ -69,18 +64,14 @@ The runtime MUST protect a secret parameter's value as [secret storage](../runti
 `on_change` MUST throw when called in the action context.
 Calling `on_change` a second time for the same parameter MUST throw.
 
-While the app is `Installed`, the runtime MUST invoke the change handler as a [lifecycle operation](../overview.md#lifecycle-operation) whenever a change to the app moves the parameter's effective value.
-A change moves the effective value when the parameter has an effective value on only one side of the change, or has one on both sides and the two differ.
-The effective value before a change is the one the previous generation's definition gives at the previous values, and the effective value after it is the one the new generation's definition gives at the new values.
+While the app is `Installed`, the runtime MUST invoke the change handler as a [lifecycle operation](../overview.md#lifecycle-operation) whenever the parameter's stored value changes in one of these ways:
 
-A parameter set, a parameter unset and a [definition update](../interface/apps.md#update) can each move a parameter's effective value, including the value of a parameter other than the one the change names, through its default.
-The runtime MUST NOT invoke the handler for a change that leaves the parameter's effective value as it was, whether or not the change stores or removes a value.
+- the parameter had no stored value and is given one;
+- the parameter's stored value is replaced by a different value;
+- the parameter's stored value is removed.
+
+Storing the value the parameter already holds is not a change.
 The runtime MUST NOT invoke the handler while the app is in any other [install phase](../overview.md#install-phase).
-The runtime refuses a change that would invoke more than one handler, as [parameter changes](../runtime/operations.md#parameter-changes) specifies.
-
-> [!NOTE]
-> A definition that derives an image from a defaulted parameter changes what it runs when a new definition moves that default, so the handler reacts to the value the definition sees rather than to what the operator stored.
-> A handler tells an operator's value from a default through `is_set()` on `old.param(name)` and `app.param(name)`.
 
 A script MAY pass a closure taking up to two parameters.
 The runtime MUST call `fn` with as many of these arguments as it takes, in this order: the [runtime handle](rt.md#runtime-handle), then an `App` named here `old`.

@@ -51,14 +51,14 @@ Admission for an app that is being uninstalled is governed by [app teardown](app
 | the runtime starts | the [start action](../language/action.md#start-action), for each installed app with no interrupted operation | `boot` | current | current |
 | an install operation completes successfully, or the app moves to `Installed` without an install operation | the start action | `install` | current | current |
 | the runtime starts with an interrupted operation | the interrupted operation, [replayed](#interrupted-operations) | `replay` | as persisted | as persisted |
-| a parameter change | the `on_change` handler of the parameter whose effective value it moves | `param_change` | before the change | produced by the change |
+| a parameter change | the changed parameter's `on_change` handler | `param_change` | before the change | produced by the change |
 | an operator request | the named action, or `install` | `operator` | current | current |
 | a schedule falls due | the [scheduled action](scheduled-actions.md) | `schedule` | current | current |
 
 Until an app's start action ends, its desired state is held as [desired state](reconciliation.md#desired-state) specifies.
 
-The runtime MUST initiate an operation for a change to an app only when the app is installed, and the change [moves the effective value](../language/parameter.md#change-handlers) of a parameter whose handler the change's target generation registers.
-A parameter set, a parameter unset and a definition update are each a parameter change, whether or not the update names a parameter.
+The runtime MUST initiate an operation for a parameter change only when the app is installed, a handler is registered for the parameter, and the change matches one of the handler's [transitions](../language/parameter.md#change-handlers).
+A parameter changed alongside a definition update is a parameter change.
 
 The runtime MUST record the source and target generations of every operation.
 For an operation that a [generation bump](generation.md#generation-numbers) initiated, the runtime MUST record as the source generation the generation current immediately before the bump, and as the target generation the generation the bump produced.
@@ -72,12 +72,7 @@ The runtime MUST NOT run the operation against another generation's state.
 ## Parameter changes
 
 The runtime MUST refuse a parameter change for an app that has an operation in progress or queued, or another change being applied.
-The runtime MUST refuse a change that sets or unsets more than one parameter.
-The runtime MUST refuse a change to an installed app that would move the effective values of more than one parameter whose handler the change's target generation registers.
-
-> [!NOTE]
-> An operator applies such a change in steps.
-> Storing a parameter's current effective value moves nothing, so pinning every parameter but one first lets the change run that one handler, and unsetting each pinned parameter afterwards runs its own.
+The runtime MUST accept a change only if it sets or unsets exactly one parameter, including a change made alongside a definition update.
 
 The runtime MUST make checking that nothing holds the app and admitting the change's handler one decision with respect to admitting any other operation for the app.
 The runtime MUST NOT admit another operation for the app after the change is committed and before its handler is admitted.

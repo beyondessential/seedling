@@ -117,7 +117,6 @@ Wherever a message names a [resource type](../language/overview.md#resource-type
 | `requirements_invalid` | the request cannot be parsed, or its actor or parameters are missing, malformed or out of range; `message` names each offending field |
 | `script_error` | a definition failed to parse or evaluate; `message` gives the error |
 | `validation_failed` | a [parameter validator](params.md#validation) rejected the proposed values; `message` names each rejecting parameter and its reason |
-| `multiple_handlers` | the change would move the effective values of more than one parameter with an `on_change` handler, as [parameter changes](../runtime/operations.md#parameter-changes) specifies; `message` names each such parameter |
 | `bundle_invalid` | a definition bundle breaks the [bundle rules](definitions.md#bundle-rules); `message` names the offending path or field |
 | `unsupported_seedling` | a definition does not [support](definitions.md#seedling-version-support) the running Seedling version |
 | `fetch_failed` | a definition could not be [fetched](definitions.md#fetching), or an image [pulled](images.md#pulling-an-image), from its registry; `message` gives the cause |
