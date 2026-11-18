@@ -29,6 +29,7 @@ mod container;
 mod deployment;
 mod description;
 mod exec;
+mod gate;
 mod ingress;
 mod job;
 mod param;

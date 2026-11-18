@@ -98,6 +98,7 @@ pub mod deployment;
 pub mod enums;
 pub mod export;
 pub mod file;
+pub mod gate;
 pub mod ingress;
 pub mod job;
 pub mod param;
@@ -124,6 +125,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<action::Action>();
     engine.build_type::<deployment::Deployment>();
     engine.build_type::<job::Job>();
+    engine.build_type::<gate::Gate>();
     engine.build_type::<volume::Volume>();
     engine.build_type::<volume::ExternalVolume>();
     engine.build_type::<runtime::RuntimeInstance>();
@@ -148,7 +150,17 @@ pub fn check_evaluated(def: &app::AppDef) -> Result<(), String> {
     ingress::check_redirect_terminations(def)?;
     ingress::check_claim_conflicts(def)?;
     container::check_images_declared(def)?;
-    service::check_route_balances(def)
+    service::check_route_balances(def)?;
+    gate::check_gates(def)
+}
+
+/// Check a definition once its script has evaluated in full: resolve what the
+/// script left to the end of its evaluation, then check the rules it is held
+/// to.
+// spec: BSL#evaluation
+pub fn finish_evaluation(app: &app::App) -> Result<(), String> {
+    gate::resolve_exclusive_selections(app)?;
+    check_evaluated(&app.def.load())
 }
 
 /// The scope a script is evaluated in, holding the constants for the host

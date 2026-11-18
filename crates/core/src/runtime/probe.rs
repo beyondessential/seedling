@@ -100,6 +100,7 @@ pub fn probe_app(
         begin_closure_capture();
         let run_result = engine.run_ast_with_scope(&mut scope, script_ast);
         let captured = end_closure_capture();
+        drop(fresh_app.take_gate_selections());
         run_result.map_err(|e| format!("script evaluation failed: {e}"))?;
         captured
     };

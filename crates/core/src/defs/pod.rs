@@ -1,8 +1,11 @@
 use rhai::{EvalAltResult, TypeBuilder};
 
+use std::collections::BTreeSet;
+
 use super::{
     Freezable, Holder, Port,
     container::ContainerDef,
+    gate::{AfterTarget, after_targets},
     resource::ResourceId,
     service::{BoundService, HttpService, HttpServiceRoute, Service, ServicePort},
 };
@@ -29,6 +32,9 @@ pub struct PodDef {
     pub http_bindings: Vec<HttpBinding>,
     pub tcp_bindings: Vec<TcpUdpBinding>,
     pub udp_bindings: Vec<TcpUdpBinding>,
+    /// The gates and workloads the pod's starts wait on.
+    // spec: GATE#start-order
+    pub after: BTreeSet<AfterTarget>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +84,19 @@ impl PodDef {
                 }
                 pod.service_mounts.push(svc);
                 drop(pod);
+                Ok(this.clone())
+            },
+        );
+
+        // spec: POD#start-order
+        // spec: GATE#start-order
+        builder.with_fn(
+            "after",
+            move |this: &mut T, target: rhai::Dynamic| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                super::app::ensure_not_in_action_closure("after")?;
+                let targets = after_targets(target)?;
+                ext(this).lock().after.extend(targets);
                 Ok(this.clone())
             },
         );

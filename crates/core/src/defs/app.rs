@@ -3,13 +3,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
-use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
+use seedling_protocol::names::{ActionName, AppName, GateName, ParamName, ShellName};
 
 use crate::runtime::definition::Bundle;
 
 use super::{
     Holder,
     action::{ActionDef, ShellDef},
+    collection::Collection,
+    gate::GateDef,
     param_def::ParamDef,
     resource::{Resource, ResourceId, ResourceKind},
 };
@@ -18,6 +20,7 @@ mod action;
 mod collection;
 mod deployment;
 mod file;
+mod gate;
 mod job;
 mod param;
 mod service;
@@ -35,6 +38,8 @@ mod volume;
 pub(crate) struct ClosureCapture {
     pub actions: BTreeMap<ActionName, FnPtr>,
     pub shells: BTreeMap<ShellName, FnPtr>,
+    /// Each declared gate's body, or `None` for a gate declared with none.
+    pub gates: BTreeMap<GateName, Option<FnPtr>>,
 }
 
 thread_local! {
@@ -58,6 +63,21 @@ fn capture_action(name: ActionName, fnptr: FnPtr) {
     CLOSURE_CAPTURE.with(|c| {
         if let Some(ref mut store) = *c.borrow_mut() {
             store.actions.insert(name, fnptr);
+        }
+    });
+}
+
+pub(crate) fn capture_gate(name: GateName, body: Option<FnPtr>) {
+    CLOSURE_CAPTURE.with(|c| {
+        if let Some(ref mut store) = *c.borrow_mut() {
+            match body {
+                Some(body) => {
+                    store.gates.insert(name, Some(body));
+                }
+                None => {
+                    store.gates.entry(name).or_insert(None);
+                }
+            }
         }
     });
 }
@@ -330,6 +350,11 @@ impl Drop for SubActionFrame {
 }
 
 thread_local! {
+    static GATE_SELECTIONS: RefCell<BTreeMap<(usize, GateName), Collection>> =
+        const { RefCell::new(BTreeMap::new()) };
+}
+
+thread_local! {
     static APPDEF_HOLDER: RefCell<Option<Arc<arc_swap::ArcSwap<AppDef>>>> = const { RefCell::new(None) };
 }
 
@@ -379,6 +404,10 @@ pub struct AppDef {
     /// Names of parameters that have a validator attached.
     // spec: PARAM#validators
     pub validators: BTreeSet<ParamName>,
+    /// Gates declared by the BSL script via `app.gate()`, with what they
+    /// declare. Their bodies are recovered from the capture buffer.
+    // spec: GATE#declaration
+    pub gates: BTreeMap<GateName, GateDef>,
 }
 
 fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAltResult>> {
@@ -424,6 +453,31 @@ impl App {
             stored: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
             bundle,
         }
+    }
+
+    /// Hold the selection the script gave gate `name`, to be resolved once its
+    /// evaluation completes.
+    ///
+    /// A selection is not `Send`, so it stays on the evaluating thread rather
+    /// than in the definition. It holds the `App` it was made from, so it is
+    /// released with [`App::take_gate_selections`] when the evaluation ends,
+    /// whether or not it succeeded.
+    // spec: GATE#exclusive-selection
+    pub(crate) fn hold_gate_selection(&self, name: GateName, selection: Collection) {
+        let key = (Arc::as_ptr(&self.def) as usize, name);
+        GATE_SELECTIONS.with(|s| s.borrow_mut().insert(key, selection));
+    }
+
+    /// Take the selections the script gave this app's gates, leaving none.
+    pub(crate) fn take_gate_selections(&self) -> BTreeMap<GateName, Collection> {
+        let app = Arc::as_ptr(&self.def) as usize;
+        GATE_SELECTIONS.with(|s| {
+            let mut held = s.borrow_mut();
+            let mine: Vec<_> = held.keys().filter(|(a, _)| *a == app).cloned().collect();
+            mine.into_iter()
+                .filter_map(|key| held.remove(&key).map(|c| (key.1, c)))
+                .collect()
+        })
     }
 }
 
@@ -498,5 +552,6 @@ impl CustomType for App {
         collection::on_app(&mut builder);
         action::on_app(&mut builder);
         shell::on_app(&mut builder);
+        gate::on_app(&mut builder);
     }
 }

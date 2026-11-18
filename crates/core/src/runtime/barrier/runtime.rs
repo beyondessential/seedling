@@ -968,6 +968,13 @@ impl RuntimeInstance {
             return Ok(out);
         }
 
+        // spec: GATE#declaration
+        if resources.is::<crate::defs::gate::Gate>() {
+            return Err(RegistryError::message(
+                "a gate is not a resource, so it is not a selection".to_owned(),
+            ));
+        }
+
         // spec: RT#selections
         // The other resource handles — volumes, external volumes and
         // external services — are selections whose resources a runtime

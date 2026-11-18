@@ -819,10 +819,13 @@ fn run_definition(
     let validators = validate.map(|_| crate::defs::app::end_validator_capture());
     let ast = match ran {
         Ok(ast) => ast,
-        Err(e) => return (app, Err(e)),
+        Err(e) => {
+            drop(app.take_gate_selections());
+            return (app, Err(e));
+        }
     };
     // spec: BSL#evaluation
-    if let Err(e) = crate::defs::check_evaluated(&app.def.load()) {
+    if let Err(e) = crate::defs::finish_evaluation(&app) {
         return (app, Err(ScriptError(e)));
     }
     let (Some(proposed), Some(validators)) = (validate, validators) else {
