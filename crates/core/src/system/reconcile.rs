@@ -6299,22 +6299,14 @@ mod tests {
         let reconciler = test_reconciler(&oi);
         let (apps, _) = reconciler.snapshot_all_apps();
         let app = apps.iter().find(|a| a.name.as_str() == "demo").unwrap();
-        oi.block_on(container.pull_image("docker.io/library/nginx:1.30"))
-            .unwrap();
-        let _ = oi.block_on(pods::observe_and_actuate(
-            &reconciler.observer,
-            &reconciler.actuator,
-            &reconciler.driver,
-            &reconciler.db,
-            &app.desired,
-            app.app_priority,
-            &app.gate_keys,
-            &app.gates,
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-            &HashSet::new(),
-        ));
+        // Nothing is started while the gate is unsatisfied, so each workload's
+        // pod network is recorded here, as a start would record it.
+        for resource in &app.desired.resources {
+            reconciler
+                .actuator
+                .allocate_pod_prefix(&resource.instance)
+                .unwrap();
+        }
 
         let moved = GateKeyDigests::of(
             &{
