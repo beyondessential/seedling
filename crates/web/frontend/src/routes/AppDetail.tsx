@@ -2675,8 +2675,7 @@ export default function AppDetail() {
             >
               Operation in progress:{" "}
               <strong>{data.current_operation.action_name}</strong> (gen{" "}
-              {data.current_operation.source_generation} →{" "}
-              {data.current_operation.target_generation})
+              {data.current_operation.generation})
               {data.current_operation.barrier && (
                 <>
                   {" "}

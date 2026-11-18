@@ -250,8 +250,7 @@ export interface AppAction {
 
 export interface CurrentOperation {
   action_name: string;
-  source_generation: number;
-  target_generation: number;
+  generation: number;
   barrier: {
     resources: string[];
     required_state: string;
@@ -391,8 +390,7 @@ export interface SeedlingEvent {
   // OperationStarted / OperationCompleted / OperationFailed / OperationCancelled
   action_name?: string;
   operation_id?: string;
-  source_generation?: number;
-  target_generation?: number;
+  operation_generation?: number;
   trigger?: string;
   error?: string;
   // FaultFiled / FaultCleared

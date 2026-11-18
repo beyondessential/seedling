@@ -92,8 +92,7 @@ describe("AppDetail page", () => {
       status: "operating",
       current_operation: {
         action_name: "backup",
-        source_generation: 4,
-        target_generation: 5,
+        generation: 5,
         barrier: {
           resources: ["web"],
           required_state: "ready",
