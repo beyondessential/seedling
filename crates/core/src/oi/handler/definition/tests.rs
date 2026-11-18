@@ -306,7 +306,7 @@ fn a_refused_update_stores_nothing_and_leaves_faults_alone() {
     .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "mode", "value": "broken" }),
+        json!({ "app": "web", "params": { "mode": "broken" } }),
     )
     .unwrap();
     assert_eq!(faults_of(&oi, "web"), vec!["script_error"]);
@@ -353,7 +353,7 @@ fn a_refused_update_stores_nothing_and_leaves_faults_alone() {
     assert!(faults_of(&oi, "web").is_empty());
 }
 
-// spec: PRM#parameter-set
+// spec: PRM#parameter-changes
 // spec: PARAM#validators
 // spec: PRM#validation
 #[test]
@@ -365,7 +365,7 @@ fn a_param_set_the_validator_rejects_is_refused() {
     let (code, message) = oi
         .call(
             "/apps/params/set",
-            json!({ "app": "web", "name": "version", "value": "v2.11" }),
+            json!({ "app": "web", "params": { "version": "v2.11" } }),
         )
         .unwrap_err();
     assert_eq!(code, "validation_failed");
@@ -386,7 +386,7 @@ fn a_param_set_the_validator_rejects_is_refused() {
 
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "version", "value": "v2.12" }),
+        json!({ "app": "web", "params": { "version": "v2.12" } }),
     )
     .unwrap();
 }
@@ -404,7 +404,7 @@ fn a_validator_that_errors_by_accident_rejects() {
     .unwrap();
     let code = err_code(oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "knob", "value": "1" }),
+        json!({ "app": "web", "params": { "knob": "1" } }),
     ));
     assert_eq!(code, "validation_failed");
 }
@@ -418,7 +418,7 @@ fn an_unset_param_passes_and_registration_runs_no_validators() {
         .expect("registration with `version` unset succeeds");
 }
 
-// spec: PRM#parameter-unset
+// spec: PRM#parameter-changes
 // spec: PRM#validation
 #[test]
 fn an_unset_another_validator_rejects_is_refused() {
@@ -435,15 +435,18 @@ fn an_unset_another_validator_rejects_is_refused() {
     .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "tls", "value": "on" }),
+        json!({ "app": "web", "params": { "tls": "on" } }),
     )
     .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "port", "value": "443" }),
+        json!({ "app": "web", "params": { "port": "443" } }),
     )
     .unwrap();
-    let code = err_code(oi.call("/apps/params/unset", json!({ "app": "web", "name": "tls" })));
+    let code = err_code(oi.call(
+        "/apps/params/set",
+        json!({ "app": "web", "params": { "tls": null } }),
+    ));
     assert_eq!(code, "validation_failed");
 }
 
@@ -454,7 +457,7 @@ const FALLBACK_SCRIPT: &str = r#"
 "#;
 
 // spec: PRM#validation
-// spec: PRM#parameter-set
+// spec: PRM#parameter-changes
 #[test]
 fn a_failing_evaluation_falls_back_to_the_last_good_validators() {
     let oi = TestOi::new();
@@ -467,7 +470,7 @@ fn a_failing_evaluation_falls_back_to_the_last_good_validators() {
     let result = oi
         .call(
             "/apps/params/set",
-            json!({ "app": "web", "name": "mode", "value": "odd" }),
+            json!({ "app": "web", "params": { "mode": "odd" } }),
         )
         .unwrap();
     assert!(result["generation"].as_u64().unwrap() > 1);
@@ -475,7 +478,7 @@ fn a_failing_evaluation_falls_back_to_the_last_good_validators() {
     // Fails to evaluate and fails the last good validators: refused.
     let code = err_code(oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "mode", "value": "forbidden" }),
+        json!({ "app": "web", "params": { "mode": "forbidden" } }),
     ));
     assert_eq!(code, "validation_failed");
 }
@@ -497,12 +500,12 @@ fn a_conditional_validator_is_found_under_the_proposed_values() {
     .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "name", "value": "lengthy" }),
+        json!({ "app": "web", "params": { "name": "lengthy" } }),
     )
     .unwrap();
     let code = err_code(oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "strict", "value": "yes" }),
+        json!({ "app": "web", "params": { "strict": "yes" } }),
     ));
     assert_eq!(code, "validation_failed");
 }
@@ -521,7 +524,7 @@ fn a_validator_defining_a_resource_rejects() {
     let (code, message) = oi
         .call(
             "/apps/params/set",
-            json!({ "app": "web", "name": "knob", "value": "1" }),
+            json!({ "app": "web", "params": { "knob": "1" } }),
         )
         .unwrap_err();
     assert_eq!(code, "validation_failed");
@@ -539,7 +542,7 @@ fn a_regime_change_is_one_atomic_definition_and_param_update() {
         .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "version", "value": "v2.11" }),
+        json!({ "app": "web", "params": { "version": "v2.11" } }),
     )
     .unwrap();
     oi.install("web");
@@ -555,12 +558,15 @@ fn a_regime_change_is_one_atomic_definition_and_param_update() {
     let result = oi
         .call(
             "/apps/update",
-            json!({ "app": "web", "script": DEF_B, "param": { "name": "version", "value": "v2.12" } }),
+            json!({ "app": "web", "script": DEF_B, "params": { "version": "v2.12" } }),
         )
         .unwrap();
     let generation = result["generation"].as_u64().unwrap();
     assert_eq!(generation, before + 1);
-    assert_eq!(result["schedule"], "accepted");
+    assert!(
+        oi.state.scheduler.lock().active().is_some(),
+        "the handler was admitted"
+    );
 
     // `old` for the handler is the previous generation: A at v2.11; the
     // target is B at v2.12.
@@ -590,9 +596,10 @@ fn a_regime_change_is_one_atomic_definition_and_param_update() {
         .unwrap();
     let entry = &history[0];
     assert_eq!(entry["kind"], "script_update");
-    assert_eq!(entry["param_name"], "version");
-    assert_eq!(entry["previous_value"], "v2.11");
-    assert_eq!(entry["new_value"], "v2.12");
+    assert_eq!(
+        entry["params"],
+        json!([{ "name": "version", "previous_value": "v2.11", "new_value": "v2.12" }])
+    );
     assert_eq!(entry["definition"]["kind"], "pushed");
 }
 
@@ -604,12 +611,12 @@ fn another_validator_sees_the_proposed_values_during_an_atomic_update() {
         .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "version", "value": "v2.11" }),
+        json!({ "app": "web", "params": { "version": "v2.11" } }),
     )
     .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "database", "value": "pg16" }),
+        json!({ "app": "web", "params": { "database": "pg16" } }),
     )
     .unwrap();
     let def = r#"
@@ -620,7 +627,7 @@ fn another_validator_sees_the_proposed_values_during_an_atomic_update() {
     "#;
     oi.call(
         "/apps/update",
-        json!({ "app": "web", "script": def, "param": { "name": "version", "value": "v2.12" } }),
+        json!({ "app": "web", "script": def, "params": { "version": "v2.12" } }),
     )
     .expect("the database validator sees the proposed v2.12");
 }
@@ -635,7 +642,8 @@ fn a_definition_update_without_a_param_change_schedules_nothing() {
     let result = oi
         .call("/apps/update", json!({ "app": "web", "script": DEF_B }))
         .unwrap();
-    assert_eq!(result["schedule"], "not_scheduled");
+    assert!(result["generation"].is_u64());
+    assert!(oi.state.scheduler.lock().active().is_none());
 }
 
 // spec: DEFN#provenance-reporting
@@ -738,7 +746,7 @@ fn the_plan_reports_validator_rejections_for_a_proposed_definition() {
         .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "version", "value": "v2.11" }),
+        json!({ "app": "web", "params": { "version": "v2.11" } }),
     )
     .unwrap();
     oi.install("web");
@@ -756,7 +764,7 @@ fn the_plan_reports_validator_rejections_for_a_proposed_definition() {
             json!({
                 "app": "web",
                 "proposed_reference": format!("{REPO}:b"),
-                "proposed_params": [{ "name": "version", "value": "v2.12" }],
+                "proposed_params": { "version": "v2.12" },
             }),
         )
         .unwrap();
@@ -777,7 +785,7 @@ fn the_plan_lists_no_handler_for_an_app_that_is_not_installed_or_a_value_that_do
         .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "web", "name": "version", "value": "v2.12" }),
+        json!({ "app": "web", "params": { "version": "v2.12" } }),
     )
     .unwrap();
     publish(&oi, "b", &[("app.seed.rhai", DEF_B.as_bytes())]);
@@ -787,7 +795,7 @@ fn the_plan_lists_no_handler_for_an_app_that_is_not_installed_or_a_value_that_do
             json!({
                 "app": "web",
                 "proposed_reference": format!("{REPO}:b"),
-                "proposed_params": [{ "name": "version", "value": value }],
+                "proposed_params": { "version": value },
             }),
         )
         .unwrap()["on_change_would_fire"]
@@ -872,7 +880,7 @@ fn a_secret_changed_alongside_a_definition_is_redacted_in_history() {
         .unwrap();
     oi.call(
         "/apps/update",
-        json!({ "app": "web", "script": def, "param": { "name": "api-key", "value": "hunter22" } }),
+        json!({ "app": "web", "script": def, "params": { "api-key": "hunter22" } }),
     )
     .unwrap();
     let history = oi
@@ -880,8 +888,10 @@ fn a_secret_changed_alongside_a_definition_is_redacted_in_history() {
         .unwrap();
     let entry = &history[0];
     assert_eq!(entry["kind"], "script_update");
-    assert_eq!(entry["param_name"], "api-key");
-    assert_eq!(entry["redacted"], true);
+    assert_eq!(
+        entry["params"],
+        json!([{ "name": "api-key", "redacted": true }])
+    );
     assert!(!history.to_string().contains("hunter22"));
 }
 
@@ -954,7 +964,7 @@ fn app_updated_carries_the_provenance_and_the_param_change() {
     let mut rx = oi.state.event_tx.subscribe();
     oi.call(
         "/apps/update",
-        json!({ "app": "web", "script": DEF_A, "param": { "name": "version", "value": "v3" } }),
+        json!({ "app": "web", "script": DEF_A, "params": { "version": "v3" } }),
     )
     .unwrap();
     let event = loop {
@@ -965,7 +975,8 @@ fn app_updated_carries_the_provenance_and_the_param_change() {
         }
     };
     assert_eq!(event["definition"]["kind"], "pushed");
-    assert_eq!(event["name"], "version");
-    assert_eq!(event["previous_value"], Value::Null);
-    assert_eq!(event["new_value"], "v3");
+    assert_eq!(
+        event["changes"],
+        json!([{ "name": "version", "new_value": "v3" }])
+    );
 }

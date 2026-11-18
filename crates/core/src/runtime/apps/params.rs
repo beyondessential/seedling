@@ -25,7 +25,7 @@ pub fn load_params_for_app(
 }
 
 // spec: PRM#parameter-storage
-// spec: PRM#parameter-set
+// spec: PRM#parameter-changes
 pub fn upsert_param(
     db: &Db,
     app_name: &AppName,
@@ -47,7 +47,7 @@ pub fn delete_app_params(db: &Db, app_name: &AppName) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// spec: PRM#parameter-unset
+// spec: PRM#parameter-changes
 pub fn delete_one_param(
     db: &Db,
     app_name: &AppName,

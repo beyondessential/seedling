@@ -35,7 +35,7 @@ rfc2047-decoder = "1.1.2"
 rustls = "0.23.46"
 rustls-pki-types = "1.16.0"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = { version = "1.0.154", features = ["preserve_order"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "raw_value"] }
 sha2 = "0.11.1"
 snafu = "0.9.2"
 subtle = "2.6.1"

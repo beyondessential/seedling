@@ -772,12 +772,11 @@ fn fire(s: &Arc<Mutex<Scheduler>>, name: &str) -> ScheduleResult {
     )
 }
 
-// spec: OPS#parameter-changes
-// A param change checked that the app was free, committed, and then admitted
-// its handler. A scheduled firing admitted in between had the handler
-// refused after the value was already stored.
+// spec: OPS#changes-to-an-app
+// A change commits while it holds the app, so an operation admitted in
+// between would run against a generation the change is about to replace.
 #[test]
-fn a_held_app_admits_nothing_until_its_handler_takes_the_hold_s_place() {
+fn a_held_app_admits_nothing_until_the_hold_ends() {
     let s = shared();
     let hold = AppHold::take(&s, &app("app1")).expect("a free app can be held");
     assert_eq!(s.lock().blocker_for(&app("app1")), Some(AppBlocker::Change));
@@ -792,20 +791,11 @@ fn a_held_app_admits_nothing_until_its_handler_takes_the_hold_s_place() {
     );
     s.lock().complete_current();
 
-    let (result, op) = hold.admit(
-        &act("apikey"),
-        1,
-        2,
-        "param_change",
-        &phase(AppPhase::Installed),
-        None,
-    );
-    assert_eq!(result, ScheduleResult::Accepted);
-    assert_eq!(op, s.lock().active().map(|a| a.operation_id.clone()));
-    assert_eq!(s.lock().active().unwrap().action, act("apikey"));
+    drop(hold);
+    assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
 }
 
-// spec: OPS#parameter-changes
+// spec: OPS#changes-to-an-app
 #[test]
 fn a_handler_queued_in_the_hold_s_place_reports_its_id() {
     let s = shared();
@@ -830,26 +820,36 @@ fn a_handler_queued_in_the_hold_s_place_reports_its_id() {
     assert!(op.is_some());
 }
 
-// spec: OPS#parameter-changes
+// spec: OPS#changes-to-an-app
 #[test]
-fn an_app_with_an_operation_or_a_hold_cannot_be_held() {
+fn an_app_with_an_operation_can_be_held_but_not_by_two_changes() {
     let s = shared();
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
+    let hold = AppHold::take(&s, &app("app1")).expect("an operation does not refuse a change");
     assert_eq!(
-        AppHold::take(&s, &app("app1")).err(),
-        Some(AppBlocker::Active(act("nightly")))
+        s.lock().active().map(|a| a.action.clone()),
+        Some(act("nightly")),
+        "the operation goes on"
     );
-    s.lock().complete_current();
-
-    let _hold = AppHold::take(&s, &app("app1")).expect("free again");
     assert_eq!(
         AppHold::take(&s, &app("app1")).err(),
         Some(AppBlocker::Change),
         "one change at a time"
     );
+    drop(hold);
+    let _again = AppHold::take(&s, &app("app1")).expect("free again");
 }
 
-// spec: OPS#parameter-changes
+// spec: OPS#changes-to-an-app
+#[test]
+fn a_queued_operation_does_not_refuse_a_change() {
+    let s = shared();
+    assert_eq!(fire(&s, "app2"), ScheduleResult::Accepted);
+    assert_eq!(fire(&s, "app1"), ScheduleResult::Queued);
+    let _hold = AppHold::take(&s, &app("app1")).expect("a queued operation does not refuse");
+}
+
+// spec: OPS#changes-to-an-app
 #[test]
 fn a_dropped_hold_frees_the_app() {
     let s = shared();
@@ -858,7 +858,7 @@ fn a_dropped_hold_frees_the_app() {
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
 }
 
-// spec: OPS#parameter-changes
+// spec: OPS#changes-to-an-app
 #[test]
 fn a_refused_handler_frees_the_app() {
     let s = shared();

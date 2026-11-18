@@ -113,7 +113,7 @@ pub enum AppBlocker {
     Active(ActionName),
     /// The named action is queued behind another app's operation.
     Queued(ActionName),
-    /// A change to the app is being committed; see [`AppHold`].
+    /// A change to the app is being applied; see [`AppHold`].
     Change,
 }
 
@@ -210,22 +210,19 @@ impl Scheduler {
         self.held.contains(app).then_some(AppBlocker::Change)
     }
 
-    // spec: OPS#parameter-changes
-    /// Hold `app` against every admission while a change to it is committed.
+    // spec: OPS#changes-to-an-app
+    /// Hold `app` against operation admission while a change to it is
+    /// applied.
     ///
-    /// A parameter or definition change checks that nothing runs for the app,
-    /// commits, and only then admits its `on_change` handler. An operation
-    /// admitted in between would have the handler refused after the change
-    /// was committed, so the hold stands in for an operation from the check
-    /// until the handler is admitted in its place. Refused with whatever
-    /// holds the app already.
+    /// Changes to an app apply one at a time, so a change is refused while
+    /// another holds the app. An operation already running or queued for the
+    /// app does not refuse it: that operation goes on against its own
+    /// generation.
     fn hold(&mut self, app: &AppName) -> Result<(), AppBlocker> {
-        match self.blocker_for(app) {
-            Some(blocker) => Err(blocker),
-            None => {
-                self.held.insert(app.clone());
-                Ok(())
-            }
+        if self.held.insert(app.clone()) {
+            Ok(())
+        } else {
+            Err(AppBlocker::Change)
         }
     }
 

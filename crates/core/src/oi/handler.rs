@@ -95,6 +95,19 @@ fn parse_params<T: DeserializeOwned>(params: Value) -> Result<T, OiError> {
     })
 }
 
+/// [`parse_params`] from the request's own text, for the methods that carry
+/// an object whose members must not repeat a name.
+fn parse_raw_params<T: DeserializeOwned>(
+    params: &serde_json::value::RawValue,
+) -> Result<T, OiError> {
+    serde_json::from_str(params.get()).map_err(|e| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("invalid params: {e}"),
+        )
+    })
+}
+
 // `Option<Option<T>>` distinguishes "field absent" from "field present
 // but null". serde-json's default Option deserialiser collapses both
 // into None, which would make it impossible to clear a value via the
@@ -178,15 +191,31 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
     struct Request {
         method: String,
         #[serde(default)]
-        params: Value,
+        params: Box<serde_json::value::RawValue>,
     }
     // spec: WIRE#control-requests
-    let req: Request = serde_json::from_slice(buf).map_err(|e| {
+    let raw: Request = serde_json::from_slice(buf).map_err(|e| {
         OiError::new(
             ErrorCode::RequirementsInvalid,
             format!("invalid request: {e}"),
         )
     })?;
+    // The request's own text stays beside its value for the methods that must
+    // tell two members of one name apart, which the value no longer can.
+    let raw_params = raw.params;
+    struct ParsedRequest {
+        method: String,
+        params: Value,
+    }
+    let req = ParsedRequest {
+        method: raw.method,
+        params: serde_json::from_str(raw_params.get()).map_err(|e| {
+            OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("invalid request: {e}"),
+            )
+        })?,
+    };
 
     let result = match req.method.as_str() {
         // spec: STS#liveness
@@ -200,7 +229,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/apps/create" => apps::register_app(state, parse_params(req.params)?, ctx),
         "/apps/remove" => apps::deregister_app(state, parse_params(req.params)?, ctx),
         "/apps/uninstall" => apps::uninstall_app(state, parse_params(req.params)?),
-        "/apps/update" => apps::update_app(state, parse_params(req.params)?, ctx),
+        "/apps/update" => apps::update_app(state, parse_raw_params(&raw_params)?, ctx),
         // spec: CTL#scaling
         "/apps/scale" => apps::scale_app(state, parse_params(req.params)?, ctx),
         // spec: CTL#app-priority
@@ -220,11 +249,9 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         // spec: APPS#generation-history
         "/apps/generations" => apps::list_generations(state, parse_params(req.params)?),
         // spec: PRM#change-planning
-        "/apps/plan" => apps::dry_run_plan(state, parse_params(req.params)?, ctx),
-        // spec: PRM#parameter-set
-        "/apps/params/set" => params::set_param(state, parse_params(req.params)?, ctx),
-        // spec: PRM#parameter-unset
-        "/apps/params/unset" => params::unset_param(state, parse_params(req.params)?, ctx),
+        "/apps/plan" => apps::dry_run_plan(state, parse_raw_params(&raw_params)?, ctx),
+        // spec: PRM#parameter-changes
+        "/apps/params/set" => params::set_params(state, parse_raw_params(&raw_params)?, ctx),
         // spec: ACI#invoking-an-action
         "/apps/action/invoke" => actions::invoke_action(state, parse_params(req.params)?, ctx),
         // spec: ACI#cancellation

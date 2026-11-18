@@ -672,13 +672,13 @@ fn script_at_param_change_generation_resolves_to_most_recent_script() {
     generations::bump_param_change(
         &db,
         &app("myapp"),
-        &generations::ParamChange {
+        &[generations::ParamChange {
             name: &site,
             previous: None,
             new_value: Some("prod"),
             is_secret: false,
             previous_is_secret: false,
-        },
+        }],
         &cipher,
     )
     .expect("param bump");

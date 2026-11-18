@@ -35,6 +35,7 @@ use super::{
         scale_bounds_of, shell_entry_json,
     },
     definition::{self, DefinitionInput, Resolved},
+    params::ParamChanges,
 };
 
 #[derive(Deserialize)]
@@ -49,23 +50,15 @@ pub(crate) struct CreateParams {
     pub definition: DefinitionInput,
 }
 
-/// One parameter change made alongside a definition update.
-// spec: APPS#update
-#[derive(Deserialize)]
-pub(crate) struct ParamUpdate {
-    pub name: ParamName,
-    /// `None` unsets the parameter.
-    #[serde(default)]
-    pub value: Option<String>,
-}
-
 #[derive(Deserialize)]
 pub(crate) struct UpdateParams {
     pub app: AppName,
     #[serde(flatten)]
     pub definition: DefinitionInput,
+    /// Parameter changes made alongside the definition.
+    // spec: APPS#update
     #[serde(default)]
-    pub param: Option<ParamUpdate>,
+    pub params: Option<ParamChanges>,
 }
 
 #[derive(Deserialize)]
@@ -84,13 +77,6 @@ pub(crate) struct ListGenerationsParams {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ProposedParam {
-    pub name: String,
-    /// `Some(s)` to model setting; `None` to model unsetting.
-    pub value: Option<String>,
-}
-
-#[derive(Deserialize)]
 pub(crate) struct PlanParams {
     pub app: AppName,
     #[serde(default)]
@@ -100,7 +86,7 @@ pub(crate) struct PlanParams {
     #[serde(default)]
     pub proposed_reference: Option<String>,
     #[serde(default)]
-    pub proposed_params: Option<Vec<ProposedParam>>,
+    pub proposed_params: Option<ParamChanges>,
 }
 
 #[derive(Deserialize)]
@@ -1175,31 +1161,34 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
             if let Some(definition) = definitions.get(&e.generation) {
                 obj.insert("definition".into(), definition.clone());
             }
-            if let Some(name) = &e.param_name {
-                obj.insert("param_name".into(), json!(name));
-            }
-            if e.param_name.is_some() {
+            if !e.params.is_empty() {
                 // spec: APPS#generation-history
                 // spec: SEC#redaction
-                let is_secret = e
-                    .param_name
-                    .as_deref()
-                    .and_then(|n| live_params_schema.get(n))
-                    .map(|d| d.is_secret())
-                    .unwrap_or(false);
-                let redacted = is_secret || e.previous_value_redacted || e.new_value_redacted;
-                if redacted {
-                    obj.insert("redacted".into(), json!(true));
-                } else {
-                    obj.insert(
-                        "previous_value".into(),
-                        e.previous_value.map_or(Value::Null, Value::String),
-                    );
-                    obj.insert(
-                        "new_value".into(),
-                        e.new_value.map_or(Value::Null, Value::String),
-                    );
-                }
+                let params: Vec<Value> = e
+                    .params
+                    .into_iter()
+                    .map(|p| {
+                        let is_secret = live_params_schema
+                            .get(p.name.as_str())
+                            .is_some_and(|d| d.is_secret());
+                        let mut entry = serde_json::Map::new();
+                        entry.insert("name".into(), json!(p.name));
+                        if is_secret || p.previous_value_redacted || p.new_value_redacted {
+                            entry.insert("redacted".into(), json!(true));
+                        } else {
+                            entry.insert(
+                                "previous_value".into(),
+                                p.previous_value.map_or(Value::Null, Value::String),
+                            );
+                            entry.insert(
+                                "new_value".into(),
+                                p.new_value.map_or(Value::Null, Value::String),
+                            );
+                        }
+                        Value::Object(entry)
+                    })
+                    .collect();
+                obj.insert("params".into(), Value::Array(params));
             }
             obj.insert(
                 "script_changed".into(),
@@ -1281,19 +1270,10 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         .map_err(|e| OiError::internal(format!("db params: {e}")))?;
 
     // Build the proposed param map from current with the proposals overlaid.
-    let mut proposed_param_map = current_params.clone();
-    if let Some(props) = &params.proposed_params {
-        for p in props {
-            match &p.value {
-                Some(v) => {
-                    proposed_param_map.insert(p.name.clone(), v.clone());
-                }
-                None => {
-                    proposed_param_map.remove(&p.name);
-                }
-            }
-        }
-    }
+    let proposed_param_map = match &params.proposed_params {
+        Some(changes) => changes.applied_to(&current_params),
+        None => current_params.clone(),
+    };
 
     let (proposed_app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
@@ -1757,7 +1737,7 @@ pub(crate) fn update_app(
         }
     }
 
-    // Reject if an operation is active or queued for this app, and hold it
+    // Hold the app against other changes until this one is applied, and
     // until the handler for a changed param is admitted.
     let hold = super::params::hold_for_change(state, &params.app)?;
 
@@ -1777,40 +1757,18 @@ pub(crate) fn update_app(
         )
     };
 
-    let name_owned = params.app.clone();
-    let cipher = Arc::clone(&state.cipher);
-    // spec: SEC#generation-history — whether the value being replaced is held in
-    // secret storage is read before anything is written, since this update
-    // may be what stops the definition marking it secret.
-    let changing = params.param.as_ref().map(|p| p.name.clone());
-    let (current_params, previous_is_secret) = state
-        .db
-        .call(move |db| -> rusqlite::Result<_> {
-            let values = crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)?;
-            let stored_secret = match &changing {
-                Some(name) => {
-                    crate::runtime::apps::secret_params::is_stored_secret(db, &name_owned, name)?
-                }
-                None => false,
-            };
-            Ok((values, stored_secret))
-        })
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db params: {e}")))?;
+    let current_params = super::params::load_current_values(state, &params.app)?;
 
-    // spec: OPS#parameter-changes — at most one parameter,
-    // carried in the same step as the definition.
-    let mut proposed = current_params.clone();
-    let change = params.param.and_then(|p| {
-        let previous = current_params.get(p.name.as_str()).cloned();
-        if previous == p.value {
-            return None;
-        }
-        match &p.value {
-            Some(v) => proposed.insert(p.name.as_str().to_owned(), v.clone()),
-            None => proposed.remove(p.name.as_str()),
-        };
-        Some((p.name, previous, p.value))
-    });
+    // spec: APPS#update — the parameter changes are carried in the same step
+    // as the definition.
+    let proposed = match &params.params {
+        Some(changes) => changes.applied_to(&current_params),
+        None => current_params.clone(),
+    };
+    let edits = match &params.params {
+        Some(changes) => changes.edits(&current_params),
+        None => Vec::new(),
+    };
 
     // spec: PRM#validation — the validators are those of the new
     // definition, evaluated with the values the request would produce.
@@ -1826,21 +1784,25 @@ pub(crate) fn update_app(
         return Err(validation_error(&rejections));
     }
 
-    // The new definition decides whether the changed parameter is secret.
-    let is_secret = change.as_ref().is_some_and(|(pname, _, _)| {
-        app.def
-            .load()
-            .params
-            .get(pname)
-            .is_some_and(|d| d.is_secret())
-    });
+    // The new definition decides which changed parameters are secret.
+    let secret: std::collections::BTreeMap<ParamName, bool> = {
+        let def = app.def.load();
+        edits
+            .iter()
+            .map(|e| {
+                (
+                    e.name.clone(),
+                    def.params.get(&e.name).is_some_and(|d| d.is_secret()),
+                )
+            })
+            .collect()
+    };
 
     // spec: GEN#generation-numbers — the definition, the parameter change, and
     // the generation bump commit together or not at all.
     let name_owned = params.app.clone();
     let bundle_owned = Arc::clone(&bundle);
     let source_owned = source.clone();
-    let change_owned = change.clone();
     let cipher = Arc::clone(&state.cipher);
     let app_for_migration = app.clone();
     let declared: stopped::StoppedSet = app
@@ -1850,37 +1812,29 @@ pub(crate) fn update_app(
         .keys()
         .map(|id| (id.kind, id.name.as_str().to_owned()))
         .collect();
-    let generation = state
+    let (generation, stored) = state
         .db
-        .call(move |db| -> rusqlite::Result<u64> {
+        .call(move |db| -> rusqlite::Result<_> {
             let tx = db.conn.unchecked_transaction()?;
-            let recorded = match &change_owned {
-                Some((pname, previous, new_value)) => {
-                    crate::runtime::apps::store_param_value(
-                        db,
-                        &cipher,
-                        &name_owned,
-                        pname,
-                        new_value.as_deref(),
-                        is_secret,
-                    )?;
-                    Some(crate::runtime::generations::ParamChange {
-                        name: pname,
-                        previous: previous.as_deref(),
-                        new_value: new_value.as_deref(),
-                        is_secret,
-                        previous_is_secret,
-                    })
-                }
-                None => None,
+            // spec: SEC#generation-history — whether each value being replaced
+            // is held in secret storage is read before anything is written,
+            // since this update may be what stops the definition marking it
+            // secret.
+            let stored =
+                super::params::store_edits(db, &cipher, &name_owned, edits, |name| secret[name])?;
+            let generation = {
+                let records: Vec<_> = stored
+                    .iter()
+                    .map(super::params::StoredEdit::record)
+                    .collect();
+                crate::runtime::generations::bump_script_update(
+                    db,
+                    &name_owned,
+                    &bundle_owned,
+                    &source_owned,
+                    (!records.is_empty()).then_some((records.as_slice(), cipher.as_ref())),
+                )?
             };
-            let generation = crate::runtime::generations::bump_script_update(
-                db,
-                &name_owned,
-                &bundle_owned,
-                &source_owned,
-                recorded.as_ref().map(|c| (c, cipher.as_ref())),
-            )?;
             // spec: SEC#migration
             crate::runtime::apps::migrate_param_storage(
                 db,
@@ -1892,7 +1846,7 @@ pub(crate) fn update_app(
             // spec: CTL#resource-stop
             stopped::discard_undeclared(db, &name_owned, &declared)?;
             tx.commit()?;
-            Ok(generation)
+            Ok((generation, stored))
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("db generation: {e}")))?;
 
@@ -1969,43 +1923,34 @@ pub(crate) fn update_app(
     // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, &params.app);
 
-    // spec: APPS#update — a handler for the changed parameter, registered
+    // spec: APPS#update — a handler for a changed parameter, registered
     // by the new definition, runs under it with `old` the previous
     // generation. A definition replaced without a parameter change
     // schedules nothing.
-    let schedule = match &change {
-        Some((pname, _, _)) => super::params::schedule_on_change(
-            state,
-            hold,
-            &params.app,
-            pname,
-            generation,
-            &ctx.events.actor,
-        )?,
-        None => "not_scheduled",
-    };
+    let changed: Vec<&ParamName> = stored.iter().map(super::params::StoredEdit::name).collect();
+    super::params::schedule_on_change(
+        state,
+        hold,
+        &params.app,
+        &changed,
+        generation,
+        &ctx.events.actor,
+    )?;
 
-    tracing::info!(app = %name, generation, schedule, "updated app");
-    // spec: EVT#event-types
-    // spec: SEC#generation-history — each value is withheld on the same terms as
-    // it is recorded, so dropping the `secret` flag does not announce the
-    // value the flag was protecting.
-    let param_event = change.as_ref().map(|(pname, previous, new_value)| {
-        let keep = |secret: bool, v: &Option<String>| if secret { None } else { v.clone() };
-        seedling_protocol::events::AppUpdatedParam {
-            name: pname.clone(),
-            previous_value: keep(previous_is_secret, previous),
-            new_value: keep(is_secret, new_value),
-        }
-    });
+    tracing::info!(app = %name, generation, "updated app");
+    // spec: EVT#app-events
+    // spec: SEC#generation-history
     ctx.events.app_updated(
         &params.app,
         generation,
         (previous_generation != 0).then_some(previous_generation),
         source.to_json(&bundle),
-        param_event,
+        stored
+            .iter()
+            .map(super::params::StoredEdit::event_entry)
+            .collect(),
     );
-    Ok(json!({ "schedule": schedule, "generation": generation }))
+    Ok(json!({ "generation": generation }))
 }
 
 // spec: ACTU#held-volumes

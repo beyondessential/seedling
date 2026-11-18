@@ -298,8 +298,7 @@ impl AppRegistry {
     }
 
     // spec: APPS#update
-    // spec: PRM#parameter-set
-    // spec: PRM#parameter-unset
+    // spec: PRM#parameter-changes
     /// Re-evaluate the app's current definition with updated stored params.
     ///
     /// On success the entry's app is updated and any active script-error

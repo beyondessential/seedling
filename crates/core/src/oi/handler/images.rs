@@ -470,7 +470,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
 
 /// Reconcile `app`'s pins against the current AppDef and a lenient probe
 /// of the app's script. Called after operator-driven AppDef changes
-/// (`/apps/update`, `/apps/params/set`, `/apps/params/unset`).
+/// (`/apps/update`, `/apps/params/set`).
 ///
 /// - Clean probe → orphan pins are deleted.
 /// - Dirty probe (any handler reported an error or skipped_reason) →
