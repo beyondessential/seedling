@@ -1822,3 +1822,22 @@ fn a_dynamic_resource_reports_the_operation_or_the_session_that_created_it() {
     assert_eq!(session["operation_id"], json!(null));
     assert_eq!(session["session_id"], "sess-1");
 }
+
+// spec: APPS#removal
+#[test]
+fn an_app_cannot_be_removed_while_a_session_on_it_has_a_slot() {
+    let oi = TestOi::with_app("demo");
+    let session = seedling_protocol::names::SessionId::generate();
+    let sessions = std::sync::Arc::clone(&oi.state.registry.read().get("demo").unwrap().sessions);
+    sessions.open(session);
+
+    let (code, _) = oi
+        .call("/apps/remove", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(oi.state.registry.read().is_registered("demo"));
+
+    sessions.close(&session);
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+    assert!(!oi.state.registry.read().is_registered("demo"));
+}

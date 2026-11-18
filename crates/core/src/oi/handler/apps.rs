@@ -1515,6 +1515,23 @@ pub(crate) fn deregister_app(
         return Err(app_blocked(name, "remove", &blocker));
     }
 
+    // spec: APPS#removal
+    // A session's teardown is driven through the app's entry, and the records
+    // it has yet to tear down are spared only while the entry holds its slot.
+    if state
+        .registry
+        .read()
+        .get(name)
+        .is_some_and(|entry| !entry.sessions.is_empty())
+    {
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!(
+                "a shell session is open on the app or still tearing down what it started;                  wait for it to finish: {name}"
+            ),
+        ));
+    }
+
     // Reject if the app is not in the NotInstalled phase. The message
     // distinguishes the three non-removable phases so operators know whether
     // to wait (Installing, Uninstalling) or run a separate uninstall first
