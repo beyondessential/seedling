@@ -26,6 +26,7 @@ use crate::{
         apps::{AppRegistry, transition_phase},
         db::DbHandle,
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling, merge_sessions},
+        gates::{GateRuntime, GateView},
         gc::InstanceGcConfig,
         health::InstanceHealth,
         identity::InstanceId,
@@ -402,6 +403,10 @@ struct AppSnapshot {
     /// workload ordered after one of them carries.
     // spec: UPD#spec-hash
     gate_keys: GateKeyDigests,
+    /// What the app's gates hold, and which of its workloads wait on a target.
+    // spec: RCN#gate-holds
+    // spec: GATE#start-order
+    gates: GateView,
     /// Where the app's install stands in the order installs completed.
     // spec: ING#claims-across-apps
     install_seq: Option<i64>,
@@ -423,6 +428,9 @@ pub struct Reconciler {
     db: DbHandle,
     /// The host's secret key, under which gate keys are digested.
     cipher: Arc<Cipher>,
+    /// What the runtime remembers of its gates' checks.
+    // spec: GRUN#checks
+    gate_runtime: Arc<GateRuntime>,
     registry: Arc<dyn InstanceRegistry>,
     app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
@@ -784,6 +792,7 @@ impl Reconciler {
         tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
         site_resolver: Option<Arc<SiteServiceResolver>>,
         instance_gc: InstanceGcConfig,
+        gate_runtime: Arc<GateRuntime>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let written_obs = seed_written_obs(&db);
@@ -806,6 +815,7 @@ impl Reconciler {
             data_dir,
             db,
             cipher,
+            gate_runtime,
             registry,
             app_registry,
             written_obs,
@@ -1017,6 +1027,41 @@ impl Reconciler {
                     continue;
                 }
             };
+            // spec: GRUN#gate-state
+            // spec: RCN#gate-holds
+            let gates = match phase {
+                AppPhase::Installed => {
+                    let (app_name, def, cipher) =
+                        (name.clone(), app_def.clone(), Arc::clone(&self.cipher));
+                    let stopped = stopped_set.clone();
+                    let remembered = self.gate_runtime.remembered(&name);
+                    let definition_error = entry.script_error.as_ref().map(|(why, _)| why.clone());
+                    self.db.call(move |db| {
+                        let state = crate::runtime::gates::evaluate(
+                            db,
+                            &app_name,
+                            &def,
+                            &cipher,
+                            definition_error.as_deref(),
+                            &remembered,
+                        );
+                        crate::runtime::gates::view(db, &app_name, &def, &state, &stopped, &remembered)
+                    })
+                }
+                _ => GateView::default(),
+            };
+            // A resource a gate holds is kept at `Unscheduled` as one an
+            // operator stopped is.
+            let down: stopped::StoppedSet = stopped_set
+                .iter()
+                .cloned()
+                .chain(
+                    gates
+                        .held
+                        .keys()
+                        .map(|id| (id.kind, id.name.as_str().to_owned())),
+                )
+                .collect();
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 // spec: OPS#shell-sessions
@@ -1028,7 +1073,7 @@ impl Reconciler {
                     (*progress).as_ref(),
                     &*self.registry,
                     &effective_scales,
-                    &stopped_set,
+                    &down,
                 ),
             };
             // Read in place, as the operation's progress is, rather than
@@ -1093,6 +1138,7 @@ impl Reconciler {
                 warm_cert_hostnames,
                 app_priority,
                 gate_keys,
+                gates,
                 install_seq: entry.install_seq,
             });
         }
@@ -3462,6 +3508,7 @@ mod tests {
             warm_cert_hostnames: Default::default(),
             app_priority: AppPriority::default(),
             gate_keys: GateKeyDigests::default(),
+            gates: Default::default(),
             install_seq: Some(1),
         }
     }
@@ -3490,6 +3537,7 @@ mod tests {
             warm_cert_hostnames: Default::default(),
             app_priority,
             gate_keys: GateKeyDigests::default(),
+            gates: Default::default(),
             install_seq: Some(1),
         }
     }
@@ -5900,6 +5948,7 @@ mod tests {
                 retain: std::time::Duration::from_secs(3600),
                 retain_restart_records: 50,
             },
+            Arc::clone(&oi.state.gate_runtime),
         )
     }
 
@@ -6063,6 +6112,7 @@ mod tests {
                 &app.desired,
                 app.app_priority,
                 &app.gate_keys,
+                &app.gates,
                 &HashSet::new(),
                 &HashSet::new(),
                 &HashSet::new(),
@@ -6152,6 +6202,7 @@ mod tests {
             &app.desired,
             app.app_priority,
             &app.gate_keys,
+            &app.gates,
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),

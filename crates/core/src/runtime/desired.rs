@@ -70,6 +70,10 @@ pub struct OperationProgress {
     /// state. Stored by ingress resource name.
     // spec: RT#certificate-warming
     pub warm_cert_hostnames: BTreeSet<String>,
+    /// The progress is a gate run's, whose desired state is the steady state
+    /// with the resources the body placed in it laid over.
+    // spec: RCN#desired-state
+    pub gate_run: bool,
 }
 
 impl OperationProgress {
@@ -78,6 +82,7 @@ impl OperationProgress {
             resources: HashMap::new(),
             dynamic_defs: HashMap::new(),
             warm_cert_hostnames: BTreeSet::new(),
+            gate_run: false,
         }
     }
 
@@ -116,11 +121,7 @@ impl OperationProgress {
     ///
     /// Later entries for the same resource override earlier ones.
     pub fn from_log(entries: &[ActionLogEntry]) -> Self {
-        let mut this = Self {
-            resources: HashMap::new(),
-            dynamic_defs: HashMap::new(),
-            warm_cert_hostnames: BTreeSet::new(),
-        };
+        let mut this = Self::new();
         for entry in entries {
             match entry.call_kind {
                 CallKind::Start => {
@@ -186,7 +187,11 @@ impl OperationProgress {
 /// resources at desired state `Ready` (steady-state maintenance).
 ///
 /// When an operation is in progress, only resources the action closure has
-/// explicitly placed into the desired state are included.
+/// explicitly placed into the desired state are included. A gate run holds
+/// the steady state besides, with what its body has placed in it laid over.
+///
+/// `stopped` holds the resources kept at `Unscheduled` whatever their scale:
+/// the ones an operator stopped, and the ones a gate holds.
 // spec: RCN#desired-state
 pub fn compute(
     app_name: &AppName,
@@ -198,7 +203,29 @@ pub fn compute(
 ) -> Result<DesiredState, RegistryError> {
     match operation_progress {
         None => compute_steady(app_name, app_def, registry, effective_scales, stopped),
+        Some(progress) if progress.gate_run => {
+            let mut state = compute_steady(app_name, app_def, registry, effective_scales, stopped)?;
+            overlay(&mut state, compute_during_operation(app_def, progress));
+            Ok(state)
+        }
         Some(progress) => Ok(compute_during_operation(app_def, progress)),
+    }
+}
+
+/// Lay what an operation has placed in the desired state over `state`: each
+/// instance it names takes the state the operation put it in, and an instance
+/// `state` does not hold is added.
+// spec: RCN#desired-state
+fn overlay(state: &mut DesiredState, placed: DesiredState) {
+    for resource in placed.resources {
+        match state
+            .resources
+            .iter_mut()
+            .find(|held| held.instance.id == resource.instance.id)
+        {
+            Some(held) => *held = resource,
+            None => state.resources.push(resource),
+        }
     }
 }
 
@@ -266,8 +293,14 @@ fn compute_steady(
     stopped: &StoppedSet,
 ) -> Result<DesiredState, RegistryError> {
     let mut resources = Vec::new();
+    // spec: RCN#gate-holds
+    // The Job of a gate's check is run to check the gate and at no other time.
+    let check_jobs = crate::runtime::gates::check_jobs(app_def);
 
     for (id, resource) in &app_def.resources {
+        if check_jobs.contains(id) {
+            continue;
+        }
         let is_stopped = stopped.contains(&(id.kind, id.name.as_str().to_owned()));
 
         if id.kind == ResourceKind::Deployment
@@ -275,6 +308,7 @@ fn compute_steady(
         {
             // spec: CTL#resource-stop
             // spec: AUTO#scale
+            // spec: RCN#gate-holds
             let scale = if is_stopped { 0 } else { effective };
             // Steady-state desired state keeps an instance whatever its
             // containers have done: re-identifying it would lose the restart
@@ -308,6 +342,7 @@ fn compute_steady(
         // Non-deployment resources: singleton.
         let inst = registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
         // spec: CTL#resource-stop
+        // spec: RCN#gate-holds
         let desired = if is_stopped {
             LifecycleState::Unscheduled
         } else {

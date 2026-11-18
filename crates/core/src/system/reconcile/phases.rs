@@ -47,6 +47,7 @@ pub(super) async fn run_pods_phase(
                 &app.desired,
                 app.app_priority,
                 &app.gate_keys,
+                &app.gates,
                 written_obs,
                 started_jobs,
                 completed_jobs,

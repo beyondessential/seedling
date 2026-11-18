@@ -135,6 +135,7 @@ impl TestOi {
             tailscale_provider,
             site_resolver: None,
             definition_registry: Arc::clone(&registry) as _,
+            gate_runtime: Arc::new(crate::runtime::gates::GateRuntime::new()),
         });
 
         // As the daemon does once its state exists: without it the coordinator

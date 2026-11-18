@@ -64,6 +64,10 @@ pub struct OiState {
     /// The OCI registry client definitions are fetched through.
     // spec: DEFN#fetching
     pub definition_registry: crate::runtime::definition::fetch::SharedRegistry,
+    /// What the runtime holds in memory about its gates' checks, shared with
+    /// the reconciler.
+    // spec: GRUN#checks
+    pub gate_runtime: Arc<crate::runtime::gates::GateRuntime>,
 }
 
 /// The daemon's state as the source of the facts a TLS chain depends on.

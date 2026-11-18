@@ -717,6 +717,7 @@ async fn main() {
             Arc::clone(&tick_notify),
         );
 
+    let gate_runtime = Arc::new(seedling_core::runtime::gates::GateRuntime::new());
     let reconciler = Reconciler::new(
         Arc::clone(&driver),
         node_prefix,
@@ -736,6 +737,7 @@ async fn main() {
         Some(Arc::clone(&tls_coordinator)),
         Some(Arc::clone(&site_resolver)),
         instance_gc,
+        Arc::clone(&gate_runtime),
     );
     let reconciler = reconciler.with_host_probes(host_probes);
 
@@ -799,6 +801,7 @@ async fn main() {
         tailscale_provider: Some(Arc::clone(&tailscale_provider)),
         site_resolver: Some(Arc::clone(&site_resolver)),
         definition_registry: Arc::new(seedling_core::runtime::definition::fetch::OciRegistry::new()),
+        gate_runtime,
     });
     // The coordinator and the cert endpoint were built before the state they
     // read the facts of a strategy chain from, and have decided nothing until

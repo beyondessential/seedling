@@ -5,11 +5,16 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use crate::{
-    defs::{enums::OnUpdate, gate::GateKeyDigests, resource::Resource},
+    defs::{
+        enums::OnUpdate,
+        gate::GateKeyDigests,
+        resource::Resource,
+    },
     runtime::{
         autonomous_ops,
         db::DbHandle,
         desired::{DesiredResource, DesiredState, undeclared_pod},
+        gates::GateView,
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
         priority::AppPriority,
@@ -431,6 +436,7 @@ async fn actuate_one_pod(
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
     hold_start: bool,
+    wait_for_targets: bool,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -668,6 +674,17 @@ async fn actuate_one_pod(
                 if !restart_at_once || result.stop_failure.is_some() {
                     return Some(obs.result);
                 }
+            }
+
+            // spec: GATE#start-order
+            // A workload waiting on a target that is not ready starts no
+            // instance, whether it has none or is replacing a stale one.
+            if wait_for_targets {
+                tracing::debug!(
+                    instance = %dr.instance.display_name,
+                    "pods: holding a start until the workload's targets are ready"
+                );
+                return Some(obs.result);
             }
 
             // spec: UPD#replace-updates
@@ -1005,6 +1022,7 @@ pub(super) async fn observe_and_actuate(
     desired: &DesiredState,
     app_priority: AppPriority,
     gate_keys: &GateKeyDigests,
+    gates: &GateView,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -1085,9 +1103,28 @@ pub(super) async fn observe_and_actuate(
     let mut held_starts: HashSet<String> = HashSet::new();
     let mut rolling_deployments: HashSet<String> = HashSet::new();
 
+    // spec: UPD#stale-instances
+    // A stale instance is not stopped while its workload waits on a target
+    // that is not ready, whatever the update strategy.
+    let mut waiting_instances: HashSet<String> = HashSet::new();
+    for obs in &observed {
+        if gates.waits_for(&obs.dr.instance.kind, obs.dr.instance.name.as_deref()) {
+            waiting_instances.insert(obs.dr.instance.display_name.clone());
+            if obs.spec_stale && obs.is_running {
+                inhibited_instances.insert(obs.dr.instance.display_name.clone());
+            }
+        }
+    }
+
     for (dep_name, indices) in &deployment_groups {
         let group_refs: Vec<&ObservedInstance<'_>> =
             indices.iter().map(|&i| &observed[i]).collect();
+        if group_refs
+            .iter()
+            .all(|o| waiting_instances.contains(&o.dr.instance.display_name))
+        {
+            continue;
+        }
 
         let on_update = match &group_refs[0].dr.definition {
             Resource::Deployment(dep) => dep.def.lock().on_update,
@@ -1109,6 +1146,7 @@ pub(super) async fn observe_and_actuate(
     for obs in observed {
         let inhibit = inhibited_instances.contains(&obs.dr.instance.display_name);
         let hold_start = held_starts.contains(&obs.dr.instance.display_name);
+        let wait_for_targets = waiting_instances.contains(&obs.dr.instance.display_name);
         actuate_futures.push(actuate_one_pod(
             actuator,
             db,
@@ -1117,6 +1155,7 @@ pub(super) async fn observe_and_actuate(
             obs,
             inhibit,
             hold_start,
+            wait_for_targets,
             written_obs,
             started_jobs,
             completed_jobs,
@@ -1406,6 +1445,7 @@ mod update_tests {
                     AppPriority::default(),
                     &GateKeyDigests::default(),
                     running,
+                    false,
                     false,
                     false,
                     &HashSet::from([(dr.instance.id, "container_running")]),

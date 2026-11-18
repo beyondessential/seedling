@@ -165,14 +165,18 @@ pub fn load_records(db: &Db, app: &AppName) -> rusqlite::Result<Records> {
     Ok(records)
 }
 
-/// Start a run: the gate's last success no longer stands, and the way the
-/// previous run ended is no longer the way its most recent one did.
+/// Start a run: the gate's last success no longer stands, the way the
+/// previous run ended is no longer the way its most recent one did, and the
+/// gate is not paused, whoever starts the run.
 // spec: GRUN#preparation
 pub fn begin_run(db: &Db, app: &AppName, gate: &GateName) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT INTO gate_records (app, gate, valid, last_failure)
          VALUES (?1, ?2, 0, NULL)
-         ON CONFLICT(app, gate) DO UPDATE SET valid = 0, last_failure = NULL",
+         ON CONFLICT(app, gate) DO UPDATE SET
+             valid = 0,
+             last_failure = NULL,
+             paused_key_digest = NULL",
         params![app, gate],
     )?;
     Ok(())
@@ -239,7 +243,11 @@ pub fn record_failure(
          VALUES (?1, ?2, 0, 1, ?3, ?4, ?5, ?6)
          ON CONFLICT(app, gate) DO UPDATE SET
              valid = 0,
-             consecutive_failures = consecutive_failures + 1,
+             consecutive_failures = CASE
+                 WHEN failed_key_digest IS excluded.failed_key_digest
+                 THEN consecutive_failures + 1
+                 ELSE 1
+             END,
              last_failure_at = excluded.last_failure_at,
              last_failure = excluded.last_failure,
              failed_key_digest = excluded.failed_key_digest,

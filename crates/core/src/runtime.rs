@@ -17,6 +17,7 @@ pub mod dynamic_teardown;
 pub mod external_service_mappings;
 pub mod external_volume_mappings;
 pub mod faults;
+pub mod gates;
 pub mod gc;
 pub mod generations;
 pub mod health;
