@@ -697,7 +697,7 @@ export interface PlanRejection {
 
 export interface PlanResponse {
   diff?: PlanDiffEntry[];
-  on_change_would_fire?: string[];
+  gates_would_run?: string[];
   errors?: string[];
   /** Parameters whose validators reject the proposed values. */
   rejections?: PlanRejection[];

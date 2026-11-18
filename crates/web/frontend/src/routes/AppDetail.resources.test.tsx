@@ -162,7 +162,7 @@ describe("AppDetail params", () => {
         ...baseFixtures(makeDetail()),
         "/apps/plan": {
           diff: [],
-          on_change_would_fire: ["domain"],
+          gates_would_run: ["domain"],
           errors: [],
           rejections: [{ name: "domain", reason: "must be a hostname" }],
         },
@@ -189,7 +189,7 @@ describe("AppDetail params", () => {
     const { request } = mount(
       {
         ...baseFixtures(makeDetail()),
-        "/apps/plan": { diff: [], on_change_would_fire: [], errors: [], rejections: [] },
+        "/apps/plan": { diff: [], gates_would_run: [], errors: [], rejections: [] },
       },
       "write",
     );

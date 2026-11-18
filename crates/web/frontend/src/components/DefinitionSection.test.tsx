@@ -53,7 +53,7 @@ function mount(
 
 const plan: PlanResponse = {
   diff: [{ resource_type: "deployment", resource_name: "api", change: "modified", fields: ["image"] }],
-  on_change_would_fire: ["version"],
+  gates_would_run: ["version"],
   errors: [],
   rejections: [],
 };

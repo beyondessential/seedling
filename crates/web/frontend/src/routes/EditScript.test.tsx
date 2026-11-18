@@ -22,7 +22,7 @@ vi.mock("@uiw/react-codemirror", () => ({
 
 const plan: PlanResponse = {
   diff: [{ resource_type: "deployment", resource_name: "web", change: "modified" }],
-  on_change_would_fire: [],
+  gates_would_run: [],
   errors: [],
 };
 
@@ -88,7 +88,7 @@ describe("EditScript", () => {
 
   it("blocks apply when the plan reports errors", async () => {
     renderEdit({
-      "/apps/plan": { diff: [], on_change_would_fire: [], errors: ["undefined variable x"] },
+      "/apps/plan": { diff: [], gates_would_run: [], errors: ["undefined variable x"] },
     });
     const editor = await findSeededEditor();
     fireEvent.change(editor, { target: { value: "// bad" } });

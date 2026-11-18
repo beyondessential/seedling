@@ -25,7 +25,7 @@ interface Props {
 // spec: UI#images
 export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
   const diff = plan.diff ?? [];
-  const handlers = plan.on_change_would_fire ?? [];
+  const gates = plan.gates_would_run ?? [];
   const errors = plan.errors ?? [];
   const rejections = plan.rejections ?? [];
   const unwarmed = unwarmedHandlerImages ?? [];
@@ -142,7 +142,7 @@ export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
           </TableContainer>
         )}
       </Box>
-      {handlers.length > 0 && (
+      {gates.length > 0 && (
         <Box>
           <Typography
             variant="caption"
@@ -151,13 +151,13 @@ export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
               display: "block",
               mb: 0.5
             }}>
-            on_change handlers that would fire ({handlers.length})
+            Gates that would run ({gates.length})
           </Typography>
           <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap", gap: 0.5 }}>
-            {handlers.map((h) => (
+            {gates.map((g) => (
               <Chip
-                key={h}
-                label={h}
+                key={g}
+                label={g}
                 size="small"
                 sx={{ fontFamily: "monospace" }}
               />

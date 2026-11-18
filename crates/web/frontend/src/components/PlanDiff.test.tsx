@@ -8,7 +8,7 @@ describe("PlanDiff", () => {
     render(<PlanDiff plan={{}} />);
     expect(screen.getByText("Resource changes (0)")).toBeTruthy();
     expect(screen.getByText("No resource changes.")).toBeTruthy();
-    expect(screen.queryByText(/on_change handlers/)).toBeNull();
+    expect(screen.queryByText(/Gates that would run/)).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
   });
 
@@ -37,14 +37,14 @@ describe("PlanDiff", () => {
     expect(screen.getByText("image, scale")).toBeTruthy();
   });
 
-  it("lists on_change handlers that would fire", () => {
+  it("lists the gates that would run", () => {
     const plan: PlanResponse = {
       diff: [],
-      on_change_would_fire: ["migrate", "reload-config"],
+      gates_would_run: ["migrate", "reload-config"],
     };
     render(<PlanDiff plan={plan} />);
     expect(
-      screen.getByText("on_change handlers that would fire (2)"),
+      screen.getByText("Gates that would run (2)"),
     ).toBeTruthy();
     expect(screen.getByText("migrate")).toBeTruthy();
     expect(screen.getByText("reload-config")).toBeTruthy();
