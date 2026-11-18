@@ -699,3 +699,44 @@ fn evaluating_the_same_definition_twice_gives_equal_gates() {
     let second = evaluated(script);
     assert_eq!(first.def.load().gates, second.def.load().gates);
 }
+
+// spec: UPD#spec-hash
+#[test]
+fn a_workload_carries_the_digests_of_the_gates_it_is_ordered_directly_after_only() {
+    use crate::runtime::secrets::Cipher;
+
+    let app = evaluated(&format!(
+        r#"{WORKLOADS}
+        let migrate = app.gate("migrate").key(1);
+        let seed = app.gate("seed").key(2);
+        api.after(migrate).after(seed).after(tool);
+        web.after(api);
+        tool.after(migrate);"#
+    ));
+    let def = app.def.load();
+    let cipher = Cipher::for_tests();
+    let digests = defs::gate::GateKeyDigests::of(&def, &cipher).unwrap();
+    let directly = |kind, name| {
+        digests
+            .directly_after(&def.resources[&workload(kind, name)])
+            .unwrap()
+            .into_iter()
+            .map(|(gate, _)| gate.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        directly(ResourceKind::Deployment, "api"),
+        ["migrate", "seed"]
+    );
+    assert_eq!(directly(ResourceKind::Job, "tool"), ["migrate"]);
+    assert!(directly(ResourceKind::Deployment, "web").is_empty());
+
+    let missing = defs::gate::GateKeyDigests::default();
+    assert_eq!(
+        missing
+            .directly_after(&def.resources[&workload(ResourceKind::Job, "tool")])
+            .unwrap_err()
+            .0,
+        "migrate"
+    );
+}
