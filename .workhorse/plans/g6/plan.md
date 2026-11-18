@@ -19,6 +19,9 @@ What remains is DTLS, whose datagrams reach the Service still encrypted.
 - Whether the Service sees the client's address is not this card's: L6 covers passing it outbound, alongside A2's inbound recovery.
 
 - The idle period is fixed in the proxy, not declared in the BSL; a per-ingress setting can be added later if an app needs one.
+- Sessions survive a config apply that leaves their ingress as it was; an upgrade may end them.
+- A refused session is logged and holds a `dtls_session_refused` condition fault.
+- The DTLS session rules live in PRX ("DTLS-terminating ingresses"); ING keeps the termination, version and certificate rules.
 - Connection IDs are supported, with a return routability check before sending to a changed address; pion/dtls provides both.
 
 ## Build
@@ -27,6 +30,10 @@ What remains is DTLS, whose datagrams reach the Service still encrypted.
 - [ ] Emit it on a DTLS ingress's UDP L4 route ahead of `proxy`
 - [ ] Handshake gating (cookie exchange), per-session upstream flow, refusal when no flow can be opened, idle expiry, close on client close
 - [ ] Connection IDs and the return routability check for both versions
+- [ ] Discard non-DTLS datagrams without reply
+- [ ] Sessions survive a config reload that leaves the ingress as it was: keep session state outside the handler instance (a usage pool keyed by listener) so a reprovisioned handler adopts it
+- [ ] Log each refused session naming the ingress; get refusals to the runtime (proxy log or admin endpoint) and hold `dtls_session_refused` as a condition fault, cleared after five quiet minutes or when the ingress goes
+- [ ] Confirm TLS ingresses accept 1.2 and 1.3 (the proxy's default) and pin it in a config test
 - [ ] Image check fixture (`everything_on()`) exercises a DTLS route
 - [ ] Claim model in reconcile: compute claims per `(port, transport)`, resolve conflicts into `ingress_conflict` across apps and site ingresses, replacing `conflicting_listener_ports`
 - [ ] Fail evaluation when two ingresses of one app make conflicting claims

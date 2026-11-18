@@ -355,7 +355,7 @@ Deleting the renewed certificate while its renewal is pending MUST leave the ren
 
 ## Serving
 
-The runtime MUST deliver runtime-managed certificates and their keys to the ingress proxy on request, at handshake time, selected by the SNI hostname, or for an ingress terminating DTLS by the ingress's hostname, as [DTLS sessions](../../language/ingress.md#dtls-sessions) specifies.
+The runtime MUST deliver runtime-managed certificates and their keys to the ingress proxy on request, at handshake time, selected by the SNI hostname, or for an ingress terminating DTLS by the ingress's hostname, as [termination](../../language/ingress.md#termination) specifies.
 The runtime MUST NOT write private key material into the proxy's persistent configuration or any state the proxy replays on restart.
 The runtime MUST compare the SNI hostname to managed hostnames ignoring ASCII case and any trailing dot.
 

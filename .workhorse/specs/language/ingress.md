@@ -10,11 +10,12 @@ Applies to the BSL `Ingress` type, through which an app exposes one of its servi
 
 | term | meaning |
 | --- | --- |
-| TLS | Transport Layer Security, as defined by [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) |
+| TLS | Transport Layer Security, in either TLS 1.2 or TLS 1.3 |
+| TLS 1.2 | as defined by [RFC 5246](https://www.rfc-editor.org/rfc/rfc5246) |
+| TLS 1.3 | as defined by [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) |
 | DTLS | Datagram Transport Layer Security, in either DTLS 1.2 or DTLS 1.3 |
 | DTLS 1.2 | as defined by [RFC 6347](https://www.rfc-editor.org/rfc/rfc6347) |
 | DTLS 1.3 | as defined by [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) |
-| connection ID | an identifier carried in DTLS records that associates them with a session independently of the sender's address, as defined by [RFC 9146](https://www.rfc-editor.org/rfc/rfc9146) for DTLS 1.2 and [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) §9 for DTLS 1.3 |
 | HTTPS | HTTP over TLS, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) §4.2.2 |
 | HTTP/1.1 | as defined by [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) |
 | HTTP/2 | as defined by [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113); in cleartext, started with prior knowledge as in §3.3 |
@@ -84,7 +85,7 @@ Exactly four pairings are valid:
 | `terminate` | `output` | the ingress accepts | the Service receives |
 | --- | --- | --- | --- |
 | `Terminate.Tls` | `Output.Tcp` | TLS over TCP | the plaintext TCP stream inside the TLS session |
-| `Terminate.Dtls` | `Output.Udp` | DTLS over UDP | the plaintext datagrams inside the DTLS session |
+| `Terminate.Dtls` | `Output.Udp` | DTLS over UDP | the plaintext datagrams inside the DTLS session, as [DTLS-terminating ingresses](../runtime/proxy.md#dtls-terminating-ingresses) specifies |
 | `Terminate.Https` | `Output.Http1` | HTTP/1.1 and HTTP/2 over TLS on TCP, and HTTP/3 on UDP | plaintext HTTP/1.1 |
 | `Terminate.Https` | `Output.Http2` | HTTP/1.1 and HTTP/2 over TLS on TCP, and HTTP/3 on UDP | cleartext HTTP/2 |
 
@@ -92,42 +93,14 @@ Any other pairing MUST throw.
 The error MUST name the pairing supplied and the four valid pairings.
 A second `tls()` call MUST replace the first.
 
+An ingress terminating TLS or HTTPS MUST accept both TLS 1.2 and TLS 1.3 on TCP.
 An ingress terminating DTLS MUST accept both DTLS 1.2 and DTLS 1.3.
+An ingress terminating DTLS MUST present the certificate for its own hostname, whatever SNI the client sends, and whether or not it sends one.
 An ingress terminating TLS or DTLS MUST NOT interpret the application protocol inside it.
 An ingress with a termination MUST reject traffic that is not of the protocol it accepts.
+An ingress terminating DTLS MUST discard a datagram that is not DTLS, without replying to it.
 
 An ingress on which `tls()` is never called MUST forward TCP connections to its Service unmodified, and MUST NOT forward UDP traffic.
-
-### DTLS sessions
-
-An ingress terminating DTLS MUST present the certificate for its own hostname, whatever SNI the client sends, and whether or not it sends one.
-
-The runtime MUST carry the plaintext datagrams of each DTLS session to the Service on a UDP flow of the session's own, whose source port differs from that of every other session's flow open to the Service.
-The runtime MUST deliver a datagram the Service sends on a session's flow to that session's client, inside the session.
-
-> [!NOTE]
-> A flow per session lets the Service tell its clients apart by source port, as it would if they reached it over plain UDP.
-
-The runtime MUST NOT complete a DTLS handshake before the client has shown, by the protocol's cookie exchange, that it receives datagrams at the address it sends from.
-The runtime MUST open a session's flow to the Service only once the session's handshake has completed.
-
-When no flow to the Service can be opened for a new session, the runtime MUST refuse that session, and MUST continue to serve the sessions already open.
-
-> [!NOTE]
-> Each open session holds a source port toward its Service, so the sessions one Service can have open at once are bounded by the ports available to the proxy.
-> Requiring the cookie exchange and a completed handshake first keeps a client sending from addresses it does not hold from spending those ports.
-
-A session MUST end when its client closes it.
-The runtime MUST end a session that has carried no datagram in either direction for an idle period, which SHOULD be at least five minutes.
-When a session ends, the runtime MUST close its flow to the Service.
-
-The runtime MUST support [connection IDs](#borrowed-terms) in both DTLS versions.
-A session whose client uses a connection ID MUST continue when the client's address or port changes, on the same flow to the Service.
-Before sending a session's datagrams to a client's changed address, the runtime MUST confirm that the client receives datagrams at that address.
-
-> [!NOTE]
-> A client moving between networks keeps its session rather than handshaking again, and the Service sees no change.
-> Confirming the new address keeps a party that rewrites a datagram's source from aiming the session's traffic at someone else.
 
 ### Terminate
 
