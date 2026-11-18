@@ -29,6 +29,11 @@ Seedling has two halves that meet badly: the resource graph is level-triggered a
 - `on_change` is removed, not kept alongside. Ordered reactions become steps; configuration in environment variables or mounted content is spec-hash content the update strategies already roll.
 - A step's body is a closure with `rt`. A Job-only form may come later as shorthand.
 - Scope is the full model: steps, `after` on steps and on resources, and folding in the start and install actions.
+- Satisfaction is a recorded key plus an optional `.check()` probe: a failing probe makes the step unsatisfied again, so a database restored behind Seedling's back re-runs the migration.
+- The start action is removed; boot order comes from `after`. After a Deployment means its instances are running and healthy, after a Job that it completed successfully; satisfied steps don't re-run at boot.
+- `after` stays within one app. Apps never depend on other apps: a definition depends on a contract the operator fulfils (Tamanu's database), which it can gate on with a step whose check probes that contract.
+- A step's run holds only its dependants and its exclusive selection; the rest of the app keeps converging.
+- Install action: liked in principle, pending the summary of what removing it loses (below).
 
 ### Design so far
 
@@ -67,8 +72,30 @@ What else it subsumes:
 
 - J6 for upgrades: a failed step holds its dependants by construction, across reboots.
 - V14's Retry upgrade action and readiness check (a step keyed on the database URL and crypto key that every part comes after), and the install's first migration (the step's first run).
-- The start action, if `after` on resources orders a boot.
-- The install action, if one-off operator input moves to ordinary actions (V14's Provision).
+- The start action.
+- The install action, subject to the summary below.
+
+### Removing the install action
+
+What install does today, and where each goes:
+
+- First-run setup (initdb, first migration, render config, create roles, warm certificates): the steps' first runs, with `last` absent. One-off setup is a step with a constant key.
+- A pre-flight check before anything starts: a step every part comes after.
+- Bringing parts up in order: `after`.
+- Retrying a failed install, cancelling one: step back-off and operator retry; cancel pauses the step, uninstall backs out.
+- Replay, `install_interrupted`, and the runtime's path out of a stuck `Installing` phase: no longer needed, since install no longer runs a closure.
+
+Costs that have a workaround:
+
+- A failed first run leaves the app `Installed` and faulted, not `NotInstalled`. Removing an app that never worked takes an uninstall before the remove.
+- The `installing` status could be derived (installed, with a step that has never succeeded) so the console and Canopy reporting keep it.
+- Install parameters (operator input validated against a schema, held only for the install) move to an ordinary action run after install, as V14's Provision is. Actions already take the same schemas, and volume params too, which install parameters can't.
+
+The one thing with no direct replacement: gating the app's start on operator input that is never stored. With install parameters, the initial admin password is given before anything runs and is never kept. As an action, the parts are already up when the operator provides it. Ways round it:
+
+- Accept it: the app starts unprovisioned and the operator runs the action (V14's choice; a Tamanu facility uses its setup wizard anyway).
+- Store it as a secret parameter and key a step on it, giving up "never stored".
+- Let an action's success satisfy a step (`step.by_action(provision)`), so dependants wait for the operator. Another concept.
 
 Prior art: Kubernetes controllers (level-triggered reconcile) and init containers (per-pod gating); make and Bazel (re-run a recipe when its input key changes); systemd ordering (`After=`, `ExecCondition=`).
 
