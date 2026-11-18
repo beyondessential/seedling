@@ -20,8 +20,56 @@ import (
 const (
 	handshakeTimeout = 30 * time.Second
 	cidLength        = 8
-	maxDatagram      = 65535
+	// maxRecord is the most plaintext one DTLS record carries, which bounds
+	// a datagram in either direction of a session.
+	maxRecord = 1 << 14
 )
+
+// sessionSlots bounds the sessions open across every listener. Each holds a
+// socket toward its service, so without a bound a flood of sessions would
+// spend the descriptors every other route in the proxy needs. Half the
+// process's limit leaves the rest to them.
+var sessionSlots = newSlots(descriptorLimit() / 2)
+
+// descriptorLimit is the process's soft limit on open files, or a
+// conservative stand-in where it cannot be read.
+func descriptorLimit() int {
+	var limit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &limit); err != nil || limit.Cur == 0 {
+		return 1024
+	}
+	if limit.Cur > 1<<20 {
+		return 1 << 20
+	}
+	return int(limit.Cur)
+}
+
+// slots counts open sessions against a bound.
+type slots struct {
+	mu   sync.Mutex
+	used int
+	max  int
+}
+
+func newSlots(max int) *slots { return &slots{max: max} }
+
+func (s *slots) take() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.used >= s.max {
+		return false
+	}
+	s.used++
+	return true
+}
+
+func (s *slots) release() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.used--
+}
+
+var errNoSlot = errors.New("the proxy holds as many DTLS sessions as it has room for")
 
 // serverConfig is what a listener forwards its sessions with. A change of any
 // of it ends the sessions made under the old one.
@@ -45,6 +93,7 @@ type listener struct {
 	getCert certFunc
 	// dial opens a flow to the upstream; a field so tests can fail it.
 	dial     func(string) (*net.UDPConn, error)
+	slots    *slots
 	sessions map[*session]struct{}
 	closed   bool
 }
@@ -86,6 +135,7 @@ func listenOn(
 		cfg:      cfg,
 		getCert:  getCert,
 		dial:     dialUpstream,
+		slots:    sessionSlots,
 		sessions: make(map[*session]struct{}),
 	}
 	ln, err := dtls.Listen(
@@ -183,6 +233,7 @@ func (l *listener) serve(conn *dtls.Conn) {
 	l.mu.Lock()
 	cfg := l.cfg
 	dial := l.dial
+	room := l.slots
 	closed := l.closed
 	l.mu.Unlock()
 	if closed {
@@ -192,6 +243,12 @@ func (l *listener) serve(conn *dtls.Conn) {
 
 	// The flow is opened only now: a client that never completes the
 	// handshake spends none of the proxy's source ports.
+	if !room.take() {
+		l.refuse(cfg, errNoSlot)
+		_ = conn.Close()
+		return
+	}
+	defer room.release()
 	upstream, err := dial(cfg.Upstream)
 	if err != nil {
 		l.refuse(cfg, err)
@@ -287,7 +344,7 @@ func (s *session) run(idle time.Duration) {
 
 	go func() {
 		defer finish()
-		buf := make([]byte, maxDatagram)
+		buf := make([]byte, maxRecord)
 		for {
 			n, err := s.client.Read(buf)
 			if err != nil {
@@ -301,7 +358,9 @@ func (s *session) run(idle time.Duration) {
 	}()
 	go func() {
 		defer finish()
-		buf := make([]byte, maxDatagram)
+		// One byte over a record, so a datagram too big for one is seen
+		// whole rather than cut short.
+		buf := make([]byte, maxRecord+1)
 		for {
 			n, err := s.upstream.Read(buf)
 			if err != nil {
@@ -311,6 +370,12 @@ func (s *session) run(idle time.Duration) {
 				return
 			}
 			s.touch()
+			// A datagram that does not fit in a record cannot be carried
+			// inside the session. It is dropped, as the network would drop
+			// one too large for the path, and the session goes on.
+			if n > maxRecord {
+				continue
+			}
 			if _, err := s.client.Write(buf[:n]); err != nil {
 				return
 			}

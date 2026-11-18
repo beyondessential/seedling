@@ -430,7 +430,12 @@ port, hostname, upstream and name.
 - A handshake is not completed before the cookie exchange, and a session's
   upstream UDP flow is opened only after its handshake completes, with a
   source port of its own, so the service tells clients apart as over plain
-  UDP. The cap is the source ports the proxy has toward one service.
+  UDP. The cap is the source ports the proxy has toward one service, and
+  across every DTLS ingress, half the proxy's open-file limit, so sessions
+  cannot spend the descriptors the other routes need; a session beyond
+  either is refused.
+- A datagram from the service too big for one DTLS record is dropped, and
+  the session goes on.
 - A datagram that is not DTLS is dropped without a reply. A session ends
   when its client closes it, or after five minutes with no datagram in
   either direction, and its flow is closed.

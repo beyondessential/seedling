@@ -546,3 +546,69 @@ func TestASessionWithAConnectionIDContinuesWhenTheClientsAddressChanges(t *testi
 		})
 	}
 }
+
+// spec: PRX#dtls-terminating-ingresses
+func TestSessionsBeyondTheProxysRoomAreRefusedAndTheOpenOnesContinue(t *testing.T) {
+	f := newFixture(t, time.Minute)
+	f.l.mu.Lock()
+	f.l.slots = newSlots(1)
+	f.l.mu.Unlock()
+
+	first := f.client(t)
+	roundTrip(t, first, "first")
+
+	refused, err := dtls.Dial("udp", f.addr, dtls.WithInsecureSkipVerify(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer refused.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = refused.HandshakeContext(ctx)
+
+	waitFor(t, "the refusal to be recorded", func() bool {
+		_, ok := refusals.snapshot()["voip.example.com:5684"]
+		return ok
+	})
+	roundTrip(t, first, "still served")
+	if got := len(f.up.sources()); got != 2 {
+		t.Fatalf("the refused session reached the service: %d datagrams", got)
+	}
+
+	// Ending the open session makes room for another.
+	_ = first.Close()
+	waitFor(t, "the session to end", func() bool { return f.l.sessionCount() == 0 })
+	roundTrip(t, f.client(t), "after room was made")
+}
+
+// spec: PRX#dtls-terminating-ingresses
+func TestADatagramTooBigForARecordIsDroppedAndTheSessionGoesOn(t *testing.T) {
+	f := newFixture(t, time.Minute)
+	// Answer each datagram with one too big for a record, then the echo.
+	big, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer big.Close()
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := big.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			_, _ = big.WriteToUDP(make([]byte, maxRecord+100), from)
+			_, _ = big.WriteToUDP(buf[:n], from)
+		}
+	}()
+	cfg := f.l.cfg
+	cfg.Upstream = big.LocalAddr().String()
+	f.l.reconfigure(cfg, f.l.getCert)
+
+	c := f.client(t)
+	roundTrip(t, c, "first")
+	roundTrip(t, c, "second")
+	if f.l.sessionCount() != 1 {
+		t.Fatal("the session ended")
+	}
+}
