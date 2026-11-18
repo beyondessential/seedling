@@ -330,6 +330,11 @@ pub(super) struct ProxyBuildResult {
     /// unless `coverage` is complete: the target of an attachment may be an
     /// app missing from the build.
     pub unresolved_site_attachments: Option<Vec<super::site_proxy::UnresolvedAttachment>>,
+    /// The `(app, ingress)` of each DTLS ingress the proxy is given to serve,
+    /// whose refused sessions are held as faults. `None` unless `coverage` is
+    /// complete: an ingress missing from the build is absent, not removed.
+    // spec: PRX#dtls-terminating-ingresses
+    pub dtls_ingresses: Option<Vec<(AppName, String)>>,
 }
 
 /// The `(instance, hostname)` pairs whose certificates are observed: every
@@ -503,6 +508,7 @@ pub(super) fn compute_proxy_config(
             ready_observations,
             conflicts: None,
             unresolved_site_attachments: None,
+            dtls_ingresses: None,
         };
     };
 
@@ -572,6 +578,7 @@ pub(super) fn compute_proxy_config(
         ready_observations,
         conflicts: decided.then_some(conflicts),
         unresolved_site_attachments: decided.then_some(surviving_site_data.unresolved),
+        dtls_ingresses: decided.then_some(served.dtls_owners),
     }
 }
 
@@ -583,6 +590,8 @@ struct ServedIngresses {
     )>,
     l4: Vec<crate::system::types::L4Route>,
     dtls: Vec<crate::system::types::DtlsRoute>,
+    /// The app each DTLS route belongs to, with the route's ingress name.
+    dtls_owners: Vec<(AppName, String)>,
 }
 
 impl ServedIngresses {
@@ -591,12 +600,18 @@ impl ServedIngresses {
             http: Vec::new(),
             l4: Vec::new(),
             dtls: Vec::new(),
+            dtls_owners: Vec::new(),
         };
         for ingress in ingresses {
             match ingress.serve {
                 site_proxy::AppServe::Http(upstream) => served.http.push((ingress.def, *upstream)),
                 site_proxy::AppServe::Tcp(route) => served.l4.push(route),
-                site_proxy::AppServe::Dtls(route) => served.dtls.push(route),
+                site_proxy::AppServe::Dtls(route) => {
+                    served
+                        .dtls_owners
+                        .push((ingress.app.clone(), route.ingress.clone()));
+                    served.dtls.push(route);
+                }
             }
         }
         served

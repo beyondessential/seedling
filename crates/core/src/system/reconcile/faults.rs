@@ -679,6 +679,48 @@ impl Reconciler {
         });
     }
 
+    /// Converge `dtls_session_refused` faults to the DTLS ingresses the proxy
+    /// has refused a session of in the last five minutes.
+    ///
+    /// The refusals are read from the proxy. A read that fails is not an
+    /// answer, so it files nothing and clears nothing: the faults stay as they
+    /// were until a read succeeds.
+    // spec: FLT#ingress-and-service-faults
+    // spec: PRX#dtls-terminating-ingresses
+    pub(super) async fn reconcile_dtls_refusals(&self, served: &[(AppName, String)]) {
+        // With no DTLS ingress served nothing can be refusing, and any fault
+        // left over is cleared without asking the proxy.
+        let refusals = if served.is_empty() {
+            BTreeMap::new()
+        } else {
+            match self.driver.proxy.dtls_refusals().await {
+                Ok(refusals) => refusals,
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not read the proxy's DTLS session refusals");
+                    return;
+                }
+            }
+        };
+        let current = dtls_refusal_faults(served, &refusals, jiff::Timestamp::now());
+        let subjects: Vec<String> = current.keys().map(|k| k.subject.to_string()).collect();
+        self.db.call(move |db| {
+            match faults::sync_faults(
+                db,
+                &faults::FaultScope::Kind("dtls_session_refused".to_owned()),
+                &current,
+            ) {
+                Ok(outcome) if outcome.filed > 0 => {
+                    tracing::warn!(
+                        ingresses = ?subjects,
+                        "the proxy refused DTLS sessions for want of a flow to the service"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("failed to converge dtls_session_refused faults: {e}"),
+            }
+        });
+    }
+
     /// File a `site_ingress_target_missing` fault for each unresolved
     /// site-ingress attachment. We dedup on (site_ingress, port, protocol)
     /// so a stable misconfiguration doesn't fan out into duplicate faults.
@@ -1317,3 +1359,100 @@ mod health_check_tests;
 
 #[cfg(test)]
 mod cert_acquisition_tests;
+
+/// How long after a refused session its ingress holds a `dtls_session_refused`
+/// fault.
+// spec: FLT#ingress-and-service-faults
+const DTLS_REFUSAL_WINDOW_SECS: i64 = 5 * 60;
+
+/// The faults to hold: one per served DTLS ingress with a session refused
+/// within the window ending at `now`. An ingress no longer served has none,
+/// whatever the proxy last reported for it.
+// spec: FLT#ingress-and-service-faults
+fn dtls_refusal_faults(
+    served: &[(AppName, String)],
+    refusals: &BTreeMap<String, jiff::Timestamp>,
+    now: jiff::Timestamp,
+) -> BTreeMap<faults::FaultKey, (faults::FaultMeta, String)> {
+    served
+        .iter()
+        .filter_map(|(app, ingress)| {
+            let at = refusals.get(ingress)?;
+            (now.as_second() - at.as_second() < DTLS_REFUSAL_WINDOW_SECS).then(|| {
+                (
+                    faults::FaultKey::new(app, "dtls_session_refused", ingress.as_str()),
+                    (
+                        faults::FaultMeta::resource("ingress", ingress.as_str()),
+                        format!(
+                            "the proxy refused a session at {at} for want of a flow to the \
+                             service; the sessions already open are served"
+                        ),
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod dtls_refusal_tests {
+    use super::*;
+
+    fn at(s: &str) -> jiff::Timestamp {
+        s.parse().unwrap()
+    }
+
+    fn served() -> Vec<(AppName, String)> {
+        vec![(
+            AppName::new_unchecked("voip"),
+            "voip.example.com:5684".to_owned(),
+        )]
+    }
+
+    fn refusals(when: &str) -> BTreeMap<String, jiff::Timestamp> {
+        BTreeMap::from([("voip.example.com:5684".to_owned(), at(when))])
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn a_recent_refusal_is_held_against_the_ingress() {
+        let held = dtls_refusal_faults(
+            &served(),
+            &refusals("2026-11-18T01:00:00Z"),
+            at("2026-11-18T01:04:59Z"),
+        );
+        assert_eq!(held.len(), 1);
+        let key = held.keys().next().unwrap();
+        assert_eq!(key.kind.as_ref() as &str, "dtls_session_refused");
+        assert_eq!(key.subject.as_ref() as &str, "voip.example.com:5684");
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn five_quiet_minutes_hold_nothing() {
+        let held = dtls_refusal_faults(
+            &served(),
+            &refusals("2026-11-18T01:00:00Z"),
+            at("2026-11-18T01:05:00Z"),
+        );
+        assert!(held.is_empty());
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn an_ingress_that_is_no_longer_served_holds_nothing() {
+        let held = dtls_refusal_faults(
+            &[],
+            &refusals("2026-11-18T01:00:00Z"),
+            at("2026-11-18T01:00:01Z"),
+        );
+        assert!(held.is_empty());
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn an_ingress_never_refused_holds_nothing() {
+        let held = dtls_refusal_faults(&served(), &BTreeMap::new(), at("2026-11-18T01:00:01Z"));
+        assert!(held.is_empty());
+    }
+}

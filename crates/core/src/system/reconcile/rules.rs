@@ -9,7 +9,6 @@ use seedling_protocol::names::{AppName, ExternalServiceName, ServiceRef};
 use super::RunningPod;
 use crate::{
     defs::{
-        app::AppDef,
         resource::{Resource, ResourceKind},
         service::{BoundService, ServicePort},
     },
@@ -17,7 +16,6 @@ use crate::{
         InstanceRegistry,
         external_service_mappings::ExternalServiceSnapshot,
         registry::RegistryError,
-        site_ingress_attachments::AttachmentProtocol,
         site_services::{
             SiteServiceProtocol,
             resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},

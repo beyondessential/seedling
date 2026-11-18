@@ -2585,6 +2585,9 @@ fn a_cached_config_from_before_dtls_termination_still_parses_and_renders_as_it_d
     let tls = &servers["l4_tcp_5432"]["routes"][0];
     assert!(tls["match"].is_null(), "no name to route by was recorded");
     assert_eq!(tls["handle"][0]["handler"], "tls");
-    assert_eq!(servers["l4_udp_5684"]["routes"][0]["handle"][0]["handler"], "proxy");
+    assert_eq!(
+        servers["l4_udp_5684"]["routes"][0]["handle"][0]["handler"],
+        "proxy"
+    );
     assert!(json["apps"]["seedling_dtls"].is_null());
 }
