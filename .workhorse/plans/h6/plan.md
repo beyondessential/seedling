@@ -177,10 +177,11 @@ Grounded in the code as of the rebase over F6 and G6.
 
 ### Progress
 
-- Stage A (several parameters per change) is built and committed: migration v82 (`generation_params` only), `/apps/params/set` with `params`, `ParamsChanged`, CLI and console changes. The remaining storage work needs v83 or later.
-- Temporary shims for the next stage to delete: `schedule_on_change` fires at most one handler per change; `/apps/plan` still reports `on_change_would_fire`; `/apps/generations` still emits `operation_id` and `outcome`.
-- Next: stage B (remove `on_change`, the start and install actions, install parameters, operation outcomes on generations), then gates (BSL, runtime, reconciler, interface), then definitions, docs and tests.
-- Spec questions raised by stage A: PRM refuses a repeated parameter name in one request, which only the raw request text can show; PRM's plan section should say whether an empty `proposed_params` is refused.
+- Stage A (several parameters per change): done. Migration v82.
+- Stage B1 (install and start actions, install parameters removed): done. Migration v83. `AppStatus::Installing` stays as a variant nothing derives yet; the gate stage derives it in `runtime/apps/status.rs::steady` from the setup record.
+- Stage B2 (`on_change`, `param_change` trigger, source/target generation, generation outcomes removed): done. Migrations v84 to v86.
+- Left for gates: `HandlerKind::Gate` and check entry in the image probe; `gates_would_run` in `/apps/plan` (the console already reads it); `gates`, `held_by`, `waiting_on` in `/apps/show`; `/apps/gates/run`; `GateStateChanged`; the gate tables and `registered_apps.set_up`.
+- Then definitions, docs, test cases.
 
 ### Baseline
 
