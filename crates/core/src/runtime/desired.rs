@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use seedling_protocol::names::AppName;
@@ -9,7 +9,7 @@ use crate::defs::job::Job;
 use crate::defs::resource::{Resource, ResourceId, ResourceKind};
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::db::Db;
-use crate::runtime::identity::{InstanceVariant, ResourceInstance};
+use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 use crate::runtime::lifecycle::LifecycleState;
 use crate::runtime::stopped::StoppedSet;
 use crate::runtime::{InstanceRegistry, RegistryError};
@@ -364,17 +364,15 @@ pub fn merge_sessions(
     sessions: &[&OperationProgress],
     uninstalling: bool,
 ) {
+    let mut held: HashSet<InstanceId> = state
+        .resources
+        .iter()
+        .map(|resource| resource.instance.id)
+        .chain(state.undeclared.iter().map(|instance| instance.id))
+        .collect();
     for progress in sessions {
         for mut resource in compute_during_operation(app_def, progress).resources {
-            if state
-                .resources
-                .iter()
-                .any(|held| held.instance.id == resource.instance.id)
-                || state
-                    .undeclared
-                    .iter()
-                    .any(|held| held.id == resource.instance.id)
-            {
+            if !held.insert(resource.instance.id) {
                 continue;
             }
             if uninstalling {
