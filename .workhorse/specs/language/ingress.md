@@ -100,6 +100,8 @@ An ingress on which `tls()` is never called MUST forward TCP connections to its 
 
 ### DTLS sessions
 
+An ingress terminating DTLS MUST present the certificate for its own hostname, whatever SNI the client sends, and whether or not it sends one.
+
 The runtime MUST carry the plaintext datagrams of each DTLS session to the Service on a UDP flow of the session's own, whose source port differs from that of every other session's flow open to the Service.
 The runtime MUST deliver a datagram the Service sends on a session's flow to that session's client, inside the session.
 

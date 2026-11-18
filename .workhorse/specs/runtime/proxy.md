@@ -63,17 +63,18 @@ Each transport an ingress serves on its port is a claim on that port, of one of 
 | TCP or UDP passed through, as an app ingress with no termination or a `tcp` or `udp` attachment does | the whole port |
 | TLS on TCP, including HTTPS | the port for its hostname, among TLS claims |
 | HTTP/3 on UDP | the port for its hostname, among HTTP/3 claims |
-| DTLS on UDP | the port for its hostname, among DTLS claims |
+| DTLS on UDP | the whole port |
 | plaintext HTTP on TCP, as a plaintext ingress or an [HTTP redirect](../language/ingress.md#redirect-to-https) does | the port for its hostname, among plaintext HTTP claims |
 
 Two claims on the same port and transport MUST be served together when both are for a hostname, both are of the same kind, and their hostnames differ.
 Any other two claims on the same port and transport conflict.
 
-The proxy MUST route each connection, session or request on a shared port to the ingress whose hostname the client names: by SNI for TLS, DTLS and HTTP/3, and by the request's `Host` for plaintext HTTP.
+The proxy MUST route each connection or request on a shared port to the ingress whose hostname the client names: by SNI for TLS and HTTP/3, and by the request's `Host` for plaintext HTTP.
+The proxy MUST refuse a TLS handshake that carries no SNI, or whose SNI names no ingress on the port.
 
 > [!NOTE]
 > Traffic passed through carries nothing the proxy reads a hostname from, so a pass-through ingress leaves nothing on its port for another to be told apart by.
-> DTLS and HTTP/3 both name a hostname in their handshakes, but the proxy serves HTTP/3 from a listener of its own, which leaves no point at which the two could be told apart.
+> DTLS clients commonly send no SNI, so a DTLS ingress is not told apart by hostname either, and holds its UDP port alone.
 
 ### Plaintext ingresses
 
