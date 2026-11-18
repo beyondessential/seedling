@@ -180,6 +180,7 @@ Grounded in the code as of the rebase over F6 and G6.
 - Stage A (several parameters per change): done. Migration v82.
 - Stage B1 (install and start actions, install parameters removed): done. Migration v83. `AppStatus::Installing` stays as a variant nothing derives yet; the gate stage derives it in `runtime/apps/status.rs::steady` from the setup record.
 - Stage B2 (`on_change`, `param_change` trigger, source/target generation, generation outcomes removed): done. Migrations v84 to v86.
+- Stage G1 (BSL `Gate`, `after`, `GateDef` on `AppDef`, end-of-evaluation checks, migration v87 with `gate_records`/`gate_holds`/`set_up`, `Cipher::key_digest`, spec hash folding in direct gate keys): done. Exclusive selections resolve through a thread-local drained by `defs::finish_evaluation`.
 - Left for gates: `HandlerKind::Gate` and check entry in the image probe; `gates_would_run` in `/apps/plan` (the console already reads it); `gates`, `held_by`, `waiting_on` in `/apps/show`; `/apps/gates/run`; `GateStateChanged`; the gate tables and `registered_apps.set_up`.
 - Then definitions, docs, test cases.
 
