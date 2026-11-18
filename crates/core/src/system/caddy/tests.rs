@@ -62,6 +62,7 @@ fn http_only_vhost_goes_in_http_server() {
         }],
         virtual_hosts: vec![http_vhost("example.com", "[fd5e::1]:3000")],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -87,6 +88,7 @@ fn https_vhost_goes_in_https_server_redirect_in_http() {
         ],
         virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -136,6 +138,7 @@ fn tls_acme_subjects_appear_in_automation() {
             }],
         }],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -190,6 +193,7 @@ fn warm_cert_skipped_when_already_routed() {
             }],
         }],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -239,6 +243,7 @@ fn dial_strips_http_scheme() {
             }],
         }],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -276,6 +281,7 @@ fn https_server_includes_quic_listener() {
             }],
         }],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -307,6 +313,7 @@ fn cert_endpoint_url_is_emitted_inside_automation_policy() {
         }],
         virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
         renewal_ratios: Default::default(),
@@ -354,6 +361,7 @@ fn internal_hostnames_pin_caddy_internal_issuer() {
             https_vhost("node.localhost", "[fd5e::1]:3001"),
         ],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -392,6 +400,7 @@ fn only_internal_hostnames_emit_just_internal_policy() {
         }],
         virtual_hosts: vec![https_vhost("node.localhost", "[fd5e::1]:3000")],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -440,6 +449,7 @@ fn vhost_with_multiple_prefixes_emits_per_prefix_routes_longest_first() {
             ],
         }],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -467,6 +477,7 @@ fn cert_endpoint_url_without_subjects_emits_no_tls_app() {
         listeners: vec![],
         virtual_hosts: vec![],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
         renewal_ratios: Default::default(),
@@ -475,28 +486,253 @@ fn cert_endpoint_url_without_subjects_emits_no_tls_app() {
     assert!(json["apps"]["tls"].is_null());
 }
 
+fn tls_route(port: u16, hostname: &str, upstream: &str) -> crate::system::types::L4Route {
+    crate::system::types::L4Route {
+        port,
+        proto: crate::system::types::L4Proto::Tcp,
+        upstreams: vec![upstream.to_string()],
+        terminate_tls: true,
+        hostname: Some(hostname.to_string()),
+    }
+}
+
+fn pass_through_route(
+    port: u16,
+    proto: crate::system::types::L4Proto,
+    upstream: &str,
+) -> crate::system::types::L4Route {
+    crate::system::types::L4Route {
+        port,
+        proto,
+        upstreams: vec![upstream.to_string()],
+        terminate_tls: false,
+        hostname: None,
+    }
+}
+
+fn dtls_route(port: u16, hostname: &str) -> crate::system::types::DtlsRoute {
+    crate::system::types::DtlsRoute {
+        port,
+        hostname: hostname.to_string(),
+        upstream: "[fd5e::9]:5684".to_string(),
+        ingress: format!("{hostname}:{port}"),
+    }
+}
+
 // spec: ING#termination
 #[test]
 fn an_l4_route_terminating_tls_runs_the_tls_handler_before_the_proxy() {
-    use crate::system::types::{L4Proto, L4Route};
-
     let config = ProxyConfig {
-        listeners: vec![],
-        virtual_hosts: vec![],
-        l4_routes: vec![L4Route {
-            port: 5432,
-            proto: L4Proto::Tcp,
-            upstreams: vec!["[fd5e::1]:5432".to_string()],
-            terminate_tls: true,
-        }],
-        warm_cert_hostnames: Default::default(),
-        cert_endpoint_url: None,
-        renewal_ratios: Default::default(),
+        l4_routes: vec![tls_route(5432, "db.example.com", "[fd5e::1]:5432")],
+        ..Default::default()
     };
     let json = build_caddy_config(&config);
-    let handle = &json["apps"]["layer4"]["servers"]["l4_tcp_5432"]["routes"][0]["handle"];
-    assert_eq!(handle[0]["handler"], "tls");
-    assert_eq!(handle[1]["handler"], "proxy");
+    let route = &json["apps"]["layer4"]["servers"]["l4_tcp_5432"]["routes"][0];
+    assert_eq!(route["handle"][0]["handler"], "tls");
+    assert_eq!(route["handle"][1]["handler"], "proxy");
+}
+
+// spec: ING#termination
+#[test]
+fn a_tls_route_accepts_both_tls_versions_by_name() {
+    let config = ProxyConfig {
+        l4_routes: vec![tls_route(5432, "db.example.com", "[fd5e::1]:5432")],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let handler = &json["apps"]["layer4"]["servers"]["l4_tcp_5432"]["routes"][0]["handle"][0];
+    let policy = &handler["connection_policies"][0];
+    assert_eq!(policy["protocol_min"], "tls1.2");
+    assert_eq!(policy["protocol_max"], "tls1.3");
+}
+
+// spec: PRX#shared-ports
+#[test]
+fn a_lone_tls_route_answers_only_to_its_own_hostname() {
+    let config = ProxyConfig {
+        l4_routes: vec![tls_route(5432, "db.example.com", "[fd5e::1]:5432")],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let routes = json["apps"]["layer4"]["servers"]["l4_tcp_5432"]["routes"]
+        .as_array()
+        .unwrap();
+    assert_eq!(routes.len(), 1, "no route to catch a handshake naming none");
+    assert_eq!(routes[0]["match"][0]["tls"]["sni"][0], "db.example.com");
+}
+
+// spec: PRX#shared-ports
+#[test]
+fn tls_routes_for_different_hostnames_share_a_port_by_sni() {
+    let config = ProxyConfig {
+        l4_routes: vec![
+            tls_route(5432, "a.example.com", "[fd5e::1]:5432"),
+            tls_route(5432, "b.example.com", "[fd5e::2]:5432"),
+        ],
+        ..Default::default()
+    };
+    assert!(super::config::conflicting_binds(&config).is_empty());
+    let json = build_caddy_config(&config);
+    let servers = json["apps"]["layer4"]["servers"].as_object().unwrap();
+    assert_eq!(servers.len(), 1, "one server for the port");
+    let routes = servers["l4_tcp_5432"]["routes"].as_array().unwrap();
+    let snis: Vec<_> = routes
+        .iter()
+        .map(|r| r["match"][0]["tls"]["sni"][0].as_str().unwrap())
+        .collect();
+    assert_eq!(snis, ["a.example.com", "b.example.com"]);
+    assert_eq!(
+        routes[1]["handle"][1]["upstreams"][0]["dial"][0],
+        "[fd5e::2]:5432"
+    );
+}
+
+// spec: PRX#shared-ports
+#[test]
+fn a_tls_route_beside_an_https_server_is_wrapped_ahead_of_its_tls() {
+    let mut https = https_vhost("web.example.com", "[fd5e::1]:8080");
+    https.redirect = None;
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Https,
+            },
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Quic,
+            },
+        ],
+        virtual_hosts: vec![https],
+        l4_routes: vec![tls_route(443, "db.example.com", "[fd5e::2]:5432")],
+        ..Default::default()
+    };
+    assert!(super::config::conflicting_binds(&config).is_empty());
+    let json = build_caddy_config(&config);
+    assert!(
+        json["apps"]["layer4"].is_null(),
+        "the HTTPS server takes the port, so no layer 4 server binds it"
+    );
+    let server = &json["apps"]["http"]["servers"]["seedling_https_443"];
+    let wrappers = server["listener_wrappers"].as_array().unwrap();
+    assert_eq!(wrappers[0]["wrapper"], "layer4");
+    assert_eq!(
+        wrappers[1]["wrapper"], "tls",
+        "named, so the layer 4 module reads the hello and not ciphertext"
+    );
+    let route = &wrappers[0]["routes"][0];
+    assert_eq!(route["match"][0]["tls"]["sni"][0], "db.example.com");
+    assert_eq!(route["handle"][0]["handler"], "tls");
+    assert_eq!(
+        route["handle"][1]["upstreams"][0]["dial"][0],
+        "[fd5e::2]:5432"
+    );
+}
+
+// spec: ING#termination
+#[test]
+fn an_https_server_accepts_both_tls_versions_by_name() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![https_vhost("web.example.com", "[fd5e::1]:8080")],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let policy =
+        &json["apps"]["http"]["servers"]["seedling_https_443"]["tls_connection_policies"][0];
+    assert_eq!(policy["protocol_min"], "tls1.2");
+    assert_eq!(policy["protocol_max"], "tls1.3");
+    assert!(
+        json["apps"]["http"]["servers"]["seedling_https_443"]["listener_wrappers"].is_null(),
+        "nothing shares the port, so nothing reads the hello ahead of it"
+    );
+}
+
+// spec: PRX#dtls-terminating-ingresses
+#[test]
+fn a_dtls_route_is_emitted_as_a_server_of_the_dtls_app_and_not_of_layer4() {
+    let config = ProxyConfig {
+        dtls_routes: vec![dtls_route(5684, "voip.example.com")],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    assert!(json["apps"]["layer4"].is_null());
+    let server = &json["apps"]["seedling_dtls"]["servers"]["dtls_5684"];
+    assert_eq!(server["listen"][0], ":5684");
+    assert_eq!(server["hostname"], "voip.example.com");
+    assert_eq!(server["upstream"], "[fd5e::9]:5684");
+    assert_eq!(server["ingress"], "voip.example.com:5684");
+}
+
+// spec: PRX#dtls-terminating-ingresses
+#[test]
+fn no_dtls_routes_means_no_dtls_app() {
+    let json = build_caddy_config(&ProxyConfig::default());
+    assert!(json["apps"]["seedling_dtls"].is_null());
+}
+
+// spec: PRX#shared-ports
+#[test]
+fn dtls_beside_pass_through_udp_is_reported_as_a_double_bind() {
+    use crate::system::types::L4Proto;
+
+    let config = ProxyConfig {
+        l4_routes: vec![pass_through_route(5684, L4Proto::Udp, "[fd5e::1]:5684")],
+        dtls_routes: vec![dtls_route(5684, "voip.example.com")],
+        ..Default::default()
+    };
+    let conflicts = super::config::conflicting_binds(&config);
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].to_string(), "udp/5684");
+}
+
+// spec: PRX#shared-ports
+#[test]
+fn dtls_beside_http3_is_reported_as_a_double_bind() {
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Https,
+            },
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Quic,
+            },
+        ],
+        virtual_hosts: vec![https_vhost("web.example.com", "[fd5e::1]:8080")],
+        dtls_routes: vec![dtls_route(443, "voip.example.com")],
+        ..Default::default()
+    };
+    let conflicts = super::config::conflicting_binds(&config);
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].to_string(), "udp/443");
+}
+
+// spec: PRX#shared-ports
+#[test]
+fn pass_through_beside_a_tls_route_is_reported_as_a_double_bind() {
+    use crate::system::types::L4Proto;
+
+    // Both routes are rendered into one server per port and transport, so the
+    // double bind that matters is against an HTTP server on that port.
+    let mut plain = http_vhost("plain.example.com", "[fd5e::1]:8080");
+    plain.port = 5432;
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 5432,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![plain],
+        l4_routes: vec![pass_through_route(5432, L4Proto::Tcp, "[fd5e::2]:5432")],
+        ..Default::default()
+    };
+    let conflicts = super::config::conflicting_binds(&config);
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].to_string(), "tcp/5432");
 }
 
 #[test]
@@ -512,14 +748,17 @@ fn l4_routes_emit_layer4_servers_per_port_and_proto() {
                 proto: L4Proto::Tcp,
                 upstreams: vec!["[fd5e::1]:5432".to_string()],
                 terminate_tls: false,
+                hostname: None,
             },
             L4Route {
                 port: 514,
                 proto: L4Proto::Udp,
                 upstreams: vec!["[fd5e::2]:514".to_string(), "[fd5e::3]:514".to_string()],
                 terminate_tls: false,
+                hostname: None,
             },
         ],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -590,6 +829,7 @@ fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
             ],
         }],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -639,6 +879,7 @@ fn http_to_https_redirect_targets_nonstandard_https_port() {
         ],
         virtual_hosts: vec![vhost],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -748,6 +989,7 @@ fn plaintext_only_config_requests_no_certificate() {
         }],
         virtual_hosts: vec![http_vhost("clinic.local", "[fd5e::1]:80")],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -771,6 +1013,7 @@ fn plaintext_vhost_gets_no_redirect_route() {
         }],
         virtual_hosts: vec![http_vhost("clinic.local", "[fd5e::1]:80")],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -1347,9 +1590,12 @@ fn ipv6_clients_are_counted_per_64_and_ipv4_per_address() {
 // every route and cert policy on the node, not just the offending ingress.
 #[test]
 fn a_port_declared_as_both_plaintext_and_tls_is_reported() {
-    use crate::system::caddy::config::conflicting_listener_ports;
-    use crate::system::types::{ProxyListener, ProxyListenerProto};
+    use crate::system::caddy::config::conflicting_binds;
 
+    let mut plain = http_vhost("plain.example.com", "[fd5e::1]:8080");
+    plain.port = 8443;
+    let mut tls = https_vhost("web.example.com", "[fd5e::2]:8080");
+    tls.port = 8443;
     let config = ProxyConfig {
         listeners: vec![
             ProxyListener {
@@ -1360,21 +1606,19 @@ fn a_port_declared_as_both_plaintext_and_tls_is_reported() {
                 port: 8443,
                 proto: ProxyListenerProto::Https,
             },
-            ProxyListener {
-                port: 80,
-                proto: ProxyListenerProto::Http,
-            },
         ],
+        virtual_hosts: vec![plain, tls],
         ..Default::default()
     };
-    assert_eq!(conflicting_listener_ports(&config), vec![8443]);
+    let conflicts = conflicting_binds(&config);
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].to_string(), "tcp/8443");
 }
 
 // spec: PRX#plaintext-ingresses
 #[test]
 fn distinct_ports_per_protocol_do_not_conflict() {
-    use crate::system::caddy::config::conflicting_listener_ports;
-    use crate::system::types::{ProxyListener, ProxyListenerProto};
+    use crate::system::caddy::config::conflicting_binds;
 
     let config = ProxyConfig {
         listeners: vec![
@@ -1391,9 +1635,13 @@ fn distinct_ports_per_protocol_do_not_conflict() {
                 proto: ProxyListenerProto::Quic,
             },
         ],
+        virtual_hosts: vec![
+            http_vhost("plain.example.com", "[fd5e::1]:8080"),
+            https_vhost("web.example.com", "[fd5e::2]:8080"),
+        ],
         ..Default::default()
     };
-    assert!(conflicting_listener_ports(&config).is_empty());
+    assert!(conflicting_binds(&config).is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -1950,6 +2198,7 @@ fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost(
             )],
         }],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),
@@ -2018,6 +2267,7 @@ fn a_hostname_held_back_from_renewing_gets_a_policy_of_its_own() {
             https_vhost("later.example.com", "[fd5e::1]:3003"),
         ],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
         renewal_ratios: std::collections::BTreeMap::from([
@@ -2073,6 +2323,7 @@ fn a_ratio_for_a_hostname_the_proxy_does_not_serve_is_ignored() {
         }],
         virtual_hosts: vec![https_vhost("plain.example.com", "[fd5e::1]:3000")],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: std::collections::BTreeMap::from([("gone.example.com".to_owned(), 0.1)]),
@@ -2292,6 +2543,7 @@ fn a_proxied_route_with_no_upstreams_answers_503() {
         }],
         virtual_hosts: vec![vhost],
         l4_routes: vec![],
+        dtls_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
         renewal_ratios: Default::default(),

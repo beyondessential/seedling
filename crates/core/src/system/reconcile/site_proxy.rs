@@ -7,7 +7,7 @@ use super::AppSnapshot;
 use crate::{
     defs::{
         Port,
-        ingress::{HttpTermination, IngressDef},
+        ingress::{Claim, ClaimTransport, HttpTermination, IngressDef},
         resource::{Resource, ResourceKind},
     },
     runtime::{
@@ -19,7 +19,7 @@ use crate::{
     },
     system::{
         translate::proxy::{RedirectTarget, ServiceUpstream},
-        types::{L4Proto, L4Route},
+        types::{DtlsRoute, L4Proto, L4Route},
     },
 };
 
@@ -39,7 +39,7 @@ pub(super) struct SiteProxyData {
     /// be resolved this tick. Used for fault filing.
     pub unresolved: Vec<UnresolvedAttachment>,
     /// When each site ingress first had an attachment on a port, which orders
-    /// site ingresses claiming the same `(hostname, port)`.
+    /// site ingresses making conflicting claims.
     // spec: SITE#ingress-conflicts
     pub created: std::collections::BTreeMap<(SiteIngressName, u16), String>,
 }
@@ -53,15 +53,13 @@ pub(super) struct UnresolvedAttachment {
 }
 
 /// One resolved L4 (tcp/udp) site-ingress attachment. We carry the parent
-/// site ingress's name + hostname alongside the route so the conflict
-/// detector can attribute collisions and the reconciler can drop both
-/// sides from the proxy config when an app ingress claims the same
-/// `(hostname, port)`.
+/// site ingress's name alongside the route so the conflict detector can
+/// attribute collisions and the reconciler can drop both sides from the proxy
+/// config when an app ingress makes a conflicting claim.
 // spec: SITE#attachments
 #[derive(Debug, Clone)]
 pub(super) struct SiteL4Entry {
     pub site_ingress: SiteIngressName,
-    pub hostname: String,
     pub route: L4Route,
 }
 
@@ -177,12 +175,12 @@ fn resolve_attachment(
                         };
                         data.l4_routes.push(SiteL4Entry {
                             site_ingress: ingress.name.clone(),
-                            hostname: ingress.hostname.clone(),
                             route: L4Route {
                                 port: att.port,
                                 proto,
                                 upstreams: vec![upstream_url],
                                 terminate_tls: false,
+                                hostname: None,
                             },
                         });
                     }
@@ -441,353 +439,448 @@ fn pod_first_port(
         .map(|b| b.route.http.port.get())
 }
 
-/// (hostname, port) tuples that the proxy config rejected because both an
-/// app ingress and a site-ingress attachment claimed them. Both sides of
-/// each conflict are dropped from the proxy config; the reconciler files
-/// faults for each party and clears them on the first tick where the
-/// conflict no longer appears.
-// spec: SITE#ingress-conflicts
-#[derive(Debug, Default, Clone)]
-pub(super) struct ConflictReport {
-    /// Conflict tuples observed this tick.
-    pub conflicts: BTreeSet<(String, u16)>,
-    /// Per-conflict roster of involved parties, used for fault descriptions.
-    pub parties: Vec<ConflictParties>,
-    /// App ingresses left out because another app's ingress claims the same
-    /// `(hostname, port)`.
-    // spec: ING#claims-across-apps
-    pub app_claims: Vec<LostAppClaim>,
-    /// Site ingress attachments left out because an attachment of another site
-    /// ingress, created first, claims the same `(hostname, port)`.
-    // spec: SITE#ingress-conflicts
-    pub site_claims: Vec<LostSiteClaim>,
-    /// `(hostname, port)` claimed by an app ingress's HTTP redirect and by a
-    /// plaintext site ingress attachment. Only the redirect and the
-    /// attachment are left out; the app ingress itself is served.
-    // spec: PRX#port-scope
-    pub redirect_conflicts: BTreeSet<(String, u16)>,
+/// What the proxy serves for one app ingress.
+pub(super) enum AppServe {
+    /// An HTTP-terminating ingress, routed through a virtual host.
+    Http(Box<ServiceUpstream>),
+    /// An ingress that passes TCP through or terminates TLS without HTTP.
+    Tcp(L4Route),
+    /// An ingress that terminates DTLS.
+    Dtls(DtlsRoute),
 }
 
-/// A site ingress attachment left out of the proxy because an attachment of
-/// another site ingress, created first, claims the same `(hostname, port)`.
-// spec: SITE#ingress-conflicts
-#[derive(Debug, Clone)]
-pub(super) struct LostSiteClaim {
-    pub hostname: String,
-    pub port: u16,
-    pub site_ingress: SiteIngressName,
-    /// The site ingress whose attachment is served.
-    pub served: SiteIngressName,
+/// An app ingress, carrying its app so it can take part in conflict
+/// resolution whatever it is served as.
+// spec: ING#claims-across-apps
+pub(super) struct AppIngress {
+    pub app: AppName,
+    pub def: IngressDef,
+    pub serve: AppServe,
 }
 
-/// Keep, of the site ingresses claiming each `(hostname, port)`, only the one
-/// whose attachment was created first, and report the rest.
+impl AppIngress {
+    fn name(&self) -> String {
+        ingress_resource_name(&self.def)
+    }
+}
+
+/// An ingress's name inside its app's resource map: `<hostname>:<port>`.
+/// Mirrors `crate::defs::ingress::ingress_resource_name` without depending on
+/// the definitions side of the codebase here.
+fn ingress_resource_name(def: &IngressDef) -> String {
+    format!("{}:{}", def.hostname, def.port.get())
+}
+
+/// One party's claims, in the order the party ranks among those competing for
+/// a port.
+struct Candidate<O> {
+    owner: O,
+    claims: Vec<Claim>,
+    /// The candidate this one is served with. Where that one is left out this
+    /// one is too, and takes no claim away from anything else.
+    rides_with: Option<usize>,
+}
+
+enum Admission {
+    Served,
+    /// Left out because `theirs`, a claim of the served candidate `by`,
+    /// conflicts with `mine`.
+    Lost {
+        mine: Claim,
+        theirs: Claim,
+        by: usize,
+    },
+    /// Left out with the candidate it rides with.
+    WithParent,
+}
+
+/// Serve candidates in order, leaving out each one that makes a claim
+/// conflicting with one of a candidate already served, unless the two have the
+/// same owner.
 ///
-/// The name breaks a tie, so the outcome is the same on every tick.
-// spec: SITE#ingress-conflicts
-pub(super) fn resolve_site_claims(mut data: SiteProxyData) -> (SiteProxyData, Vec<LostSiteClaim>) {
-    use std::collections::BTreeMap;
-
-    let created = |name: &SiteIngressName, port: u16| {
-        data.created
-            .get(&(name.clone(), port))
-            .cloned()
-            .unwrap_or_default()
-    };
-    let claims: Vec<(String, u16, SiteIngressName)> = data
-        .forwards
-        .iter()
-        .map(|(n, d, _)| (d.hostname.clone(), d.port.get(), n.clone()))
-        .chain(
-            data.redirects
-                .iter()
-                .map(|(n, d, _)| (d.hostname.clone(), d.port.get(), n.clone())),
-        )
-        .chain(
-            data.l4_routes
-                .iter()
-                .map(|e| (e.hostname.clone(), e.route.port, e.site_ingress.clone())),
-        )
-        .collect();
-
-    let rank = |name: &SiteIngressName, port: u16| (created(name, port), name.clone());
-    let mut served: BTreeMap<(String, u16), SiteIngressName> = BTreeMap::new();
-    for (hostname, port, name) in &claims {
-        let key = (hostname.clone(), *port);
-        match served.get(&key) {
-            Some(current) if rank(current, *port) <= rank(name, *port) => {}
-            _ => {
-                served.insert(key, name.clone());
-            }
+/// A conflict is between pairs of claims, so which candidates are served can
+/// depend on the order. Callers rank candidates so the outcome is the same on
+/// every tick.
+// spec: PRX#shared-ports
+fn admit<O: PartialEq>(candidates: &[Candidate<O>]) -> Vec<Admission> {
+    let mut outcome: Vec<Admission> = Vec::with_capacity(candidates.len());
+    for (idx, candidate) in candidates.iter().enumerate() {
+        if let Some(parent) = candidate.rides_with
+            && !matches!(outcome[parent], Admission::Served)
+        {
+            outcome.push(Admission::WithParent);
+            continue;
         }
+        let blocked = candidates[..idx]
+            .iter()
+            .zip(&outcome)
+            .enumerate()
+            .filter(|(_, (_, admission))| matches!(admission, Admission::Served))
+            .filter(|(_, (served, _))| served.owner != candidate.owner)
+            .find_map(|(by, (served, _))| {
+                candidate.claims.iter().find_map(|mine| {
+                    served
+                        .claims
+                        .iter()
+                        .find(|theirs| mine.conflicts_with(theirs))
+                        .map(|theirs| Admission::Lost {
+                            mine: mine.clone(),
+                            theirs: theirs.clone(),
+                            by,
+                        })
+                })
+            });
+        outcome.push(blocked.unwrap_or(Admission::Served));
     }
-
-    let mut lost: BTreeMap<(String, u16, SiteIngressName), SiteIngressName> = BTreeMap::new();
-    for (hostname, port, name) in &claims {
-        let winner = &served[&(hostname.clone(), *port)];
-        if winner != name {
-            lost.insert((hostname.clone(), *port, name.clone()), winner.clone());
-        }
-    }
-    let is_lost = |hostname: &str, port: u16, name: &SiteIngressName| {
-        lost.contains_key(&(hostname.to_owned(), port, name.clone()))
-    };
-    data.forwards
-        .retain(|(n, d, _)| !is_lost(&d.hostname, d.port.get(), n));
-    data.redirects
-        .retain(|(n, d, _)| !is_lost(&d.hostname, d.port.get(), n));
-    data.l4_routes
-        .retain(|e| !is_lost(&e.hostname, e.route.port, &e.site_ingress));
-
-    let lost = lost
-        .into_iter()
-        .map(|((hostname, port, site_ingress), served)| LostSiteClaim {
-            hostname,
-            port,
-            site_ingress,
-            served,
-        })
-        .collect();
-    (data, lost)
+    outcome
 }
 
-/// An app ingress left out of the proxy because an ingress of an app whose
-/// install completed earlier claims the same `(hostname, port)`.
+/// A claim of an app ingress that was left out of the proxy because another
+/// app's ingress, whose app installed first, makes a conflicting claim.
 // spec: ING#claims-across-apps
 #[derive(Debug, Clone)]
 pub(super) struct LostAppClaim {
-    pub hostname: String,
-    pub port: u16,
     pub app: AppName,
     pub ingress: String,
-    /// The app whose ingress is served, and that ingress.
-    pub served: (AppName, String),
+    /// The claim is the ingress's HTTP redirect, which alone is left out, and
+    /// not the ingress.
+    pub redirect: bool,
+    pub claim: Claim,
+    /// The ingress whose claim is served, and that claim.
+    pub served: ServedClaim,
 }
 
-/// Keep, of the app ingresses claiming each `(hostname, port)`, only the one
-/// of the app whose install completed first, and report the rest.
+#[derive(Debug, Clone)]
+pub(super) struct ServedClaim {
+    pub app: AppName,
+    pub ingress: String,
+    pub claim: Claim,
+}
+
+/// Keep, of the app ingresses making conflicting claims, those of the app whose
+/// install completed first, and report the rest.
 ///
 /// `install_seq` gives each app's place in the order installs completed; an
 /// app with none ranks after every app with one, and the app name breaks a
 /// tie, so the outcome is the same on every tick.
+///
+/// An ingress is left out whole, whichever of its claims lost. Its redirect is
+/// a claim of its own: where only that loses, only the redirect is left out.
 // spec: ING#claims-across-apps
 pub(super) fn resolve_app_claims(
-    pairs: Vec<(AppName, IngressDef, ServiceUpstream)>,
+    mut ingresses: Vec<AppIngress>,
     install_seq: impl Fn(&AppName) -> Option<i64>,
-) -> (
-    Vec<(AppName, IngressDef, ServiceUpstream)>,
-    Vec<LostAppClaim>,
-) {
-    use std::collections::BTreeMap;
+) -> (Vec<AppIngress>, Vec<LostAppClaim>) {
+    ingresses.sort_by_cached_key(|i| {
+        (
+            install_seq(&i.app).unwrap_or(i64::MAX),
+            i.app.clone(),
+            i.name(),
+        )
+    });
 
-    let rank = |app: &AppName| (install_seq(app).unwrap_or(i64::MAX), app.clone());
-    let mut served: BTreeMap<(String, u16), (AppName, String)> = BTreeMap::new();
-    for (app, def, _up) in &pairs {
-        let key = (def.hostname.clone(), def.port.get());
-        let claim = (app.clone(), ingress_resource_name(def));
-        match served.get(&key) {
-            Some((current, _)) if rank(current) <= rank(app) => {}
-            _ => {
-                served.insert(key, claim);
-            }
-        }
-    }
-
-    let mut kept = Vec::new();
-    let mut lost = Vec::new();
-    for (app, def, up) in pairs {
-        let key = (def.hostname.clone(), def.port.get());
-        let winner = &served[&key];
-        if winner.0 == app {
-            kept.push((app, def, up));
-        } else {
-            lost.push(LostAppClaim {
-                hostname: key.0,
-                port: key.1,
-                app,
-                ingress: ingress_resource_name(&def),
-                served: winner.clone(),
+    // (index into `ingresses`, whether the candidate is its redirect)
+    let mut slots: Vec<(usize, bool)> = Vec::new();
+    let mut candidates: Vec<Candidate<AppName>> = Vec::new();
+    for (idx, ingress) in ingresses.iter().enumerate() {
+        let core = candidates.len();
+        slots.push((idx, false));
+        candidates.push(Candidate {
+            owner: ingress.app.clone(),
+            claims: ingress.def.claims(),
+            rides_with: None,
+        });
+        if let Some(redirect) = ingress.def.redirect_claim() {
+            slots.push((idx, true));
+            candidates.push(Candidate {
+                owner: ingress.app.clone(),
+                claims: vec![redirect],
+                rides_with: Some(core),
             });
         }
     }
+    let outcome = admit(&candidates);
+
+    let mut lost = Vec::new();
+    let mut dropped: BTreeSet<usize> = BTreeSet::new();
+    let mut redirects_dropped: BTreeSet<usize> = BTreeSet::new();
+    for ((idx, redirect), admission) in slots.iter().zip(&outcome) {
+        let Admission::Lost { mine, theirs, by } = admission else {
+            continue;
+        };
+        let ingress = &ingresses[*idx];
+        let (served_idx, _) = slots[*by];
+        let served = &ingresses[served_idx];
+        lost.push(LostAppClaim {
+            app: ingress.app.clone(),
+            ingress: ingress.name(),
+            redirect: *redirect,
+            claim: mine.clone(),
+            served: ServedClaim {
+                app: served.app.clone(),
+                ingress: served.name(),
+                claim: theirs.clone(),
+            },
+        });
+        if *redirect {
+            redirects_dropped.insert(*idx);
+        } else {
+            dropped.insert(*idx);
+        }
+    }
+
+    let kept = ingresses
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| !dropped.contains(idx))
+        .map(|(idx, mut ingress)| {
+            if redirects_dropped.contains(&idx) {
+                ingress.def.redirect = None;
+            }
+            ingress
+        })
+        .collect();
     (kept, lost)
 }
 
+/// A site ingress attachment left out of the proxy because an attachment of
+/// another site ingress, created first, makes a conflicting claim.
+// spec: SITE#ingress-conflicts
 #[derive(Debug, Clone)]
-pub(super) struct ConflictParties {
-    pub hostname: String,
-    pub port: u16,
-    /// Apps with a colliding ingress on this `(hostname, port)`.
-    pub apps: Vec<(AppName, String /* ingress resource name */)>,
-    /// Site ingresses with a colliding attachment on this `(hostname, port)`.
-    pub site: Vec<String /* site ingress name */>,
-    /// The apps' claim is an ingress's HTTP redirect, not the ingress itself.
-    pub redirect: bool,
+pub(super) struct LostSiteClaim {
+    pub site_ingress: SiteIngressName,
+    pub claim: Claim,
+    /// The site ingress whose attachment is served, and its claim.
+    pub served: SiteIngressName,
+    pub served_claim: Claim,
 }
 
-/// Find every `(hostname, port)` tuple claimed by both an app ingress and a
-/// site-ingress attachment. Caller is responsible for removing the matching
-/// entries from `app_pairs`, `site_data.forwards`, and `site_data.redirects`
-/// before passing them to `build_proxy_config`.
+/// Where a resolved site attachment is held in a [`SiteProxyData`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum SiteEntry {
+    Forward(usize),
+    Redirect(usize),
+    L4(usize),
+}
+
+impl SiteProxyData {
+    /// Every attachment held, the site ingress it belongs to, its port, and
+    /// what it claims.
+    fn entries(&self) -> Vec<(SiteEntry, SiteIngressName, u16, Vec<Claim>)> {
+        let mut out = Vec::new();
+        for (i, (name, def, _)) in self.forwards.iter().enumerate() {
+            out.push((
+                SiteEntry::Forward(i),
+                name.clone(),
+                def.port.get(),
+                def.claims(),
+            ));
+        }
+        for (i, (name, def, _)) in self.redirects.iter().enumerate() {
+            out.push((
+                SiteEntry::Redirect(i),
+                name.clone(),
+                def.port.get(),
+                def.claims(),
+            ));
+        }
+        for (i, entry) in self.l4_routes.iter().enumerate() {
+            let transport = match entry.route.proto {
+                L4Proto::Tcp => ClaimTransport::Tcp,
+                L4Proto::Udp => ClaimTransport::Udp,
+            };
+            out.push((
+                SiteEntry::L4(i),
+                entry.site_ingress.clone(),
+                entry.route.port,
+                vec![Claim::whole_port(entry.route.port, transport)],
+            ));
+        }
+        out
+    }
+
+    fn retain_entries(&mut self, keep: impl Fn(SiteEntry) -> bool) {
+        let mut index = 0;
+        self.forwards.retain(|_| {
+            let k = keep(SiteEntry::Forward(index));
+            index += 1;
+            k
+        });
+        let mut index = 0;
+        self.redirects.retain(|_| {
+            let k = keep(SiteEntry::Redirect(index));
+            index += 1;
+            k
+        });
+        let mut index = 0;
+        self.l4_routes.retain(|_| {
+            let k = keep(SiteEntry::L4(index));
+            index += 1;
+            k
+        });
+    }
+}
+
+/// Keep, of the site ingresses making conflicting claims, those whose
+/// attachment was created first, and report the rest.
+///
+/// The name breaks a tie, so the outcome is the same on every tick.
 // spec: SITE#ingress-conflicts
-pub(super) fn detect_conflicts(
-    app_pairs: &[(AppName, IngressDef, ServiceUpstream)],
-    site_data: &SiteProxyData,
-) -> ConflictReport {
-    use std::collections::BTreeMap;
+pub(super) fn resolve_site_claims(mut data: SiteProxyData) -> (SiteProxyData, Vec<LostSiteClaim>) {
+    let mut entries = data.entries();
+    entries.sort_by_cached_key(|(entry, name, port, _)| {
+        (
+            data.created
+                .get(&(name.clone(), *port))
+                .cloned()
+                .unwrap_or_default(),
+            name.clone(),
+            *entry,
+        )
+    });
+    let candidates: Vec<Candidate<SiteIngressName>> = entries
+        .iter()
+        .map(|(_, name, _, claims)| Candidate {
+            owner: name.clone(),
+            claims: claims.clone(),
+            rides_with: None,
+        })
+        .collect();
+    let outcome = admit(&candidates);
 
-    let mut app_index: BTreeMap<(String, u16), Vec<(AppName, String)>> = BTreeMap::new();
-    for (app, def, _up) in app_pairs {
-        app_index
-            .entry((def.hostname.clone(), def.port.get()))
-            .or_default()
-            .push((app.clone(), ingress_resource_name(def)));
+    let mut lost = Vec::new();
+    let mut dropped: BTreeSet<SiteEntry> = BTreeSet::new();
+    for ((entry, name, _, _), admission) in entries.iter().zip(&outcome) {
+        let Admission::Lost { mine, theirs, by } = admission else {
+            continue;
+        };
+        dropped.insert(*entry);
+        lost.push(LostSiteClaim {
+            site_ingress: name.clone(),
+            claim: mine.clone(),
+            served: entries[*by].1.clone(),
+            served_claim: theirs.clone(),
+        });
     }
+    data.retain_entries(|entry| !dropped.contains(&entry));
+    (data, lost)
+}
 
-    let mut site_index: BTreeMap<(String, u16), Vec<String>> = BTreeMap::new();
-    for (name, def, _up) in &site_data.forwards {
-        site_index
-            .entry((def.hostname.clone(), def.port.get()))
-            .or_default()
-            .push(name.as_str().to_owned());
-    }
-    for (name, def, _r) in &site_data.redirects {
-        site_index
-            .entry((def.hostname.clone(), def.port.get()))
-            .or_default()
-            .push(name.as_str().to_owned());
-    }
-    for entry in &site_data.l4_routes {
-        site_index
-            .entry((entry.hostname.clone(), entry.route.port))
-            .or_default()
-            .push(entry.site_ingress.as_str().to_owned());
-    }
+/// One side of an app's claim against a site ingress attachment's, which is
+/// why both are left out of the proxy.
+#[derive(Debug, Clone)]
+pub(super) struct ConflictParty {
+    pub app: AppName,
+    pub ingress: String,
+    /// The app's claim is its ingress's HTTP redirect, not the ingress itself.
+    pub redirect: bool,
+    pub app_claim: Claim,
+    pub site_ingress: SiteIngressName,
+    pub site_claim: Claim,
+}
 
+/// App ingresses and site ingress attachments making conflicting claims, and
+/// what the proxy is to leave out because of them. The reconciler files faults
+/// for each party and clears them on the first tick where the conflict no
+/// longer appears.
+// spec: SITE#ingress-conflicts
+#[derive(Debug, Default, Clone)]
+pub(super) struct ConflictReport {
+    /// App claims against site attachment claims.
+    pub parties: Vec<ConflictParty>,
+    /// App ingresses left out because another app's ingress makes a
+    /// conflicting claim.
+    // spec: ING#claims-across-apps
+    pub app_claims: Vec<LostAppClaim>,
+    /// Site ingress attachments left out because an attachment of another site
+    /// ingress, created first, makes a conflicting claim.
+    // spec: SITE#ingress-conflicts
+    pub site_claims: Vec<LostSiteClaim>,
+    /// App ingresses left out whole because of a site attachment.
+    dropped_ingresses: BTreeSet<(AppName, String)>,
+    /// App ingresses whose redirect alone is left out because of a site
+    /// attachment; the ingress itself is served.
+    // spec: PRX#shared-ports
+    dropped_redirects: BTreeSet<(AppName, String)>,
+    dropped_site: BTreeSet<SiteEntry>,
+}
+
+/// Find every app claim and site attachment claim that conflict. Caller is
+/// responsible for passing the result to [`drop_conflicting`], which removes
+/// both sides before the proxy configuration is built.
+// spec: SITE#ingress-conflicts
+pub(super) fn detect_conflicts(apps: &[AppIngress], site: &SiteProxyData) -> ConflictReport {
+    let site_entries = site.entries();
     let mut report = ConflictReport::default();
-    for (key, apps) in &app_index {
-        if let Some(site) = site_index.get(key) {
-            report.conflicts.insert(key.clone());
-            report.parties.push(ConflictParties {
-                hostname: key.0.clone(),
-                port: key.1,
-                apps: apps.clone(),
-                site: site.clone(),
-                redirect: false,
-            });
-        }
-    }
 
-    // spec: PRX#port-scope
-    // An ingress's HTTP redirect claims its hostname on the redirect's port,
-    // and conflicts with a plaintext ingress's claim there.
-    let mut plaintext_index: BTreeMap<(String, u16), Vec<String>> = BTreeMap::new();
-    for (name, def, _) in &site_data.forwards {
-        if !def.tls {
-            plaintext_index
-                .entry((def.hostname.clone(), def.port.get()))
-                .or_default()
-                .push(name.as_str().to_owned());
+    let mut find = |app: &AppIngress, redirect: bool, claim: &Claim| {
+        let mut found = false;
+        for (entry, name, _, site_claims) in &site_entries {
+            for site_claim in site_claims.iter().filter(|c| claim.conflicts_with(c)) {
+                found = true;
+                report.dropped_site.insert(*entry);
+                report.parties.push(ConflictParty {
+                    app: app.app.clone(),
+                    ingress: app.name(),
+                    redirect,
+                    app_claim: claim.clone(),
+                    site_ingress: name.clone(),
+                    site_claim: site_claim.clone(),
+                });
+            }
         }
-    }
-    for (name, def, _) in &site_data.redirects {
-        if !def.tls {
-            plaintext_index
-                .entry((def.hostname.clone(), def.port.get()))
-                .or_default()
-                .push(name.as_str().to_owned());
+        found
+    };
+
+    for app in apps {
+        let mut whole = false;
+        for claim in app.def.claims() {
+            whole |= find(app, false, &claim);
         }
-    }
-    let mut redirect_index: BTreeMap<(String, u16), Vec<(AppName, String)>> = BTreeMap::new();
-    for (app, def, _up) in app_pairs {
-        if let Some(redirect) = &def.redirect {
-            redirect_index
-                .entry((def.hostname.clone(), redirect.port.get()))
-                .or_default()
-                .push((app.clone(), ingress_resource_name(def)));
-        }
-    }
-    for (key, apps) in &redirect_index {
-        if let Some(site) = plaintext_index.get(key) {
-            report.redirect_conflicts.insert(key.clone());
-            report.parties.push(ConflictParties {
-                hostname: key.0.clone(),
-                port: key.1,
-                apps: apps.clone(),
-                site: site.clone(),
-                redirect: true,
-            });
+        if whole {
+            report
+                .dropped_ingresses
+                .insert((app.app.clone(), app.name()));
+        } else if let Some(claim) = app.def.redirect_claim()
+            && find(app, true, &claim)
+        {
+            report
+                .dropped_redirects
+                .insert((app.app.clone(), app.name()));
         }
     }
     report
 }
 
-/// Reconstruct the resource name an ingress occupies inside an `AppDef`'s
-/// resource map: `<hostname>:<port>`. Mirrors
-/// `crate::defs::ingress::ingress_resource_name` without depending on the
-/// definitions side of the codebase here.
-fn ingress_resource_name(def: &IngressDef) -> String {
-    format!("{}:{}", def.hostname, def.port.get())
-}
-
-/// Helper to drop entries whose `(hostname, port)` is in `conflicts`.
-pub(super) fn drop_conflicting_app_pairs(
-    pairs: Vec<(AppName, IngressDef, ServiceUpstream)>,
-    conflicts: &BTreeSet<(String, u16)>,
-) -> Vec<(AppName, IngressDef, ServiceUpstream)> {
-    pairs
+/// Leave out of the app ingresses and the site data what `report` says to:
+/// both sides of each conflict between them. An ingress whose redirect alone
+/// conflicts keeps being served without it.
+// spec: SITE#ingress-conflicts
+// spec: PRX#shared-ports
+pub(super) fn drop_conflicting(
+    apps: Vec<AppIngress>,
+    mut site: SiteProxyData,
+    report: &ConflictReport,
+) -> (Vec<AppIngress>, SiteProxyData) {
+    let apps = apps
         .into_iter()
-        .filter(|(_app, def, _u)| !conflicts.contains(&(def.hostname.clone(), def.port.get())))
-        .collect()
-}
-
-/// Take the HTTP redirect off each app ingress whose redirect claim is in
-/// `conflicts`; the ingress itself stays.
-// spec: PRX#port-scope
-pub(super) fn drop_conflicting_redirects(
-    pairs: Vec<(AppName, IngressDef, ServiceUpstream)>,
-    conflicts: &BTreeSet<(String, u16)>,
-) -> Vec<(AppName, IngressDef, ServiceUpstream)> {
-    pairs
-        .into_iter()
-        .map(|(app, mut def, up)| {
-            if def
-                .redirect
-                .as_ref()
-                .is_some_and(|r| conflicts.contains(&(def.hostname.clone(), r.port.get())))
-            {
-                def.redirect = None;
-            }
-            (app, def, up)
+        .filter(|i| {
+            !report
+                .dropped_ingresses
+                .contains(&(i.app.clone(), i.name()))
         })
-        .collect()
-}
-
-/// Drop the plaintext HTTP attachments claiming a `(hostname, port)` in
-/// `conflicts`.
-// spec: PRX#port-scope
-pub(super) fn drop_conflicting_plaintext(
-    mut data: SiteProxyData,
-    conflicts: &BTreeSet<(String, u16)>,
-) -> SiteProxyData {
-    let keep =
-        |def: &IngressDef| def.tls || !conflicts.contains(&(def.hostname.clone(), def.port.get()));
-    data.forwards.retain(|(_n, def, _u)| keep(def));
-    data.redirects.retain(|(_n, def, _r)| keep(def));
-    data
-}
-
-pub(super) fn drop_conflicting_site_data(
-    mut data: SiteProxyData,
-    conflicts: &BTreeSet<(String, u16)>,
-) -> SiteProxyData {
-    data.forwards
-        .retain(|(_n, def, _u)| !conflicts.contains(&(def.hostname.clone(), def.port.get())));
-    data.redirects
-        .retain(|(_n, def, _r)| !conflicts.contains(&(def.hostname.clone(), def.port.get())));
-    data.l4_routes
-        .retain(|entry| !conflicts.contains(&(entry.hostname.clone(), entry.route.port)));
-    data
+        .map(|mut i| {
+            if report
+                .dropped_redirects
+                .contains(&(i.app.clone(), i.name()))
+            {
+                i.def.redirect = None;
+            }
+            i
+        })
+        .collect();
+    site.retain_entries(|entry| !report.dropped_site.contains(&entry));
+    (apps, site)
 }
 
 #[cfg(test)]
@@ -933,181 +1026,319 @@ mod tests {
         );
     }
 
+    fn app_ingress(app: &AppName, def: IngressDef) -> AppIngress {
+        let serve = if def.dtls {
+            AppServe::Dtls(DtlsRoute {
+                port: def.port.get(),
+                hostname: def.hostname.clone(),
+                upstream: "[fd5e::1]:5684".to_owned(),
+                ingress: ingress_resource_name(&def),
+            })
+        } else if def.http_terminate.is_none() {
+            AppServe::Tcp(L4Route {
+                port: def.port.get(),
+                proto: L4Proto::Tcp,
+                upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                terminate_tls: def.tls,
+                hostname: def.tls.then(|| def.hostname.clone()),
+            })
+        } else {
+            AppServe::Http(Box::new(upstream()))
+        };
+        AppIngress {
+            app: app.clone(),
+            def,
+            serve,
+        }
+    }
+
+    fn tls_def(hostname: &str, port: u16) -> IngressDef {
+        IngressDef {
+            http_terminate: None,
+            ..def(hostname, port)
+        }
+    }
+
+    fn dtls_def(hostname: &str, port: u16) -> IngressDef {
+        IngressDef {
+            tls: false,
+            dtls: true,
+            http_terminate: None,
+            ..def(hostname, port)
+        }
+    }
+
+    fn pass_through_def(hostname: &str, port: u16) -> IngressDef {
+        IngressDef {
+            tls: false,
+            http_terminate: None,
+            ..def(hostname, port)
+        }
+    }
+
+    fn plaintext(hostname: &str, port: u16) -> IngressDef {
+        IngressDef {
+            tls: false,
+            ..def(hostname, port)
+        }
+    }
+
+    // spec: SITE#ingress-conflicts
+    #[test]
+    fn an_app_ingress_conflicts_with_a_redirect_attachment_on_its_hostname_and_port() {
+        let app = AppName::new("web").unwrap();
+        let apps = vec![app_ingress(&app, def("shared.example.com", 443))];
+        let data = SiteProxyData {
+            redirects: vec![(
+                site("legacy"),
+                def("shared.example.com", 443),
+                redirect_target(),
+            )],
+            ..site_data(vec![], vec![])
+        };
+        let report = detect_conflicts(&apps, &data);
+        assert_eq!(report.parties.len(), 2, "its TCP and its UDP claim");
+        let (kept_apps, kept_site) = drop_conflicting(apps, data, &report);
+        assert!(kept_apps.is_empty() && kept_site.redirects.is_empty());
+    }
+
+    fn l4_entry(name: &str, port: u16, proto: L4Proto) -> SiteL4Entry {
+        SiteL4Entry {
+            site_ingress: site(name),
+            route: L4Route {
+                port,
+                proto,
+                upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                terminate_tls: false,
+                hostname: None,
+            },
+        }
+    }
+
+    fn site_data(forwards: Vec<(&str, IngressDef)>, l4: Vec<SiteL4Entry>) -> SiteProxyData {
+        SiteProxyData {
+            forwards: forwards
+                .into_iter()
+                .map(|(name, def)| (site(name), def, upstream()))
+                .collect(),
+            redirects: vec![],
+            l4_routes: l4,
+            unresolved: vec![],
+            created: Default::default(),
+        }
+    }
+
+    fn first_install_first(app: &AppName) -> Option<i64> {
+        match app.as_str() {
+            "first" => Some(1),
+            "second" => Some(2),
+            _ => None,
+        }
+    }
+
     // spec: ING#claims-across-apps
     #[test]
     fn the_app_that_installed_first_keeps_a_shared_hostname_and_port() {
         let first = AppName::new("first").unwrap();
         let second = AppName::new("second").unwrap();
         let never = AppName::new("never").unwrap();
-        let seq = |app: &AppName| match app.as_str() {
-            "first" => Some(1),
-            "second" => Some(2),
-            _ => None,
-        };
-        let pairs = vec![
-            (never.clone(), def("shared.example.com", 443), upstream()),
-            (second.clone(), def("shared.example.com", 443), upstream()),
-            (first.clone(), def("shared.example.com", 443), upstream()),
-            (second.clone(), def("shared.example.com", 8443), upstream()),
+        let ingresses = vec![
+            app_ingress(&never, def("shared.example.com", 443)),
+            app_ingress(&second, def("shared.example.com", 443)),
+            app_ingress(&first, def("shared.example.com", 443)),
+            app_ingress(&second, def("shared.example.com", 8443)),
         ];
 
-        let (kept, lost) = resolve_app_claims(pairs, seq);
+        let (kept, lost) = resolve_app_claims(ingresses, first_install_first);
         let kept: Vec<_> = kept
             .iter()
-            .map(|(app, def, _)| (app.as_str(), def.port.get()))
+            .map(|i| (i.app.as_str(), i.def.port.get()))
             .collect();
         assert_eq!(kept, vec![("first", 443), ("second", 8443)]);
         let mut losers: Vec<_> = lost.iter().map(|l| l.app.as_str()).collect();
         losers.sort();
         assert_eq!(losers, vec!["never", "second"]);
-        assert!(lost.iter().all(|l| l.served.0 == first && l.port == 443));
+        assert!(
+            lost.iter()
+                .all(|l| l.served.app == first && l.claim.port == 443)
+        );
 
         // Once the served ingress stops claiming them, the next is served.
         let (kept, lost) = resolve_app_claims(
             vec![
-                (never.clone(), def("shared.example.com", 443), upstream()),
-                (second.clone(), def("shared.example.com", 443), upstream()),
+                app_ingress(&never, def("shared.example.com", 443)),
+                app_ingress(&second, def("shared.example.com", 443)),
             ],
-            seq,
+            first_install_first,
         );
-        assert_eq!(kept[0].0, second);
+        assert_eq!(kept[0].app, second);
         assert_eq!(lost[0].app, never);
+    }
+
+    // spec: PRX#shared-ports
+    // spec: ING#claims-across-apps
+    #[test]
+    fn apps_share_a_port_by_hostname_where_their_claims_are_of_one_kind() {
+        let first = AppName::new("first").unwrap();
+        let second = AppName::new("second").unwrap();
+        let (kept, lost) = resolve_app_claims(
+            vec![
+                app_ingress(&first, tls_def("a.example.com", 443)),
+                app_ingress(&second, def("b.example.com", 443)),
+            ],
+            first_install_first,
+        );
+        assert_eq!(kept.len(), 2, "TLS beside HTTPS on one port");
+        assert!(lost.is_empty());
+    }
+
+    // spec: PRX#shared-ports
+    // spec: ING#claims-across-apps
+    #[test]
+    fn pass_through_takes_its_whole_port_from_a_later_apps_ingress() {
+        let first = AppName::new("first").unwrap();
+        let second = AppName::new("second").unwrap();
+        let (kept, lost) = resolve_app_claims(
+            vec![
+                app_ingress(&second, def("b.example.com", 443)),
+                app_ingress(&first, pass_through_def("a.example.com", 443)),
+            ],
+            first_install_first,
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].app, first);
+        assert_eq!(lost[0].app, second);
+        assert_eq!(
+            lost[0].claim.to_string(),
+            "tcp/443 (TLS b.example.com)",
+            "names the port, the transport and the hostname"
+        );
+    }
+
+    // spec: PRX#shared-ports
+    #[test]
+    fn an_ingress_left_out_is_left_out_whole_so_dtls_beside_http3_loses_its_tcp_claim_too() {
+        let first = AppName::new("first").unwrap();
+        let second = AppName::new("second").unwrap();
+        let (kept, lost) = resolve_app_claims(
+            vec![
+                app_ingress(&first, dtls_def("voip.example.com", 443)),
+                app_ingress(&second, def("web.example.com", 443)),
+                // The HTTPS ingress's TCP claim must not keep this one out once
+                // it is itself left out.
+                app_ingress(&second, tls_def("db.example.com", 443)),
+            ],
+            first_install_first,
+        );
+        let kept: Vec<_> = kept.iter().map(|i| i.def.hostname.as_str()).collect();
+        assert_eq!(kept, ["voip.example.com", "db.example.com"]);
+        assert_eq!(lost.len(), 1);
+        assert_eq!(
+            lost[0].claim.to_string(),
+            "udp/443 (HTTP/3 web.example.com)"
+        );
+    }
+
+    // spec: PRX#shared-ports
+    #[test]
+    fn a_redirect_that_loses_is_left_out_alone() {
+        let first = AppName::new("first").unwrap();
+        let second = AppName::new("second").unwrap();
+        let mut redirecting = def("b.example.com", 443);
+        redirecting.redirect = Some(crate::defs::ingress::RedirectDef {
+            port: Port::new(80).unwrap(),
+            code: 307,
+        });
+        let (kept, lost) = resolve_app_claims(
+            vec![
+                app_ingress(&first, pass_through_def("a.example.com", 80)),
+                app_ingress(&second, redirecting),
+            ],
+            first_install_first,
+        );
+        assert_eq!(kept.len(), 2);
+        assert!(kept[1].def.redirect.is_none());
+        assert!(lost[0].redirect);
     }
 
     #[test]
     fn no_conflict_when_disjoint() {
         let app = AppName::new("web").unwrap();
-        let app_pairs = vec![(app.clone(), def("a.example.com", 443), upstream())];
-        let data = SiteProxyData {
-            forwards: vec![(site("front"), def("b.example.com", 443), upstream())],
-            redirects: vec![],
-            l4_routes: vec![],
-            unresolved: vec![],
-            created: Default::default(),
-        };
-        let report = detect_conflicts(&app_pairs, &data);
-        assert!(report.conflicts.is_empty());
+        let apps = vec![app_ingress(&app, def("a.example.com", 443))];
+        let data = site_data(vec![("front", def("b.example.com", 8443))], vec![]);
+        let report = detect_conflicts(&apps, &data);
+        assert!(report.parties.is_empty());
     }
 
+    // spec: SITE#ingress-conflicts
     #[test]
-    fn conflict_on_same_host_and_port() {
+    fn an_app_ingress_and_an_attachment_for_one_hostname_and_port_are_both_left_out() {
         let app = AppName::new("web").unwrap();
-        let app_pairs = vec![(app.clone(), def("shared.example.com", 443), upstream())];
-        let data = SiteProxyData {
-            forwards: vec![(site("front"), def("shared.example.com", 443), upstream())],
-            redirects: vec![],
-            l4_routes: vec![],
-            unresolved: vec![],
-            created: Default::default(),
-        };
-        let report = detect_conflicts(&app_pairs, &data);
-        assert_eq!(report.conflicts.len(), 1);
-        assert!(
-            report
-                .conflicts
-                .contains(&("shared.example.com".to_owned(), 443))
-        );
-        assert_eq!(report.parties.len(), 1);
-        assert_eq!(report.parties[0].apps.len(), 1);
-        assert_eq!(report.parties[0].site.len(), 1);
-        assert_eq!(report.parties[0].site[0], "front");
-    }
-
-    #[test]
-    fn conflict_with_redirect_side() {
-        let app = AppName::new("web").unwrap();
-        let app_pairs = vec![(app.clone(), def("shared.example.com", 443), upstream())];
-        let data = SiteProxyData {
-            forwards: vec![],
-            redirects: vec![(
-                site("legacy"),
-                def("shared.example.com", 443),
-                redirect_target(),
-            )],
-            l4_routes: vec![],
-            unresolved: vec![],
-            created: Default::default(),
-        };
-        let report = detect_conflicts(&app_pairs, &data);
-        assert_eq!(report.conflicts.len(), 1);
-    }
-
-    #[test]
-    fn different_ports_on_same_host_do_not_conflict() {
-        let app = AppName::new("web").unwrap();
-        let app_pairs = vec![(app.clone(), def("shared.example.com", 443), upstream())];
-        let data = SiteProxyData {
-            forwards: vec![(site("front"), def("shared.example.com", 8080), upstream())],
-            redirects: vec![],
-            l4_routes: vec![],
-            unresolved: vec![],
-            created: Default::default(),
-        };
-        let report = detect_conflicts(&app_pairs, &data);
-        assert!(report.conflicts.is_empty());
-    }
-
-    #[test]
-    fn l4_route_conflicts_with_app_ingress_on_same_host_port() {
-        let app = AppName::new("web").unwrap();
-        let app_pairs = vec![(app.clone(), def("shared.example.com", 5432), upstream())];
-        let data = SiteProxyData {
-            forwards: vec![],
-            redirects: vec![],
-            l4_routes: vec![SiteL4Entry {
-                site_ingress: site("postgres"),
-                hostname: "shared.example.com".to_owned(),
-                route: L4Route {
-                    port: 5432,
-                    proto: L4Proto::Tcp,
-                    upstreams: vec!["[fd5e::1]:5432".to_owned()],
-                    terminate_tls: false,
-                },
-            }],
-            unresolved: vec![],
-            created: Default::default(),
-        };
-        let report = detect_conflicts(&app_pairs, &data);
-        assert_eq!(report.conflicts.len(), 1);
-        assert_eq!(report.parties[0].site[0], "postgres");
-    }
-
-    #[test]
-    fn drop_filters_l4_routes() {
-        let conflicts: BTreeSet<(String, u16)> = [("dropped.example.com".to_owned(), 5432)]
-            .into_iter()
-            .collect();
-        let data = SiteProxyData {
-            forwards: vec![],
-            redirects: vec![],
-            l4_routes: vec![
-                SiteL4Entry {
-                    site_ingress: site("dropped"),
-                    hostname: "dropped.example.com".to_owned(),
-                    route: L4Route {
-                        port: 5432,
-                        proto: L4Proto::Tcp,
-                        upstreams: vec!["[fd5e::1]:5432".to_owned()],
-                        terminate_tls: false,
-                    },
-                },
-                SiteL4Entry {
-                    site_ingress: site("kept"),
-                    hostname: "kept.example.com".to_owned(),
-                    route: L4Route {
-                        port: 5432,
-                        proto: L4Proto::Tcp,
-                        upstreams: vec!["[fd5e::2]:5432".to_owned()],
-                        terminate_tls: false,
-                    },
-                },
+        let apps = vec![app_ingress(&app, def("shared.example.com", 443))];
+        let data = site_data(
+            vec![
+                ("front", def("shared.example.com", 443)),
+                ("solo", def("solo.example.com", 8443)),
             ],
-            unresolved: vec![],
-            created: Default::default(),
-        };
-        let kept = drop_conflicting_site_data(data, &conflicts);
-        assert_eq!(kept.l4_routes.len(), 1);
-        assert_eq!(kept.l4_routes[0].hostname, "kept.example.com");
+            vec![],
+        );
+        let report = detect_conflicts(&apps, &data);
+        assert_eq!(report.parties.len(), 2, "its TCP and its UDP claim");
+        assert_eq!(report.parties[0].site_ingress, site("front"));
+
+        let (kept_apps, kept_site) = drop_conflicting(apps, data, &report);
+        assert!(kept_apps.is_empty());
+        assert_eq!(kept_site.forwards.len(), 1);
+        assert_eq!(kept_site.forwards[0].0, site("solo"));
+    }
+
+    // spec: SITE#ingress-conflicts
+    // spec: PRX#shared-ports
+    #[test]
+    fn app_and_attachment_serving_one_port_for_different_hostnames_do_not_conflict() {
+        let app = AppName::new("web").unwrap();
+        let apps = vec![app_ingress(&app, tls_def("a.example.com", 443))];
+        let data = site_data(vec![("front", def("b.example.com", 443))], vec![]);
+        assert!(detect_conflicts(&apps, &data).parties.is_empty());
+    }
+
+    // spec: SITE#ingress-conflicts
+    #[test]
+    fn a_pass_through_app_ingress_conflicts_with_a_tcp_attachment_on_its_port() {
+        let app = AppName::new("web").unwrap();
+        let apps = vec![app_ingress(&app, pass_through_def("a.example.com", 5432))];
+        let data = site_data(vec![], vec![l4_entry("postgres", 5432, L4Proto::Tcp)]);
+        let report = detect_conflicts(&apps, &data);
+        assert_eq!(report.parties.len(), 1);
+        assert_eq!(report.parties[0].site_ingress, site("postgres"));
+
+        let (kept_apps, kept_site) = drop_conflicting(apps, data, &report);
+        assert!(kept_apps.is_empty() && kept_site.l4_routes.is_empty());
+    }
+
+    // spec: SITE#ingress-conflicts
+    #[test]
+    fn a_dtls_app_ingress_conflicts_with_a_udp_attachment_but_not_a_tcp_one() {
+        let app = AppName::new("web").unwrap();
+        let apps = vec![app_ingress(&app, dtls_def("voip.example.com", 5684))];
+        let data = site_data(vec![], vec![l4_entry("tcp", 5684, L4Proto::Tcp)]);
+        assert!(detect_conflicts(&apps, &data).parties.is_empty());
+        let data = site_data(vec![], vec![l4_entry("udp", 5684, L4Proto::Udp)]);
+        assert_eq!(detect_conflicts(&apps, &data).parties.len(), 1);
+    }
+
+    // spec: SITE#ingress-conflicts
+    #[test]
+    fn dtls_conflicts_with_a_site_https_attachments_http3_claim() {
+        let app = AppName::new("web").unwrap();
+        let apps = vec![app_ingress(&app, dtls_def("voip.example.com", 443))];
+        let data = site_data(vec![("front", def("web.example.com", 443))], vec![]);
+        let report = detect_conflicts(&apps, &data);
+        assert_eq!(report.parties.len(), 1);
+        assert_eq!(
+            report.parties[0].site_claim.to_string(),
+            "udp/443 (HTTP/3 web.example.com)"
+        );
     }
 
     fn created(
@@ -1149,10 +1380,10 @@ mod tests {
             vec![("first".to_owned(), 443), ("second".to_owned(), 8443)],
             "another port on the same hostname is unaffected"
         );
-        assert_eq!(lost.len(), 1);
-        assert_eq!(lost[0].site_ingress, site("second"));
-        assert_eq!(lost[0].served, site("first"));
-        assert_eq!(lost[0].port, 443);
+        assert_eq!(lost.len(), 2, "its TCP claim and its UDP claim");
+        assert!(lost.iter().all(|l| l.site_ingress == site("second")));
+        assert!(lost.iter().all(|l| l.served == site("first")));
+        assert!(lost.iter().all(|l| l.claim.port == 443));
 
         // Once the served attachment no longer claims the pair, the other is
         // served.
@@ -1168,14 +1399,23 @@ mod tests {
         assert!(lost.is_empty());
     }
 
-    fn plaintext(hostname: &str, port: u16) -> IngressDef {
-        IngressDef {
-            tls: false,
-            ..def(hostname, port)
-        }
+    // spec: SITE#ingress-conflicts
+    // spec: PRX#shared-ports
+    #[test]
+    fn site_attachments_for_different_hostnames_share_a_port() {
+        let data = site_data(
+            vec![
+                ("one", def("one.example.com", 443)),
+                ("two", def("two.example.com", 443)),
+            ],
+            vec![],
+        );
+        let (kept, lost) = resolve_site_claims(data);
+        assert_eq!(kept.forwards.len(), 2);
+        assert!(lost.is_empty());
     }
 
-    // spec: PRX#port-scope
+    // spec: PRX#shared-ports
     #[test]
     fn an_app_ingress_redirect_conflicts_with_a_plaintext_attachment_on_its_port() {
         let app = AppName::new("web").unwrap();
@@ -1184,70 +1424,41 @@ mod tests {
             port: Port::new(80).unwrap(),
             code: 307,
         });
-        let app_pairs = vec![(app.clone(), ingress, upstream())];
-        let data = SiteProxyData {
-            forwards: vec![
-                (
-                    site("plain"),
-                    plaintext("clinic.example.com", 80),
-                    upstream(),
-                ),
-                // A TLS attachment on the redirect's port is not a plaintext ingress.
-                (site("tls"), def("other.example.com", 80), upstream()),
+        let apps = vec![app_ingress(&app, ingress)];
+        let data = site_data(
+            vec![
+                ("plain", plaintext("clinic.example.com", 80)),
+                // A TLS attachment for another hostname on the redirect's
+                // port is not a plaintext ingress, but it is a claim of
+                // another kind on the same TCP port.
+                ("tls", def("other.example.com", 80)),
+                // Plaintext for another hostname shares the port.
+                ("other", plaintext("other.example.com", 80)),
             ],
-            redirects: vec![],
-            l4_routes: vec![],
-            unresolved: vec![],
-            created: Default::default(),
-        };
-
-        let report = detect_conflicts(&app_pairs, &data);
-        assert!(
-            report.conflicts.is_empty(),
-            "the ingress's own port is not in conflict"
+            vec![],
         );
-        assert_eq!(
-            report.redirect_conflicts,
-            BTreeSet::from([("clinic.example.com".to_owned(), 80)])
-        );
-        assert_eq!(report.parties.len(), 1);
-        assert!(report.parties[0].redirect);
-        assert_eq!(report.parties[0].site, vec!["plain".to_owned()]);
 
-        // The ingress keeps serving; only its redirect and the attachment go.
-        let kept = drop_conflicting_redirects(app_pairs, &report.redirect_conflicts);
-        assert_eq!(kept.len(), 1);
-        assert!(kept[0].1.redirect.is_none());
-        let kept = drop_conflicting_plaintext(data, &report.redirect_conflicts);
-        assert_eq!(kept.forwards.len(), 1);
-        assert_eq!(kept.forwards[0].0, site("tls"));
-    }
-
-    #[test]
-    fn drop_filters_both_sides() {
-        let app = AppName::new("web").unwrap();
-        let app_pairs = vec![
-            (app.clone(), def("kept.example.com", 443), upstream()),
-            (app.clone(), def("dropped.example.com", 443), upstream()),
-        ];
-        let data = SiteProxyData {
-            forwards: vec![
-                (site("front"), def("dropped.example.com", 443), upstream()),
-                (site("solo"), def("solo.example.com", 443), upstream()),
-            ],
-            redirects: vec![],
-            l4_routes: vec![],
-            unresolved: vec![],
-            created: Default::default(),
-        };
-        let conflicts: BTreeSet<(String, u16)> = [("dropped.example.com".to_owned(), 443)]
-            .into_iter()
+        let report = detect_conflicts(&apps, &data);
+        let sites: BTreeSet<_> = report
+            .parties
+            .iter()
+            .map(|p| p.site_ingress.as_str().to_owned())
             .collect();
-        let kept_app = drop_conflicting_app_pairs(app_pairs, &conflicts);
-        assert_eq!(kept_app.len(), 1);
-        assert_eq!(kept_app[0].1.hostname, "kept.example.com");
-        let kept_site = drop_conflicting_site_data(data, &conflicts);
-        assert_eq!(kept_site.forwards.len(), 1);
-        assert_eq!(kept_site.forwards[0].1.hostname, "solo.example.com");
+        assert_eq!(
+            sites,
+            BTreeSet::from(["plain".to_owned(), "tls".to_owned()])
+        );
+        assert!(report.parties.iter().all(|p| p.redirect));
+
+        // The ingress keeps serving; only its redirect and the attachments go.
+        let (kept_apps, kept_site) = drop_conflicting(apps, data, &report);
+        assert_eq!(kept_apps.len(), 1);
+        assert!(kept_apps[0].def.redirect.is_none());
+        let kept: Vec<_> = kept_site
+            .forwards
+            .iter()
+            .map(|(n, _, _)| n.as_str())
+            .collect();
+        assert_eq!(kept, ["other"]);
     }
 }

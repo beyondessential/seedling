@@ -17,15 +17,18 @@ use crate::{
     },
     system::{
         translate::proxy::{HttpForwardRoute, HttpRedirectRoute, ServiceUpstream},
-        types::{L4Proto, L4Route, RouteProxy, RouteZone},
+        types::{DtlsRoute, L4Proto, L4Route, RouteProxy, RouteZone},
     },
 };
 
-use super::RunningPod;
+use super::{RunningPod, site_proxy::AppServe};
 
 pub(super) struct ProxyBuildOutput {
-    pub pairs: Vec<(IngressDef, ServiceUpstream)>,
-    pub l4_routes: Vec<L4Route>,
+    /// Each ingress with what the proxy serves for it. None is left out yet:
+    /// conflicts between ingresses are resolved over every app's, which only
+    /// the caller holds.
+    // spec: ING#claims-across-apps
+    pub ingresses: Vec<(IngressDef, AppServe)>,
     /// Hostnames of ingresses that terminate TLS or DTLS without terminating
     /// HTTP. They have no virtual host for the proxy to acquire a certificate
     /// through, so each is handed to it as a certificate to obtain.
@@ -50,8 +53,7 @@ pub(super) fn collect(
     let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
     let mut ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> =
         Vec::new();
-    let mut pairs: Vec<(IngressDef, ServiceUpstream)> = Vec::new();
-    let mut l4_routes: Vec<L4Route> = Vec::new();
+    let mut ingresses: Vec<(IngressDef, AppServe)> = Vec::new();
     let mut certificate_hostnames: Vec<String> = Vec::new();
     let mut service_defs: std::collections::HashMap<String, ServiceProxyDef> =
         std::collections::HashMap::new();
@@ -92,14 +94,25 @@ pub(super) fn collect(
             // A DTLS ingress accepts DTLS over UDP and nothing on TCP; one with
             // no termination forwards TCP alone. A TLS ingress's connection is
             // terminated by the proxy, so its Service receives the plaintext
-            // stream. The proxy has no DTLS termination, so a DTLS ingress's
-            // datagrams reach the Service as they arrive.
-            l4_routes.push(L4Route {
-                port: def.port.get(),
-                proto: if def.dtls { L4Proto::Udp } else { L4Proto::Tcp },
-                upstreams: vec![upstream_url],
-                terminate_tls: def.tls,
-            });
+            // stream, and a DTLS ingress's session is terminated likewise, so
+            // its Service receives the datagrams inside it.
+            let serve = if def.dtls {
+                AppServe::Dtls(DtlsRoute {
+                    port: def.port.get(),
+                    hostname: def.hostname.clone(),
+                    upstream: upstream_url,
+                    ingress: ingress.name.to_string(),
+                })
+            } else {
+                AppServe::Tcp(L4Route {
+                    port: def.port.get(),
+                    proto: L4Proto::Tcp,
+                    upstreams: vec![upstream_url],
+                    terminate_tls: def.tls,
+                    hostname: def.tls.then(|| def.hostname.clone()),
+                })
+            };
+            ingresses.push((def, serve));
 
             observations.push((
                 ingress_instance.clone(),
@@ -140,15 +153,15 @@ pub(super) fn collect(
         let redirects = collect_redirect_routes(service_def);
         let service_port = service_def.fallback_port(def.port.get());
 
-        pairs.push((
+        ingresses.push((
             def,
-            ServiceUpstream {
+            AppServe::Http(Box::new(ServiceUpstream {
                 routes,
                 redirects,
                 service_ip,
                 service_port,
                 proxy: service_level_proxy(snapshot, svc_name, service_def),
-            },
+            })),
         ));
     }
 
@@ -179,8 +192,7 @@ pub(super) fn collect(
     }
 
     Ok(ProxyBuildOutput {
-        pairs,
-        l4_routes,
+        ingresses,
         certificate_hostnames,
         observations,
         ready_observations,
@@ -528,6 +540,39 @@ mod zone_tests {
 }
 
 #[cfg(test)]
+impl ProxyBuildOutput {
+    fn http(&self) -> Vec<(&IngressDef, &ServiceUpstream)> {
+        self.ingresses
+            .iter()
+            .filter_map(|(def, serve)| match serve {
+                AppServe::Http(upstream) => Some((def, &**upstream)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn tcp(&self) -> Vec<&L4Route> {
+        self.ingresses
+            .iter()
+            .filter_map(|(_, serve)| match serve {
+                AppServe::Tcp(route) => Some(route),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn dtls(&self) -> Vec<&DtlsRoute> {
+        self.ingresses
+            .iter()
+            .filter_map(|(_, serve)| match serve {
+                AppServe::Dtls(route) => Some(route),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
 mod certificate_tests {
 
     use super::*;
@@ -553,10 +598,10 @@ mod certificate_tests {
             &[],
         )
         .expect("collects");
+        assert_eq!(out.http().len(), 1, "HTTPS is routed through a vhost");
         let mut hostnames = out.certificate_hostnames;
         hostnames.sort();
         assert_eq!(hostnames, ["db.example.com", "voip.example.com"]);
-        assert_eq!(out.pairs.len(), 1, "HTTPS is routed through a vhost");
     }
 
     // spec: ING#termination
@@ -579,20 +624,26 @@ mod certificate_tests {
             &[],
         )
         .expect("collects");
-        let mut routes: Vec<(u16, L4Proto, bool)> = out
-            .l4_routes
+        let mut routes: Vec<(u16, L4Proto, Option<&str>)> = out
+            .tcp()
             .iter()
-            .map(|r| (r.port, r.proto, r.terminate_tls))
+            .map(|r| (r.port, r.proto, r.hostname.as_deref()))
             .collect();
         routes.sort_by_key(|(port, _, _)| *port);
         assert_eq!(
             routes,
             [
-                (2222, L4Proto::Tcp, false),
-                (5432, L4Proto::Tcp, true),
-                (5684, L4Proto::Udp, false),
-            ]
+                (2222, L4Proto::Tcp, None),
+                (5432, L4Proto::Tcp, Some("db.example.com")),
+            ],
+            "TLS is terminated for its hostname, and nothing else is"
         );
+        let dtls: Vec<_> = out
+            .dtls()
+            .iter()
+            .map(|r| (r.port, r.hostname.as_str(), r.ingress.as_str()))
+            .collect();
+        assert_eq!(dtls, [(5684, "voip.example.com", "voip.example.com:5684")]);
     }
 }
 
@@ -625,8 +676,9 @@ mod upstream_port_tests {
             app.deployment("app").tcp(5432, web.port(7000));
         "#,
         );
-        let [(_, upstream)] = out.pairs.as_slice() else {
-            panic!("one HTTPS ingress, got {}", out.pairs.len());
+        let http = out.http();
+        let [(_, upstream)] = http.as_slice() else {
+            panic!("one HTTPS ingress, got {}", http.len());
         };
         assert!(upstream.routes.is_empty(), "no pod binds a prefix");
         assert_eq!(upstream.service_port, 8080);
@@ -642,8 +694,9 @@ mod upstream_port_tests {
             app.deployment("app").tcp(5432, web.port(7000));
         "#,
         );
-        let [(_, upstream)] = out.pairs.as_slice() else {
-            panic!("one HTTPS ingress, got {}", out.pairs.len());
+        let http = out.http();
+        let [(_, upstream)] = http.as_slice() else {
+            panic!("one HTTPS ingress, got {}", http.len());
         };
         assert_eq!(upstream.service_port, 8443);
     }
@@ -662,11 +715,13 @@ mod upstream_port_tests {
         "#,
         );
         let mut routes: Vec<(u16, String)> = out
-            .l4_routes
+            .tcp()
             .iter()
             .map(|r| (r.port, r.upstreams.join(",")))
+            .chain(out.dtls().iter().map(|r| (r.port, r.upstream.clone())))
             .collect();
         routes.sort();
+        assert_eq!(routes.len(), 3);
         for (port, upstream) in routes {
             assert!(
                 upstream.ends_with(&format!("]:{port}")),

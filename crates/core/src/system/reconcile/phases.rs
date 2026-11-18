@@ -416,12 +416,7 @@ pub(super) fn compute_proxy_config(
     cert_endpoint_url: Option<&str>,
     renewal_ratios: &std::collections::BTreeMap<String, f64>,
 ) -> ProxyBuildResult {
-    let mut all_pairs: Vec<(
-        AppName,
-        crate::defs::ingress::IngressDef,
-        crate::system::translate::proxy::ServiceUpstream,
-    )> = Vec::new();
-    let mut all_l4_routes = Vec::new();
+    let mut all_ingresses: Vec<site_proxy::AppIngress> = Vec::new();
     let mut observations = Vec::new();
     let mut ready_observations = Vec::new();
     let mut all_warm: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -450,10 +445,13 @@ pub(super) fn compute_proxy_config(
                 continue;
             }
         };
-        for (def, upstream) in build.pairs {
-            all_pairs.push((app.name.clone(), def, upstream));
+        for (def, serve) in build.ingresses {
+            all_ingresses.push(site_proxy::AppIngress {
+                app: app.name.clone(),
+                def,
+                serve,
+            });
         }
-        all_l4_routes.extend(build.l4_routes);
         // spec: ING#certificates
         all_warm.extend(build.certificate_hostnames);
         observations.extend(build.observations);
@@ -482,22 +480,21 @@ pub(super) fn compute_proxy_config(
     // spec: ING#claims-across-apps
     let install_seqs: HashMap<&AppName, Option<i64>> =
         apps.iter().map(|a| (&a.name, a.install_seq)).collect();
-    let (all_pairs, lost_app_claims) =
-        site_proxy::resolve_app_claims(all_pairs, |app| install_seqs.get(app).copied().flatten());
+    let (all_ingresses, lost_app_claims) = site_proxy::resolve_app_claims(all_ingresses, |app| {
+        install_seqs.get(app).copied().flatten()
+    });
 
     // spec: SITE#unreadable-site-ingresses
     // Without the site ingresses no conflict can be decided and no attachment
     // resolved, so neither is reported, and the build is partial: the config
     // lacks every site ingress, which applied would withdraw them.
     let Some(site_snapshot) = site_snapshot else {
-        let app_proxy_pairs: Vec<_> = all_pairs
-            .into_iter()
-            .map(|(_app, def, up)| (def, up))
-            .collect();
+        let served = ServedIngresses::from_app(all_ingresses);
         return ProxyBuildResult {
             config: finish_proxy_config(
-                build_proxy_config(&app_proxy_pairs, &[]),
-                all_l4_routes,
+                build_proxy_config(&served.http, &[]),
+                served.l4,
+                served.dtls,
                 all_warm,
                 cert_endpoint_url,
                 renewal_ratios,
@@ -523,24 +520,15 @@ pub(super) fn compute_proxy_config(
     let (site_data, lost_site_claims) = site_proxy::resolve_site_claims(site_data);
 
     // spec: SITE#ingress-conflicts
-    let mut conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);
+    let mut conflicts = site_proxy::detect_conflicts(&all_ingresses, &site_data);
     conflicts.app_claims = lost_app_claims;
     conflicts.site_claims = lost_site_claims;
-    let surviving_app_pairs = site_proxy::drop_conflicting_redirects(
-        site_proxy::drop_conflicting_app_pairs(all_pairs, &conflicts.conflicts),
-        &conflicts.redirect_conflicts,
-    );
-    let surviving_site_data = site_proxy::drop_conflicting_plaintext(
-        site_proxy::drop_conflicting_site_data(site_data, &conflicts.conflicts),
-        &conflicts.redirect_conflicts,
-    );
+    let (surviving_app, surviving_site_data) =
+        site_proxy::drop_conflicting(all_ingresses, site_data, &conflicts);
 
     // build_proxy_config wants the (def, upstream) shape — the app name was
     // only carried along so the conflict report could attribute the apps.
-    let app_proxy_pairs: Vec<_> = surviving_app_pairs
-        .into_iter()
-        .map(|(_app, def, up)| (def, up))
-        .collect();
+    let mut served = ServedIngresses::from_app(surviving_app);
     let site_forward_pairs: Vec<_> = surviving_site_data
         .forwards
         .into_iter()
@@ -552,10 +540,9 @@ pub(super) fn compute_proxy_config(
         .map(|(_name, def, target)| (def, target))
         .collect();
 
-    let mut combined_forwards = app_proxy_pairs;
-    combined_forwards.extend(site_forward_pairs);
+    served.http.extend(site_forward_pairs);
     // spec: SITE#attachments
-    all_l4_routes.extend(
+    served.l4.extend(
         surviving_site_data
             .l4_routes
             .into_iter()
@@ -574,8 +561,9 @@ pub(super) fn compute_proxy_config(
     let decided = coverage.is_complete();
     ProxyBuildResult {
         config: finish_proxy_config(
-            build_proxy_config(&combined_forwards, &site_redirect_pairs),
-            all_l4_routes,
+            build_proxy_config(&served.http, &site_redirect_pairs),
+            served.l4,
+            served.dtls,
             all_warm,
             cert_endpoint_url,
             renewal_ratios,
@@ -588,14 +576,44 @@ pub(super) fn compute_proxy_config(
     }
 }
 
+/// The app ingresses the proxy serves, by what each is served as.
+struct ServedIngresses {
+    http: Vec<(
+        crate::defs::ingress::IngressDef,
+        crate::system::translate::proxy::ServiceUpstream,
+    )>,
+    l4: Vec<crate::system::types::L4Route>,
+    dtls: Vec<crate::system::types::DtlsRoute>,
+}
+
+impl ServedIngresses {
+    fn from_app(ingresses: Vec<site_proxy::AppIngress>) -> Self {
+        let mut served = Self {
+            http: Vec::new(),
+            l4: Vec::new(),
+            dtls: Vec::new(),
+        };
+        for ingress in ingresses {
+            match ingress.serve {
+                site_proxy::AppServe::Http(upstream) => served.http.push((ingress.def, *upstream)),
+                site_proxy::AppServe::Tcp(route) => served.l4.push(route),
+                site_proxy::AppServe::Dtls(route) => served.dtls.push(route),
+            }
+        }
+        served
+    }
+}
+
 fn finish_proxy_config(
     mut config: crate::system::types::ProxyConfig,
     l4_routes: Vec<crate::system::types::L4Route>,
+    dtls_routes: Vec<crate::system::types::DtlsRoute>,
     warm: std::collections::BTreeSet<String>,
     cert_endpoint_url: Option<&str>,
     renewal_ratios: &std::collections::BTreeMap<String, f64>,
 ) -> crate::system::types::ProxyConfig {
     config.l4_routes = l4_routes;
+    config.dtls_routes = dtls_routes;
     crate::system::translate::proxy::augment_with_warm_certs(&mut config, warm);
     config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
     config.renewal_ratios = renewal_ratios.clone();

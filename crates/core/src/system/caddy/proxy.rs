@@ -42,11 +42,12 @@ pub(crate) enum CaddyError {
         backtrace: snafu::Backtrace,
     },
     #[snafu(display(
-        "port(s) {ports:?} are declared as both plaintext and TLS listeners; \
-         Caddy cannot bind one address twice and would reject the whole config"
+        "address(es) {} are bound by more than one server; \
+         Caddy cannot bind one address twice and would reject the whole config",
+        binds.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     ))]
     ConflictingListeners {
-        ports: Vec<u16>,
+        binds: Vec<super::config::Bind>,
         backtrace: snafu::Backtrace,
     },
 }
@@ -133,9 +134,10 @@ impl CaddyProxy {
         // bind the same address, and `POST /config/` is all-or-nothing, so
         // pushing one would drop every route and cert policy on the node —
         // far past the ingress that caused it.
-        let conflicts = super::config::conflicting_listener_ports(config);
+        // spec: PRX#shared-ports
+        let conflicts = super::config::conflicting_binds(config);
         if !conflicts.is_empty() {
-            return ConflictingListenersSnafu { ports: conflicts }.fail();
+            return ConflictingListenersSnafu { binds: conflicts }.fail();
         }
 
         let caddy_json = super::config::build_caddy_config(config);

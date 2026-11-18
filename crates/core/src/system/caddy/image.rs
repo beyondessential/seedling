@@ -86,8 +86,34 @@ fn referenced_modules(config: &serde_json::Value) -> std::collections::BTreeSet<
                         "{namespace}.reverse_proxy.selection_policies.{name}"
                     ));
                 }
-                for value in map.values() {
-                    handlers(value, namespace, out);
+                // A listener wrapper is a module of its own namespace, and the
+                // routes of a layer 4 one are the layer 4 app's, whichever app
+                // the server holding them belongs to.
+                if let Some(serde_json::Value::Array(wrappers)) = map.get("listener_wrappers") {
+                    for wrapper in wrappers {
+                        if let Some(serde_json::Value::String(name)) = wrapper.get("wrapper") {
+                            out.insert(format!("caddy.listeners.{name}"));
+                        }
+                        handlers(wrapper, "layer4", out);
+                    }
+                }
+                // A layer 4 route's matchers are named by key, as modules of
+                // the layer 4 matcher namespace.
+                if namespace == "layer4"
+                    && let Some(serde_json::Value::Array(sets)) = map.get("match")
+                {
+                    for set in sets {
+                        if let serde_json::Value::Object(matchers) = set {
+                            for name in matchers.keys() {
+                                out.insert(format!("layer4.matchers.{name}"));
+                            }
+                        }
+                    }
+                }
+                for (key, value) in map {
+                    if key != "listener_wrappers" {
+                        handlers(value, namespace, out);
+                    }
                 }
             }
             serde_json::Value::Array(items) => {
@@ -105,8 +131,9 @@ fn referenced_modules(config: &serde_json::Value) -> std::collections::BTreeSet<
     };
 
     for (app, node) in apps {
-        // `layer4` is plugin-provided, so the app id itself must be present.
-        if app == "layer4" {
+        // `layer4` and `seedling_dtls` are plugin-provided, so the app id
+        // itself must be present.
+        if app == "layer4" || app == "seedling_dtls" {
             found.insert(app.clone());
         }
         handlers(node, app, &mut found);
@@ -145,9 +172,9 @@ mod tests {
     use super::*;
     use crate::system::caddy::config::build_caddy_config;
     use crate::system::types::{
-        HttpRedirect, L4Proto, L4Route, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute,
-        ProxyRouteHandler, RedirectSegment, RouteCompress, RouteHeaderOps, RouteHeaders,
-        RouteProxy, RouteZone, VirtualHost,
+        DtlsRoute, HttpRedirect, L4Proto, L4Route, ProxyConfig, ProxyListener, ProxyListenerProto,
+        ProxyRoute, ProxyRouteHandler, RedirectSegment, RouteCompress, RouteHeaderOps,
+        RouteHeaders, RouteProxy, RouteZone, VirtualHost,
     };
 
     /// Default proxy settings, with a rate limit added: limiting is off by
@@ -322,14 +349,31 @@ mod tests {
                     proto: L4Proto::Tcp,
                     upstreams: vec!["[fd5e::2]:5432".to_owned()],
                     terminate_tls: true,
+                    hostname: Some("db.example.com".to_owned()),
+                },
+                // Shares the HTTPS port by SNI, so it takes the layer 4
+                // listener wrapper of the HTTPS server.
+                L4Route {
+                    port: 443,
+                    proto: L4Proto::Tcp,
+                    upstreams: vec!["[fd5e::2]:6432".to_owned()],
+                    terminate_tls: true,
+                    hostname: Some("stream.example.com".to_owned()),
                 },
                 L4Route {
                     port: 5353,
                     proto: L4Proto::Udp,
                     upstreams: vec!["[fd5e::2]:5353".to_owned()],
                     terminate_tls: false,
+                    hostname: None,
                 },
             ],
+            dtls_routes: vec![DtlsRoute {
+                port: 5684,
+                hostname: "voip.example.com".to_owned(),
+                upstream: "[fd5e::2]:5684".to_owned(),
+                ingress: "voip.example.com:5684".to_owned(),
+            }],
             warm_cert_hostnames: BTreeSet::from(["warm.example.com".to_owned()]),
             cert_endpoint_url: Some("http://[fd5e::3]:8080/get_certificate".to_owned()),
             renewal_ratios: BTreeMap::from([("slow.example.com".to_owned(), 0.5)]),
