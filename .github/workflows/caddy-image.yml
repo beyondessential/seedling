@@ -27,7 +27,7 @@ env:
   # pull request that forgets. Keep the Caddy part in sync with the FROM tags in
   # docker/caddy/Containerfile, and the whole tag in sync with CADDY_IMAGE in
   # crates/core/src/system/caddy/startup.rs.
-  TAG: "2.11.9-1"
+  TAG: "2.11.9-2"
   IMAGE: ghcr.io/beyondessential/seedling-caddy
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: A Containerfile change must move the image tag to an unused serial
+      - name: A change to what the image is built from must move the image tag to an unused serial
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -54,8 +54,14 @@ jobs:
           # how the two tips differ. Two dots also reports a Containerfile that
           # moved on the base branch and not here, which is a change the pull
           # request does not own and cannot bump a serial for.
-          if git diff --quiet "$BASE...$HEAD" -- docker/caddy/Containerfile; then
-            echo "Containerfile unchanged; nothing to check."
+          # The Containerfile and the modules built into the image: everything
+          # under docker/caddy except the list of required modules, which is
+          # checked against the image and not part of it, and the tests of the
+          # modules, which the image does not contain.
+          if git diff --quiet "$BASE...$HEAD" -- docker/caddy \
+            ':(exclude)docker/caddy/required-modules.txt' \
+            ':(exclude)docker/caddy/dtls/*_test.go'; then
+            echo "Image inputs unchanged; nothing to check."
             exit 0
           fi
 
@@ -64,7 +70,7 @@ jobs:
           new="$(read_tag < .github/workflows/caddy-image.yml)"
 
           if [ "$old" = "$new" ]; then
-            echo "::error::docker/caddy/Containerfile changed but TAG is still \"$new\". \
+            echo "::error::docker/caddy changed but TAG is still \"$new\". \
           A rebuilt image published under an existing tag leaves hosts on whichever \
           digest they already pulled. Bump the serial."
             exit 1
@@ -74,6 +80,24 @@ jobs:
           # Moving relative to the base branch does not see a serial another
           # build already claimed; only the registry knows that.
           etc/ci/check-caddy-tag-unused.sh "$IMAGE" "$new"
+
+  dtls-module:
+    name: DTLS module tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: docker/caddy/dtls/go.mod
+          cache-dependency-path: docker/caddy/dtls/go.sum
+      - name: Vet
+        working-directory: docker/caddy/dtls
+        run: go vet ./...
+      - name: Test
+        working-directory: docker/caddy/dtls
+        run: go test -race ./...
 
   build:
     name: Build and publish

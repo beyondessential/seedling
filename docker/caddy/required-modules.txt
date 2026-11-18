@@ -51,3 +51,5 @@ caddy.listeners.tls
 # A DTLS ingress is terminated by the proxy's own module, built into the image
 # from docker/caddy/dtls: no upstream module terminates DTLS.
 seedling_dtls
+# The route the runtime polls for refused sessions.
+admin.api.seedling_dtls
