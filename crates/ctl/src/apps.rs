@@ -696,8 +696,8 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 }
             }
             // spec: CLI#parameter-changes
-            let changes =
-                definition::param_changes(&proposed_params, &proposed_unset).unwrap_or_else(|e| {
+            let changes = definition::param_changes(&proposed_params, &proposed_unset)
+                .unwrap_or_else(|e| {
                     tracing::error!("{e}");
                     std::process::exit(1);
                 });

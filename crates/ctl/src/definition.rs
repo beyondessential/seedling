@@ -382,7 +382,10 @@ mod github {
 /// once, whether by repeating it or by both setting and unsetting it. Whether
 /// anything is changed is for the caller to decide.
 // spec: CLI#parameter-changes
-pub(super) fn param_changes(set: &[String], unset: &[String]) -> Result<Map<String, Value>, String> {
+pub(super) fn param_changes(
+    set: &[String],
+    unset: &[String],
+) -> Result<Map<String, Value>, String> {
     let mut changes = Map::new();
     let mut add = |name: &str, value: Value| match changes.insert(name.to_owned(), value) {
         Some(_) => Err(format!("parameter {name:?} is changed more than once")),
