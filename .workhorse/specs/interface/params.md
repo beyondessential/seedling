@@ -65,13 +65,14 @@ It MUST refuse it with `operation_in_progress` if a lifecycle operation is runni
 If `value` equals the parameter's stored value, the request is a no-op: the server MUST change nothing and MUST return `not_scheduled` with the app's current generation.
 
 Otherwise the server MUST validate the proposed values before it persists anything.
+If the change would move the effective values of more than one parameter with a handler, as [parameter changes](../runtime/operations.md#parameter-changes) specifies, the server MUST refuse the request with `multiple_handlers` and MUST persist nothing.
 It MUST then store the value and bump the app's generation, with a `param_set` [history entry](apps.md#generation-history), as one durable change.
 Once the change is durable, it MUST emit a `ParamSet` [event](events.md#app-events).
 
 The server MUST then evaluate the app's definition with its new values.
 If the evaluation fails, the server MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against the app, and the request still succeeds.
 
-If the app is installed and its definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation) and return `accepted`.
+If the app is installed and the change [moves the effective value](../language/parameter.md#change-handlers) of a parameter whose `on_change` handler the app's definition registers, the server MUST schedule that handler as a [lifecycle operation](../overview.md#lifecycle-operation) and return `accepted`.
 A handler queued behind another app's operation is accepted.
 Otherwise the server MUST return `not_scheduled`.
 
@@ -92,7 +93,7 @@ The server MUST refuse the request with `requirements_invalid`, `not_found` or `
 
 If the parameter has no stored value, the request is a no-op: the server MUST change nothing and MUST return `not_scheduled` with the app's current generation.
 
-Otherwise the server MUST validate the proposed values before it changes anything.
+Otherwise the server MUST validate the proposed values before it changes anything, and MUST refuse the request with `multiple_handlers` on the same terms as `/apps/params/set`.
 It MUST then remove the value and bump the app's generation, with a `param_unset` history entry, as one durable change.
 Once the change is durable, it MUST emit a `ParamUnset` event.
 It MUST then evaluate the definition, file a `script_error` fault if the evaluation fails, and schedule an `on_change` handler, as `/apps/params/set` does.
@@ -123,7 +124,7 @@ The result has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `diff` | array | one entry per resource added, removed or modified |
-| `on_change_would_fire` | array of strings | in ascending order, the parameters whose `on_change` handler the server would schedule if the change were committed, as [parameter set](#parameter-set) specifies |
+| `on_change_would_fire` | array of strings | in ascending order, the parameters whose `on_change` handler the change would invoke if it were committed, as [parameter set](#parameter-set) specifies, so that more than one names a change refused with `multiple_handlers` |
 | `errors` | array of strings | the parse or evaluation errors, if the evaluated definition fails to parse or evaluate |
 | `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose validator rejects the proposed values |
 

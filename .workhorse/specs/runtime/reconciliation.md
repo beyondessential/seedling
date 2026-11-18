@@ -47,6 +47,11 @@ From the moment the runtime initiates an app's [start action](../language/action
 While a [shell session](../interface/shells.md#shell-session) on an app is open, the app's desired state MUST also hold the [dynamic resources](../language/app.md#dynamic-resource-lifetime) the session's closure has started, each in the state the closure last put it in, whatever else the desired state consists of.
 The runtime MUST keep each session's resources apart from those of every other session and of any lifecycle operation.
 
+From the moment the runtime commits a [generation](generation.md) whose change initiates a lifecycle operation until that operation ends, including while it is queued, the app's desired state MUST be as for an app with a lifecycle operation in progress.
+
+> [!NOTE]
+> A change that initiates a handler leaves the app's instances running as they were started until the handler directs them, so a new release's images do not start before the handler has prepared for them.
+
 ## Reconciliation loop
 
 The runtime MUST run a reconciliation loop for as long as it runs.

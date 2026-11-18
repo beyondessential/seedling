@@ -63,7 +63,7 @@ It MUST refuse it with `operation_in_progress` if a lifecycle operation is runni
 The server MUST evaluate the new definition with the [proposed values](params.md#proposed-values), then validate those values against it.
 If `param` gives the parameter's stored value, the update changes no parameter.
 
-If the definition cannot be fetched, breaks the bundle rules, does not support the running Seedling version, fails to parse or evaluate, or fails validation, the server MUST refuse the request with the matching error and MUST leave everything observable as it was.
+If the definition cannot be fetched, breaks the bundle rules, does not support the running Seedling version, fails to parse or evaluate, fails validation, or would invoke more than one handler (`multiple_handlers`), the server MUST refuse the request with the matching error and MUST leave everything observable as it was.
 It MUST store no bundle and no parameter value, MUST NOT bump the generation, MUST NOT file or clear any fault, and the app MUST keep running its existing [resource graph](../overview.md#resource-graph).
 Every piece of state derived from the definition MUST stay as it was, so that a refused update cannot be told apart from one never submitted.
 
@@ -73,9 +73,8 @@ Every piece of state derived from the definition MUST stay as it was, so that a 
 On success the server MUST record the new definition and the parameter change together in a single generation bump, with a `script_update` history entry.
 It MUST then emit an `AppUpdated` [event](events.md#app-events).
 
-If the update changes a parameter, the app is installed, and the new definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation).
+If the app is installed and the update [moves the effective value](../language/parameter.md#change-handlers) of a parameter whose `on_change` handler the new definition registers, the server MUST schedule that handler as a [lifecycle operation](../overview.md#lifecycle-operation).
 The handler MUST run under the new definition, with `old` being the previous generation.
-An update that changes no parameter MUST NOT schedule a handler.
 
 ## Uninstall
 
