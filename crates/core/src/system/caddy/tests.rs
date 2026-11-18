@@ -2562,3 +2562,29 @@ fn a_proxied_route_with_no_upstreams_answers_503() {
     assert_eq!(last["handler"], "static_response");
     assert_eq!(last["status_code"], 503);
 }
+
+// spec: PRX#proxy-upgrades
+#[test]
+fn a_cached_config_from_before_dtls_termination_still_parses_and_renders_as_it_did() {
+    // A TLS route without a hostname, and a UDP route, which is what a DTLS
+    // ingress was cached as, since its datagrams were passed through.
+    let cached = r#"{
+      "listeners":[],"virtual_hosts":[],
+      "l4_routes":[
+        {"port":5432,"proto":"Tcp","upstreams":["[fd5e::1]:5432"],"terminate_tls":true},
+        {"port":5684,"proto":"Udp","upstreams":["[fd5e::2]:5684"]}
+      ],
+      "warm_cert_hostnames":[],"cert_endpoint_url":null
+    }"#;
+    let config = crate::system::caddy::startup::parse_cached_proxy_config(cached)
+        .expect("the old shape still parses");
+    assert!(config.dtls_routes.is_empty());
+
+    let json = build_caddy_config(&config);
+    let servers = &json["apps"]["layer4"]["servers"];
+    let tls = &servers["l4_tcp_5432"]["routes"][0];
+    assert!(tls["match"].is_null(), "no name to route by was recorded");
+    assert_eq!(tls["handle"][0]["handler"], "tls");
+    assert_eq!(servers["l4_udp_5684"]["routes"][0]["handle"][0]["handler"], "proxy");
+    assert!(json["apps"]["seedling_dtls"].is_null());
+}

@@ -410,12 +410,20 @@ fn l4_route(route: &L4Route) -> Value {
         .map(|u| json!({ "dial": [u] }))
         .collect();
     let proxy = json!({ "handler": "proxy", "upstreams": upstreams });
-    match (&route.hostname, route.terminate_tls) {
-        (Some(hostname), true) => json!({
+    if !route.terminate_tls {
+        return json!({ "handle": [proxy] });
+    }
+    // A route cached before routes carried a hostname terminates TLS for any
+    // name, as the daemon that wrote it rendered it, so replaying it
+    // reproduces what was running; the next reconciliation tick rebuilds it
+    // from the declaration, with its name.
+    // spec: PRX#proxy-upgrades
+    match &route.hostname {
+        Some(hostname) => json!({
             "match": [{ "tls": { "sni": [hostname] } }],
             "handle": [tls_handler(), proxy],
         }),
-        _ => json!({ "handle": [proxy] }),
+        None => json!({ "handle": [tls_handler(), proxy] }),
     }
 }
 
