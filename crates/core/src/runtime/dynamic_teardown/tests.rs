@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use seedling_protocol::names::AppName;
 
 use super::{keep_tearing_down, tear_down};
@@ -8,8 +8,9 @@ use crate::{
     defs::resource::ResourceKind,
     runtime::{
         anonymous_volumes::{self, AnonymousVolume},
+        apps::AppRegistry,
         db::DbHandle,
-        desired::{insert_dynamic_resource, list_dynamic_resources},
+        desired::{DynamicCreator, insert_dynamic_resource, list_dynamic_resources},
         faults,
         identity::ResourceInstance,
         scheduler::Scheduler,
@@ -55,14 +56,19 @@ fn harness() -> Harness {
 /// Record an anonymous Job of `op` whose anonymous volume, standing on the
 /// host, the container runtime refuses to remove.
 fn stuck_job(h: &Harness, op: &str) -> ResourceInstance {
+    stuck_job_of(h, op, DynamicCreator::Operation)
+}
+
+/// As [`stuck_job`], created by `creator`, whose id `owner` is.
+fn stuck_job_of(h: &Harness, owner: &str, creator: DynamicCreator) -> ResourceInstance {
     let job = ResourceInstance::new_anonymous(AppName::new("app").unwrap(), ResourceKind::Job);
     let volume = AnonymousVolume {
         name: "seedling-anon-0123456789abcdef0123456789abcdef-vol-0".to_owned(),
         tmpfs: false,
     };
-    let (recorded, op, stored) = (job.clone(), op.to_owned(), volume.clone());
+    let (recorded, op, stored) = (job.clone(), owner.to_owned(), volume.clone());
     h.db.call(move |db| {
-        insert_dynamic_resource(db, &recorded, &op, None).unwrap();
+        insert_dynamic_resource(db, &recorded, &op, creator, None).unwrap();
         anonymous_volumes::record(db, &recorded, &[stored]).unwrap();
     });
     let created = volume.name.clone();
@@ -104,6 +110,7 @@ fn a_dynamic_resource_left_by_a_teardown_is_torn_down_again_holding_the_fault_me
     let h = harness();
     stuck_job(&h, "op-1");
     let scheduler = Arc::new(Mutex::new(Scheduler::new()));
+    let registry = Arc::new(RwLock::new(AppRegistry::new()));
 
     with_paused_clock(async {
         let left = tear_down(&h.driver, &h.db, h.db.call(list_dynamic_resources).unwrap()).await;
@@ -113,6 +120,7 @@ fn a_dynamic_resource_left_by_a_teardown_is_torn_down_again_holding_the_fault_me
             Arc::clone(&h.driver),
             h.db.clone(),
             Arc::clone(&scheduler),
+            Arc::clone(&registry),
             Some(left),
         );
         tokio::pin!(keep);
@@ -173,12 +181,14 @@ fn dynamic_resources_whose_records_could_not_be_read_are_read_again_and_torn_dow
     };
     rename("dynamic_resources", "hidden_dynamic_resources");
     let scheduler = Arc::new(Mutex::new(Scheduler::new()));
+    let registry = Arc::new(RwLock::new(AppRegistry::new()));
 
     with_paused_clock(async {
         let keep = keep_tearing_down(
             Arc::clone(&h.driver),
             h.db.clone(),
             Arc::clone(&scheduler),
+            Arc::clone(&registry),
             None,
         );
         tokio::pin!(keep);
@@ -219,4 +229,53 @@ fn a_fault_outliving_its_operations_records_is_cleared() {
     assert_eq!(stalled(&h, "op-gone"), 0);
     assert_eq!(stalled(&h, "op-live"), 1, "a live operation's is left");
     assert_eq!(stalled(&h, "op-left"), 1, "one with records left keeps it");
+}
+
+// spec: OPS#shell-sessions
+// A session's dynamic resources are its own to tear down while it is open and
+// after it has ended, so the background read may not take them.
+#[test]
+fn a_background_teardown_leaves_the_resources_of_a_session_that_has_a_slot() {
+    use seedling_protocol::names::SessionId;
+
+    let h = harness();
+    let session = SessionId::generate();
+    stuck_job_of(&h, &session.to_string(), DynamicCreator::ShellSession);
+    h.containers.refuse_volume_removal(false);
+    let scheduler = Arc::new(Mutex::new(Scheduler::new()));
+    let registry = Arc::new(RwLock::new(AppRegistry::new()));
+    registry
+        .write()
+        .register(
+            AppName::new("app").unwrap(),
+            Arc::default(),
+            crate::runtime::definition::Source::unknown_push(),
+            Arc::default(),
+            &crate::ScriptLimits::default(),
+        )
+        .unwrap();
+    let sessions = Arc::clone(&registry.read().get("app").unwrap().sessions);
+    sessions.open(session);
+
+    with_paused_clock(async {
+        let keep = keep_tearing_down(
+            Arc::clone(&h.driver),
+            h.db.clone(),
+            Arc::clone(&scheduler),
+            Arc::clone(&registry),
+            None,
+        );
+        tokio::pin!(keep);
+        tokio::select! {
+            () = &mut keep => panic!("the teardown ended while a session stood"),
+            () = tokio::time::sleep(TEN_MINUTES) => {}
+        }
+        assert_eq!(records(&h), 1, "the session's resource was left alone");
+
+        sessions.close(&session);
+        tokio::time::timeout(TEN_MINUTES, keep)
+            .await
+            .expect("the teardown takes the resource once the session has let go");
+    });
+    assert_eq!(records(&h), 0);
 }

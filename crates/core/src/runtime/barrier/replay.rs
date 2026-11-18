@@ -415,6 +415,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     ctx.lock().executor = executor;
     // spec: SEC#storage
     ctx.lock().cipher = cipher.clone();
+    ctx.lock().is_shell = requested_shell;
     // spec: SUSP#side-effecting-calls
     ctx.lock().early_commit = log.early_committer();
 
@@ -639,6 +640,12 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         };
         let mut progress = OperationProgress::from_log(&loaded);
         progress.dynamic_defs = ctx.lock().dynamic_defs.clone();
+        // spec: RT#starting-resources
+        // A shell does not drive its app's declared resources: the steady
+        // state or the operation in progress does.
+        if is_shell {
+            progress.retain_dynamic();
+        }
         *ap.write() = Some(progress);
     }
     if let Some(notify) = &tick_notify {

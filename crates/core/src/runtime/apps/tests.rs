@@ -79,6 +79,7 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         app: crate::defs::app::App::default(),
         phase: Arc::new(parking_lot::Mutex::new(AppPhase::NotInstalled)),
         active_progress: Arc::new(parking_lot::RwLock::new(None)),
+        sessions: Default::default(),
         tick_notify: Arc::new(Notify::new()),
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
         current_generation: 0,

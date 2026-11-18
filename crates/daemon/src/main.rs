@@ -1105,6 +1105,7 @@ fn keep_tearing_down(oi_state: &Arc<OiState>, left: Leftovers) {
         Arc::clone(&oi_state.driver),
         oi_state.db.clone(),
         Arc::clone(&oi_state.scheduler),
+        Arc::clone(&oi_state.registry),
         left,
     ));
 }
@@ -1230,9 +1231,14 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
         let records = oi_state
             .db
             .call(seedling_core::runtime::desired::list_dynamic_resources);
+        // spec: OPS#shell-sessions
+        // A session open by the time this runs is the runtime's own, run since
+        // startup began; its resources are its to tear down.
+        let live_sessions = oi_state.registry.read().live_sessions();
         let records: Result<Vec<_>, _> = records.map(|rs| {
             rs.into_iter()
                 .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
+                .filter(|r| !live_sessions.contains(&r.operation_id))
                 .collect()
         });
         // spec: SUSP#abandoned-replay
@@ -1258,7 +1264,11 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
                 seedling_core::runtime::dynamic_teardown::clear_finished_operations(
                     &oi_state.db,
                     &left,
-                    &replay_op_id.iter().cloned().collect(),
+                    &replay_op_id
+                        .iter()
+                        .cloned()
+                        .chain(live_sessions.iter().cloned())
+                        .collect(),
                 );
                 Some(left)
             }

@@ -5,7 +5,7 @@ use std::{
 
 use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
-use seedling_protocol::names::{ActionName, AppName, ParamName};
+use seedling_protocol::names::{ActionName, AppName, ParamName, SessionId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
@@ -107,6 +107,50 @@ impl AppStatus {
     }
 }
 
+/// Where a shell session's dynamic resources stand in the desired state, as
+/// an operation's stand in [`AppEntry::active_progress`].
+pub type SessionSlot = Arc<RwLock<Option<OperationProgress>>>;
+
+/// The slot of each shell session that is open on an app, or that has ended
+/// and is still tearing its dynamic resources down.
+///
+/// Unlike operations, of which one runs per host, any number of sessions run
+/// beside an operation and each other, so each has a slot of its own.
+// spec: RCN#desired-state
+#[derive(Default)]
+pub struct SessionSlots {
+    slots: RwLock<BTreeMap<SessionId, SessionSlot>>,
+}
+
+impl SessionSlots {
+    /// Give `session` an empty slot, which stands until it is [closed](Self::close).
+    pub fn open(&self, session: SessionId) -> SessionSlot {
+        Arc::clone(self.slots.write().entry(session).or_default())
+    }
+
+    pub fn close(&self, session: &SessionId) {
+        self.slots.write().remove(session);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.read().is_empty()
+    }
+
+    /// The sessions that have a slot.
+    pub fn sessions(&self) -> Vec<SessionId> {
+        self.slots.read().keys().copied().collect()
+    }
+
+    /// What each session has placed in the desired state so far.
+    pub fn progress(&self) -> Vec<OperationProgress> {
+        self.slots
+            .read()
+            .values()
+            .filter_map(|slot| slot.read().clone())
+            .collect()
+    }
+}
+
 pub struct AppEntry {
     pub name: AppName,
     /// The definition installed at the current generation.
@@ -123,6 +167,9 @@ pub struct AppEntry {
     pub phase: Arc<Mutex<AppPhase>>,
     /// Shared with the reconciler and operation runner to track in-progress ops.
     pub active_progress: Arc<RwLock<Option<OperationProgress>>>,
+    /// Shared with the reconciler and the shell sessions to track theirs.
+    // spec: RCN#desired-state
+    pub sessions: Arc<SessionSlots>,
     /// Wakes the reconciler for an immediate tick.
     pub tick_notify: Arc<Notify>,
     /// Active script-evaluation fault, if the last reload failed.
@@ -213,6 +260,7 @@ impl AppRegistry {
                 app,
                 phase: Arc::new(Mutex::new(AppPhase::NotInstalled)),
                 active_progress: Arc::new(RwLock::new(None)),
+                sessions: Arc::default(),
                 tick_notify,
                 script_error,
                 current_generation: generation,
@@ -220,6 +268,17 @@ impl AppRegistry {
                 start_pending: Arc::default(),
             },
         );
+    }
+
+    /// The id of every shell session that has a slot on any app: those open,
+    /// and those ended whose dynamic resources are still being torn down.
+    // spec: OPS#shell-sessions
+    pub fn live_sessions(&self) -> std::collections::HashSet<String> {
+        self.entries
+            .values()
+            .flat_map(|entry| entry.sessions.sessions())
+            .map(|session| session.to_string())
+            .collect()
     }
 
     pub fn deregister(&mut self, name: &str) -> bool {
@@ -405,6 +464,7 @@ impl AppRegistry {
                     app,
                     phase: Arc::new(Mutex::new(phase)),
                     active_progress: Arc::new(RwLock::new(None)),
+                    sessions: Arc::default(),
                     tick_notify: Arc::clone(&tick_notify),
                     script_error,
                     current_generation,

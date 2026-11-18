@@ -24,7 +24,7 @@ use crate::{
         AppPhase, InstanceRegistry,
         apps::{AppRegistry, transition_phase},
         db::DbHandle,
-        desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
+        desired::{DesiredState, EffectiveScales, compute, compute_uninstalling, merge_sessions},
         gc::InstanceGcConfig,
         health::InstanceHealth,
         identity::InstanceId,
@@ -1038,9 +1038,15 @@ impl Reconciler {
                     &stopped_set,
                 ),
             };
+            let sessions = entry.sessions.progress();
             let desired = match desired {
-                Ok(d) => {
+                Ok(mut d) => {
                     self.clear_desired_state_fault(&name);
+                    // spec: RCN#desired-state
+                    // Each open shell session's dynamic resources join the
+                    // desired state whatever phase the app is in and whatever
+                    // else it holds.
+                    merge_sessions(&mut d, &app_def, &sessions, phase == AppPhase::Uninstalling);
                     d
                 }
                 Err(e) => {
@@ -1061,9 +1067,10 @@ impl Reconciler {
                 }
             };
             let warm_cert_hostnames = (*progress)
-                .as_ref()
-                .map(|p| p.warm_cert_hostnames.clone())
-                .unwrap_or_default();
+                .iter()
+                .chain(&sessions)
+                .flat_map(|p| p.warm_cert_hostnames.iter().cloned())
+                .collect();
             // spec: PRIO#priority-setting
             // Read once for the whole tick above; an app with no stored
             // decision stands at the default.
@@ -1074,6 +1081,7 @@ impl Reconciler {
                 .unwrap_or_default();
             let steady = phase == AppPhase::Installed
                 && progress.is_none()
+                && sessions.is_empty()
                 && !entry
                     .start_pending
                     .load(std::sync::atomic::Ordering::Acquire);

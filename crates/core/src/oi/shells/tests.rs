@@ -11,8 +11,8 @@ use tokio::io::AsyncWrite;
 use super::{
     registry::{ShellSession, StopSignal},
     session::{
-        LiveShell, SessionIo, SessionOutcome, SessionStreams, run_app_shell, run_to_exit,
-        session_outcome,
+        LiveShell, SessionIo, SessionOutcome, SessionProgress, SessionStreams, run_app_shell,
+        run_to_exit, session_outcome,
     },
 };
 use crate::{
@@ -20,7 +20,10 @@ use crate::{
         state::OiState,
         test_support::{Loopback, TestOi, loopback},
     },
-    runtime::barrier::shell::{ShellExecTarget, ShellExit, ShellHost},
+    runtime::{
+        apps::SessionSlot,
+        barrier::shell::{ShellExecTarget, ShellExit, ShellHost},
+    },
     system::types::ExecHandle,
 };
 
@@ -304,6 +307,15 @@ impl ShellHost for FakeHost {
     }
 }
 
+/// A session run to its end, with the app it ran on.
+struct ShellRan {
+    oi: TestOi,
+    outcome: SessionOutcome,
+    session_id: SessionId,
+    /// The slot the session placed its dynamic resources in.
+    slot: SessionSlot,
+}
+
 /// Run the `tools` shell of a `demo` app declared by `script`, with `params`,
 /// against `host`, stopping the session after `stop_after` if given, and say
 /// how the session ended.
@@ -313,6 +325,16 @@ fn run_shell(
     host: &Arc<FakeHost>,
     stop_after: Option<std::time::Duration>,
 ) -> SessionOutcome {
+    run_shell_session(script, params, host, stop_after).outcome
+}
+
+/// As [`run_shell`], keeping the app and the session's slot for inspection.
+fn run_shell_session(
+    script: &str,
+    params: serde_json::Value,
+    host: &Arc<FakeHost>,
+    stop_after: Option<std::time::Duration>,
+) -> ShellRan {
     use seedling_protocol::names::ShellName;
 
     let oi = TestOi::new();
@@ -321,7 +343,7 @@ fn run_shell(
         serde_json::json!({ "app": "demo", "script": script }),
     )
     .unwrap();
-    let (app, schema) = {
+    let (app, schema, sessions, tick_notify) = {
         let reg = oi.state.registry.read();
         let entry = reg.get("demo").unwrap();
         let schema = entry
@@ -333,11 +355,18 @@ fn run_shell(
             .unwrap()
             .params
             .clone();
-        (entry.app.clone(), schema)
+        (
+            entry.app.clone(),
+            schema,
+            Arc::clone(&entry.sessions),
+            Arc::clone(&entry.tick_notify),
+        )
     };
     let params = params.as_object().cloned().unwrap_or_default();
     let stop = StopSignal::new();
-    oi.block_on(async {
+    let session_id = SessionId::generate();
+    let slot = sessions.open(session_id);
+    let outcome = oi.block_on(async {
         if let Some(after) = stop_after {
             let stop = stop.clone();
             tokio::spawn(async move {
@@ -354,6 +383,11 @@ fn run_shell(
             params,
             &stop,
             Arc::clone(host) as Arc<dyn ShellHost>,
+            SessionProgress {
+                id: session_id,
+                slot: Arc::clone(&slot),
+                tick_notify,
+            },
         )
         .await;
         let job_exit = host
@@ -363,7 +397,13 @@ fn run_shell(
             .and_then(|exit| exit.exit_code())
             .filter(|_| host.attachments() > 0);
         session_outcome(&run, stop.is_requested(), job_exit)
-    })
+    });
+    ShellRan {
+        oi,
+        outcome,
+        session_id,
+        slot,
+    }
 }
 
 const TOOLS_JOB: &str = r#"

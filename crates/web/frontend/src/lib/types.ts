@@ -210,8 +210,12 @@ export interface AppResource {
    * with no name argument). Set alongside `dynamic`. */
   anonymous?: boolean;
   /** Operation that created this dynamic resource — useful for grouping when
-   * multiple actions are queued. Set alongside `dynamic`. */
-  operation_id?: string;
+   * multiple actions are queued. Set alongside `dynamic`; `null` where a shell
+   * session created it. */
+  operation_id?: string | null;
+  /** Shell session that created this dynamic resource. Set alongside
+   * `dynamic`; `null` where an operation created it. */
+  session_id?: string | null;
   /** Free-form description set via `resource.description(...)`. For static
    * resources this also lives at `def.description`; dynamic resources only
    * carry it at the top level because their persisted record has no

@@ -16,7 +16,7 @@ use crate::{
         AppPhase,
         apps::{AppRegistry, AppStatus, status as app_status},
         definition::{Bundle, Source, version},
-        desired::list_dynamic_resources_for_app,
+        desired::{DynamicCreator, list_dynamic_resources_for_app},
         faults,
         health::{InstanceHealth, declares_healthcheck, read_health},
         history::{find_instances_for_group, read_lifecycle},
@@ -894,7 +894,15 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         "name": display_name,
                         "type": kind_str,
                         "anonymous": rec.resource_name.is_none(),
-                        "operation_id": rec.operation_id,
+                        // spec: APPS#dynamic-resources
+                        "operation_id": match rec.creator {
+                            DynamicCreator::Operation => Value::String(rec.operation_id.clone()),
+                            DynamicCreator::ShellSession => Value::Null,
+                        },
+                        "session_id": match rec.creator {
+                            DynamicCreator::Operation => Value::Null,
+                            DynamicCreator::ShellSession => Value::String(rec.operation_id.clone()),
+                        },
                         // spec: BSL#descriptions
                         "description": rec.description,
                         "instances": [{

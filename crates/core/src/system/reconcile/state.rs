@@ -650,7 +650,9 @@ impl Reconciler {
 // spec: GC#unscheduled-instances
 fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDesiredState {
     let still_steady = |entry: &AppEntry| {
-        *entry.phase.lock() == AppPhase::Installed && entry.active_progress.read().is_none()
+        *entry.phase.lock() == AppPhase::Installed
+            && entry.active_progress.read().is_none()
+            && entry.sessions.is_empty()
     };
     let mut known = KnownDesiredState::default();
     for app in apps.iter().filter(|app| app.steady) {
@@ -667,7 +669,9 @@ fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDes
     }
     for name in registry.names() {
         if registry.get(name.as_str()).is_some_and(|entry| {
-            *entry.phase.lock() == AppPhase::NotInstalled && entry.active_progress.read().is_none()
+            *entry.phase.lock() == AppPhase::NotInstalled
+                && entry.active_progress.read().is_none()
+                && entry.sessions.is_empty()
         }) {
             known.insert_app(&name, []);
         }

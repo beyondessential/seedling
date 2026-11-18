@@ -102,6 +102,13 @@ impl OperationProgress {
         self.resources.is_empty()
     }
 
+    /// Drop every resource that is not dynamic. A declared resource is named
+    /// and a dynamic one is anonymous.
+    // spec: RT#starting-resources
+    pub fn retain_dynamic(&mut self) {
+        self.resources.retain(|instance, _| instance.name.is_none());
+    }
+
     /// Build from a slice of action log entries.
     ///
     /// `Start` entries map to desired state `Ready`.
@@ -344,6 +351,41 @@ fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> D
     }
 }
 
+/// Add what the shell sessions open on an app have placed in the desired
+/// state to `state`, beside whatever else it holds.
+///
+/// A session only ever places dynamic instances, which no operation's
+/// progress and no steady state holds, so its entries cannot clash with
+/// theirs. For an app being uninstalled, every instance is held `Unscheduled`
+/// and a session's is held so too.
+// spec: RCN#desired-state
+pub fn merge_sessions(
+    state: &mut DesiredState,
+    app_def: &AppDef,
+    sessions: &[OperationProgress],
+    uninstalling: bool,
+) {
+    for progress in sessions {
+        for mut resource in compute_during_operation(app_def, progress).resources {
+            if state
+                .resources
+                .iter()
+                .any(|held| held.instance.id == resource.instance.id)
+                || state
+                    .undeclared
+                    .iter()
+                    .any(|held| held.id == resource.instance.id)
+            {
+                continue;
+            }
+            if uninstalling {
+                resource.desired = LifecycleState::Unscheduled;
+            }
+            state.resources.push(resource);
+        }
+    }
+}
+
 fn lookup_definition(app_def: &AppDef, instance: &ResourceInstance) -> Option<Resource> {
     let name = Arc::new(instance.name.as_deref().unwrap_or("").to_owned());
     let id = ResourceId {
@@ -353,11 +395,25 @@ fn lookup_definition(app_def: &AppDef, instance: &ResourceInstance) -> Option<Re
     app_def.resources.get(&id).cloned()
 }
 
+/// What created a dynamic resource, and so what its record's `operation_id`
+/// names.
+// spec: APP#dynamic-resource-lifetime
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicCreator {
+    /// A lifecycle operation; the record holds the operation's id.
+    Operation,
+    /// A shell session; the record holds the session's id.
+    ShellSession,
+}
+
 /// A persisted dynamic resource record.
 pub struct DynamicResourceRecord {
     pub instance_id: String,
     pub app: AppName,
+    /// The id of the operation or shell session that created the resource, as
+    /// `creator` says.
     pub operation_id: String,
+    pub creator: DynamicCreator,
     pub kind: String,
     pub display_name: String,
     /// BSL-level resource name; `None` for anonymous resources.
@@ -372,16 +428,19 @@ pub fn insert_dynamic_resource(
     db: &Db,
     instance: &ResourceInstance,
     operation_id: &str,
+    creator: DynamicCreator,
     description: Option<&str>,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
         // spec: INFRA#database
         "INSERT INTO dynamic_resources
-             (instance_id, app, operation_id, kind, display_name, resource_name, description)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             (instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+              description)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(instance_id) DO UPDATE SET
              app = excluded.app,
              operation_id = excluded.operation_id,
+             shell_session = excluded.shell_session,
              kind = excluded.kind,
              display_name = excluded.display_name,
              resource_name = excluded.resource_name,
@@ -390,6 +449,7 @@ pub fn insert_dynamic_resource(
             instance.id.to_hex(),
             instance.app,
             operation_id,
+            creator == DynamicCreator::ShellSession,
             format!("{:?}", instance.kind),
             instance.display_name,
             instance.name,
@@ -411,7 +471,8 @@ pub fn delete_dynamic_resource(db: &Db, instance_id: &str) -> rusqlite::Result<(
 /// Load all dynamic resource records (e.g., for startup orphan cleanup).
 pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, kind, display_name, resource_name, description
+        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+                description
          FROM dynamic_resources ORDER BY app, instance_id",
     )?;
     collect_dynamic_rows(stmt.query_map([], parse_dynamic_row)?)
@@ -423,7 +484,8 @@ pub fn list_dynamic_resources_for_app(
     app: &AppName,
 ) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, kind, display_name, resource_name, description
+        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+                description
          FROM dynamic_resources WHERE app = ?1 ORDER BY instance_id",
     )?;
     collect_dynamic_rows(stmt.query_map([app], parse_dynamic_row)?)
@@ -436,7 +498,8 @@ pub fn list_dynamic_resources_for_operation(
     operation_id: &str,
 ) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, kind, display_name, resource_name, description
+        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+                description
          FROM dynamic_resources WHERE operation_id = ?1 ORDER BY instance_id",
     )?;
     collect_dynamic_rows(stmt.query_map([operation_id], parse_dynamic_row)?)
@@ -447,10 +510,15 @@ fn parse_dynamic_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourc
         instance_id: row.get(0)?,
         app: row.get::<_, AppName>(1)?,
         operation_id: row.get(2)?,
-        kind: row.get(3)?,
-        display_name: row.get(4)?,
-        resource_name: row.get(5)?,
-        description: row.get(6)?,
+        creator: if row.get::<_, bool>(3)? {
+            DynamicCreator::ShellSession
+        } else {
+            DynamicCreator::Operation
+        },
+        kind: row.get(4)?,
+        display_name: row.get(5)?,
+        resource_name: row.get(6)?,
+        description: row.get(7)?,
     })
 }
 

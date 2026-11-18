@@ -28,6 +28,7 @@ fn entry_with_script(name: &str, script: &str) -> AppEntry {
         app: app_def,
         phase: Arc::new(parking_lot::Mutex::new(AppPhase::NotInstalled)),
         active_progress: Arc::new(parking_lot::RwLock::new(None)),
+        sessions: Default::default(),
         tick_notify: Arc::new(Notify::new()),
         script_error: None,
         current_generation: 0,

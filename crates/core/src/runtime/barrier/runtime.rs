@@ -1053,8 +1053,28 @@ impl RuntimeInstance {
         // state: the record is all that finds it again after a restart, so a
         // resource whose record cannot be written is not started.
         if let (Some(db), Some(ctx)) = (&self.db, &self.ctx) {
-            let op_id = ctx.lock().operation_id.0.clone();
+            let (op_id, creator) = {
+                let g = ctx.lock();
+                // spec: OPS#shell-sessions
+                // A shell session's id stands where an operation's does, so
+                // the record is found again by the session that created it.
+                let creator = if g.is_shell {
+                    crate::runtime::desired::DynamicCreator::ShellSession
+                } else {
+                    crate::runtime::desired::DynamicCreator::Operation
+                };
+                (g.operation_id.0.clone(), creator)
+            };
             for (instance, maybe_def) in &resources_with_defs {
+                // spec: RT#starting-resources
+                // A shell leaves the declared resources of its selection to
+                // whatever else drives them, so only its anonymous ones are
+                // its own to record.
+                if creator == crate::runtime::desired::DynamicCreator::ShellSession
+                    && instance.name.is_some()
+                {
+                    continue;
+                }
                 if let Some(resource) = maybe_def {
                     let recorded = instance.clone();
                     let op_id = op_id.clone();
@@ -1065,6 +1085,7 @@ impl RuntimeInstance {
                             db,
                             &recorded,
                             &op_id,
+                            creator,
                             description.as_deref(),
                         )
                     }) {
@@ -1808,6 +1829,19 @@ impl RuntimeInstance {
         // spec: OPS#cancellation
         if ctx.lock().cancel_token.is_cancelled() {
             return Err(make_cancel_error());
+        }
+
+        // spec: RT#stopping-resources
+        // A shell does not drive its app's declared resources, so it has no
+        // standing to stop one. The call claims no position in the log.
+        if ctx.lock().is_shell
+            && let Some(declared) = resources.iter().find(|r| r.name.is_some())
+        {
+            return Err(format!(
+                "rt.stop in a shell cannot stop {}: it is declared by the app",
+                declared.display_name
+            )
+            .into());
         }
 
         let mut g = ctx.lock();
