@@ -39,7 +39,7 @@ Seedling has two halves that meet badly: the resource graph is level-triggered a
 
 ### Design so far
 
-Working name: a **step**. A static resource that the runtime keeps converged, like any other.
+Working name: a **gate**. A static resource that the runtime keeps converged, like any other.
 
 - **Key**: a value the definition computes in the static context, e.g. `version.value()`, or a digest of rendered config. The step is satisfied when its last success was for the current key. Where the key came from (stored value, default, derived value, definition update) does not matter.
 - **Body**: a closure run as a lifecycle operation whenever the step is unsatisfied. It receives `last`, the app at the step's last success, or none on its first run. A version that moved twice while failing still upgrades from the release the database was last migrated to, and the first run is how a body tells install from upgrade.
