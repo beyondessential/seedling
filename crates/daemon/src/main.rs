@@ -1235,11 +1235,12 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
         // A session open by the time this runs is the runtime's own, run since
         // startup began; its resources are its to tear down.
         let live_sessions = oi_state.registry.read().live_sessions();
-        let records: Result<Vec<_>, _> = records.map(|rs| {
-            rs.into_iter()
-                .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
-                .filter(|r| !live_sessions.contains(&r.operation_id))
-                .collect()
+        let records = records.map(|rs| {
+            seedling_core::runtime::dynamic_teardown::unspared(
+                rs,
+                replay_op_id.as_deref(),
+                &live_sessions,
+            )
         });
         // spec: SUSP#abandoned-replay
         // spec: FLT#host-faults

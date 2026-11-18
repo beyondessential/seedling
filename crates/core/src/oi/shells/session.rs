@@ -337,7 +337,7 @@ pub(crate) async fn open_shell_session(
 /// lets go of its slot in the app's desired state.
 // spec: APP#dynamic-resource-lifetime
 // spec: OPS#shell-sessions
-async fn tear_down_session_resources(
+pub(super) async fn tear_down_session_resources(
     state: Arc<OiState>,
     app_name: AppName,
     session_id: SessionId,

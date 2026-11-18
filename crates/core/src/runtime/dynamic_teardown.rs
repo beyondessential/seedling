@@ -241,6 +241,26 @@ pub fn clear_finished_operations(
     });
 }
 
+/// The records a startup teardown takes: every one but those of the operation
+/// about to be replayed, which the replay adopts, and those of the sessions in
+/// `live`, which are the runtime's own, run since startup began.
+///
+/// A session a previous run left is never live, as sessions are never
+/// replayed, so its resources are always torn down.
+// spec: SUSP#abandoned-replay
+// spec: OPS#shell-sessions
+pub fn unspared(
+    records: Vec<DynamicResourceRecord>,
+    replay: Option<&str>,
+    live_sessions: &HashSet<String>,
+) -> Vec<DynamicResourceRecord> {
+    records
+        .into_iter()
+        .filter(|r| Some(r.operation_id.as_str()) != replay)
+        .filter(|r| !live_sessions.contains(&r.operation_id))
+        .collect()
+}
+
 /// The operations and shell sessions whose dynamic resources are not to be
 /// torn down here: the operation running, and those queued, which includes an
 /// operation being replayed, and every session open or still tearing its own

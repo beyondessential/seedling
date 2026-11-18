@@ -279,3 +279,42 @@ fn a_background_teardown_leaves_the_resources_of_a_session_that_has_a_slot() {
     });
     assert_eq!(records(&h), 0);
 }
+
+// spec: OPS#shell-sessions
+// spec: SUSP#abandoned-replay
+// Sessions are never replayed, so the resources of one a previous run left are
+// always torn down at startup, where an operation's are spared for its replay.
+#[test]
+fn startup_tears_down_the_resources_of_sessions_a_previous_run_left() {
+    use seedling_protocol::names::SessionId;
+
+    let h = harness();
+    let left = SessionId::generate().to_string();
+    let open = SessionId::generate().to_string();
+    stuck_job_of(&h, &left, DynamicCreator::ShellSession);
+    stuck_job_of(&h, &open, DynamicCreator::ShellSession);
+    stuck_job_of(&h, "op-replayed", DynamicCreator::Operation);
+    h.containers.refuse_volume_removal(false);
+
+    let all = h.db.call(list_dynamic_resources).unwrap();
+    let taken = super::unspared(all, Some("op-replayed"), &[open.clone()].into());
+    assert_eq!(
+        taken
+            .iter()
+            .map(|r| r.operation_id.as_str())
+            .collect::<Vec<_>>(),
+        [left.as_str()],
+        "only the session no one holds is taken"
+    );
+
+    let retained = with_paused_clock(tear_down(&h.driver, &h.db, taken));
+    assert!(retained.is_empty());
+    let remaining: Vec<String> =
+        h.db.call(list_dynamic_resources)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.operation_id)
+            .collect();
+    assert!(!remaining.contains(&left), "its record is forgotten");
+    assert!(remaining.contains(&open) && remaining.contains(&"op-replayed".to_owned()));
+}
