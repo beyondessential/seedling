@@ -543,3 +543,17 @@ fn a_pass_through_ingress_and_a_dtls_ingress_claim_different_transports() {
         "TCP pass-through and DTLS on UDP are claims of different transports"
     );
 }
+
+// spec: ING#identity-within-an-app
+// spec: PRX#shared-ports
+#[test]
+fn a_redirect_on_the_ingresses_own_port_fails_evaluation() {
+    let err = evaluate(
+        r#"app.service("web").ingress("example.com", 443).tls(Terminate.Https, Output.Http1).redirect(443);"#,
+    )
+    .expect("the definition fails to evaluate");
+    assert!(
+        err.0.contains("example.com:443"),
+        "names the ingress: {err}"
+    );
+}

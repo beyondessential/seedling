@@ -609,14 +609,18 @@ impl Reconciler {
 
             // spec: SITE#ingress-conflicts
             for lost in &site_claims {
+                let other = if lost.served == lost.site_ingress {
+                    "another attachment of this site ingress".to_owned()
+                } else {
+                    format!("site ingress {}, whose attachment", lost.served)
+                };
                 add(
                     faults::FaultKey::new(&system, "ingress_conflict", lost.site_ingress.as_str()),
                     faults::FaultMeta::resource("site_ingress", lost.site_ingress.as_str()),
                     format!(
-                        "claim on {} conflicts with the claim on {} of site ingress {}, whose \
-                         attachment was created first; this attachment is left out of the proxy \
-                         while that one is served",
-                        lost.claim, lost.served_claim, lost.served
+                        "claim on {} conflicts with the claim on {} of {other} was created \
+                         first; this attachment is left out of the proxy while that one is served",
+                        lost.claim, lost.served_claim
                     ),
                 );
             }

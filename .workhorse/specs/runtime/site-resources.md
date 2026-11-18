@@ -264,7 +264,7 @@ The discovered site ingress's certificate is obtained as [Tailscale certificates
 When an app's ingress and a site ingress attachment make [conflicting claims](proxy.md#shared-ports) on a port, the runtime MUST leave both out of the proxy configuration for as long as the conflict lasts.
 The runtime MUST raise the [`ingress_conflict`](faults.md#ingress-and-service-faults) fault for each side.
 
-When attachments of two site ingresses make conflicting claims on a port, the runtime MUST serve the attachment created first, and MUST leave the other out of the proxy configuration.
+When two site ingress attachments make conflicting claims on a port, whether they belong to one site ingress or to two, the runtime MUST serve the attachment created first, and MUST leave the other out of the proxy configuration.
 The runtime MUST raise the `ingress_conflict` fault for the site ingress whose attachment it leaves out.
 Once the served attachment no longer makes a conflicting claim, the runtime MUST serve the other.
 

@@ -290,33 +290,47 @@ impl IngressDef {
 }
 
 /// Refuse a definition in which two ingresses make conflicting claims on a
-/// port. The redirect of an ingress is a claim of the ingress.
+/// port. The redirect of an ingress is a claim of the ingress, and is held to
+/// the ingress's own claims as well: a redirect on the ingress's own port
+/// would bind that port for plaintext and TLS at once.
 // spec: ING#identity-within-an-app
 pub(crate) fn check_claim_conflicts(def: &super::app::AppDef) -> Result<(), String> {
-    let mut claimed: Vec<(String, Claim)> = Vec::new();
+    // (ingress name, whether the claim is its redirect, the claim)
+    let mut claimed: Vec<(String, bool, Claim)> = Vec::new();
     for resource in def.resources.values() {
         let super::resource::Resource::Ingress(ingress) = resource else {
             continue;
         };
         let ingress_def = ingress.def.lock();
-        for claim in ingress_def
-            .claims()
-            .into_iter()
-            .chain(ingress_def.redirect_claim())
-        {
-            claimed.push((ingress.name.to_string(), claim));
+        for claim in ingress_def.claims() {
+            claimed.push((ingress.name.to_string(), false, claim));
+        }
+        if let Some(claim) = ingress_def.redirect_claim() {
+            claimed.push((ingress.name.to_string(), true, claim));
         }
     }
     claimed.sort();
-    for (i, (name, claim)) in claimed.iter().enumerate() {
-        for (other_name, other_claim) in &claimed[i + 1..] {
-            if name != other_name && claim.conflicts_with(other_claim) {
-                return Err(format!(
+    for (i, (name, redirect, claim)) in claimed.iter().enumerate() {
+        for (other_name, other_redirect, other_claim) in &claimed[i + 1..] {
+            // One ingress's own claims are one per transport, and never
+            // conflict among themselves.
+            let same_ingress_core = name == other_name && !redirect && !other_redirect;
+            if same_ingress_core || !claim.conflicts_with(other_claim) {
+                continue;
+            }
+            return Err(if name == other_name {
+                format!(
+                    "ingress '{name}' declares a redirect that conflicts with the ingress \
+                     itself on {}/{}: {claim} against {other_claim}",
+                    claim.transport, claim.port
+                )
+            } else {
+                format!(
                     "ingresses '{name}' and '{other_name}' make conflicting claims on {}/{}: \
                      {claim} against {other_claim}",
                     claim.transport, claim.port
-                ));
-            }
+                )
+            });
         }
     }
     Ok(())

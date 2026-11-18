@@ -38,10 +38,10 @@ pub(super) struct SiteProxyData {
     /// `(site_ingress, port, protocol, reason)` for entries that couldn't
     /// be resolved this tick. Used for fault filing.
     pub unresolved: Vec<UnresolvedAttachment>,
-    /// When each site ingress first had an attachment on a port, which orders
-    /// site ingresses making conflicting claims.
+    /// When each attachment, by its site ingress, port and protocol, was
+    /// created, which orders attachments making conflicting claims.
     // spec: SITE#ingress-conflicts
-    pub created: std::collections::BTreeMap<(SiteIngressName, u16), String>,
+    pub created: std::collections::BTreeMap<(SiteIngressName, u16, AttachmentProtocol), String>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,14 +114,10 @@ pub(super) fn collect(
             .iter()
             .filter(|a| a.site_ingress == ingress.name)
         {
-            data.created
-                .entry((ingress.name.clone(), att.port))
-                .and_modify(|first| {
-                    if att.created_at < *first {
-                        first.clone_from(&att.created_at);
-                    }
-                })
-                .or_insert_with(|| att.created_at.clone());
+            data.created.insert(
+                (ingress.name.clone(), att.port, att.protocol),
+                att.created_at.clone(),
+            );
             resolve_attachment(
                 ingress,
                 att,
@@ -473,8 +469,7 @@ fn ingress_resource_name(def: &IngressDef) -> String {
 
 /// One party's claims, in the order the party ranks among those competing for
 /// a port.
-struct Candidate<O> {
-    owner: O,
+struct Candidate {
     claims: Vec<Claim>,
     /// The candidate this one is served with. Where that one is left out this
     /// one is too, and takes no claim away from anything else.
@@ -495,14 +490,18 @@ enum Admission {
 }
 
 /// Serve candidates in order, leaving out each one that makes a claim
-/// conflicting with one of a candidate already served, unless the two have the
-/// same owner.
+/// conflicting with one of a candidate already served.
+///
+/// Two candidates of one owner are held to this as any others are: two of one
+/// app's ingresses cannot conflict, since such a definition fails to evaluate,
+/// but two attachments of one site ingress can, and serving both would bind
+/// one address twice.
 ///
 /// A conflict is between pairs of claims, so which candidates are served can
 /// depend on the order. Callers rank candidates so the outcome is the same on
 /// every tick.
 // spec: PRX#shared-ports
-fn admit<O: PartialEq>(candidates: &[Candidate<O>]) -> Vec<Admission> {
+fn admit(candidates: &[Candidate]) -> Vec<Admission> {
     let mut outcome: Vec<Admission> = Vec::with_capacity(candidates.len());
     for (idx, candidate) in candidates.iter().enumerate() {
         if let Some(parent) = candidate.rides_with
@@ -516,7 +515,6 @@ fn admit<O: PartialEq>(candidates: &[Candidate<O>]) -> Vec<Admission> {
             .zip(&outcome)
             .enumerate()
             .filter(|(_, (_, admission))| matches!(admission, Admission::Served))
-            .filter(|(_, (served, _))| served.owner != candidate.owner)
             .find_map(|(by, (served, _))| {
                 candidate.claims.iter().find_map(|mine| {
                     served
@@ -581,19 +579,17 @@ pub(super) fn resolve_app_claims(
 
     // (index into `ingresses`, whether the candidate is its redirect)
     let mut slots: Vec<(usize, bool)> = Vec::new();
-    let mut candidates: Vec<Candidate<AppName>> = Vec::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
     for (idx, ingress) in ingresses.iter().enumerate() {
         let core = candidates.len();
         slots.push((idx, false));
         candidates.push(Candidate {
-            owner: ingress.app.clone(),
             claims: ingress.def.claims(),
             rides_with: None,
         });
         if let Some(redirect) = ingress.def.redirect_claim() {
             slots.push((idx, true));
             candidates.push(Candidate {
-                owner: ingress.app.clone(),
                 claims: vec![redirect],
                 rides_with: Some(core),
             });
@@ -663,40 +659,69 @@ pub(super) enum SiteEntry {
     L4(usize),
 }
 
+/// One attachment as a party to conflict resolution.
+struct SiteClaimant {
+    entry: SiteEntry,
+    site_ingress: SiteIngressName,
+    port: u16,
+    protocol: AttachmentProtocol,
+    claims: Vec<Claim>,
+}
+
 impl SiteProxyData {
-    /// Every attachment held, the site ingress it belongs to, its port, and
-    /// what it claims.
-    fn entries(&self) -> Vec<(SiteEntry, SiteIngressName, u16, Vec<Claim>)> {
+    /// Every attachment held: where it is held, its site ingress, port and
+    /// protocol, and what it claims.
+    fn entries(&self) -> Vec<SiteClaimant> {
+        let http_protocol = |def: &IngressDef| match def.http_terminate {
+            Some(HttpTermination::Http2) => AttachmentProtocol::Http2,
+            _ => AttachmentProtocol::Http,
+        };
         let mut out = Vec::new();
         for (i, (name, def, _)) in self.forwards.iter().enumerate() {
-            out.push((
-                SiteEntry::Forward(i),
-                name.clone(),
-                def.port.get(),
-                def.claims(),
-            ));
+            out.push(SiteClaimant {
+                entry: SiteEntry::Forward(i),
+                site_ingress: name.clone(),
+                port: def.port.get(),
+                protocol: http_protocol(def),
+                claims: def.claims(),
+            });
         }
         for (i, (name, def, _)) in self.redirects.iter().enumerate() {
-            out.push((
-                SiteEntry::Redirect(i),
-                name.clone(),
-                def.port.get(),
-                def.claims(),
-            ));
+            out.push(SiteClaimant {
+                entry: SiteEntry::Redirect(i),
+                site_ingress: name.clone(),
+                port: def.port.get(),
+                protocol: http_protocol(def),
+                claims: def.claims(),
+            });
         }
         for (i, entry) in self.l4_routes.iter().enumerate() {
-            let transport = match entry.route.proto {
-                L4Proto::Tcp => ClaimTransport::Tcp,
-                L4Proto::Udp => ClaimTransport::Udp,
+            let (transport, protocol) = match entry.route.proto {
+                L4Proto::Tcp => (ClaimTransport::Tcp, AttachmentProtocol::Tcp),
+                L4Proto::Udp => (ClaimTransport::Udp, AttachmentProtocol::Udp),
             };
-            out.push((
-                SiteEntry::L4(i),
-                entry.site_ingress.clone(),
-                entry.route.port,
-                vec![Claim::whole_port(entry.route.port, transport)],
-            ));
+            out.push(SiteClaimant {
+                entry: SiteEntry::L4(i),
+                site_ingress: entry.site_ingress.clone(),
+                port: entry.route.port,
+                protocol,
+                claims: vec![Claim::whole_port(entry.route.port, transport)],
+            });
         }
         out
+    }
+
+    /// When the attachment was created, or the empty string, which ranks
+    /// first, for one the snapshot did not record.
+    fn created_at(&self, claimant: &SiteClaimant) -> String {
+        self.created
+            .get(&(
+                claimant.site_ingress.clone(),
+                claimant.port,
+                claimant.protocol,
+            ))
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn retain_entries(&mut self, keep: impl Fn(SiteEntry) -> bool) {
@@ -721,28 +746,19 @@ impl SiteProxyData {
     }
 }
 
-/// Keep, of the site ingresses making conflicting claims, those whose
-/// attachment was created first, and report the rest.
+/// Keep, of the attachments making conflicting claims, those created first,
+/// whether of one site ingress or of two, and report the rest.
 ///
-/// The name breaks a tie, so the outcome is the same on every tick.
+/// The site ingress, then where the attachment is held, breaks a tie, so the
+/// outcome is the same on every tick.
 // spec: SITE#ingress-conflicts
 pub(super) fn resolve_site_claims(mut data: SiteProxyData) -> (SiteProxyData, Vec<LostSiteClaim>) {
-    let mut entries = data.entries();
-    entries.sort_by_cached_key(|(entry, name, port, _)| {
-        (
-            data.created
-                .get(&(name.clone(), *port))
-                .cloned()
-                .unwrap_or_default(),
-            name.clone(),
-            *entry,
-        )
-    });
-    let candidates: Vec<Candidate<SiteIngressName>> = entries
+    let mut claimants = data.entries();
+    claimants.sort_by_cached_key(|c| (data.created_at(c), c.site_ingress.clone(), c.entry));
+    let candidates: Vec<Candidate> = claimants
         .iter()
-        .map(|(_, name, _, claims)| Candidate {
-            owner: name.clone(),
-            claims: claims.clone(),
+        .map(|c| Candidate {
+            claims: c.claims.clone(),
             rides_with: None,
         })
         .collect();
@@ -750,15 +766,15 @@ pub(super) fn resolve_site_claims(mut data: SiteProxyData) -> (SiteProxyData, Ve
 
     let mut lost = Vec::new();
     let mut dropped: BTreeSet<SiteEntry> = BTreeSet::new();
-    for ((entry, name, _, _), admission) in entries.iter().zip(&outcome) {
+    for (claimant, admission) in claimants.iter().zip(&outcome) {
         let Admission::Lost { mine, theirs, by } = admission else {
             continue;
         };
-        dropped.insert(*entry);
+        dropped.insert(claimant.entry);
         lost.push(LostSiteClaim {
-            site_ingress: name.clone(),
+            site_ingress: claimant.site_ingress.clone(),
             claim: mine.clone(),
-            served: entries[*by].1.clone(),
+            served: claimants[*by].site_ingress.clone(),
             served_claim: theirs.clone(),
         });
     }
@@ -810,21 +826,21 @@ pub(super) struct ConflictReport {
 /// both sides before the proxy configuration is built.
 // spec: SITE#ingress-conflicts
 pub(super) fn detect_conflicts(apps: &[AppIngress], site: &SiteProxyData) -> ConflictReport {
-    let site_entries = site.entries();
+    let site_claimants = site.entries();
     let mut report = ConflictReport::default();
 
     let mut find = |app: &AppIngress, redirect: bool, claim: &Claim| {
         let mut found = false;
-        for (entry, name, _, site_claims) in &site_entries {
-            for site_claim in site_claims.iter().filter(|c| claim.conflicts_with(c)) {
+        for claimant in &site_claimants {
+            for site_claim in claimant.claims.iter().filter(|c| claim.conflicts_with(c)) {
                 found = true;
-                report.dropped_site.insert(*entry);
+                report.dropped_site.insert(claimant.entry);
                 report.parties.push(ConflictParty {
                     app: app.app.clone(),
                     ingress: app.name(),
                     redirect,
                     app_claim: claim.clone(),
-                    site_ingress: name.clone(),
+                    site_ingress: claimant.site_ingress.clone(),
                     site_claim: site_claim.clone(),
                 });
             }
@@ -1342,11 +1358,11 @@ mod tests {
     }
 
     fn created(
-        entries: &[(&str, u16, &str)],
-    ) -> std::collections::BTreeMap<(SiteIngressName, u16), String> {
+        entries: &[(&str, u16, AttachmentProtocol, &str)],
+    ) -> std::collections::BTreeMap<(SiteIngressName, u16, AttachmentProtocol), String> {
         entries
             .iter()
-            .map(|(name, port, at)| ((site(name), *port), (*at).to_owned()))
+            .map(|(name, port, protocol, at)| ((site(name), *port, *protocol), (*at).to_owned()))
             .collect()
     }
 
@@ -1363,9 +1379,24 @@ mod tests {
             l4_routes: vec![],
             unresolved: vec![],
             created: created(&[
-                ("first", 443, "2026-01-01T00:00:00Z"),
-                ("second", 443, "2026-02-01T00:00:00Z"),
-                ("second", 8443, "2026-02-01T00:00:00Z"),
+                (
+                    "first",
+                    443,
+                    AttachmentProtocol::Http,
+                    "2026-01-01T00:00:00Z",
+                ),
+                (
+                    "second",
+                    443,
+                    AttachmentProtocol::Http,
+                    "2026-02-01T00:00:00Z",
+                ),
+                (
+                    "second",
+                    8443,
+                    AttachmentProtocol::Http,
+                    "2026-02-01T00:00:00Z",
+                ),
             ]),
         };
 
@@ -1393,11 +1424,51 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
-            created: created(&[("second", 443, "2026-02-01T00:00:00Z")]),
+            created: created(&[(
+                "second",
+                443,
+                AttachmentProtocol::Http,
+                "2026-02-01T00:00:00Z",
+            )]),
         };
         let (kept, lost) = resolve_site_claims(data);
         assert_eq!(kept.forwards.len(), 1);
         assert!(lost.is_empty());
+    }
+
+    // spec: SITE#ingress-conflicts
+    #[test]
+    fn two_attachments_of_one_site_ingress_conflicting_on_a_port_serve_the_one_created_first() {
+        // An HTTPS attachment claims HTTP/3 on its UDP port, which a `udp`
+        // attachment of the same site ingress claims whole.
+        let data = SiteProxyData {
+            created: created(&[
+                ("edge", 443, AttachmentProtocol::Udp, "2026-01-01T00:00:00Z"),
+                (
+                    "edge",
+                    443,
+                    AttachmentProtocol::Http,
+                    "2026-02-01T00:00:00Z",
+                ),
+            ]),
+            ..site_data(
+                vec![("edge", def("edge.example.com", 443))],
+                vec![l4_entry("edge", 443, L4Proto::Udp)],
+            )
+        };
+        let (kept, lost) = resolve_site_claims(data);
+        assert_eq!(kept.l4_routes.len(), 1, "the udp attachment came first");
+        assert!(
+            kept.forwards.is_empty(),
+            "the HTTPS attachment is left out whole"
+        );
+        assert_eq!(lost.len(), 1);
+        assert_eq!(lost[0].site_ingress, site("edge"));
+        assert_eq!(lost[0].served, site("edge"));
+        assert_eq!(
+            lost[0].claim.to_string(),
+            "udp/443 (HTTP/3 edge.example.com)"
+        );
     }
 
     // spec: SITE#ingress-conflicts
