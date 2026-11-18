@@ -10,7 +10,7 @@ Applies to the loop by which the [runtime](../overview.md#runtime) brings a [hos
 
 ### Steady state
 
-The condition of an app while no [lifecycle operation](../overview.md#lifecycle-operation) is in progress for it.
+The condition of an app while no [lifecycle operation](../overview.md#lifecycle-operation) other than a [gate run](gates.md) is in progress for it.
 
 ### Autonomous operation
 
@@ -25,32 +25,40 @@ Host state that the runtime rebuilds in full on each iteration and applies whole
 
 ## Desired state
 
-An app's [desired state](../overview.md#desired-state) is derived from its [resource graph](../overview.md#resource-graph) and, while a lifecycle operation is in progress for it, from that operation's progress.
+An app's [desired state](../overview.md#desired-state) is derived from its [resource graph](../overview.md#resource-graph) and its [gates](../language/gate.md), and, while a lifecycle operation is in progress for it, from that operation's progress.
 
-In steady state, the desired state of an app that is `Installing` or `Installed` MUST be its whole resource graph.
+In steady state, the desired state of an app that is `Installed` MUST be its whole resource graph, as [start order](../language/gate.md#start-order) and [gate holds](#gate-holds) qualify it.
 In steady state, the desired state of an app that is `Uninstalling` MUST hold each of the app's recorded instances `Unscheduled`.
 An app that is `NotInstalled` MUST have no desired state.
 The runtime MUST maintain an app's steady-state desired state without direction from an operator, as [autonomous reconciliation](autonomous.md) specifies.
 
-While a lifecycle operation is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](operations.md#operation) has [started](../language/rt.md#starting-resources) or [stopped](../language/rt.md#stopping-resources), each in the state the closure last put it in.
+While a lifecycle operation other than a [gate run](gates.md) is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](operations.md#operation) has [started](../language/rt.md#starting-resources) or [stopped](../language/rt.md#stopping-resources), each in the state the closure last put it in.
 The runtime MUST act only on resources in the desired state.
 A resource outside the desired state MUST be left as it is until the operation names it or completes.
 Its running instances MUST keep the specification they were last started with, and MUST NOT be rotated.
 
-An install operation is a lifecycle operation, and the runtime MUST actuate the resources its closure places in the desired state as for any other.
-
-From the moment the runtime initiates an app's [start action](../language/action.md#start-action) until that start action ends, including while it is queued, the app's desired state MUST be as for an app with a lifecycle operation in progress.
+While a gate run is in progress for an app, the app's desired state MUST be as in steady state, with each resource the gate's body has started or stopped in the state the body last put it in.
 
 > [!NOTE]
-> Holding the whole resource graph back until the start action has run lets the start action bring an app up in its own order after the host restarts.
+> A gate run holds only what the gate holds, so the rest of the app goes on being maintained while a migration runs, including a supervisor that answers requests meanwhile.
 
 While a [shell session](../interface/shells.md#shell-session) on an app is open, the app's desired state MUST also hold the [dynamic resources](../language/app.md#dynamic-resource-lifetime) the session's closure has started, each in the state the closure last put it in, whatever else the desired state consists of.
 The runtime MUST keep each session's resources apart from those of every other session and of any lifecycle operation.
 
-From the moment the runtime commits a [generation](generation.md) whose change initiates a lifecycle operation until that operation ends, including while it is queued, the app's desired state MUST be as for an app with a lifecycle operation in progress.
+### Gate holds
+
+The runtime MUST NOT start an instance of a workload ordered after a target, nor run a gate ordered after one, until the target is ready, as [start order](../language/gate.md#start-order) specifies.
+
+Before a [gate run](gates.md#preparation) stops the gate's exclusive selection, the runtime MUST record durably that the gate holds the selection, and MUST NOT stop it if it cannot record that.
+From then until the gate is next satisfied, the runtime MUST hold every resource of the selection `Unscheduled`, through failed and cancelled runs and across restarts of the runtime.
+The runtime MUST clear the record once the gate is satisfied, and MUST NOT start the selection before it has cleared it.
+
+If the runtime cannot read whether a gate holds its exclusive selection, it MUST NOT start any resource of the selection.
+
+The Job of a gate's [check](../language/gate.md#check) MUST be held out of the steady-state desired state, except while the runtime runs it to [check the gate](gates.md#checks).
 
 > [!NOTE]
-> A change that initiates a handler leaves the app's instances running as they were started until the handler directs them, so a new release's images do not start before the handler has prepared for them.
+> A key change makes the gate's dependants stale, but their replacements wait for the gate, so the instances already running keep running until the run stops what it holds.
 
 ## Reconciliation loop
 
@@ -79,7 +87,7 @@ It MUST instead return control to the loop, and a later iteration MUST re-evalua
 
 ## Applying absolute state
 
-An app contributes to absolute state while it is `Installing`, `Installed` or `Uninstalling`.
+An app contributes to absolute state while it is `Installed` or `Uninstalling`.
 The runtime MUST withdraw a contribution only when the resources making it leave the app's desired state, or when the app moves to `NotInstalled`.
 The runtime MUST NOT withdraw a contribution because it failed to compute it.
 
@@ -95,4 +103,4 @@ An iteration that computes every contribution MUST apply the result, including a
 > An absent contribution and a deleted one look the same once applied.
 > Removing the last ingress of the last app leaves the proxy serving nothing, while failing to compute that app's ingresses leaves the proxy as it was.
 
-The runtime MUST tear down infrastructure shared between apps only when no app is `Installing`, `Installed` or `Uninstalling`.
+The runtime MUST tear down infrastructure shared between apps only when no app is `Installed` or `Uninstalling`.

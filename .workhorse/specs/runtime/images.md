@@ -101,7 +101,8 @@ Operators remove images sooner through [image management](../interface/images.md
 
 ## Image discovery
 
-The runtime MUST provide a probe that evaluates an app's install handler, start handler, action handlers, shell handlers and parameter-change handlers, each with the app's current resource graph and a resolved parameter map.
+The runtime MUST provide a probe that evaluates an app's action handlers, shell handlers and gate bodies, each with the app's current resource graph and a resolved parameter map.
+A probe MUST pass a gate's body `last` as a [gate run](gates.md) would, reflecting the gate's last success where it has one.
 A probe MUST NOT change the host, the app's persisted state, the [action execution log](history.md#action-execution-log), the [autonomous operations log](history.md#autonomous-operations-log), the [world observation history](history.md#world-observation-history), or any pin.
 
 During a probe, the runtime MUST handle `rt.*` calls as follows:

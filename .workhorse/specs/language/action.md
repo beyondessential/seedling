@@ -4,7 +4,7 @@ id: ACN
 
 # Actions
 
-Applies to the actions, shells and install action a BSL script declares on an [app](../overview.md#app), the closures they run, and the params those closures receive.
+Applies to the actions and shells a BSL script declares on an [app](../overview.md#app), the closures they run, and the params those closures receive.
 
 ## Terminology
 
@@ -14,7 +14,7 @@ A named task an app declares for an [operator](../overview.md#operator) or the [
 
 ### Action closure
 
-A closure a script hands to the runtime to run with a [runtime handle](rt.md#runtime-handle): the closure of an action, a shell or the install action, or a parameter's [change handler](parameter.md#change-handlers).
+A closure a script hands to the runtime to run with a [runtime handle](rt.md#runtime-handle): the closure of an action or a shell, or a [gate's body](gate.md#body).
 
 ### Shell
 
@@ -26,15 +26,14 @@ The object map from param names to values that an action closure receives from i
 
 ### Param schema
 
-The definitions of the params an action, shell or install action accepts, keyed by param name.
+The definitions of the params an action or shell accepts, keyed by param name.
 
 ## Action declaration
 
 A script declares an action with `app.on_action(name: string, fn: closure)` or `app.on_action(name: string, fn: closure, options: map)`.
 Either method returns an `Action` handle for the declared action.
 A `name` that is not a valid [name](overview.md#names) MUST throw.
-The name `install` is reserved for the [install action](#install-action), and declaring an action under it MUST throw.
-Declaring an action under a name an action of the app is already declared under MUST throw, including a declaration through `app.on_start` of a second start action.
+Declaring an action under a name an action of the app is already declared under MUST throw.
 `app.on_action` MUST throw when called in the [action context](app.md#action-context).
 
 The `options` map MAY carry these keys:
@@ -56,10 +55,9 @@ An action is not a [resource](../overview.md#resource), and a runtime handle met
 ## Action handles
 
 `app.action(name: string)` returns the `Action` handle of the action declared under `name`.
-The handle MUST be equivalent to the one the declaring `app.on_action` or `app.on_start` call returned.
+The handle MUST be equivalent to the one the declaring `app.on_action` call returned.
 `app.action` MUST throw when called outside the action context.
 A `name` naming no declared action MUST throw.
-The install action has no name, and `app.action` MUST NOT return it.
 
 ### Action invocation
 
@@ -81,7 +79,7 @@ The error MUST name each action on the stack, in call order, followed by the act
 
 ## Param delivery
 
-The runtime MUST pass an action's, shell's or install action's closure the params its invoker supplied, after validation against its param schema, as the param map.
+The runtime MUST pass an action's or shell's closure the params its invoker supplied, after validation against its param schema, as the param map.
 If the invoker supplies no params, the param map MUST be empty.
 
 Param keys ending in `_volume` or `_filename` are reserved for the runtime.
@@ -155,7 +153,7 @@ That generator's default output MUST be 32 random bytes written as 64 lowercase 
 ### Volume params
 
 The `volume` kind MUST be accepted in the param schemas of actions and shells.
-Declaring a `volume` param in the install action's param schema MUST throw, and a [parameter's kind](parameter.md#schema) does not accept it.
+A [parameter's kind](parameter.md#schema) does not accept it.
 
 The runtime MUST reject an invocation whose `volume` param names a site volume that does not exist.
 When it dispatches the invocation, the runtime MUST bind the named site volume for the operation, as [operation volume params](../runtime/operations.md#operation-scoped-volumes) specify.
@@ -164,27 +162,8 @@ If the binding cannot be made at dispatch, the runtime MUST fail the invocation 
 A closure obtains the bound volume with `app.external_volume(param["<name>_volume"])`, as [operation-scoped external volumes](volume.md#external-volumes) specify.
 
 > [!NOTE]
-> A volume binding lasts for one operation, while a parameter's value and the setup an install performs outlive it.
+> A volume binding lasts for one operation, while a parameter's value outlives it.
 > A script needing a permanent volume declares an external volume for the operator to map.
-
-## Start action
-
-The start action is the action named `start`, and brings the app up.
-A script declares it with `app.on_start(fn: closure)`, `app.on_start(fn: closure, options: map)` or `app.on_action("start", …)`, each of which returns its `Action` handle.
-The `options` of `app.on_start` MAY carry `description`, as for `app.on_action`.
-An `options` map passed to `app.on_start` carrying any other key MUST throw.
-An `options` map passed to `app.on_action("start", …)` carrying `params` MUST throw.
-`app.on_start` MUST throw when called in the action context.
-
-The runtime MUST run the start action as a lifecycle operation, with the trigger `install`, when an install operation for the app completes successfully.
-The runtime MUST run it with the trigger `install` when the app moves to `Installed` without an install operation.
-The runtime MUST also run it, with the trigger `boot`, when the runtime starts with the app installed and no interrupted operation to replay for it.
-Until the start action ends, the runtime holds the rest of the app's resources as [desired state](../runtime/reconciliation.md#desired-state) specifies.
-The start action's closure MUST receive an empty param map when the runtime runs it.
-If the script declares no start action, the runtime MUST run it as though its closure called `rt.start(app)`.
-
-The runtime MUST NOT let an operator invoke the start action, and MUST answer an [action invocation](../interface/actions.md#invoking-an-action) naming it with `not_found`.
-`on_schedule` on the start action's handle MUST throw.
 
 ## Shells
 
@@ -276,23 +255,3 @@ The schedule hash MUST be [SipHash-1-3](https://www.aumasson.jp/siphash/siphash.
 > [!NOTE]
 > The hash depends on the two names alone, so a schedule fires at the same times on every host and across every release.
 > `H 2 * * *` fires once a day, at a minute in the 02:00 hour that is fixed for the app and action.
-
-## Install action
-
-The install action sets the app up when an operator installs it.
-A script declares it with `app.on_install(fn: closure)` or `app.on_install(fn: closure, config: map)`, which return no value.
-A second call to `app.on_install` MUST throw.
-`app.on_install` MUST throw when called in the action context.
-
-The `config` map MAY carry `params`, the install action's param schema.
-A `config` carrying any other key MUST throw.
-A `params` that is not a map MUST throw.
-
-The runtime MUST call `fn` with two arguments: a runtime handle, then the param map.
-Every value in the install action's param map is a string.
-The runtime MUST run the install action only when an operator [installs the app](../interface/actions.md#install).
-The install action is not registered under a name, and neither `app.action` nor `invoke` can reach it.
-
-If the script declares no install action, installing the app MUST move it to `Installed` without an install operation, as [install](../interface/actions.md#install) specifies.
-
-Install param values MUST be held only for the duration of the install operation, and the runtime MUST discard them when it ends.

@@ -22,7 +22,7 @@ A call in an action closure that waits for resources to reach a [lifecycle state
 
 ## Handle availability
 
-The runtime MUST pass a runtime handle as the first argument of every action closure, except a [change handler](parameter.md#change-handlers) that takes no arguments.
+The runtime MUST pass a runtime handle as the first argument of every action closure, except a [gate's body](gate.md#body) that takes no arguments.
 Scripts conventionally name it `rt`.
 The runtime MUST NOT expose any way for a script to construct a `RuntimeInstance`.
 
@@ -91,7 +91,7 @@ Such a `Started` holding no ingress MUST satisfy them at once.
 Its other barriers MUST throw.
 
 > [!NOTE]
-> In a [change handler](parameter.md#change-handlers), `app` is the app at the new generation, so `rt.warm_certs(app)` warms the ingresses of the new generation and none that only the previous one declared.
+> In a [gate's body](gate.md#body), `app` is the app at the run's generation, so `rt.warm_certs(app)` warms the ingresses of that generation and none that only `last` declared.
 
 ### Image warming
 

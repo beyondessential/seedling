@@ -28,11 +28,9 @@ The runtime MUST increment an app's generation by exactly one on each of these c
 - a successful parameter set or unset.
 
 The runtime MUST commit the new generation atomically with the change that caused it.
-If the change triggers a [lifecycle operation](../overview.md#lifecycle-operation), such as an `on_change` handler, the runtime MUST dispatch the operation only after committing the generation.
 
 An app's generations MUST be strictly increasing from its registration until its deregistration.
-A failed lifecycle operation MUST NOT roll back the generation that triggered it.
-The runtime records the failure as [completion](operations.md#completion) specifies.
+A failed [gate run](gates.md) MUST NOT roll back the generation that made the gate unsatisfied.
 
 ## History entries
 
@@ -48,8 +46,6 @@ The runtime MUST keep a generation history for each app, holding one entry for e
 | parameter | `param_set`, `param_unset`, and a `script_update` that changed a parameter alongside its definition | the name of the parameter changed |
 | previous value | every entry with a parameter | the parameter's value before the change, or none if it was unset |
 | new value | every entry with a parameter | the parameter's value after the change, or none if the change unset it |
-| operation | an entry whose change triggered a lifecycle operation | the operation's identity |
-| outcome | an entry with an operation | `pending` while the operation runs or waits, then `succeeded`, `cancelled`, or `failed` with details |
 
 Values of a secret parameter are protected in history entries as [secret history](secrets.md#generation-history) specifies.
 

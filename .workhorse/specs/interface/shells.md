@@ -38,7 +38,7 @@ The server MUST reject a request naming an app that is not registered with `not_
 The server MUST reject the request with `not_installed` unless the app's [install phase](../overview.md#install-phase) is `Installed`.
 The server MUST reject a request naming a shell the app does not declare with `not_found`.
 A `params` key ending in `_volume` or `_filename` is [reserved](../language/action.md#param-delivery), and the server MUST reject a request carrying one with `requirements_invalid`.
-Where the shell declares parameters, the server MUST validate `params` and fill in defaults as for [install parameters](actions.md#install-parameters).
+Where the shell declares parameters, the server MUST validate `params` and fill in defaults as for [action parameters](actions.md#action-parameters).
 
 On success the handshake response's result is:
 

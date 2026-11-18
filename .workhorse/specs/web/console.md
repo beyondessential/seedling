@@ -22,10 +22,10 @@ The console MUST let an operator observe and control a host through its [Operato
 It SHOULD offer each Operator Interface operation the CLI offers, other than those this spec withholds and those a browser cannot carry out, such as listening on a local port for a port forward.
 It MUST offer log streaming for both app workloads and the host's infrastructure components.
 
-The console MUST let the operator list apps with their statuses, and see an app's status with its resources, faults, parameters, install requirements and actions.
+The console MUST let the operator list apps with their statuses, and see an app's status with its resources, faults, parameters, gates and actions.
 It MUST let the operator register an app with a script, update an app's script or fetch its definition from a registry, and deregister an app.
 It MUST let the operator set and unset an app's parameters, scale its deployments, set its priority, view its generation history, and plan a change.
-It MUST let the operator invoke an app's lifecycle actions, and invoke its install action with the install requirements.
+It MUST let the operator install an app, invoke its lifecycle actions, and run its gates.
 
 The console MUST let the operator list the authorised client keys, authorise a key, and revoke a key.
 It MUST let the operator list, add and remove the hostnames on the container registry allowlist.

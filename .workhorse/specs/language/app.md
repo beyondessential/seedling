@@ -14,7 +14,7 @@ Evaluation of a script outside every [action closure](action.md#action-closure) 
 
 ### Action context
 
-Evaluation of a script inside an action closure, such as an action's closure or a [parameter change handler](parameter.md#change-handlers).
+Evaluation of a script inside an action closure, such as an action's closure or a [gate's body](gate.md#body).
 
 ### Validator context
 

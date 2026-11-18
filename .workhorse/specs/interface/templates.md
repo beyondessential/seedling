@@ -162,7 +162,7 @@ The result is an object with these members.
 | `description` | string or null | the description the definition declares for its app |
 | `resources` | array | one object per declared resource |
 | `params` | array | one object per declared parameter |
-| `actions` | array | one object per declared action, shell and install action |
+| `actions` | array | one object per declared action and shell |
 | `script_error` | string or null | why evaluation failed, or `null` if it succeeded |
 
 A `resources` entry MUST carry `name`, `type` and `def` as an entry of the `resources` member of [app description](apps.md#description) does.

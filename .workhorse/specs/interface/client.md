@@ -86,17 +86,15 @@ For a TCP forward, it MUST count the connections opened and the connections acti
 For a UDP forward, it MUST count the datagrams relayed in each direction, and the datagrams dropped for exceeding the [maximum datagram size](port-forwards.md#borrowed-terms).
 When the forward ends, the CLI MUST print a summary of these counts to standard error.
 
-## Action, shell and install parameters
+## Action and shell parameters
 
 `apps action <app> <name> [key[=value]]...` invokes an action, and `apps shell <app> <name> [key[=value]]...` opens a shell, with the parameters given after the name.
 In both, a `key=value` argument MUST become the parameter `key` with the string value `value`, split at the first `=`.
 A bare `key` MUST become the parameter `key` with the value `true`.
 
-`apps install <app> [key=value]...` invokes the install action with the parameters given after the app.
-Install parameters carry values typed by the app's parameter schema, so each argument MUST be a `key=value` pair.
-If an argument holds no `=`, the CLI MUST report an error naming that argument and send no request.
-
 `apps cancel-action <app>` MUST [cancel](actions.md#cancellation) the app's lifecycle operation.
+
+`apps gate run <app> <gate>` MUST [run](app-control.md#gate-runs) the named gate.
 
 ## Definition sources
 

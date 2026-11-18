@@ -56,13 +56,13 @@ Registering an app and reloading a stored app run no validators.
 | `name` | string | yes | the parameter's name, following the [naming rules](../language/overview.md#names) |
 | `value` | string | yes | the value to set |
 
-The result is `{ "schedule": "accepted" | "not_scheduled", "generation": <integer> }`, where `generation` is the app's current [generation](../overview.md#generation) once the request completes.
+The result is `{ "generation": <integer> }`, the app's current [generation](../overview.md#generation) once the request completes.
 
 The server MUST refuse the request with `requirements_invalid` if `name` breaks the naming rules.
 It MUST refuse it with `not_found` if the app is not registered.
-It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, an install of the app is in progress, or another change to the app is being applied.
+It MUST refuse it with `operation_in_progress` if another change to the app is being applied.
 
-If `value` equals the parameter's stored value, the request is a no-op: the server MUST change nothing and MUST return `not_scheduled` with the app's current generation.
+If `value` equals the parameter's stored value, the request is a no-op: the server MUST change nothing and MUST return the app's current generation.
 
 Otherwise the server MUST validate the proposed values before it persists anything.
 It MUST then store the value and bump the app's generation, with a `param_set` [history entry](apps.md#generation-history), as one durable change.
@@ -71,11 +71,7 @@ Once the change is durable, it MUST emit a `ParamSet` [event](events.md#app-even
 The server MUST then evaluate the app's definition with its new values.
 If the evaluation fails, the server MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against the app, and the request still succeeds.
 
-If the app is installed and its definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation) and return `accepted`.
-A handler queued behind another app's operation is accepted.
-Otherwise the server MUST return `not_scheduled`.
-
-If the server cannot admit the handler once the change is committed, it MUST refuse the request with `internal`, with a `message` saying that the change was applied and at which generation.
+A change that moves the key of one of the app's [gates](../language/gate.md) leaves it unsatisfied, and the runtime runs it as [gate runs](../runtime/gates.md) specify.
 
 ## Parameter unset
 
@@ -90,12 +86,12 @@ The result has the same shape as `/apps/params/set`'s.
 
 The server MUST refuse the request with `requirements_invalid`, `not_found` or `operation_in_progress` on the same terms as `/apps/params/set`.
 
-If the parameter has no stored value, the request is a no-op: the server MUST change nothing and MUST return `not_scheduled` with the app's current generation.
+If the parameter has no stored value, the request is a no-op: the server MUST change nothing and MUST return the app's current generation.
 
 Otherwise the server MUST validate the proposed values before it changes anything.
 It MUST then remove the value and bump the app's generation, with a `param_unset` history entry, as one durable change.
 Once the change is durable, it MUST emit a `ParamUnset` event.
-It MUST then evaluate the definition, file a `script_error` fault if the evaluation fails, and schedule an `on_change` handler, as `/apps/params/set` does.
+It MUST then evaluate the definition, and file a `script_error` fault if the evaluation fails, as `/apps/params/set` does.
 
 ## Change planning
 
@@ -123,7 +119,7 @@ The result has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `diff` | array | one entry per resource added, removed or modified |
-| `on_change_would_fire` | array of strings | in ascending order, the parameters whose `on_change` handler the server would schedule if the change were committed, as [parameter set](#parameter-set) specifies |
+| `gates_would_run` | array of strings | in ascending order, the names of the gates whose [key](../language/gate.md#key) the change would move, where the app is installed |
 | `errors` | array of strings | the parse or evaluation errors, if the evaluated definition fails to parse or evaluate |
 | `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose validator rejects the proposed values |
 
@@ -142,4 +138,4 @@ Each `diff` entry has these members.
 
 A resource present in both definitions MUST appear in `diff` only if a member of its `def` differs.
 
-The server MUST NOT run any `on_change` handler or action closure to answer the request.
+The server MUST NOT run any gate, gate check or action closure to answer the request.

@@ -10,7 +10,7 @@ Applies to how the [runtime](../overview.md#runtime) replaces running Deployment
 
 ### Spec hash
 
-A digest of a container's full configuration, recorded on the container when it starts.
+A digest of a container's full configuration, together with the [keys](../language/gate.md#key) of the gates its workload is [ordered after](../language/gate.md#start-order), recorded on the container when it starts.
 
 ### Stale instance
 

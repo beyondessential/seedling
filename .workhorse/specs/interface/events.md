@@ -22,12 +22,11 @@ Every event MUST carry these members:
 | `timestamp` | string | when the event occurred, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
 
 When a request on the Operator Interface causes an event, the event MUST carry an `actor` member holding the [actor](wire.md#actor-attribution) resolved from that request.
-The events of an operation with the [trigger](../runtime/operations.md#initiating-events) `install` or `param_change` MUST carry the actor of the request that installed the app or changed the parameter, up to any replay that resumes the operation.
 
 An event the runtime causes on its own MUST NOT carry `actor`.
 The events the runtime causes on its own include:
 
-- the events of an operation with the trigger `boot` or `schedule`;
+- the events of an operation with the trigger `gate` or `schedule`;
 - the events an operation emits after the runtime resumes it by [replay](../runtime/suspension.md#replay), whatever its trigger;
 - the events a [discovery provider](../runtime/site-resources.md#discovery-provider)'s poll causes, including a poll that [`/ingresses/site/discovery/refresh`](site-ingresses.md#discovery-refresh) started.
 
@@ -77,12 +76,13 @@ A member marked "optional" is absent where it has no value.
 | `DeploymentRestarted` | `app`, `deployment`, `restart_id` (string) | as [deployment restart](app-control.md#deployment-restart) specifies |
 | `ResourceStopped` | `app`, `kind` (string), `name` | as [stopping a resource](app-control.md#resource-stop) specifies |
 | `ResourceUnstopped` | `app`, `kind` (string), `name` | as [unstopping a resource](app-control.md#resource-stop) specifies |
+| `GateStateChanged` | `app`, `gate`, `state` (string), `previous_state` (string) | whenever the `state` [`/apps/show`](apps.md#gates) reports for a gate changes |
 
 `previous_scale` in `ScaleChanged` is the deployment's effective scale before the change, and `null` where it cannot be read.
 `restart_id` in `DeploymentRestarted` is the restart's identifier, as [deployment restart](app-control.md#deployment-restart) defines it.
 `definition` in `AppUpdated` is the [definition provenance](definitions.md#provenance-reporting) of the new definition.
 In `AppUpdated`, `previous_value` and `new_value` MUST be `null` for an unset value and for a secret parameter.
-`phase` in `AppPhaseChanged` is one of `"not_installed"`, `"installing"`, `"installed"` and `"uninstalling"`.
+`phase` in `AppPhaseChanged` is one of `"not_installed"`, `"installed"` and `"uninstalling"`.
 In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](../runtime/secrets.md#generation-history) require.
 
 ### Operation events

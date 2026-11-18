@@ -296,9 +296,9 @@ The runtime MUST attempt to bring the proxy up when it starts.
 A failure to bring the proxy up MUST NOT prevent the runtime from starting.
 The [Operator Interface](../overview.md#operator-interface), database, scheduler and reconciliation loop MUST come up whether or not the proxy does.
 
-While any app is installed or installing, the runtime MUST check the proxy's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration and restart it if it is not running or not healthy.
+While any app is installed, the runtime MUST check the proxy's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration and restart it if it is not running or not healthy.
 The proxy is healthy when it answers the runtime's health query on its administrative interface.
-The runtime MUST stop the proxy when no app is installed or installing.
+The runtime MUST stop the proxy when no app is installed.
 
 On an iteration that fails to bring the proxy up, or does not finish doing so, the runtime MUST file a [`caddy_failed`](faults.md#host-faults) fault, and MUST clear it as that fault's row specifies.
 
