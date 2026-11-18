@@ -173,11 +173,6 @@ let version = app.param("version")
 version.value()             // "latest" when no operator value is stored
 version.is_set()            // false while only the default is in effect
 
-version.on_change(|rt, old| {
-    // old is the App state at the previous generation
-    // use it to stop old resources before starting new ones
-});
-
 version.validate(|value, all| {
     // throw to reject the proposed value; `all` maps every set param
     // to its proposed value
@@ -308,7 +303,7 @@ app.on_start(|rt, _param| {
 // The closure runs when an operator invokes the action.
 // `params` declares a validated schema; extra keys are passed through as-is.
 // Every handler (`on_action`, `on_start`, `on_shell`, `on_install`,
-// `on_change`, `validate`) must be a closure: passing a function by name, as
+// `validate`) must be a closure: passing a function by name, as
 // `handler` or `Fn("handler")`, throws. Wrap it instead: `|rt, param| handler(rt, param)`.
 app.on_action("migrate", |rt, param| {
     // Jobs defined inside actions are dynamic: created fresh per invocation.
@@ -373,20 +368,6 @@ app.on_install(|rt, param| {
             description: "Initial administrator password",
         },
     },
-});
-
-// on_change fires when a parameter value changes (not on first install).
-// The closure may take 0, 1 or 2 parameters: it is given as many of `rt` and `old` as it declares.
-version.on_change(|rt, old| {
-    // old is the app at the previous generation; use it to stop old resources.
-    rt.start(app.job()
-        .image(image.call())
-        .command(["migrate", "--run"])
-        .mount("/data", data)
-    ).terminated().ensure_success();
-
-    rt.stop(old.select(#{ types: [ResourceType.Deployment] }));
-    rt.start(app).ready();
 });
 ```
 
@@ -563,7 +544,7 @@ let banner = app.file("banner.txt").text();       // throws if the file is not U
 ```
 
 - `app.file(path)` returns a `File`; `app.dir(path)` returns a `Directory` of every file beneath `path`. Paths are relative to the bundle root and cannot escape it; a missing file, or a folder with nothing in it, throws.
-- Both read the bundle the app was evaluated from, in any context. Inside an `on_change` handler, `old.file(...)` and `old.dir(...)` read the previous generation's bundle.
+- Both read the bundle the app was evaluated from, in any context.
 - `volume.write` and `rt.write` accept a `File` as well as a string. `volume.write_dir(path, dir)` writes a whole directory, and may target the volume root.
 
 Bundles are limited to regular files and folders, 2 MiB in total. See [Deploying](deploying.md#app-definitions) for pushing a folder and publishing a bundle to a registry.

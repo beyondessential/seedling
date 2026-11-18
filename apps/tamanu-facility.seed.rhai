@@ -103,9 +103,9 @@ let psql_image = "docker.io/library/postgres:18-alpine";
 
 // With no public hostname there is no HTTPS ingress to derive an advertised
 // URL from, so `canonical-url` has to supply one. Checked here rather than at
-// the top level: this closure only runs from `render_config` (install and
-// on_change), by which point params are supplied, whereas a top-level throw
-// would fire during first registration and leave the script unloadable.
+// the top level: this closure only runs when the config is rendered, by which
+// point params are supplied, whereas a top-level throw would fire during first
+// registration and leave the script unloadable.
 let canonical = || {
     if !canonical_url.is_set() && !public_hostname.is_set() {
         throw "set canonical-url when public-hostname is unset: the facility must advertise a URL"
@@ -417,7 +417,7 @@ app.on_action("copy-image-defaults", |rt, _param| {
 // Pre-pull the container images for a target version into local storage so
 // the actual version change can rotate without paying registry-fetch latency
 // inside the migration window. The images are pinned to this app until they
-// are observed in use, matching what `version.on_change` does at upgrade time.
+// are observed in use.
 app.on_action("warm-images", |rt, param| {
     let target = if "target-version" in param && param["target-version"] != "" {
         param["target-version"]
@@ -484,46 +484,3 @@ app.on_shell("run", |_rt, shell, param| {
         },
     },
 });
-
-// ── Version changes ───────────────────────────────────────────────────────────
-
-// Stop API + workers so the migration has exclusive database access; the
-// frontend keeps serving cached pages through the brief outage. `rt.start(app)`
-// afterwards rolls the frontend (rolling update) and brings the API + workers
-// back up on the new image.
-version.on_change(|rt, old| {
-    rt.warm_images([
-        app.job().image(server_image.call()),
-        app.job().image(frontend_image.call()),
-    ]).ready(600);
-
-    copy_image_defaults.call(rt);
-    render_config.call(rt);
-
-    rt.stop(old.select(#{
-        types: [ResourceType.Deployment],
-        names: ["api", "tasks", "sync"],
-    }));
-
-    migrate_db.call(rt);
-
-    rt.start(app).ready(300);
-});
-
-// ── Config parameter changes ──────────────────────────────────────────────────
-
-let restart_servers = |rt| {
-    rt.restart(app.deployment("api"));
-    rt.restart(app.deployment("tasks"));
-    rt.restart(app.deployment("sync"));
-};
-
-canonical_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-central_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-facility_id.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-sync_email.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-sync_password.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-timezone.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-auth_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-default_department.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-default_location.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });

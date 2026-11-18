@@ -105,8 +105,10 @@ Lifecycle operations are initiated by external events:
 | Event | Operation |
 |---|---|
 | Restart with interrupted operation | Replay of the interrupted operation |
-| Param change | The `on_change` handler registered on that parameter |
 | Operator request | Named action |
+
+A change to a parameter or to the definition initiates no operation: it writes a generation, and the reconciler converges on it.
+A change is refused only while another change to the same app is being applied.
 
 See the scheduling rules above for how concurrent requests are handled.
 

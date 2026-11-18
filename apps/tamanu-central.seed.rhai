@@ -100,9 +100,9 @@ let psql_image = "docker.io/library/postgres:18-alpine";
 
 // With no public hostname there is no HTTPS ingress to derive an advertised
 // URL from, so `canonical-url` has to supply one. Checked here rather than at
-// the top level: this closure only runs from `render_config` (install and
-// on_change), by which point params are supplied, whereas a top-level throw
-// would fire during first registration and leave the script unloadable.
+// the top level: this closure only runs when the config is rendered, by which
+// point params are supplied, whereas a top-level throw would fire during first
+// registration and leave the script unloadable.
 let canonical = || {
     if !canonical_url.is_set() && !public_hostname.is_set() {
         throw "set canonical-url when public-hostname is unset: the central server must advertise a URL"
@@ -389,92 +389,4 @@ app.on_shell("node", |_rt, shell, _param| {
     shell.attach(configure_server.call(app.job()).arg(["shell"]));
 }, #{
     description: "Run a bash inside the central server image",
-});
-
-// ── Version changes ───────────────────────────────────────────────────────────
-
-version.on_change(|rt, old| {
-    // warming images keeps the rest of the upgrade fast and also gates on
-    // all the images' availability *before* we start taking things down.
-    warmup.invoke();
-
-    // start intermediate in the new server image early
-    let inter = start_intermediate.call(rt);
-
-    // bring down everything non-essential
-    let old_tasks = rt.stop(old.select(#{
-        types: [ResourceType.Deployment],
-        names: ["tasks", "fhir-refresh", "fhir-resolve"],
-    }));
-
-    // swap the frontends.
-    // we could hard-swap the traffic over, but it's more gracious
-    // to get the new running, tell the old to stop gracefully,
-    // and only then hard-kill the old. the frontends are caddy,
-    // which does a soft-down on first INT, then hard on second.
-    let oldfront = old.select(#{
-        types: [ResourceType.Deployment],
-        names: ["frontend", "patient-portal"],
-    });
-    let newfront = rt.start(app.select(#{
-        types: [ResourceType.Deployment],
-        names: ["frontend", "patient-portal"],
-    }));
-    newfront.running();
-    rt.signal(oldfront, "SIGINT");
-    newfront.ready();
-    rt.signal(oldfront, "SIGINT");
-    rt.stop(oldfront);
-
-    // in future we'll want to do this instead of stopping everything:
-    // rt.stop(old.select(#{ types: [ResourceType.Deployment] }));
-    // rt.write(app.volume("config"), "/config/local.json5", local_json5.call(#{
-    //     readonly: true
-    // }));
-    // rt.start(old.deployment("api"));
-
-    // stop everything that's currently touching the database
-    rt.stop(old);
-
-    // mid-upgrade tasks
-    copy_default_config.call(rt, inter);
-    rt.write(app.volume("config"), "/config/local.json5", local_json5.call());
-    upgrade_db.call(rt, inter);
-
-    //
-
-    rt.start(app).ready(300);
-});
-
-// ── Config parameter changes ──────────────────────────────────────────────────
-// production.json5 and local.json5 are loaded at process startup. Re-render
-// on any change and restart the API + workers (the frontend doesn't read these).
-
-let restart_servers = |rt| {
-    rt.restart(app.deployment("api"));
-    rt.restart(app.deployment("tasks"));
-    if fhir_on.call() {
-        rt.restart(app.deployment("fhir-refresh"));
-        rt.restart(app.deployment("fhir-resolve"));
-    }
-    if portal_on.call() {
-        rt.restart(app.deployment("patient-portal"));
-    }
-};
-
-// Toggling the FHIR workers: bring them up or tear them down to match the new
-// param value. Re-render config first so any related side-channel state is
-// consistent, though FHIR workers don't currently read FHIR-specific config.
-fhir_enabled.on_change(|rt, old| {
-    if fhir_on.call() {
-        rt.start(app.select(#{
-            types: [ResourceType.Deployment],
-            names: ["fhir-refresh", "fhir-resolve"],
-        })).ready();
-    } else {
-        rt.stop(old.select(#{
-            types: [ResourceType.Deployment],
-            names: ["fhir-refresh", "fhir-resolve"],
-        }));
-    }
 });
