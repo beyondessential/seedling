@@ -1038,7 +1038,12 @@ impl Reconciler {
                     &stopped_set,
                 ),
             };
-            let sessions = entry.sessions.progress();
+            // Read in place, as the operation's progress is, rather than
+            // copied each tick.
+            let session_slots = entry.sessions.slots();
+            let session_guards: Vec<_> = session_slots.iter().map(|slot| slot.read()).collect();
+            let sessions: Vec<&crate::runtime::OperationProgress> =
+                session_guards.iter().filter_map(|g| g.as_ref()).collect();
             let desired = match desired {
                 Ok(mut d) => {
                     self.clear_desired_state_fault(&name);
@@ -1068,7 +1073,7 @@ impl Reconciler {
             };
             let warm_cert_hostnames = (*progress)
                 .iter()
-                .chain(&sessions)
+                .chain(sessions.iter().copied())
                 .flat_map(|p| p.warm_cert_hostnames.iter().cloned())
                 .collect();
             // spec: PRIO#priority-setting

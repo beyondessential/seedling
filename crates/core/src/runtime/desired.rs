@@ -361,7 +361,7 @@ fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> D
 pub fn merge_sessions(
     state: &mut DesiredState,
     app_def: &AppDef,
-    sessions: &[OperationProgress],
+    sessions: &[&OperationProgress],
     uninstalling: bool,
 ) {
     for progress in sessions {

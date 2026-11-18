@@ -141,13 +141,9 @@ impl SessionSlots {
         self.slots.read().keys().copied().collect()
     }
 
-    /// What each session has placed in the desired state so far.
-    pub fn progress(&self) -> Vec<OperationProgress> {
-        self.slots
-            .read()
-            .values()
-            .filter_map(|slot| slot.read().clone())
-            .collect()
+    /// Every session's slot, to be read in place.
+    pub fn slots(&self) -> Vec<SessionSlot> {
+        self.slots.read().values().map(Arc::clone).collect()
     }
 }
 

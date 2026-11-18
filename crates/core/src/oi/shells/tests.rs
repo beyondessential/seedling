@@ -642,7 +642,8 @@ fn session_desired(ran: &ShellRan) -> Vec<crate::runtime::DesiredResource> {
         .app
         .def
         .load_full();
-    let progress: Vec<_> = ran.slot.read().clone().into_iter().collect();
+    let slot = ran.slot.read();
+    let progress: Vec<_> = slot.iter().collect();
     let mut state = crate::runtime::DesiredState::default();
     crate::runtime::desired::merge_sessions(&mut state, &app_def, &progress, false);
     state.resources
