@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
 use seedling_protocol::client::OiClient;
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, GateName};
 
 use super::{
     definition::{self, DefinitionArgs, DefinitionKeys, resolve_or_exit},
@@ -69,6 +69,11 @@ pub(super) enum AppsCommand {
     Params {
         #[command(subcommand)]
         command: ParamCommand,
+    },
+    /// Manage an app's gates
+    Gate {
+        #[command(subcommand)]
+        command: GateCommand,
     },
     /// Invoke a lifecycle action
     Action {
@@ -284,6 +289,13 @@ pub(super) enum ParamCommand {
     },
 }
 
+#[derive(Subcommand)]
+pub(super) enum GateCommand {
+    /// Run a gate now, whether or not it is satisfied
+    // spec: CLI#action-and-shell-parameters
+    Run { app: AppName, gate: GateName },
+}
+
 fn parse_vol_id(vol_id: &str) -> Result<(&str, &str), String> {
     let (prefix, vol) = vol_id.split_once('/').ok_or_else(|| {
         format!("invalid volume ID {vol_id:?}: expected _site/<name> or <app>/<volume>")
@@ -461,6 +473,19 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                         .request(
                             "/apps/params/set",
                             serde_json::json!({ "app": app, "params": changes }),
+                        )
+                        .await,
+                );
+            }
+        },
+        AppsCommand::Gate { command } => match command {
+            // spec: CLI#action-and-shell-parameters
+            GateCommand::Run { app, gate } => {
+                print_result(
+                    client
+                        .request(
+                            "/apps/gates/run",
+                            serde_json::json!({ "app": app, "gate": gate }),
                         )
                         .await,
                 );
@@ -867,6 +892,23 @@ mod tests {
         assert_eq!(app.to_string(), "myapp");
         assert_eq!(name.to_string(), "backup");
         assert_eq!(params, ["key=value", "verbose"]);
+    }
+
+    // spec: CLI#action-and-shell-parameters
+    #[test]
+    fn gate_run_takes_an_app_and_a_gate() {
+        let cli = TestCli::try_parse_from(["t", "gate", "run", "web", "migrate"]).expect("parses");
+        let AppsCommand::Gate {
+            command: GateCommand::Run { app, gate },
+        } = cli.cmd
+        else {
+            panic!("expected gate run");
+        };
+        assert_eq!(app.as_str(), "web");
+        assert_eq!(gate.as_str(), "migrate");
+
+        assert!(TestCli::try_parse_from(["t", "gate", "run", "web"]).is_err());
+        assert!(TestCli::try_parse_from(["t", "gate", "run", "web", "Not Valid"]).is_err());
     }
 
     #[test]
