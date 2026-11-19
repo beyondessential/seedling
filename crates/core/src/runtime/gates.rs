@@ -160,7 +160,7 @@ impl GateStatus {
     pub fn reported(&self, running: bool) -> &'static str {
         if running {
             "running"
-        } else if self.paused && self.state == GateState::Unsatisfied {
+        } else if self.paused {
             "paused"
         } else {
             match self.state {

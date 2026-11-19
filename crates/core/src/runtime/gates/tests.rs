@@ -1090,3 +1090,23 @@ fn the_last_check_outlasts_a_restart_and_the_next_interval_check_is_counted_from
         at(1_060)
     );
 }
+
+// spec: APPS#gates
+#[test]
+fn a_paused_gate_is_reported_paused_whatever_state_the_runtime_determined() {
+    let status = |state, paused| GateStatus {
+        state,
+        key_digest: None,
+        record: None,
+        paused,
+        record_error: None,
+    };
+    let undetermined = GateState::Undetermined(Undetermined::Definition("it throws".to_owned()));
+    assert_eq!(status(undetermined.clone(), true).reported(false), "paused");
+    assert_eq!(
+        status(GateState::Unsatisfied, true).reported(false),
+        "paused"
+    );
+    assert_eq!(status(undetermined.clone(), true).reported(true), "running");
+    assert_eq!(status(undetermined, false).reported(false), "undetermined");
+}
