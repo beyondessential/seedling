@@ -640,7 +640,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         let mut progress = OperationProgress::from_log(&loaded);
         progress.dynamic_defs = ctx.lock().dynamic_defs.clone();
         // spec: RCN#desired-state
-        progress.gate_run = gate.is_some();
+        progress.gate_run = gate.map(|gate| gate.name.clone());
         // spec: RT#starting-resources
         // A shell does not drive its app's declared resources: the steady
         // state or the operation in progress does.

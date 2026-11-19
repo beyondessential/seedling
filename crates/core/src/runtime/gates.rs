@@ -740,11 +740,23 @@ impl GateView {
     }
 }
 
+/// A gate whose run is in progress, and the declared resources its body has
+/// started.
+#[derive(Debug, Clone)]
+pub struct BodyStarts {
+    pub gate: GateName,
+    pub started: BTreeSet<ResourceId>,
+}
+
 /// The view of an app's gates for an iteration of the reconciliation loop.
 ///
 /// Where what a gate holds cannot be read, the resources of every gate's
 /// exclusive selection wait instead: none is started, and none is stopped
 /// because of what could not be read.
+///
+/// `body` is the gate whose run is in progress with what its body has started:
+/// none of those waits on that gate, though each still waits on its other
+/// targets.
 // spec: RCN#gate-holds
 // spec: GRUN#gate-state
 pub fn view(
@@ -754,6 +766,7 @@ pub fn view(
     gates: &AppGates,
     stopped: &StoppedSet,
     remembered: &Remembered,
+    body: Option<&BodyStarts>,
 ) -> GateView {
     let mut view = GateView::default();
     let mut unsure: BTreeSet<ResourceId> = BTreeSet::new();
@@ -795,6 +808,13 @@ pub fn view(
             if !cleared {
                 waiting_on.push(target);
             }
+        }
+        // spec: GATE#body
+        if let Some(body) = body
+            && body.started.contains(id)
+        {
+            waiting_on
+                .retain(|target| !matches!(target, AfterTarget::Gate(name) if *name == body.gate));
         }
         if !waiting_on.is_empty() || unsure.contains(id) {
             view.waiting.insert(id.clone(), waiting_on);

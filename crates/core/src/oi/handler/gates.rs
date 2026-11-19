@@ -50,6 +50,9 @@ pub(crate) struct Standing {
 /// What cannot be read is an error rather than an empty answer: a hold read
 /// as no hold, or readiness read as nothing waiting, would tell an operator
 /// that a resource is free to start when nobody checked.
+///
+/// `body` is the gate whose run is in progress for the app, if any, with what
+/// its body has started.
 // spec: APPS#description
 pub(crate) fn read(
     state: &OiState,
@@ -58,6 +61,7 @@ pub(crate) fn read(
     definition_error: Option<String>,
     installed: bool,
     stopped: StoppedSet,
+    body: Option<gates::BodyStarts>,
 ) -> Result<Standing, OiError> {
     let (app, def, cipher) = (app.clone(), Arc::clone(def), Arc::clone(&state.cipher));
     let remembered = state.gate_runtime.remembered(&app);
@@ -71,7 +75,7 @@ pub(crate) fn read(
             &remembered,
         );
         let view = if installed {
-            gates::view(db, &app, &def, &gates, &stopped, &remembered)
+            gates::view(db, &app, &def, &gates, &stopped, &remembered, body.as_ref())
         } else {
             GateView::default()
         };
@@ -184,7 +188,15 @@ pub(crate) fn would_run(
     def: &Arc<AppDef>,
     definition_error: Option<String>,
 ) -> Result<Vec<String>, OiError> {
-    let standing = read(state, app, def, definition_error, false, StoppedSet::new())?;
+    let standing = read(
+        state,
+        app,
+        def,
+        definition_error,
+        false,
+        StoppedSet::new(),
+        None,
+    )?;
     let mut names = Vec::new();
     for (name, status) in &standing.gates.gates {
         match &status.state {

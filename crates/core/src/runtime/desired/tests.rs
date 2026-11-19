@@ -1163,7 +1163,7 @@ fn a_gate_run_holds_the_steady_state_with_what_its_body_placed_over_it() {
     let down = view.keep_down(&StoppedSet::new());
 
     let mut progress = OperationProgress::new();
-    progress.gate_run = true;
+    progress.gate_run = Some(seedling_protocol::names::GateName::new("migrate").unwrap());
     // The instances exist before the gate holds them down.
     compute(
         &app_name("myapp"),
@@ -1197,7 +1197,7 @@ fn a_gate_run_holds_the_steady_state_with_what_its_body_placed_over_it() {
 
     let api = dep("myapp", "api");
     let mut progress = OperationProgress::from_log(&[log_entry(CallKind::Start, vec![api])]);
-    progress.gate_run = true;
+    progress.gate_run = Some(seedling_protocol::names::GateName::new("migrate").unwrap());
     let started = compute(
         &app_name("myapp"),
         &def,

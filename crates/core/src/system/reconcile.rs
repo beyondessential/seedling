@@ -1036,6 +1036,10 @@ impl Reconciler {
                     let stopped = stopped_set.clone();
                     let remembered = self.gate_runtime.remembered(&name);
                     let definition_error = entry.script_error.as_ref().map(|(why, _)| why.clone());
+                    // spec: GATE#body
+                    let body = progress
+                        .as_ref()
+                        .and_then(crate::runtime::OperationProgress::body_starts);
                     self.db.call(move |db| {
                         let state = crate::runtime::gates::evaluate(
                             db,
@@ -1052,6 +1056,7 @@ impl Reconciler {
                             &state,
                             &stopped,
                             &remembered,
+                            body.as_ref(),
                         )
                     })
                 }
@@ -4957,6 +4962,107 @@ mod tests {
             !waits(&gates, "web"),
             "web no longer waits once the gate is satisfied"
         );
+    }
+
+    // spec: GATE#body
+    // spec: RCN#gate-holds
+    #[test]
+    fn a_gate_run_starts_what_its_body_started_without_waiting_for_the_gate() {
+        use crate::runtime::gates::store;
+        use seedling_protocol::names::GateName;
+
+        const IMAGE: &str = "docker.io/library/nginx:1.29";
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": format!(r#"
+                    let api = app.deployment("api").image("{IMAGE}");
+                    let migrate = app.gate("migrate").key(1).exclusive(api);
+                    api.after(migrate);
+                    app.deployment("web").image("{IMAGE}").after(migrate);
+                "#),
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let (app, gate) = (
+            AppName::new("app").unwrap(),
+            GateName::new("migrate").unwrap(),
+        );
+        let api_id = crate::defs::resource::ResourceId {
+            kind: crate::defs::resource::ResourceKind::Deployment,
+            name: Arc::new("api".to_owned()),
+        };
+        let reconciler = test_reconciler(&oi);
+        let snapshot = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            apps.into_iter().find(|a| a.name.as_str() == "app").unwrap()
+        };
+        let instance = |snapshot: &AppSnapshot, name: &str| {
+            snapshot
+                .desired
+                .resources
+                .iter()
+                .find(|r| r.instance.name.as_deref() == Some(name))
+                .map(|r| (r.instance.clone(), r.desired))
+                .unwrap()
+        };
+
+        // The instances exist before the gate holds them down.
+        let idle = snapshot();
+        assert!(idle.gates.waits_for(&api_id.kind, Some("api")));
+        let (a, g, id) = (app.clone(), gate.clone(), api_id.clone());
+        oi.state.db.call(move |db| {
+            store::set_hold(db, &a, &g, &[id].into()).unwrap();
+        });
+        let mut progress = crate::runtime::OperationProgress::new();
+        progress.gate_run = Some(gate);
+        progress.started(instance(&idle, "api").0);
+        *oi.state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .active_progress
+            .write() = Some(progress);
+
+        let running = snapshot();
+        let (api, web) = (instance(&running, "api"), instance(&running, "web"));
+        assert_eq!(
+            api.1,
+            LifecycleState::Ready,
+            "the hold does not keep it down"
+        );
+        assert!(
+            !running.gates.waits_for(&api_id.kind, Some("api")),
+            "what the body started does not wait on the gate"
+        );
+        assert!(
+            running.gates.waits_for(&api_id.kind, Some("web")),
+            "what the body did not start still waits"
+        );
+
+        oi.block_on(oi.state.container_runtime.pull_image(IMAGE))
+            .unwrap();
+        let update = oi.block_on(pods::observe_and_actuate(
+            &reconciler.observer,
+            &reconciler.actuator,
+            &reconciler.driver,
+            &reconciler.db,
+            &running.desired,
+            running.app_priority,
+            &running.gate_keys,
+            &running.gates,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        ));
+        let started: Vec<_> = update.started_instances.iter().map(|i| i.id).collect();
+        assert!(started.contains(&api.0.id), "{started:?}");
+        assert!(!started.contains(&web.0.id), "{started:?}");
     }
 
     // spec: GRUN#uninstall

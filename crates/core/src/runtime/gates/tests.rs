@@ -632,7 +632,15 @@ fn holds_that_cannot_be_read_are_an_error_and_not_an_empty_set() {
     assert!(rt_exclusions(&def, &gates, None).is_err());
 
     let stopped = Default::default();
-    let view = view(&db, &app(), &def, &gates, &stopped, &Remembered::default());
+    let view = view(
+        &db,
+        &app(),
+        &def,
+        &gates,
+        &stopped,
+        &Remembered::default(),
+        None,
+    );
     assert!(
         view.held.is_empty(),
         "nothing is stopped for what cannot be read"
@@ -644,6 +652,77 @@ fn holds_that_cannot_be_read_are_an_error_and_not_an_empty_set() {
             "{name} starts nothing while its hold cannot be read"
         );
     }
+}
+
+// spec: GATE#body
+#[test]
+fn what_a_running_body_started_waits_on_nothing_but_the_other_targets_it_is_ordered_after() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let def = def(r#"
+        let config = app.gate("config").key(1);
+        let api = app.deployment("api").image("docker.io/library/nginx:1");
+        let migrate = app.gate("migrate").key(1).exclusive(api);
+        api.after([config, migrate]);
+        app.deployment("worker").image("docker.io/library/nginx:1").after(migrate);
+        app.deployment("web").image("docker.io/library/nginx:1").after(migrate);
+        "#);
+    let (api, worker, web) = (
+        id(ResourceKind::Deployment, "api"),
+        id(ResourceKind::Deployment, "worker"),
+        id(ResourceKind::Deployment, "web"),
+    );
+    let body = BodyStarts {
+        gate: gate("migrate"),
+        started: BTreeSet::from([api.clone(), worker.clone()]),
+    };
+    let waiting = |db: &Db| {
+        let gates = evaluate(db, &app(), &def, &cipher, None, &Remembered::default());
+        view(
+            db,
+            &app(),
+            &def,
+            &gates,
+            &Default::default(),
+            &Remembered::default(),
+            Some(&body),
+        )
+        .waiting
+    };
+
+    let view = waiting(&db);
+    assert_eq!(
+        view.get(&api),
+        Some(&vec![AfterTarget::Gate(gate("config"))]),
+        "api still waits on the other gate it is ordered after"
+    );
+    assert!(
+        !view.contains_key(&worker),
+        "what the body started does not wait on the gate"
+    );
+    assert_eq!(
+        view.get(&web),
+        Some(&vec![AfterTarget::Gate(gate("migrate"))]),
+        "what the body did not start still waits"
+    );
+
+    store::record_success(
+        &db,
+        &app(),
+        &gate("config"),
+        &digest(&def, &cipher, "config"),
+        1,
+    )
+    .unwrap();
+    assert!(!waiting(&db).contains_key(&api));
+
+    db.conn
+        .execute("ALTER TABLE gate_holds RENAME TO gate_holds_away", [])
+        .unwrap();
+    assert!(
+        waiting(&db).contains_key(&api),
+        "the selection still waits while its hold cannot be read"
+    );
 }
 
 // spec: RCN#gate-holds
@@ -699,6 +778,7 @@ fn a_hold_stays_held_across_a_restart_of_the_runtime() {
         &gates,
         &Default::default(),
         &Remembered::default(),
+        None,
     );
     assert_eq!(
         view.held.get(&api),
@@ -745,9 +825,17 @@ fn a_gate_with_a_check_clears_a_dependant_to_start_from_stopped_only_once_a_chec
     let web = id(ResourceKind::Deployment, "web");
     let waits = |remembered: &Remembered| {
         let gates = evaluate(&db, &app(), &def, &cipher, None, remembered);
-        view(&db, &app(), &def, &gates, &Default::default(), remembered)
-            .waiting
-            .contains_key(&web)
+        view(
+            &db,
+            &app(),
+            &def,
+            &gates,
+            &Default::default(),
+            remembered,
+            None,
+        )
+        .waiting
+        .contains_key(&web)
     };
     assert!(
         waits(&Remembered::default()),
@@ -789,6 +877,7 @@ fn a_dependant_waits_on_the_targets_that_are_not_ready_and_is_told_which() {
         &gates,
         &Default::default(),
         &Remembered::default(),
+        None,
     );
     assert_eq!(
         view.waiting.get(&id(ResourceKind::Deployment, "api")),

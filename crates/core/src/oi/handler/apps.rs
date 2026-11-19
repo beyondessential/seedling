@@ -604,6 +604,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         entry.script_error.as_ref().map(|(why, _)| why.clone()),
         *entry.phase.lock() == AppPhase::Installed,
         stopped_set.clone(),
+        entry
+            .active_progress
+            .read()
+            .as_ref()
+            .and_then(crate::runtime::OperationProgress::body_starts),
     )?;
     let running_gate = active
         .as_ref()

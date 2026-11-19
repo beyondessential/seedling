@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, GateName};
 
 use crate::defs::app::AppDef;
 use crate::defs::deployment::Deployment;
@@ -9,6 +9,7 @@ use crate::defs::job::Job;
 use crate::defs::resource::{Resource, ResourceId, ResourceKind};
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::db::Db;
+use crate::runtime::gates::BodyStarts;
 use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 use crate::runtime::lifecycle::LifecycleState;
 use crate::runtime::stopped::StoppedSet;
@@ -70,10 +71,11 @@ pub struct OperationProgress {
     /// state. Stored by ingress resource name.
     // spec: RT#certificate-warming
     pub warm_cert_hostnames: BTreeSet<String>,
-    /// The progress is a gate run's, whose desired state is the steady state
-    /// with the resources the body placed in it laid over.
+    /// The gate whose run this progress is, if it is a gate run's: its desired
+    /// state is the steady state with the resources the body placed in it laid
+    /// over.
     // spec: RCN#desired-state
-    pub gate_run: bool,
+    pub gate_run: Option<GateName>,
 }
 
 impl OperationProgress {
@@ -82,7 +84,7 @@ impl OperationProgress {
             resources: HashMap::new(),
             dynamic_defs: HashMap::new(),
             warm_cert_hostnames: BTreeSet::new(),
-            gate_run: false,
+            gate_run: None,
         }
     }
 
@@ -105,6 +107,24 @@ impl OperationProgress {
 
     pub fn is_empty(&self) -> bool {
         self.resources.is_empty()
+    }
+
+    /// For a gate run's progress, the gate and the declared resources its body
+    /// has started.
+    pub fn body_starts(&self) -> Option<BodyStarts> {
+        let gate = self.gate_run.clone()?;
+        let started = self
+            .resources
+            .iter()
+            .filter(|(_, state)| **state == LifecycleState::Ready)
+            .filter_map(|(instance, _)| {
+                instance.name.as_ref().map(|name| ResourceId {
+                    kind: instance.kind,
+                    name: Arc::new(name.clone()),
+                })
+            })
+            .collect();
+        Some(BodyStarts { gate, started })
     }
 
     /// Drop every resource that is not dynamic.
@@ -203,7 +223,7 @@ pub fn compute(
 ) -> Result<DesiredState, RegistryError> {
     match operation_progress {
         None => compute_steady(app_name, app_def, registry, effective_scales, stopped),
-        Some(progress) if progress.gate_run => {
+        Some(progress) if progress.gate_run.is_some() => {
             let mut state = compute_steady(app_name, app_def, registry, effective_scales, stopped)?;
             overlay(&mut state, compute_during_operation(app_def, progress));
             Ok(state)
