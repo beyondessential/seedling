@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use crate::{
     oi::state::OiState,
     runtime::{
-        DbInstanceRegistry, InstanceRegistry, images,
+        DbInstanceRegistry, InstanceRegistry,
+        gates::run::LastSuccesses,
+        images,
         probe::{ProbeRequest, probe_app},
     },
 };
@@ -445,15 +447,15 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
     };
     // A gate's body is probed with `last` as a run of it would give it, which
     // is the app as stored, not as a proposed script would make it.
+    let last = LastSuccesses::new(
+        &state.db,
+        &name,
+        &stored_app,
+        &state.script_limits,
+        &state.cipher,
+    );
     let response = probe_app(&engine, &ast, &app, registry, &request, &|gate| {
-        crate::runtime::gates::run::last_success(
-            &state.db,
-            &name,
-            gate,
-            &stored_app,
-            &state.script_limits,
-            &state.cipher,
-        )
+        last.of(gate)
     })
     .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
 
@@ -551,6 +553,13 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
     let registry: std::sync::Arc<dyn InstanceRegistry> =
         std::sync::Arc::new(DbInstanceRegistry::new(state.db.clone()));
 
+    let last = LastSuccesses::new(
+        &state.db,
+        app_name,
+        &app,
+        &state.script_limits,
+        &state.cipher,
+    );
     let probe_response = match crate::runtime::probe::probe_app(
         &engine,
         &ast,
@@ -560,16 +569,7 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
             lenient: true,
             ..Default::default()
         },
-        &|gate| {
-            crate::runtime::gates::run::last_success(
-                &state.db,
-                app_name,
-                gate,
-                &app,
-                &state.script_limits,
-                &state.cipher,
-            )
-        },
+        &|gate| last.of(gate),
     ) {
         Ok(r) => r,
         Err(e) => {
