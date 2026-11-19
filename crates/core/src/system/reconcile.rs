@@ -388,6 +388,11 @@ struct AppSnapshot {
     // spec: GC#unscheduled-instances
     steady: bool,
     app_def: AppDef,
+    /// `app_def` with each resource an operation placed as the operation's
+    /// definition declares it: what the proxy routes, the tier slices and the
+    /// healthcheck pass read.
+    // spec: OPS#changes-to-an-app
+    declarations: AppDef,
     phase: AppPhase,
     phase_handle: Arc<Mutex<AppPhase>>,
     /// Hostnames whose certs should be pre-warmed. Captured from the in-flight
@@ -1152,11 +1157,13 @@ impl Reconciler {
                 .and_then(|p| p.as_ref().ok())
                 .copied()
                 .unwrap_or_default();
+            let declarations = desired.declarations(&app_def);
             snapshots.push(AppSnapshot {
                 name,
                 desired,
                 steady,
                 app_def,
+                declarations,
                 phase,
                 phase_handle: Arc::clone(&entry.phase),
                 warm_cert_hostnames,
@@ -1256,7 +1263,7 @@ fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
         // running in the slice alone.
         let mut tiers: BTreeSet<Priority> = BTreeSet::new();
         tiers.insert(Priority::Normal);
-        for resource in app.app_def.resources.values() {
+        for resource in app.declarations.resources.values() {
             if let Resource::Deployment(deployment) = resource {
                 tiers.insert(deployment.def.lock().priority);
             }
@@ -2390,7 +2397,7 @@ impl Reconciler {
                 Some(p) => p.as_slice(),
                 None => continue,
             };
-            for (id, resource) in &app.app_def.resources {
+            for (id, resource) in &app.declarations.resources {
                 let crate::defs::resource::Resource::Deployment(dep) = resource else {
                     continue;
                 };
@@ -3555,6 +3562,7 @@ mod tests {
             name: app_name,
             desired: DesiredState::default(),
             steady: true,
+            declarations: app_def.clone(),
             app_def,
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
@@ -3584,6 +3592,7 @@ mod tests {
             name: app_name,
             desired: DesiredState::default(),
             steady: true,
+            declarations: app_def.clone(),
             app_def,
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
@@ -5277,6 +5286,75 @@ mod tests {
         );
         let started: Vec<_> = update.started_instances.iter().map(|i| i.id).collect();
         assert_eq!(started, vec![api.id]);
+    }
+
+    // spec: OPS#changes-to-an-app
+    // spec: RCN#desired-state
+    #[test]
+    fn an_ingress_an_operation_placed_is_routed_as_the_operation_declares_it_after_an_update_drops_it()
+     {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": r#"app.service("web").ingress("a.example.com", 2222);"#,
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let reconciler = test_reconciler(&oi);
+        let snapshot = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            apps.into_iter().find(|a| a.name.as_str() == "app").unwrap()
+        };
+        let ingress = snapshot()
+            .desired
+            .resources
+            .iter()
+            .find(|r| r.instance.kind == ResourceKind::Ingress)
+            .map(|r| r.instance.clone())
+            .unwrap();
+
+        let entry_app = oi.state.registry.read().get("app").unwrap().app.clone();
+        let mut progress = crate::runtime::OperationProgress::new();
+        progress.definition = Some(entry_app.def.load_full());
+        progress.started(ingress);
+        *oi.state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .active_progress
+            .write() = Some(progress);
+
+        let (updated, err) = crate::runtime::apps::evaluate_script(
+            &AppName::new("app").unwrap(),
+            r#"app.service("web");"#,
+            &BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "{err:?}");
+        entry_app.def.store(updated.def.load_full());
+
+        let running = snapshot();
+        let routed = |def: &AppDef| {
+            proxy::collect(
+                def,
+                &running.desired,
+                &reconciler.node_prefix,
+                &*reconciler.registry,
+                &running.name,
+                &[],
+            )
+            .unwrap()
+            .ingresses
+            .into_iter()
+            .map(|(def, _)| def.hostname)
+            .collect::<Vec<_>>()
+        };
+        assert!(routed(&running.app_def).is_empty());
+        assert_eq!(routed(&running.declarations), ["a.example.com"]);
     }
 
     // spec: GRUN#uninstall

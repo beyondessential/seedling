@@ -58,6 +58,29 @@ impl DesiredState {
     pub fn is_empty(&self) -> bool {
         self.resources.is_empty() && self.undeclared.is_empty()
     }
+
+    /// `current`, the app's current definition, with each declared resource
+    /// this desired state resolved against an operation's definition as that
+    /// definition declares it.
+    // spec: OPS#changes-to-an-app
+    pub fn declarations(&self, current: &AppDef) -> AppDef {
+        let mut resolved = current.clone();
+        for resource in &self.resources {
+            let (Some(_), true, Some(name)) = (
+                &resource.declared_by,
+                resource.instance.is_declared(),
+                &resource.instance.name,
+            ) else {
+                continue;
+            };
+            let id = ResourceId {
+                kind: resource.instance.kind,
+                name: Arc::new(name.clone()),
+            };
+            resolved.resources.insert(id, resource.definition.clone());
+        }
+        resolved
+    }
 }
 
 /// Records the resources an in-progress lifecycle operation has placed into

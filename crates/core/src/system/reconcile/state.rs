@@ -871,6 +871,7 @@ mod tests {
             },
             steady: true,
             app_def: Default::default(),
+            declarations: Default::default(),
             phase: AppPhase::Installed,
             phase_handle: std::sync::Arc::new(parking_lot::Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),

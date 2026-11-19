@@ -293,7 +293,7 @@ fn resolve_forward_upstream(
 
     let svc_name_str = target_service.as_str();
     let svc_resource = snapshot
-        .app_def
+        .declarations
         .resources
         .iter()
         .find(|(id, _)| id.kind == ResourceKind::Service && id.name.as_str() == svc_name_str)
@@ -331,9 +331,9 @@ fn resolve_forward_upstream(
         .get(target_app)
         .map(Vec::as_slice)
         .unwrap_or(&empty);
-    let service_def = super::proxy::service_proxy_def(&snapshot.app_def, svc_name_str);
+    let service_def = super::proxy::service_proxy_def(&snapshot.declarations, svc_name_str);
     let routes = super::proxy::collect_http_routes(
-        &snapshot.app_def,
+        &snapshot.declarations,
         svc_name_str,
         target_running,
         &service_def,
@@ -362,7 +362,11 @@ fn resolve_forward_upstream(
         service_port,
         // Resolved against the app that declares the service, not the site,
         // so an attachment serves a route exactly as its own ingress would.
-        proxy: super::proxy::service_level_proxy(&snapshot.app_def, svc_name_str, &service_def),
+        proxy: super::proxy::service_level_proxy(
+            &snapshot.declarations,
+            svc_name_str,
+            &service_def,
+        ),
     })
 }
 
@@ -377,7 +381,7 @@ fn scan_apps_for_service_port(
 ) -> Option<u16> {
     let mut deployments = Vec::new();
     let mut jobs = Vec::new();
-    for (id, resource) in &snapshot.app_def.resources {
+    for (id, resource) in &snapshot.declarations.resources {
         match resource {
             Resource::Deployment(_) => deployments.push((id.name.as_str(), resource)),
             Resource::Job(_) => jobs.push((id.name.as_str(), resource)),
@@ -956,6 +960,7 @@ mod tests {
             desired: Default::default(),
             steady: true,
             app_def: (*app.def.load_full()).clone(),
+            declarations: (*app.def.load_full()).clone(),
             phase: crate::runtime::AppPhase::Installed,
             phase_handle: std::sync::Arc::new(parking_lot::Mutex::new(
                 crate::runtime::AppPhase::Installed,
