@@ -462,6 +462,21 @@ describe("AppDetail gate markers", () => {
     ).toBeTruthy();
   });
 
+  // spec: UI#operator-capabilities
+  it("names a pending check as the gate's check, not the satisfied gate", async () => {
+    const [web] = makeDetail().resources;
+    mount(
+      baseFixtures(
+        makeDetail({
+          resources: [
+            { ...web, waiting_on: [{ kind: "check", name: "migrate" }] },
+          ],
+        }),
+      ),
+    );
+    expect(await screen.findByText("waiting on migrate check")).toBeTruthy();
+  });
+
   it("marks nothing on a resource neither held nor waiting", async () => {
     mount(baseFixtures(makeDetail()));
     expect(await screen.findByText("gen 4")).toBeTruthy();

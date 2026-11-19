@@ -169,10 +169,14 @@ Each entry of `resources` has these members.
 | `faults` | array | the fault records of the active faults concerning the resource |
 | `stopped` | boolean | whether the resource is stopped |
 | `held_by` | array of strings | in ascending order, the names of the gates whose [holds](../runtime/reconciliation.md#gate-holds) keep the resource stopped |
-| `waiting_on` | array | for a Deployment or Job, the [targets](../language/gate.md#start-order) its starts wait on that are not ready, each `{ "kind": "gate" \| "deployment" \| "job", "name": <string> }` |
+| `waiting_on` | array | for a Deployment or Job, what its starts wait on, as below |
 | `scale` | object | for a deployment only, as [scaling](app-control.md#scaling) specifies |
 | `priority` | string | for a deployment only, as [app priority](app-control.md#app-priority) specifies |
 | `export` | object | for an exported volume only: `{ "exported": true }`, with a `description` member where the export declares one |
+
+`waiting_on` lists each [target](../language/gate.md#start-order) the resource's starts wait on that is not ready, as `{ "kind": "gate" | "deployment" | "job", "name": <string> }`.
+It also lists each satisfied gate the resource is ordered directly after whose [check](../runtime/gates.md#checks) must pass before the resource starts, as `{ "kind": "check", "name": <the gate's name> }`.
+A satisfied gate is never listed with the kind `gate`.
 
 The server MUST report `instances` empty for an app whose status is `not_installed`.
 

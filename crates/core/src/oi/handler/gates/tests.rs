@@ -187,6 +187,30 @@ fn a_workload_reports_the_targets_it_waits_on_and_the_gates_that_hold_it() {
     assert_eq!(resource_entry(&shown, "plain")["held_by"], json!([]));
 }
 
+// spec: APPS#resources
+#[test]
+fn a_workload_held_back_by_a_pending_check_waits_on_the_check_rather_than_the_satisfied_gate() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": r#"
+            let probe = app.job("probe").image("docker.io/library/tools:1").deadline(30);
+            let migrate = app.gate("migrate").key(1).check(probe);
+            app.deployment("web").image("docker.io/library/nginx:1.29").after(migrate);
+        "# }),
+    )
+    .unwrap();
+    oi.install("demo");
+    satisfy(&oi, "migrate", 1);
+
+    let shown = show(&oi);
+    assert_eq!(gate_entry(&shown, "migrate")["state"], "satisfied");
+    assert_eq!(
+        resource_entry(&shown, "web")["waiting_on"],
+        json!([{ "kind": "check", "name": "migrate" }])
+    );
+}
+
 // spec: APPS#gates
 #[test]
 fn a_gate_is_running_while_its_run_is_in_progress() {

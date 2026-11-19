@@ -196,7 +196,8 @@ it sees (all instances from `find_instances_for_group`) against what the
 reconciler considers active (the `keep` set from `ensure_scaled_group`).
 Mismatches here are a common source of false `Degraded`. A resource a gate
 holds is desired `Unscheduled`; `/apps/show` reports the gates holding it as
-`held_by`, what a workload waits on as `waiting_on`, and each gate's state under
+`held_by`, what a workload waits on as `waiting_on` (a satisfied gate whose check
+has not yet passed appears there with the kind `check`), and each gate's state under
 `gates` (`undetermined` where its record cannot be read, never `unsatisfied`).
 
 ### 6. Check for stuck operations

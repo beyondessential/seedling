@@ -824,6 +824,15 @@ pub fn declared_order(def: &AppDef) -> Vec<(&GateName, &GateDef)> {
     gates
 }
 
+/// Something a workload's starts wait on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wait {
+    /// A target that is not ready.
+    Target(AfterTarget),
+    /// A satisfied gate whose check must pass before the workload starts.
+    Check(GateName),
+}
+
 /// What the reconciler needs of an app's gates in an iteration.
 #[derive(Debug, Default, Clone)]
 pub struct GateView {
@@ -832,9 +841,9 @@ pub struct GateView {
     // spec: RCN#gate-holds
     pub held: BTreeMap<ResourceId, BTreeSet<GateName>>,
     /// Workloads that start no new instance, and whose stale instances are not
-    /// stopped, with the targets each waits on.
+    /// stopped, with what each waits on.
     // spec: GATE#start-order
-    pub waiting: BTreeMap<ResourceId, Vec<AfterTarget>>,
+    pub waiting: BTreeMap<ResourceId, Vec<Wait>>,
     /// Why readiness could not be read, where it could not: every workload
     /// then waits on whatever it is ordered after.
     pub readiness_unreadable: Option<String>,
@@ -932,14 +941,16 @@ pub fn view_from(
     }
     view.readiness_unreadable = readiness.unreadable.clone();
     for id in workloads(def) {
-        let mut waiting_on = unready_targets(&workload_targets(def, id), gates, readiness);
-        // A gate that declares a check clears its dependants to start from
-        // stopped only once a check has passed.
-        for target in workload_targets(def, id) {
-            let AfterTarget::Gate(name) = &target else {
+        let targets = workload_targets(def, id);
+        let mut waiting_on: Vec<Wait> = unready_targets(&targets, gates, readiness)
+            .into_iter()
+            .map(Wait::Target)
+            .collect();
+        for target in &targets {
+            let AfterTarget::Gate(name) = target else {
                 continue;
             };
-            if waiting_on.contains(&target) {
+            if !gates.state(name).is_some_and(GateState::is_satisfied) {
                 continue;
             }
             let Some(gate) = def.gates.get(name) else {
@@ -953,16 +964,18 @@ pub fn view_from(
                 .get(name)
                 .and_then(|g| g.key_digest.as_ref())
                 .is_some_and(|digest| remembered.cleared.get(name) == Some(digest));
+            // spec: GRUN#checks
             if !cleared {
-                waiting_on.push(target);
+                waiting_on.push(Wait::Check(name.clone()));
             }
         }
         // spec: GATE#body
         if let Some(body) = body
             && body.started.contains(id)
         {
-            waiting_on
-                .retain(|target| !matches!(target, AfterTarget::Gate(name) if *name == body.gate));
+            waiting_on.retain(|wait| {
+                !matches!(wait, Wait::Target(AfterTarget::Gate(name)) | Wait::Check(name) if *name == body.gate)
+            });
         }
         if !waiting_on.is_empty() || unsure.contains(id) {
             view.waiting.insert(id.clone(), waiting_on);

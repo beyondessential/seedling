@@ -25,8 +25,8 @@ use crate::{
     runtime::{
         AppPhase,
         gates::{
-            self, AppGates, GateState, GateView, Undetermined, held_resources, read_readiness,
-            store, unready_targets,
+            self, AppGates, GateState, GateView, Undetermined, Wait, held_resources,
+            read_readiness, store, unready_targets,
         },
         stopped::{self, StoppedSet},
     },
@@ -153,7 +153,15 @@ pub(crate) fn waiting_on(standing: &Standing, id: &ResourceId) -> Option<Vec<Val
             .view
             .waiting
             .get(id)
-            .map(|targets| targets.iter().map(target_json).collect())
+            .map(|waits| {
+                waits
+                    .iter()
+                    .map(|wait| match wait {
+                        Wait::Target(target) => target_json(target),
+                        Wait::Check(gate) => json!({ "kind": "check", "name": gate }),
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     })
 }

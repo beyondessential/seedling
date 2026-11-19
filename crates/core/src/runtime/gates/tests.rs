@@ -706,7 +706,7 @@ fn what_a_running_body_started_waits_on_nothing_but_the_other_targets_it_is_orde
     let view = waiting(&db);
     assert_eq!(
         view.get(&api),
-        Some(&vec![AfterTarget::Gate(gate("config"))]),
+        Some(&vec![Wait::Target(AfterTarget::Gate(gate("config")))]),
         "api still waits on the other gate it is ordered after"
     );
     assert!(
@@ -715,7 +715,7 @@ fn what_a_running_body_started_waits_on_nothing_but_the_other_targets_it_is_orde
     );
     assert_eq!(
         view.get(&web),
-        Some(&vec![AfterTarget::Gate(gate("migrate"))]),
+        Some(&vec![Wait::Target(AfterTarget::Gate(gate("migrate")))]),
         "what the body did not start still waits"
     );
 
@@ -848,18 +848,22 @@ fn a_gate_with_a_check_clears_a_dependant_to_start_from_stopped_only_once_a_chec
             None,
         )
         .waiting
-        .contains_key(&web)
+        .get(&web)
+        .cloned()
     };
-    assert!(
+    let on_check = Some(vec![Wait::Check(gate("ready"))]);
+    assert_eq!(
         waits(&Remembered::default()),
-        "web is down and no check has passed"
+        on_check,
+        "web is down and no check has passed, and it waits on the check rather than the satisfied gate"
     );
     let cleared = Remembered {
         cleared: [(gate("ready"), digest(&def, &cipher, "ready"))].into(),
         ..Default::default()
     };
-    assert!(
-        !waits(&cleared),
+    assert_eq!(
+        waits(&cleared),
+        None,
         "a check passed for the gate's current key"
     );
     let stale = Remembered {
@@ -870,8 +874,9 @@ fn a_gate_with_a_check_clears_a_dependant_to_start_from_stopped_only_once_a_chec
         .into(),
         ..Default::default()
     };
-    assert!(
+    assert_eq!(
         waits(&stale),
+        on_check,
         "a check that passed for another key clears nothing"
     );
 }
@@ -894,7 +899,7 @@ fn a_dependant_waits_on_the_targets_that_are_not_ready_and_is_told_which() {
     );
     assert_eq!(
         view.waiting.get(&id(ResourceKind::Deployment, "api")),
-        Some(&vec![AfterTarget::Gate(gate("migrate"))])
+        Some(&vec![Wait::Target(AfterTarget::Gate(gate("migrate")))])
     );
 }
 

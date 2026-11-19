@@ -207,8 +207,8 @@ export interface AppResource {
   /** Names of the gates whose holds keep the resource stopped, ascending. */
   held_by?: string[];
   /** Deployments and Jobs only: the targets its starts wait on that are not
-   *  ready. */
-  waiting_on?: GateTarget[];
+   *  ready, and the satisfied gates whose check must pass before it starts. */
+  waiting_on?: WaitTarget[];
   /** True for entries returned via `dynamic_resources` (jobs / volumes etc.
    * created inside an action closure). Anonymous dynamic resources have a
    * generated `name` (the display_name) and no BSL-level identifier. */
@@ -267,6 +267,10 @@ export interface GateTarget {
   kind: "gate" | "deployment" | "job";
   name: string;
 }
+
+/** What a workload's starts wait on: a target, or a satisfied gate's check,
+ *  named by the gate. */
+export type WaitTarget = GateTarget | { kind: "check"; name: string };
 
 export interface AppGate {
   name: string;

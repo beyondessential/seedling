@@ -108,6 +108,7 @@ import type {
   ResourceInstance,
   RestartSummary,
   SeedlingEvent,
+  WaitTarget,
 } from "../lib/types";
 
 /** Restart count for an instance, linking through to its full history. The
@@ -770,9 +771,9 @@ function ResourcesSection({
               </Tooltip>
             )}
             {(r.waiting_on ?? []).length > 0 && (
-              <Tooltip title="Will not start until these are ready">
+              <Tooltip title="Will not start until these are ready, or these checks pass">
                 <Chip
-                  label={`waiting on ${(r.waiting_on ?? []).map(targetLabel).join(", ")}`}
+                  label={`waiting on ${(r.waiting_on ?? []).map(waitLabel).join(", ")}`}
                   size="small"
                   color="info"
                   variant="outlined"
@@ -1731,6 +1732,10 @@ function SchedulesSection({ actions }: { actions: AppAction[] }) {
 
 function targetLabel(t: GateTarget): string {
   return t.kind === "gate" ? t.name : `${t.kind} ${t.name}`;
+}
+
+function waitLabel(t: WaitTarget): string {
+  return t.kind === "check" ? `${t.name} check` : targetLabel(t);
 }
 
 function GatesSection({
