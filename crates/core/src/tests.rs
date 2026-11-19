@@ -26,6 +26,7 @@ mod bundle;
 mod collection;
 mod constants;
 mod container;
+mod definitions;
 mod deployment;
 mod description;
 mod exec;
