@@ -209,8 +209,8 @@ Build order, with the labels used in commit history and conversation (these are 
 - [x] `after` on `PodDef::mixin` (Deployment and Job), static context only
 - [x] End-of-evaluation checks: `after` cycles, exclusive selection holding a target, check Job in its own gate's selection or ordered after it
 - [x] Remove `Param::on_change` (`defs/param.rs`), `app.on_start` and the `"start"`/`"install"` name rules in `defs/app/action.rs`, `app.on_install` and `defs/app/install.rs`; move `ParamDef`/`ParamKind` out of `defs/install.rs` and update every import
-- [ ] `run_operation` (`runtime/barrier/replay.rs`): dispatch a gate body from the capture, call it with `rt` and `last` by arity, build `last` with `generations::reconstruct_app_def` at the gate's last success or pass unit; drop the install, start-default and change-handler paths and `change_handler_call_script`; `check_idempotent` compares gates
-- [ ] `rt` exclusions (`runtime/barrier/runtime.rs`): `extract_instances`/`do_start_or_query`/`do_stop` leave out gate-held resources and workloads waiting on an unsatisfied gate, except the running gate's own; `rt.restart` throws on them; a shell's `Started` leaves them out too
+- [x] `run_operation` (`runtime/barrier/replay.rs`): dispatch a gate body from the capture, call it with `rt` and `last` by arity, build `last` with `generations::reconstruct_app_def` at the gate's last success or pass unit; drop the install, start-default and change-handler paths and `change_handler_call_script`; `check_idempotent` compares gates
+- [x] `rt` exclusions (`runtime/barrier/runtime.rs`): `extract_instances`/`do_start_or_query`/`do_stop` leave out gate-held resources and workloads waiting on an unsatisfied gate, except the running gate's own; `rt.restart` throws on them; a shell's `Started` leaves them out too
 
 ### Gate runtime
 
@@ -274,7 +274,7 @@ Build order, with the labels used in commit history and conversation (these are 
 
 ### Images
 
-- [ ] `runtime/probe.rs`: `HandlerKind::Gate` and a check entry in place of `Install`, `Start` and `ParamChange`; probe gate bodies with `last` as a run would build it; `oi/handler/images.rs` key format for the handler map
+- [x] `runtime/probe.rs`: `HandlerKind::Gate` in place of `Install`, `Start` and `ParamChange`; probe gate bodies with `last` as a run would build it; `oi/handler/images.rs` key format for the handler map
 
 ### Tests
 
