@@ -505,6 +505,54 @@ fn an_instance_that_has_started_and_not_ended_is_still_running_and_one_that_neve
     assert_eq!(running(&oi), None, "an instance that ended no longer does");
 }
 
+// spec: GRUN#preparation
+#[test]
+fn an_instance_with_a_start_that_has_not_ended_is_still_running_until_the_start_fails() {
+    use crate::runtime::history::{
+        Provenance, complete_autonomous_operation, insert_autonomous_operation, insert_instance,
+    };
+    let oi = TestOi::new();
+    let instance = ResourceInstance::new_singleton(app_name(), ResourceKind::Deployment, "api");
+    let selection = BTreeSet::from([ResourceId {
+        kind: ResourceKind::Deployment,
+        name: Arc::new("api".to_owned()),
+    }]);
+    let running = |oi: &TestOi| {
+        let selection = selection.clone();
+        oi.state
+            .db
+            .call(move |db| still_running(db, &app_name(), &selection).unwrap())
+    };
+    let i = instance.clone();
+    oi.state.db.call(move |db| insert_instance(db, &i).unwrap());
+    let i = instance.clone();
+    let start = oi.state.db.call(move |db| {
+        insert_autonomous_operation(
+            db,
+            i.id,
+            "start",
+            &Provenance {
+                observation_ids: Vec::new(),
+                rule: "test".to_owned(),
+            },
+        )
+        .unwrap()
+    });
+    assert!(
+        running(&oi).is_some(),
+        "an instance whose start is under way is not yet stopped"
+    );
+
+    oi.state.db.call(move |db| {
+        complete_autonomous_operation(db, start, "error: image_unavailable").unwrap();
+    });
+    assert_eq!(
+        running(&oi),
+        None,
+        "a start that failed left nothing to wait for"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Checks
 // ---------------------------------------------------------------------------

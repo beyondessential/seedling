@@ -41,7 +41,7 @@ use crate::{
         dynamic_cleanup::cleanup_dynamic_resources,
         history::{
             CurrentOperation, clear_current_operation, find_instances_for_group, load_action_log,
-            query_observations, save_current_operation,
+            query_autonomous_operations, query_observations, save_current_operation,
         },
         identity::ResourceInstance,
         lifecycle::LifecycleState,
@@ -631,7 +631,10 @@ fn image_of(resource: &Resource) -> Option<String> {
 
 /// What of `selection` is still running or stopping, if any.
 ///
-/// An instance that is pending never started, and counts as stopped.
+/// An instance that was never started is as stopped as one that ended. One
+/// whose latest start has not failed and has not yet been observed is still
+/// coming up, and the reconciler stops it once the host shows it.
+// spec: GRUN#preparation
 fn still_running(
     db: &Db,
     app: &AppName,
@@ -641,14 +644,38 @@ fn still_running(
         for instance in find_instances_for_group(db, app, id.kind, Some(id.name.as_str()))? {
             let observations = query_observations(db, &instance)?;
             match derive_lifecycle_state(&instance, &observations) {
-                LifecycleState::Pending
+                state @ (LifecycleState::Pending
                 | LifecycleState::Terminated
-                | LifecycleState::Unscheduled => {}
+                | LifecycleState::Unscheduled) => {
+                    let seen = observations.last().map_or(i64::MIN, |o| o.recorded_at);
+                    if start_unobserved_since(db, &instance, seen)? {
+                        return Ok(Some(format!(
+                            "{} ({state:?}, being started)",
+                            instance.display_name
+                        )));
+                    }
+                }
                 other => return Ok(Some(format!("{} ({other:?})", instance.display_name))),
             }
         }
     }
     Ok(None)
+}
+
+/// Whether the latest start of `instance` was made at or after `seen`, the time
+/// of its latest observation, and has not failed: it is under way, or the host
+/// has not yet shown what it did.
+fn start_unobserved_since(
+    db: &Db,
+    instance: &ResourceInstance,
+    seen: i64,
+) -> rusqlite::Result<bool> {
+    let latest = query_autonomous_operations(db, instance.id)?
+        .into_iter()
+        .rfind(|op| op.operation == "start");
+    Ok(latest.is_some_and(|op| {
+        op.recorded_at >= seen && op.outcome.as_deref().is_none_or(|outcome| outcome == "ok")
+    }))
 }
 
 // ---------------------------------------------------------------------------
