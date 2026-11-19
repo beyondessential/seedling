@@ -478,44 +478,61 @@ fn rows_to_entries(
     while let Some(row) = rows.next()? {
         let kind_str: String = row.get(2)?;
         let provenance: Option<String> = row.get(4)?;
-        let generation = row.get::<_, i64>(0)? as Generation;
         out.push(HistoryEntry {
-            generation,
+            generation: row.get::<_, i64>(0)? as Generation,
             created_at: row.get(1)?,
             kind: Kind::parse(&kind_str).unwrap_or(Kind::Register),
-            params: params_of(db, app, generation)?,
+            params: Vec::new(),
             bundle_hash: row.get(3)?,
             provenance: provenance.as_deref().and_then(|p| Source::from_db(p).ok()),
         });
     }
+    let mut params = params_of(db, app, out.iter().map(|entry| entry.generation))?;
+    for entry in &mut out {
+        if let Some(changed) = params.remove(&entry.generation) {
+            entry.params = changed;
+        }
+    }
     Ok(out)
 }
 
-/// The parameters a generation changed, in ascending order of name.
+/// The parameters each of `generations` changed, in ascending order of name.
+///
+/// A generation that changed none has no key.
 fn params_of(
     db: &Db,
     app: &AppName,
-    generation: Generation,
-) -> rusqlite::Result<Vec<HistoryParam>> {
-    let mut stmt = db.conn.prepare(
-        "SELECT param_name, previous_value, previous_value_ciphertext,
+    generations: impl Iterator<Item = Generation>,
+) -> rusqlite::Result<BTreeMap<Generation, Vec<HistoryParam>>> {
+    let generations: Vec<i64> = generations.map(|g| g as i64).collect();
+    if generations.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let placeholders = vec!["?"; generations.len()].join(", ");
+    let mut stmt = db.conn.prepare(&format!(
+        "SELECT generation, param_name, previous_value, previous_value_ciphertext,
                 new_value, new_value_ciphertext
          FROM generation_params
-         WHERE app = ?1 AND generation = ?2
-         ORDER BY param_name ASC",
-    )?;
-    stmt.query_map(rusqlite::params![app, generation as i64], |row| {
-        let previous_ct: Option<Vec<u8>> = row.get(2)?;
-        let new_ct: Option<Vec<u8>> = row.get(4)?;
-        Ok(HistoryParam {
-            name: row.get(0)?,
-            previous_value: row.get(1)?,
-            new_value: row.get(3)?,
+         WHERE app = ? AND generation IN ({placeholders})
+         ORDER BY generation ASC, param_name ASC"
+    ))?;
+    let args = std::iter::once(app as &dyn rusqlite::ToSql)
+        .chain(generations.iter().map(|g| g as &dyn rusqlite::ToSql));
+    let mut rows = stmt.query(rusqlite::params_from_iter(args))?;
+    let mut out: BTreeMap<Generation, Vec<HistoryParam>> = BTreeMap::new();
+    while let Some(row) = rows.next()? {
+        let generation = row.get::<_, i64>(0)? as Generation;
+        let previous_ct: Option<Vec<u8>> = row.get(3)?;
+        let new_ct: Option<Vec<u8>> = row.get(5)?;
+        out.entry(generation).or_default().push(HistoryParam {
+            name: row.get(1)?,
+            previous_value: row.get(2)?,
+            new_value: row.get(4)?,
             previous_value_redacted: previous_ct.is_some(),
             new_value_redacted: new_ct.is_some(),
-        })
-    })?
-    .collect()
+        });
+    }
+    Ok(out)
 }
 
 /// Look up a single generation entry.
