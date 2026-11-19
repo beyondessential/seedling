@@ -185,7 +185,7 @@ Build order, with the labels used in commit history and conversation (these are 
 - **G1, BSL gates and storage:** done (the BSL steps, the keyed digest, the spec hash).
 - **G2, gate runtime and reconciler:** done (the Gate runtime, Operations and lifecycle, Reconciler and Images steps, each checked against its code and a test).
 - **G3, gate surfaces:** done (`/apps/show`, `/apps/gates/run`, held restarts and stops, `gates_would_run`, `apps gate run`, the console, the OI and event tests).
-- **G4, definitions, docs and test cases:** not started. The demo definitions, docs, test cases, citations for the gate code.
+- **G4, definitions, docs and test cases:** done (the three demo definitions on gates, the docs, the test cases, citations clean).
 
 ### Baseline
 
@@ -283,12 +283,12 @@ Build order, with the labels used in commit history and conversation (these are 
 - [x] Gate runtime tests that sever in-memory state between the record write and its read: hold across a restart, pause across a restart, back-off across a restart, unreadable record leaving the gate undetermined
 - [x] Reconciler tests: held selection stays down whatever the scale, waiting workload keeps its stale instances, check Job never in the desired state, spec hash moves with a direct gate key only
 - [x] OI tests: multi-parameter set and update refusals, events and history; `/apps/install`; `/apps/gates/run` refusals; changes accepted while an operation runs
-- [ ] Draft the card's test cases (`.workhorse/test-cases/h6/overview.md`) from the gate, gate-run and parameter-change specs
+- [x] Draft the card's test cases (`.workhorse/test-cases/h6/overview.md`) from the gate, gate-run and parameter-change specs
 
 ### Definitions and docs
 
-- [ ] `apps/postgres.seed.rhai`: install and `on_change` handlers to gates (major upgrade keyed on the major, password rotation keyed on the password, rendered config keyed on its digest)
-- [ ] `apps/tamanu-central.seed.rhai` and `apps/tamanu-facility.seed.rhai`: install and version handlers to a migration gate with the parts in its exclusive selection and after it; the config handlers to environment or a config gate
-- [ ] `docs/bsl-scripting.md`: gates, `after`, `last`; drop `on_change`, `on_start`, `on_install` and the install-parameter notes
-- [ ] `docs/runtime-overview.md` initiating-events table; `docs/deploying.md` and `docs/dev-vm.md` CLI examples; `docs/failure-modes.md` if gates add a rule
-- [ ] Code citations for the removed sections replaced with the new anchors; `etc/ci/check-spec-citations.sh` clean
+- [x] `apps/postgres.seed.rhai`: install and `on_change` handlers to gates (major upgrade keyed on the major, password rotation keyed on the password, rendered config keyed on its digest)
+- [x] `apps/tamanu-central.seed.rhai` and `apps/tamanu-facility.seed.rhai`: install and version handlers to a migration gate with the parts in its exclusive selection and after it; the config handlers to environment or a config gate
+- [x] `docs/bsl-scripting.md`: gates, `after`, `last`; drop `on_change`, `on_start`, `on_install` and the install-parameter notes
+- [x] `docs/runtime-overview.md` initiating-events table; `docs/deploying.md` and `docs/dev-vm.md` CLI examples; `docs/failure-modes.md` if gates add a rule
+- [x] Code citations for the removed sections replaced with the new anchors; `etc/ci/check-spec-citations.sh` clean
