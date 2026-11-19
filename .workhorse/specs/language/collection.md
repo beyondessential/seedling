@@ -39,10 +39,12 @@ A collection formed from `col(app)` before a resource is declared therefore hold
 | an anonymous `Volume` | an empty collection |
 | any other value | an empty collection |
 
-An action handle is among the values that coerce to an empty collection.
+An action handle and a [gate](gate.md) are among the values that coerce to an empty collection.
 
 > [!NOTE]
 > An action is invoked through [`Action.invoke`](action.md#action-invocation), not acted on as a resource, so no collection holds one.
+>
+> A gate is not a resource either, so no collection holds one.
 >
 > An anonymous volume belongs to the pod that mounts it, and is set up and cleaned up with that pod, so no collection holds one either.
 

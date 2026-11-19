@@ -186,6 +186,24 @@ fn col_from_action_yields_empty() {
     );
 }
 
+// spec: COL#collection
+// A gate is not a resource, so no collection holds one.
+#[test]
+fn col_from_gate_yields_empty() {
+    run_test_script_app(
+        r#"
+        let g = app.gate("migrate");
+        app.deployment("web");
+        if type_of(col(g).one()) != "()" {
+            throw "col(gate) must be empty";
+        }
+        if type_of(col([g]).one()) != "()" {
+            throw "col([gate]) must be empty";
+        }
+    "#,
+    );
+}
+
 // spec: BSL#arguments
 // spec: COL#selection
 // A `types` value that is not an array used to drop the criterion, and a
