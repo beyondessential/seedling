@@ -183,7 +183,7 @@ Build order, with the labels used in commit history and conversation (these are 
 - **B1, install and start actions removed:** done.
 - **B2, `on_change` and edge-triggered plumbing removed:** done.
 - **G1, BSL gates and storage:** done (the BSL steps, the keyed digest, the spec hash).
-- **G2, gate runtime and reconciler:** built but not audited; its steps stay unticked until each is checked against its code and test. Gate runs, checks, holds and start order exist in code; `AppStatus::Installing` derivation and the image probe's `HandlerKind::Gate` landed with it.
+- **G2, gate runtime and reconciler:** done (the Gate runtime, Operations and lifecycle, Reconciler and Images steps, each checked against its code and a test).
 - **G3, gate surfaces:** not started. `/apps/show` gates, `held_by`, `waiting_on`; `/apps/gates/run`; `/apps/restart` and `/apps/resource/stop` for held resources; `gates_would_run`; `apps gate run`; the console's gate parts; the OI and event tests.
 - **G4, definitions, docs and test cases:** not started. The demo definitions, docs, test cases, citations for the gate code.
 
