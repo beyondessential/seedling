@@ -402,10 +402,12 @@ fn the_tamanu_definitions_refuse_a_database_or_role_name_that_needs_quoting() {
         let rejected = |name: &str, value: &str| {
             let mut proposed = base.clone();
             proposed.insert(name.to_owned(), value.to_owned());
+            // A bad name fails the evaluation itself, so the validators
+            // are those of the last evaluation that succeeded.
             let (_, outcome) = crate::runtime::apps::evaluate_validated(
                 &AppName::new_unchecked("demo"),
                 &bundle,
-                &proposed,
+                &base,
                 &proposed,
                 &crate::ScriptLimits::default(),
             );
@@ -441,5 +443,25 @@ fn the_tamanu_definitions_evaluate_with_no_hostname_or_canonical_url() {
             &crate::ScriptLimits::default(),
         );
         assert!(err.is_none(), "{name}: {err:?}");
+    }
+}
+
+// spec: PRM#validation
+// A name stored without passing the validator is checked again where it is
+// written out, so the definition fails to evaluate rather than writing it.
+#[test]
+fn the_tamanu_definitions_do_not_write_out_a_database_name_that_needs_quoting() {
+    for (name, source, mut params) in [
+        ("tamanu-central", CENTRAL, central_params()),
+        ("tamanu-facility", FACILITY, facility_params()),
+    ] {
+        params.insert("db-name".into(), "x\"; DROP DATABASE postgres; --".into());
+        let (_, err) = crate::runtime::apps::evaluate_script(
+            &AppName::new_unchecked("demo"),
+            source,
+            &params,
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_some(), "{name}");
     }
 }

@@ -154,8 +154,10 @@ let json_str = |s| {
     `"${s}"`
 };
 
-// Mutate-in-place: see the comment on `json_str` for why a chain doesn't work.
-let sql_escape = |s| { s.replace("'", "''"); s };
+// A database or role name goes into SQL and a shell command as it is, so it
+// is checked here as well as by its parameter's validator: a value stored
+// before the validator was declared is never written out unchecked.
+let sql_ident = |s| { sql_name.call(s); s };
 
 // production.json5: facility-side tamanu config, including the upstream
 // central-server URL and the sync credentials. Free-form overrides are not
@@ -376,8 +378,8 @@ let provision_db = |rt| {
     let dbu = db_user.value();
     staging.write("/setup.sql", `
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${sql_escape.call(dbu)}') THEN
-    EXECUTE format('CREATE ROLE %I LOGIN', '${sql_escape.call(dbu)}');
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${sql_ident.call(dbu)}') THEN
+    EXECUTE format('CREATE ROLE %I LOGIN', '${sql_ident.call(dbu)}');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'raw') THEN
     EXECUTE 'CREATE ROLE raw LOGIN';
@@ -387,7 +389,7 @@ DO $$ BEGIN
   END IF;
 END $$;
 `);
-    staging.write("/createdb.sql", `SELECT 'CREATE DATABASE "${sql_escape.call(dbn)}" OWNER "${sql_escape.call(dbu)}"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${sql_escape.call(dbn)}')\\gexec
+    staging.write("/createdb.sql", `SELECT 'CREATE DATABASE "${sql_ident.call(dbn)}" OWNER "${sql_ident.call(dbu)}"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${sql_ident.call(dbn)}')\\gexec
 `);
 
     rt.start(app.job()
@@ -442,7 +444,7 @@ let database_check = app.job("database-check")
     .env("PGHOST", "/var/run/postgresql")
     .env("PGUSER", "postgres")
     .command(["sh", "-c",
-        `psql -d postgres -tA -c "SELECT 1 FROM pg_database WHERE datname = '${sql_escape.call(db_name.value())}'" | grep -qx 1`
+        `psql -d postgres -tA -c "SELECT 1 FROM pg_database WHERE datname = '${sql_ident.call(db_name.value())}'" | grep -qx 1`
     ])
     .deadline(30);
 
