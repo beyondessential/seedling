@@ -376,18 +376,29 @@ pub struct Gate {
 }
 
 impl Gate {
-    pub fn new(name: GateName, app: App) -> Self {
+    fn new(name: GateName, app: App) -> Self {
         Self { name, app }
     }
 
-    fn edit(&self, change: impl Fn(&mut GateDef)) {
+    /// Apply `change` to the gate this handle names, which its app declares.
+    fn edit(&self, change: impl Fn(&mut GateDef)) -> Result<(), Box<EvalAltResult>> {
+        let mut declared = true;
         self.app.def.rcu(|d| {
             let mut d = (**d).clone();
-            if let Some(gate) = d.gates.get_mut(&self.name) {
-                change(gate);
+            match d.gates.get_mut(&self.name) {
+                Some(gate) => {
+                    declared = true;
+                    change(gate);
+                }
+                None => declared = false,
             }
             d
         });
+        if declared {
+            Ok(())
+        } else {
+            Err(format!("gate '{}' is not declared by its app", self.name).into())
+        }
     }
 }
 
@@ -401,7 +412,7 @@ impl CustomType for Gate {
             |this: &mut Self, value: Dynamic| -> Result<Self, Box<EvalAltResult>> {
                 ensure_static("key")?;
                 let key = GateKey::from_script(value)?;
-                this.edit(|gate| gate.key = key.clone());
+                this.edit(|gate| gate.key = key.clone())?;
                 Ok(this.clone())
             },
         );
@@ -423,7 +434,7 @@ impl CustomType for Gate {
                 {
                     return Err(format!("gate '{}' already has a body", this.name).into());
                 }
-                this.edit(|gate| gate.has_body = true);
+                this.edit(|gate| gate.has_body = true)?;
                 capture_gate(this.name.clone(), Some(body));
                 Ok(this.clone())
             },
@@ -491,7 +502,7 @@ impl CustomType for Gate {
             |this: &mut Self, target: Dynamic| -> Result<Self, Box<EvalAltResult>> {
                 ensure_static("after")?;
                 let targets = after_targets(target)?;
-                this.edit(|gate| gate.after.extend(targets.iter().cloned()));
+                this.edit(|gate| gate.after.extend(targets.iter().cloned()))?;
                 Ok(this.clone())
             },
         );
@@ -538,7 +549,7 @@ impl Gate {
                 job: id.clone(),
                 interval,
             })
-        });
+        })?;
         Ok(self.clone())
     }
 }
