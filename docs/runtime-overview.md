@@ -102,12 +102,16 @@ This constraint may be relaxed in the future to allow concurrent operations on d
 
 Lifecycle operations are initiated by external events:
 
-| Event | Operation |
-|---|---|
-| Restart with interrupted operation | Replay of the interrupted operation |
-| Operator request | Named action |
+| Event | Operation | Trigger |
+|---|---|---|
+| Restart with interrupted operation | Replay of the interrupted operation | `replay` |
+| A gate is due to run | The gate's run | `gate` |
+| Operator request | Named action, or the named gate's run | `operator` |
+| A schedule falls due | The scheduled action | `schedule` |
 
-A change to a parameter or to the definition initiates no operation: it writes a generation, and the reconciler converges on it.
+Installing an app, starting the daemon, and changing a parameter or the definition initiate no operation of their own.
+A change writes a generation, and the reconciler converges on it.
+A change that moves the key of a gate leaves the gate unsatisfied, and the runtime runs it as a `gate` operation once its targets are ready and its retry is due.
 A change is refused only while another change to the same app is being applied.
 
 See the scheduling rules above for how concurrent requests are handled.
