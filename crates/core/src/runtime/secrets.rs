@@ -157,6 +157,9 @@ impl Cipher {
     /// The same bytes digest the same under one secret key and differently
     /// under another, and the digest holds nothing the bytes could be
     /// recovered from.
+    ///
+    /// orion's `auth` is keyed BLAKE2b-256, so its tag is exactly
+    /// [`KeyDigest::LEN`] bytes.
     // spec: GRUN#outcome
     pub fn key_digest(&self, canonical: &[u8]) -> Result<KeyDigest, Error> {
         let tag = auth::authenticate(&self.digest_key, canonical)?;
