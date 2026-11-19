@@ -67,8 +67,16 @@ fn tracked(state: &OiState, name: Option<&AppName>) -> Vec<Tracked> {
 /// What one pass over an app's gates found.
 struct Synced {
     gates: AppGates,
+    /// What the checks and runs decide from, or `None` when what is held or
+    /// what is stopped cannot be read, so that no check or run is decided.
+    world: Option<World>,
+}
+
+/// What an app's resources are, as the checks and runs of its gates read it.
+struct World {
     readiness: Readiness,
     held: BTreeSet<ResourceId>,
+    stopped: StoppedSet,
 }
 
 /// The gate half of one iteration, for every installed app.
@@ -184,21 +192,37 @@ fn sync_db(
 
     sync_gate_faults(db, app, &gates);
 
-    // What is held is read again, as the part above may have released holds.
+    let world = read_world(db, app, def);
+    Synced { gates, world }
+}
+
+/// What the checks and runs of an app's gates decide from, or `None` when
+/// what is held or what is stopped cannot be read: either read as empty would
+/// count a held or stopped workload as one that is down.
+// spec: GRUN#checks
+// spec: GRUN#initiating-runs
+fn read_world(db: &Db, app: &AppName, def: &AppDef) -> Option<World> {
+    // What is held is read again, as the sync may have released holds.
     let held = match store::load_holds(db, app) {
         Ok(holds) => held_resources(def, &holds).into_keys().collect(),
-        Err(_) => BTreeSet::new(),
+        Err(e) => {
+            tracing::error!(%app, "cannot read what the app's gates hold, so no check or run of them is decided: {e}");
+            return None;
+        }
     };
-    let stopped = stopped::load_stopped(db, app).unwrap_or_else(|e| {
-        tracing::error!(%app, "cannot read the app's stopped resources: {e}");
-        StoppedSet::new()
-    });
+    let stopped = match stopped::load_stopped(db, app) {
+        Ok(stopped) => stopped,
+        Err(e) => {
+            tracing::error!(%app, "cannot read the app's stopped resources, so no check or run of its gates is decided: {e}");
+            return None;
+        }
+    };
     let readiness = read_readiness(db, app, def, &held, &stopped);
-    Synced {
-        gates,
+    Some(World {
         readiness,
         held,
-    }
+        stopped,
+    })
 }
 
 /// Clear the check that could not be run from the record of each gate whose
@@ -340,8 +364,10 @@ async fn drive_app(state: &Arc<OiState>, app: &Tracked) {
 
     settle_unrecorded(state, app).await;
     withdraw_undeclared(state, app).await;
-    start_checks(state, app, &synced, &running).await;
-    initiate_runs(state, app, &synced).await;
+    if let Some(world) = &synced.world {
+        start_checks(state, app, &synced.gates, world, &running).await;
+        initiate_runs(state, app, &synced.gates, world).await;
+    }
 }
 
 /// A failed check whose invalidation could not be written, and a failed run
@@ -422,17 +448,11 @@ async fn withdraw_undeclared(state: &Arc<OiState>, app: &Tracked) {
 async fn start_checks(
     state: &Arc<OiState>,
     app: &Tracked,
-    synced: &Synced,
+    gates: &AppGates,
+    world: &World,
     running: &impl Fn(&GateName) -> bool,
 ) {
     let remembered = state.gate_runtime.remembered(&app.name);
-    let stopped = state
-        .db
-        .call({
-            let name = app.name.clone();
-            move |db| stopped::load_stopped(db, &name)
-        })
-        .unwrap_or_default();
     let queued: BTreeSet<GateName> = state
         .scheduler
         .lock()
@@ -445,10 +465,16 @@ async fn start_checks(
         let Some(check) = &gate_def.check else {
             continue;
         };
-        let Some(status) = synced.gates.gates.get(name) else {
+        let Some(status) = gates.gates.get(name) else {
             continue;
         };
-        let down = dependants_down(&app.def, name, &synced.readiness, &synced.held, &stopped);
+        let down = dependants_down(
+            &app.def,
+            name,
+            &world.readiness,
+            &world.held,
+            &world.stopped,
+        );
         if !down {
             // The dependants are up, so the next one to start from stopped
             // is a new occasion for a check.
@@ -581,16 +607,16 @@ async fn apply_check_outcome(
 /// A request the concurrency rules do not accept is not a failure of the
 /// gate: nothing is recorded, and the next iteration asks again.
 // spec: GRUN#initiating-runs
-async fn initiate_runs(state: &Arc<OiState>, app: &Tracked, synced: &Synced) {
+async fn initiate_runs(state: &Arc<OiState>, app: &Tracked, gates: &AppGates, world: &World) {
     if state.scheduler.lock().blocker_for(&app.name).is_some() {
         return;
     }
     let now = Timestamp::now();
     for (name, gate_def) in declared_order(&app.def) {
-        let Some(status) = synced.gates.gates.get(name) else {
+        let Some(status) = gates.gates.get(name) else {
             continue;
         };
-        let unready = unready_targets(&gate_def.after, &synced.gates, &synced.readiness);
+        let unready = unready_targets(&gate_def.after, gates, &world.readiness);
         if decide(status, unready, now) != Decision::Run {
             continue;
         }

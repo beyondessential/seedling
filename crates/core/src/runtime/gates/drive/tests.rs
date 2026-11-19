@@ -357,7 +357,7 @@ fn a_hold_is_cleared_once_its_gate_is_satisfied_and_not_before() {
     store::set_hold(&db, &app(), &gate("migrate"), &BTreeSet::from([api])).unwrap();
 
     let synced = sync(&db, &def, &cipher, None);
-    assert_eq!(synced.held.len(), 1);
+    assert_eq!(synced.world.unwrap().held.len(), 1);
     assert_eq!(store::load_holds(&db, &app()).unwrap().len(), 1);
 
     store::record_success(
@@ -369,7 +369,7 @@ fn a_hold_is_cleared_once_its_gate_is_satisfied_and_not_before() {
     )
     .unwrap();
     let synced = sync(&db, &def, &cipher, None);
-    assert!(synced.held.is_empty());
+    assert!(synced.world.unwrap().held.is_empty());
     assert!(store::load_holds(&db, &app()).unwrap().is_empty());
 }
 
@@ -638,6 +638,51 @@ fn a_gate_whose_record_cannot_be_read_is_not_run_and_a_fault_says_so() {
     wait_until("the run to end", || valid(&oi, "seed") && idle(&oi));
     let faults = oi.state.db.call(active_faults);
     assert!(faults.is_empty(), "{faults:?}");
+}
+
+// spec: GRUN#initiating-runs
+#[test]
+fn no_gate_is_run_while_what_is_held_or_what_is_stopped_cannot_be_read() {
+    for table in ["gate_holds", "stopped_resources"] {
+        let oi = installed(r#"app.gate("seed").key(1);"#);
+        let rename = |from: &str, to: &str| {
+            let sql = format!("ALTER TABLE {from} RENAME TO {to}");
+            oi.state
+                .db
+                .call(move |db| db.conn.execute_batch(&sql).unwrap());
+        };
+        rename(table, "unreadable");
+        drive_once(&oi);
+        assert!(
+            idle(&oi),
+            "nothing is initiated while {table} cannot be read"
+        );
+        assert!(!valid(&oi, "seed"));
+
+        rename("unreadable", table);
+        drive_once(&oi);
+        wait_until("the run to end", || valid(&oi, "seed") && idle(&oi));
+    }
+}
+
+// spec: GRUN#checks
+#[test]
+fn nothing_is_decided_from_a_hold_set_or_stopped_set_that_cannot_be_read() {
+    for table in ["gate_holds", "stopped_resources"] {
+        let db = Db::open_in_memory().unwrap();
+        let cipher = Cipher::for_tests();
+        let def = def(MIGRATE);
+        register(&db);
+        assert!(sync(&db, &def, &cipher, None).world.is_some());
+
+        db.conn
+            .execute_batch(&format!("ALTER TABLE {table} RENAME TO unreadable"))
+            .unwrap();
+        assert!(
+            sync(&db, &def, &cipher, None).world.is_none(),
+            "{table} that cannot be read is not read as empty"
+        );
+    }
 }
 
 // spec: GRUN#gates-no-longer-declared
