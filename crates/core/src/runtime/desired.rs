@@ -258,14 +258,17 @@ pub fn compute(
 /// `state` does not hold is added.
 // spec: RCN#desired-state
 fn overlay(state: &mut DesiredState, placed: DesiredState) {
+    let mut held: HashMap<InstanceId, usize> = HashMap::with_capacity(state.resources.len());
+    for (at, resource) in state.resources.iter().enumerate() {
+        held.entry(resource.instance.id).or_insert(at);
+    }
     for resource in placed.resources {
-        match state
-            .resources
-            .iter_mut()
-            .find(|held| held.instance.id == resource.instance.id)
-        {
-            Some(held) => *held = resource,
-            None => state.resources.push(resource),
+        match held.get(&resource.instance.id) {
+            Some(&at) => state.resources[at] = resource,
+            None => {
+                held.insert(resource.instance.id, state.resources.len());
+                state.resources.push(resource);
+            }
         }
     }
 }
