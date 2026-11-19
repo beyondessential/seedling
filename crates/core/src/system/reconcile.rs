@@ -5018,7 +5018,16 @@ mod tests {
         });
         let mut progress = crate::runtime::OperationProgress::new();
         progress.gate_run = Some(gate);
-        progress.definition = Some(oi.state.registry.read().get("app").unwrap().app.def.load_full());
+        progress.definition = Some(
+            oi.state
+                .registry
+                .read()
+                .get("app")
+                .unwrap()
+                .app
+                .def
+                .load_full(),
+        );
         progress.started(instance(&idle, "api").0);
         *oi.state
             .registry
