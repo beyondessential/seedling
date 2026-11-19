@@ -226,8 +226,8 @@ Build order, with the labels used in commit history and conversation (these are 
 ### Operations and lifecycle
 
 - [x] Collapse source/target generation across `runtime/scheduler.rs`, `runtime/history.rs`, `oi/handler/actions/lifecycle.rs`, `runtime/barrier/replay.rs`, `oi/shells/session.rs`, `runtime/gc.rs`
-- [ ] Persist and restore gate runs (`gate` instead of an action) in the current-operation and queue records; replay a gate run
-- [ ] `lifecycle.rs`: drop `enter_installing_phase`, `finalize_install`, `revert_install_phase`, `recover_unreplayable_install`, `initiate_start`, `start_pending`; completion returns to steady state; cancelled and failed gate runs file `gate_failed`, not `operation_failed`/`operation_cancelled`; drop the outcome writes to generation history (open here: completion returning to steady state and `gate_failed` for cancelled and failed gate runs; the install-era removals are done)
+- [x] Persist and restore gate runs (`gate` instead of an action) in the current-operation and queue records; replay a gate run
+- [x] `lifecycle.rs`: drop `enter_installing_phase`, `finalize_install`, `revert_install_phase`, `recover_unreplayable_install`, `initiate_start`, `start_pending`; completion returns to steady state; cancelled and failed gate runs file `gate_failed`, not `operation_failed`/`operation_cancelled`; drop the outcome writes to generation history
 - [x] `oi/handler/actions.rs::cancel_action`: drop the Installing path
 - [x] `runtime/scheduler.rs`: drop `AppHold::admit` and `ChangeBeingApplied` uses tied to `on_change`; keep the change hold blocking operation admission
 - [x] `crates/daemon/src/main.rs`: drop boot starts and install replay; the startup sweep moves only `NotInstalled` apps with recorded instances to `Uninstalling`
@@ -235,11 +235,11 @@ Build order, with the labels used in commit history and conversation (these are 
 
 ### Reconciler
 
-- [ ] `runtime/desired.rs::compute_steady`: gate holds as `Unscheduled` whatever the scale, start order, check Jobs out of the desired state; gate run desired state as steady plus the body's starts and stops
-- [ ] `system/reconcile.rs`: drop the `Installing` and `start_pending` branches; `AppEntry::is_steady` without `start_pending`; gate state evaluated per iteration through `runtime/gates.rs` (done: the `Installing` and `start_pending` branches are gone; open: gate state evaluated per iteration)
-- [ ] `system/reconcile/pods.rs`: no new instance of a waiting workload; no stale instance stopped while its workload waits, under rolling, replace or Job
+- [x] `runtime/desired.rs::compute_steady`: gate holds as `Unscheduled` whatever the scale, start order, check Jobs out of the desired state; gate run desired state as steady plus the body's starts and stops
+- [x] `system/reconcile.rs`: drop the `Installing` and `start_pending` branches; `AppEntry::is_steady` without `start_pending`; gate state evaluated per iteration through `runtime/gates.rs`
+- [x] `system/reconcile/pods.rs`: no new instance of a waiting workload; no stale instance stopped while its workload waits, under rolling, replace or Job
 - [x] `system/actuator.rs::desired_spec_hash`: fold in the direct gate targets' key digests
-- [ ] Job readiness as a target from the most recent instance's outcome
+- [x] Job readiness as a target from the most recent instance's outcome
 
 ### Parameters and generations
 
@@ -281,7 +281,7 @@ Build order, with the labels used in commit history and conversation (these are 
 - [x] Rewrite the BSL tests that use the removed handlers (`crates/core/src/tests/param.rs`, `barrier.rs`, `action.rs`, `runtime.rs`, `app.rs`, `action_call.rs`) onto actions and gates, deleting those that only covered `on_change`, `on_start` or `on_install`
 - [x] New BSL tests for `Gate`: builder errors, key equality, cycles and self-waits, `last` at the last success
 - [x] Gate runtime tests that sever in-memory state between the record write and its read: hold across a restart, pause across a restart, back-off across a restart, unreadable record leaving the gate undetermined
-- [ ] Reconciler tests: held selection stays down whatever the scale, waiting workload keeps its stale instances, check Job never in the desired state, spec hash moves with a direct gate key only
+- [x] Reconciler tests: held selection stays down whatever the scale, waiting workload keeps its stale instances, check Job never in the desired state, spec hash moves with a direct gate key only
 - [ ] OI tests: multi-parameter set and update refusals, events and history; `/apps/install`; `/apps/gates/run` refusals; changes accepted while an operation runs
 - [ ] Draft the card's test cases (`.workhorse/test-cases/h6/overview.md`) from the gate, gate-run and parameter-change specs
 
