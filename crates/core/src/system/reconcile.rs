@@ -1040,25 +1040,41 @@ impl Reconciler {
                     let body = progress
                         .as_ref()
                         .and_then(crate::runtime::OperationProgress::body_starts);
-                    self.db.call(move |db| {
-                        let state = crate::runtime::gates::evaluate(
-                            db,
+                    let driven = self.gate_runtime.take_snapshot(
+                        &name,
+                        &app_def_arc,
+                        definition_error.as_deref(),
+                        &stopped,
+                    );
+                    match driven {
+                        Some(driven) => crate::runtime::gates::view_from(
                             &app_name,
                             &def,
-                            &cipher,
-                            definition_error.as_deref(),
-                            &remembered,
-                        );
-                        crate::runtime::gates::view(
-                            db,
-                            &app_name,
-                            &def,
-                            &state,
-                            &stopped,
+                            &driven.gates,
+                            &driven.readiness,
                             &remembered,
                             body.as_ref(),
-                        )
-                    })
+                        ),
+                        None => self.db.call(move |db| {
+                            let state = crate::runtime::gates::evaluate(
+                                db,
+                                &app_name,
+                                &def,
+                                &cipher,
+                                definition_error.as_deref(),
+                                &remembered,
+                            );
+                            crate::runtime::gates::view(
+                                db,
+                                &app_name,
+                                &def,
+                                &state,
+                                &stopped,
+                                &remembered,
+                                body.as_ref(),
+                            )
+                        }),
+                    }
                 }
                 _ => GateView::default(),
             };
@@ -4961,6 +4977,108 @@ mod tests {
             !waits(&gates, "web"),
             "web no longer waits once the gate is satisfied"
         );
+    }
+
+    // spec: RCN#gate-holds
+    // The reconciler acts on the gate state the iteration's drive worked out,
+    // holds included as drive left them, without reading it again, and reads
+    // it afresh where no drive has worked it out since.
+    #[test]
+    fn an_iteration_reads_gate_state_once_and_acts_on_what_drive_left() {
+        use crate::runtime::{
+            gates::{self, store},
+            secrets::Cipher,
+        };
+        use seedling_protocol::names::GateName;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": r#"
+                    let api = app.deployment("api").image("docker.io/library/nginx:1");
+                    let migrate = app.gate("migrate").key(1).exclusive(api);
+                    app.deployment("web").image("docker.io/library/nginx:1").after(migrate);
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let (app, gate) = (
+            AppName::new("app").unwrap(),
+            GateName::new("migrate").unwrap(),
+        );
+        let api_id = crate::defs::resource::ResourceId {
+            kind: crate::defs::resource::ResourceKind::Deployment,
+            name: Arc::new("api".to_owned()),
+        };
+        let def = oi
+            .state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .app
+            .def
+            .load_full();
+        let digest = def.gates["migrate"]
+            .key
+            .digest(&Cipher::for_tests())
+            .unwrap();
+        let hold = || {
+            let (a, g, id) = (app.clone(), gate.clone(), api_id.clone());
+            oi.state.db.call(move |db| {
+                store::set_hold(db, &a, &g, &[id].into()).unwrap();
+            });
+        };
+        let (a, g) = (app.clone(), gate.clone());
+        oi.state.db.call(move |db| {
+            store::record_success(db, &a, &g, &digest, 1).unwrap();
+        });
+        hold();
+
+        let reconciler = test_reconciler(&oi);
+        let reads = || oi.state.db.call(|_| gates::reads());
+        let view = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            apps.into_iter()
+                .find(|a| a.name.as_str() == "app")
+                .unwrap()
+                .gates
+        };
+
+        let before = reads();
+        oi.block_on(gates::drive::drive(&oi.state));
+        let driven = view();
+        let after = reads();
+        assert_eq!(
+            (after.0 - before.0, after.1 - before.1),
+            (1, 1),
+            "gate state and readiness are read once in the iteration"
+        );
+        assert!(
+            driven.held.is_empty(),
+            "the hold drive released for the satisfied gate is not acted on"
+        );
+        assert!(driven.waiting.is_empty(), "{:?}", driven.waiting);
+
+        oi.block_on(gates::drive::drive(&oi.state));
+        hold();
+        let before = reads();
+        assert!(
+            view().held.is_empty(),
+            "the reconciler acts on the state drive worked out"
+        );
+        assert_eq!(reads(), before);
+
+        assert_eq!(
+            view().held.keys().cloned().collect::<Vec<_>>(),
+            vec![api_id],
+            "without a drive since, the gates are read afresh"
+        );
+        let after = reads();
+        assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1));
     }
 
     // spec: GATE#body

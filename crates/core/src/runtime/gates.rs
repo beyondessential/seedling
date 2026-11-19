@@ -223,6 +223,8 @@ pub fn evaluate(
     definition_error: Option<&str>,
     remembered: &Remembered,
 ) -> AppGates {
+    #[cfg(test)]
+    READS.with(|reads| reads.set((reads.get().0 + 1, reads.get().1)));
     let holds = store::load_holds(db, app).map_err(|e| e.to_string());
     if def.gates.is_empty() {
         return AppGates {
@@ -608,6 +610,8 @@ pub fn read_readiness(
     held: &BTreeSet<ResourceId>,
     stopped: &StoppedSet,
 ) -> Readiness {
+    #[cfg(test)]
+    READS.with(|reads| reads.set((reads.get().0, reads.get().1 + 1)));
     let mut wanted: BTreeSet<&ResourceId> = BTreeSet::new();
     for gate in def.gates.values() {
         for target in &gate.after {
@@ -822,6 +826,26 @@ pub fn view(
     remembered: &Remembered,
     body: Option<&BodyStarts>,
 ) -> GateView {
+    let held = match &gates.holds {
+        Ok(holds) => held_resources(def, holds).into_keys().collect(),
+        Err(_) => BTreeSet::new(),
+    };
+    let readiness = read_readiness(db, app, def, &held, stopped);
+    view_from(app, def, gates, &readiness, remembered, body)
+}
+
+/// The view of an app's gates, as [`view`] gives it, from readiness already
+/// read against what the gates hold and what is stopped.
+// spec: RCN#gate-holds
+// spec: GRUN#gate-state
+pub fn view_from(
+    app: &AppName,
+    def: &AppDef,
+    gates: &AppGates,
+    readiness: &Readiness,
+    remembered: &Remembered,
+    body: Option<&BodyStarts>,
+) -> GateView {
     let mut view = GateView::default();
     let mut unsure: BTreeSet<ResourceId> = BTreeSet::new();
     match &gates.holds {
@@ -831,14 +855,12 @@ pub fn view(
             unsure.extend(def.gates.values().flat_map(|g| g.exclusive.iter().cloned()));
         }
     }
-    let held = view.held_ids();
-    let readiness = read_readiness(db, app, def, &held, stopped);
     if let Some(why) = &readiness.unreadable {
         tracing::error!(%app, "cannot read whether the app's workloads are ready; starting none that wait on one: {why}");
     }
     view.readiness_unreadable = readiness.unreadable.clone();
     for id in workloads(def) {
-        let mut waiting_on = unready_targets(&workload_targets(def, id), gates, &readiness);
+        let mut waiting_on = unready_targets(&workload_targets(def, id), gates, readiness);
         // A gate that declares a check clears its dependants to start from
         // stopped only once a check has passed.
         for target in workload_targets(def, id) {
@@ -910,6 +932,20 @@ pub fn dependants_down(
         .any(|id| !readiness.live.contains(id))
 }
 
+/// What an iteration worked out of an app's gates, and what it worked it out
+/// from, so that the reconciler acts in that iteration on the gate state the
+/// gates were driven on rather than reading it a second time.
+#[derive(Debug, Clone)]
+pub struct GateSnapshot {
+    pub def: Arc<AppDef>,
+    pub definition_error: Option<String>,
+    pub stopped: StoppedSet,
+    /// The gates' state, with what they hold as it stands after the
+    /// iteration's own changes to it.
+    pub gates: AppGates,
+    pub readiness: Readiness,
+}
+
 // ---------------------------------------------------------------------------
 // What is kept in memory
 // ---------------------------------------------------------------------------
@@ -928,6 +964,7 @@ struct Memory {
     checking: BTreeMap<(AppName, GateName), Arc<CancelToken>>,
     last_checked: BTreeMap<(AppName, GateName), Instant>,
     not_before: BTreeMap<(AppName, GateName), Instant>,
+    snapshots: BTreeMap<AppName, GateSnapshot>,
 }
 
 impl GateRuntime {
@@ -1042,6 +1079,29 @@ impl GateRuntime {
         inner.checking.retain(|(a, _), _| a != app);
         inner.last_checked.retain(|(a, _), _| a != app);
         inner.not_before.retain(|(a, _), _| a != app);
+        inner.snapshots.remove(app);
+    }
+
+    /// Keep what this iteration worked out of `app`'s gates for the
+    /// reconciler, in place of anything kept before.
+    pub fn publish(&self, app: &AppName, snapshot: GateSnapshot) {
+        self.inner.lock().snapshots.insert(app.clone(), snapshot);
+    }
+
+    /// Take what was kept of `app`'s gates, where it was worked out from the
+    /// same definition, definition error and stopped resources as given.
+    pub fn take_snapshot(
+        &self,
+        app: &AppName,
+        def: &Arc<AppDef>,
+        definition_error: Option<&str>,
+        stopped: &StoppedSet,
+    ) -> Option<GateSnapshot> {
+        self.inner.lock().snapshots.remove(app).filter(|snapshot| {
+            Arc::ptr_eq(&snapshot.def, def)
+                && snapshot.definition_error.as_deref() == definition_error
+                && snapshot.stopped == *stopped
+        })
     }
 
     /// Claim the right to check `gate`, unless a check of it is in flight.
@@ -1147,6 +1207,18 @@ impl Drop for CheckClaim {
             inner.checking.remove(&self.key);
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static READS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// How many times gate state and readiness have been read on this thread,
+/// which for a database's own thread is how many times they were read of it.
+#[cfg(test)]
+pub(crate) fn reads() -> (usize, usize) {
+    READS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

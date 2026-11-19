@@ -15,8 +15,8 @@ use seedling_protocol::{
 };
 
 use super::{
-    AppGates, Decision, GateState, Readiness, Remembered, Undetermined, decide, declared_order,
-    dependants_down, evaluate, held_resources, read_readiness, retry_delay,
+    AppGates, Decision, GateSnapshot, GateState, Readiness, Remembered, Undetermined, decide,
+    declared_order, dependants_down, evaluate, held_resources, read_readiness, retry_delay,
     run::{CheckOutcome, check_retry_is_due, eligible_for_check, run_check},
     store::{self, FailedRuns},
     unready_targets,
@@ -127,9 +127,23 @@ async fn sync(state: &Arc<OiState>, app: &Tracked) -> Synced {
         app.definition_error.clone(),
         state.gate_runtime.remembered(&app.name),
     );
-    state
+    let synced = state
         .db
-        .call(move |db| sync_db(db, &name, &def, &cipher, error.as_deref(), &remembered))
+        .call(move |db| sync_db(db, &name, &def, &cipher, error.as_deref(), &remembered));
+    // spec: RCN#gate-holds
+    if let Some(world) = &synced.world {
+        state.gate_runtime.publish(
+            &app.name,
+            GateSnapshot {
+                def: Arc::clone(&app.def),
+                definition_error: app.definition_error.clone(),
+                stopped: world.stopped.clone(),
+                gates: synced.gates.clone(),
+                readiness: world.readiness.clone(),
+            },
+        );
+    }
+    synced
 }
 
 /// Bring what is held of an app's gates in the database into line with them.
@@ -192,19 +206,22 @@ fn sync_db(
 
     sync_gate_faults(db, app, &gates);
 
-    let world = read_world(db, app, def);
+    let world = read_world(db, app, def, &mut gates);
     Synced { gates, world }
 }
 
 /// What the checks and runs of an app's gates decide from, or `None` when
 /// what is held or what is stopped cannot be read: either read as empty would
 /// count a held or stopped workload as one that is down.
+///
+/// What is held is read again, as the sync may have released holds, and
+/// `gates` takes it in place of what it held before.
 // spec: GRUN#checks
 // spec: GRUN#initiating-runs
-fn read_world(db: &Db, app: &AppName, def: &AppDef) -> Option<World> {
-    // What is held is read again, as the sync may have released holds.
-    let held = match store::load_holds(db, app) {
-        Ok(holds) => held_resources(def, &holds).into_keys().collect(),
+fn read_world(db: &Db, app: &AppName, def: &AppDef, gates: &mut AppGates) -> Option<World> {
+    gates.holds = store::load_holds(db, app).map_err(|e| e.to_string());
+    let held = match &gates.holds {
+        Ok(holds) => held_resources(def, holds).into_keys().collect(),
         Err(e) => {
             tracing::error!(%app, "cannot read what the app's gates hold, so no check or run of them is decided: {e}");
             return None;
