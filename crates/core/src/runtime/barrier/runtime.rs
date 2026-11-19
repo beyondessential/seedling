@@ -1009,6 +1009,7 @@ impl RuntimeInstance {
             return Ok(selected);
         };
         let exclusions = ctx.lock().gate_exclusions.clone();
+        eprintln!("DBG {:?} {:?}", exclusions, selected.iter().map(|(i,_)| (i.kind, i.name.clone())).collect::<Vec<_>>());
         let mut kept = Vec::with_capacity(selected.len());
         for (instance, def) in selected {
             let held = match instance.name.as_deref() {
