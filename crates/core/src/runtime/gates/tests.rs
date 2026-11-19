@@ -242,7 +242,11 @@ fn a_definition_that_fails_to_evaluate_leaves_the_gates_undetermined() {
 fn a_valid_success_whose_check_could_not_be_run_is_undetermined() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
-    let def = def(MIGRATE);
+    let def = def(r#"
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        let migrate = app.gate("migrate").key("1.0.0").check(probe);
+        app.deployment("api").image("docker.io/library/nginx:1").after(migrate);
+    "#);
     store::record_success(
         &db,
         &app(),
@@ -260,6 +264,27 @@ fn a_valid_success_whose_check_could_not_be_run_is_undetermined() {
     ));
 
     store::clear_check_unavailable(&db, &app(), &gate("migrate")).unwrap();
+    assert_eq!(
+        status(&db, &def, &cipher, "migrate").state,
+        GateState::Satisfied
+    );
+}
+
+// spec: GRUN#gate-state
+#[test]
+fn a_check_that_could_not_be_run_does_not_leave_a_gate_with_no_check_undetermined() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let def = def(MIGRATE);
+    store::record_success(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &digest(&def, &cipher, "migrate"),
+        1,
+    )
+    .unwrap();
+    store::record_check_unavailable(&db, &app(), &gate("migrate"), at(10), "no image").unwrap();
     assert_eq!(
         status(&db, &def, &cipher, "migrate").state,
         GateState::Satisfied
