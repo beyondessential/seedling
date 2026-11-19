@@ -869,3 +869,105 @@ fn a_check_that_cannot_be_run_leaves_the_gate_undetermined_and_is_retried_after_
         ready_record(&oi).check_failures == 2
     });
 }
+
+/// The instances of check Jobs the app has recorded.
+fn check_instances(db: &Db) -> Vec<crate::runtime::identity::ResourceInstance> {
+    use crate::runtime::{
+        desired::list_dynamic_resources_for_app,
+        identity::{InstanceId, InstanceVariant, ResourceInstance},
+    };
+    list_dynamic_resources_for_app(db, &app())
+        .unwrap()
+        .into_iter()
+        .map(|record| ResourceInstance {
+            id: InstanceId::from_hex(&record.instance_id).unwrap(),
+            app: app(),
+            kind: ResourceKind::Job,
+            name: None,
+            variant: InstanceVariant::Singleton,
+            display_name: record.display_name,
+        })
+        .collect()
+}
+
+fn exit(db: &Db, instance: &crate::runtime::identity::ResourceInstance, code: i64) {
+    use crate::runtime::history::insert_observation;
+    insert_observation(db, instance, "container_running", &json!({})).unwrap();
+    insert_observation(
+        db,
+        instance,
+        "container_exited",
+        &json!({ "exit_code": code }),
+    )
+    .unwrap();
+}
+
+// spec: GRUN#checks
+#[test]
+fn a_run_cancels_the_check_in_flight_so_its_failure_cannot_land_after_the_runs_success() {
+    use crate::runtime::{
+        barrier::CancelToken,
+        gates::run::{GateRunInput, run_gate},
+    };
+    let oi = satisfied_and_checked();
+    drive_once(&oi);
+    wait_until("the loop's check to start", || {
+        oi.state.db.call(check_instances).len() == 1
+    });
+    let background = oi.state.db.call(check_instances).remove(0);
+
+    let input = {
+        let reg = oi.state.registry.read();
+        let entry = reg.get("demo").unwrap();
+        GateRunInput {
+            app: entry.app.clone(),
+            gate: gate("ready"),
+            op_ctx: oi.state.event_tx.operation(
+                app(),
+                OperationTarget::Gate(gate("ready")),
+                "op-1",
+                1,
+                None,
+            ),
+            active_progress: Arc::clone(&entry.active_progress),
+            tick_notify: Arc::clone(&entry.tick_notify),
+            cancel_token: Arc::new(CancelToken::new()),
+            db_path: oi.state.db_path.clone(),
+        }
+    };
+    let state = Arc::clone(&oi.state);
+    oi.block_on(async move {
+        let run = tokio::spawn({
+            let state = Arc::clone(&state);
+            async move { run_gate(&state, input).await }
+        });
+        let until = Instant::now() + Duration::from_secs(60);
+        let ending = loop {
+            let id = background.id;
+            let found = state.db.call(move |db| {
+                check_instances(db)
+                    .into_iter()
+                    .find(|instance| instance.id != id)
+            });
+            if let Some(found) = found {
+                break found;
+            }
+            assert!(Instant::now() < until, "the run's check never started");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        state.db.call(move |db| exit(db, &ending, 0));
+        run.await.unwrap();
+    });
+
+    assert!(ready_record(&oi).valid, "the run succeeded");
+    assert!(
+        !oi.state.gate_runtime.is_checking(&app(), &gate("ready")),
+        "the loop's check ended before the run did"
+    );
+    oi.state.db.call(move |db| exit(db, &background, 1));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(
+        ready_record(&oi).valid,
+        "the loop's check, cancelled, invalidates nothing"
+    );
+}

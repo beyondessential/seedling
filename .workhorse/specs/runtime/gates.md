@@ -119,6 +119,8 @@ The runtime MUST check a gate that declares a check:
 To check a gate, the runtime MUST start an instance of the check's Job and wait for it to terminate.
 The Job's definition is that of the run's generation for the check that ends a run, and that of the app's current generation otherwise.
 The runtime MUST run a check whatever other lifecycle operation is in progress.
+A gate MUST have at most one check in progress at a time.
+When a run of a gate starts, the runtime MUST cancel any other check of the gate in progress, and MUST NOT prepare the run before that check has ended and any outcome it reached has been recorded.
 A check is neither a lifecycle operation nor a [shell session](../interface/shells.md#shell-session), and an app whose gate is being checked stays in [steady state](reconciliation.md#steady-state).
 
 Before it places a check's Job in the desired state, the runtime MUST record its instance durably against the check, and MUST NOT start an instance whose record it could not write.

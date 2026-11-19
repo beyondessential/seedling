@@ -449,9 +449,9 @@ async fn start_checks(
         };
         let (state, app_name, gate) = (Arc::clone(state), app.name.clone(), name.clone());
         tokio::spawn(async move {
-            let _claim = claim;
-            let outcome = run_check(&state, &app_name, &gate, job, None).await;
+            let outcome = run_check(&state, &app_name, &gate, job, Some(claim.cancel())).await;
             apply_check_outcome(&state, &app_name, &gate, digest, outcome).await;
+            drop(claim);
         });
     }
 }

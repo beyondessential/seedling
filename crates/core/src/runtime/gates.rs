@@ -22,7 +22,10 @@ use crate::{
         resource::{Resource, ResourceId, ResourceKind},
     },
     runtime::{
-        barrier::oracle::{container_run_succeeded, derive_lifecycle_state},
+        barrier::{
+            CancelToken,
+            oracle::{container_run_succeeded, derive_lifecycle_state},
+        },
         db::Db,
         history::{find_instances_for_group, query_observations_for},
         lifecycle::LifecycleState,
@@ -871,7 +874,7 @@ pub struct GateRuntime {
 struct Memory {
     remembered: BTreeMap<AppName, Remembered>,
     reported: BTreeMap<(AppName, GateName), &'static str>,
-    checking: BTreeSet<(AppName, GateName)>,
+    checking: BTreeMap<(AppName, GateName), Arc<CancelToken>>,
     last_checked: BTreeMap<(AppName, GateName), Instant>,
     not_before: BTreeMap<(AppName, GateName), Instant>,
 }
@@ -948,7 +951,7 @@ impl GateRuntime {
         let mut inner = self.inner.lock();
         inner.remembered.remove(app);
         inner.reported.retain(|(a, _), _| a != app);
-        inner.checking.retain(|(a, _)| a != app);
+        inner.checking.retain(|(a, _), _| a != app);
         inner.last_checked.retain(|(a, _), _| a != app);
         inner.not_before.retain(|(a, _), _| a != app);
     }
@@ -957,20 +960,41 @@ impl GateRuntime {
     pub fn begin_check(self: &Arc<Self>, app: &AppName, gate: &GateName) -> Option<CheckClaim> {
         let key = (app.clone(), gate.clone());
         let mut inner = self.inner.lock();
-        if !inner.checking.insert(key.clone()) {
+        if inner.checking.contains_key(&key) {
             return None;
         }
+        let cancel = Arc::new(CancelToken::new());
+        inner.checking.insert(key.clone(), Arc::clone(&cancel));
         Some(CheckClaim {
             runtime: Arc::clone(self),
             key,
+            cancel,
         })
+    }
+
+    /// Claim the right to check `gate` for a run of it, cancelling the check
+    /// of it in flight and waiting for that check to end.
+    ///
+    /// The wait is as long as the check in flight takes to see its cancel and
+    /// record what it reached, which it does without retrying anything.
+    // spec: GRUN#checks
+    pub async fn claim_for_run(self: &Arc<Self>, app: &AppName, gate: &GateName) -> CheckClaim {
+        loop {
+            if let Some(claim) = self.begin_check(app, gate) {
+                return claim;
+            }
+            if let Some(cancel) = self.inner.lock().checking.get(&(app.clone(), gate.clone())) {
+                cancel.request();
+            }
+            tokio::time::sleep(CLAIM_POLL).await;
+        }
     }
 
     pub fn is_checking(&self, app: &AppName, gate: &GateName) -> bool {
         self.inner
             .lock()
             .checking
-            .contains(&(app.clone(), gate.clone()))
+            .contains_key(&(app.clone(), gate.clone()))
     }
 
     /// A check of `gate` ran to an outcome, now.
@@ -1006,15 +1030,34 @@ impl GateRuntime {
     }
 }
 
+/// How long a run waits between looks at whether the check it cancelled has
+/// ended.
+const CLAIM_POLL: Duration = Duration::from_millis(50);
+
 /// The right to check one gate, given back when it is dropped.
 pub struct CheckClaim {
     runtime: Arc<GateRuntime>,
     key: (AppName, GateName),
+    cancel: Arc<CancelToken>,
+}
+
+impl CheckClaim {
+    /// Requested when a run of the gate needs the claim.
+    pub fn cancel(&self) -> &Arc<CancelToken> {
+        &self.cancel
+    }
 }
 
 impl Drop for CheckClaim {
     fn drop(&mut self) {
-        self.runtime.inner.lock().checking.remove(&self.key);
+        let mut inner = self.runtime.inner.lock();
+        if inner
+            .checking
+            .get(&self.key)
+            .is_some_and(|held| Arc::ptr_eq(held, &self.cancel))
+        {
+            inner.checking.remove(&self.key);
+        }
     }
 }
 
