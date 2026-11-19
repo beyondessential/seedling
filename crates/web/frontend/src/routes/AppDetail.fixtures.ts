@@ -2,6 +2,7 @@
 import type {
   AppAction,
   AppDetail,
+  AppGate,
   AppParam,
   AppResource,
   ContainerSummary,
@@ -168,6 +169,18 @@ export const psqlShellAction: AppAction = {
   schedules: [],
 };
 
+export function makeGate(overrides: Partial<AppGate> = {}): AppGate {
+  return {
+    name: "migrate",
+    state: "satisfied",
+    last_success_generation: 3,
+    holds_exclusive: false,
+    next_run_at: null,
+    after: [],
+    ...overrides,
+  };
+}
+
 export function makeFault(overrides: Partial<FaultRecord> = {}): FaultRecord {
   return {
     id: "fault-1",
@@ -202,6 +215,7 @@ export function makeDetail(overrides: Partial<AppDetail> = {}): AppDetail {
     params,
     unknown_params: [],
     actions: [backupAction, reindexAction, dbShellAction],
+    gates: [],
     ...overrides,
   };
 }

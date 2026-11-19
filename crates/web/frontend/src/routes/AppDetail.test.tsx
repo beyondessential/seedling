@@ -5,6 +5,7 @@ import {
   baseFixtures,
   makeDetail,
   makeFault,
+  makeGate,
 } from "./AppDetail.fixtures";
 import AppDetail from "./AppDetail";
 
@@ -119,6 +120,19 @@ describe("AppDetail page", () => {
         ["/apps/action/cancel", { app: "myapp" }],
       ]),
     );
+  });
+
+  it("names a running gate in the banner and the status chip", async () => {
+    const detail = makeDetail({
+      status: "operating",
+      gates: [makeGate({ state: "running" })],
+      current_operation: { gate: "migrate", generation: 6, barrier: null },
+    });
+    mount(baseFixtures(detail), "write");
+    expect(await screen.findByText(/Operation in progress/)).toBeTruthy();
+    expect(screen.getByText("operating: gate migrate")).toBeTruthy();
+    expect(screen.getByText("gate migrate")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Running…/ })).toBeTruthy();
   });
 
   it("surfaces stopped resources and unstops them", async () => {
@@ -255,5 +269,95 @@ describe("AppDetail page", () => {
     // The unmapped volume offers Map instead.
     expect(screen.getByText("Not mapped")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Map" })).toBeTruthy();
+  });
+});
+
+describe("AppDetail gates", () => {
+  // spec: UI#operator-capabilities
+  it("lists gates with their state and runs one", async () => {
+    const detail = makeDetail({
+      gates: [
+        makeGate({
+          name: "migrate",
+          state: "unsatisfied",
+          last_success_generation: null,
+          holds_exclusive: true,
+          next_run_at: "2026-07-09T10:05:00Z",
+          after: [{ kind: "job", name: "initdb" }],
+        }),
+        makeGate({ name: "warm", state: "satisfied", last_success_generation: 3 }),
+      ],
+    });
+    const { request } = mount(baseFixtures(detail), "write");
+    expect(await screen.findByText("Gates")).toBeTruthy();
+    const row = screen.getByText("migrate").closest("tr")!;
+    expect(within(row).getByText("unsatisfied")).toBeTruthy();
+    expect(within(row).getByText("holding")).toBeTruthy();
+    expect(within(row).getByText("never")).toBeTruthy();
+    expect(within(row).getByText("job initdb")).toBeTruthy();
+    expect(within(row).getByText(/^retries /)).toBeTruthy();
+    const other = screen.getByText("warm").closest("tr")!;
+    expect(within(other).getByText("satisfied")).toBeTruthy();
+    expect(within(other).getByText("gen 3")).toBeTruthy();
+    fireEvent.click(within(row).getByRole("button", { name: "Run" }));
+    await waitFor(() =>
+      expect(callsTo(request, "/apps/gates/run")).toEqual([
+        ["/apps/gates/run", { app: "myapp", gate: "migrate" }],
+      ]),
+    );
+  });
+
+  it("shows the server's refusal of a gate run", async () => {
+    const fixtures = {
+      ...baseFixtures(makeDetail({ gates: [makeGate()] })),
+      "/apps/gates/run": {
+        ok: false,
+        error: {
+          code: "requirements_invalid",
+          message: "targets not ready: job initdb",
+        },
+      },
+    };
+    mount(fixtures, "write");
+    const row = (await screen.findByText("migrate")).closest("tr")!;
+    fireEvent.click(within(row).getByRole("button", { name: "Run" }));
+    expect(
+      await screen.findByText(/targets not ready: job initdb/),
+    ).toBeTruthy();
+  });
+
+  it("will not run a gate in read mode or while an operation runs", async () => {
+    const { unmount } = mount(
+      baseFixtures(makeDetail({ gates: [makeGate()] })),
+      "read",
+    );
+    const gate = (await screen.findByText("migrate")).closest("tr")!;
+    expect(
+      (within(gate).getByRole("button", { name: "Run" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    unmount();
+
+    mount(
+      baseFixtures(
+        makeDetail({
+          status: "operating",
+          gates: [makeGate()],
+          current_operation: { action_name: "backup", generation: 5, barrier: null },
+        }),
+      ),
+      "write",
+    );
+    const busy = (await screen.findByText("migrate")).closest("tr")!;
+    expect(
+      (within(busy).getByRole("button", { name: "Run" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("leaves out the section for an app with no gates", async () => {
+    mount(baseFixtures(makeDetail()));
+    expect(await screen.findByText("gen 4")).toBeTruthy();
+    expect(screen.queryByText("Gates")).toBeNull();
   });
 });

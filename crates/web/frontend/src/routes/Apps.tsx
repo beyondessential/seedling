@@ -175,7 +175,7 @@ export default function Apps() {
                   <TableCell>
                     <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
                       <Chip
-                        label={statusLabel(app.status, app.action_name)}
+                        label={statusLabel(app.status, app.action_name, app.gate)}
                         color={statusColor(app.status)}
                         size="small"
                       />

@@ -178,6 +178,7 @@ describe("AppDetail params", () => {
     fireEvent.change(screen.getByDisplayValue("example.com"), { target: { value: "x" } });
     fireEvent.click(screen.getByRole("button", { name: "Plan this change" }));
     expect(await screen.findByText(/must be a hostname/)).toBeTruthy();
+    expect(screen.getByText("Gates that would run (1)")).toBeTruthy();
     expect(callsTo(request, "/apps/plan")).toEqual([
       ["/apps/plan", { app: "myapp", proposed_params: { LOG_LEVEL: "debug", domain: "x" } }],
     ]);
@@ -419,6 +420,42 @@ describe("AppDetail resources", () => {
     mount(baseFixtures(makeDetail({ resources: [makeWebDeployment({ priority: "normal" })] })));
     await screen.findByText("web-0");
     expect(screen.queryByText("normal")).toBeNull();
+  });
+});
+
+describe("AppDetail gate markers", () => {
+  // spec: UI#operator-capabilities
+  it("marks a resource a gate holds and one waiting on a gate", async () => {
+    const [web, data] = makeDetail().resources;
+    mount(
+      baseFixtures(
+        makeDetail({
+          resources: [
+            { ...web, held_by: ["migrate", "warm"] },
+            {
+              ...data,
+              type: "job",
+              name: "report",
+              waiting_on: [
+                { kind: "gate", name: "migrate" },
+                { kind: "deployment", name: "web" },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    expect(await screen.findByText("held by migrate, warm")).toBeTruthy();
+    expect(
+      screen.getByText("waiting on migrate, deployment web"),
+    ).toBeTruthy();
+  });
+
+  it("marks nothing on a resource neither held nor waiting", async () => {
+    mount(baseFixtures(makeDetail()));
+    expect(await screen.findByText("gen 4")).toBeTruthy();
+    expect(screen.queryByText(/^held by/)).toBeNull();
+    expect(screen.queryByText(/^waiting on/)).toBeNull();
   });
 });
 

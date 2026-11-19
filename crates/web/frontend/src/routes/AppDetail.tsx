@@ -79,6 +79,7 @@ import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import {
   appPriorityColor,
   deploymentPriorityColor,
+  gateStateColor,
   statusColor,
   statusLabel,
 } from "../lib/status";
@@ -86,6 +87,7 @@ import type {
   ActionSchedule,
   AppAction,
   AppDetail,
+  AppGate,
   AppParam,
   AppPriority,
   AppResource,
@@ -94,6 +96,7 @@ import type {
   DiscoverResponse,
   ExternalMapping,
   FaultRecord,
+  GateTarget,
   HandlerProbe,
   HeaderOpsSummary,
   HeadersSummary,
@@ -750,6 +753,36 @@ function ResourcesSection({
                   "& .MuiChip-label": { px: 0.75 },
                 }}
               />
+            )}
+            {(r.held_by ?? []).length > 0 && (
+              <Tooltip title="A gate keeps this resource stopped until it succeeds">
+                <Chip
+                  label={`held by ${(r.held_by ?? []).join(", ")}`}
+                  size="small"
+                  color="warning"
+                  variant="outlined"
+                  sx={{
+                    fontSize: "0.65rem",
+                    height: 18,
+                    "& .MuiChip-label": { px: 0.75 },
+                  }}
+                />
+              </Tooltip>
+            )}
+            {(r.waiting_on ?? []).length > 0 && (
+              <Tooltip title="Will not start until these are ready">
+                <Chip
+                  label={`waiting on ${(r.waiting_on ?? []).map(targetLabel).join(", ")}`}
+                  size="small"
+                  color="info"
+                  variant="outlined"
+                  sx={{
+                    fontSize: "0.65rem",
+                    height: 18,
+                    "& .MuiChip-label": { px: 0.75 },
+                  }}
+                />
+              </Tooltip>
             )}
             {r.dynamic && (
               <Chip
@@ -1689,6 +1722,123 @@ function SchedulesSection({ actions }: { actions: AppAction[] }) {
   );
 }
 
+function targetLabel(t: GateTarget): string {
+  return t.kind === "gate" ? t.name : `${t.kind} ${t.name}`;
+}
+
+function GatesSection({
+  appName,
+  gates,
+  status,
+  hasScriptError,
+  onRefresh,
+}: {
+  appName: string;
+  gates: AppGate[];
+  status: AppStatus;
+  hasScriptError: boolean;
+  onRefresh: () => void;
+}) {
+  const { execute, loading, error, clearError } = useOiAction();
+  const canRun =
+    !hasScriptError &&
+    status !== "not_installed" &&
+    status !== "uninstalling" &&
+    status !== "operating";
+
+  const run = async (gate: string) => {
+    if ((await execute("/apps/gates/run", { app: appName, gate })) === null)
+      return;
+    onRefresh();
+  };
+
+  return (
+    <>
+      {error && (
+        <Alert severity="error" onClose={clearError} sx={{ mb: 1 }}>
+          {error.message}
+        </Alert>
+      )}
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Name</TableCell>
+              <TableCell>State</TableCell>
+              <TableCell>Last success</TableCell>
+              <TableCell>After</TableCell>
+              <TableCell />
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {gates.map((g) => (
+              <TableRow key={g.name}>
+                <TableCell sx={{ fontFamily: "monospace" }}>{g.name}</TableCell>
+                <TableCell>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                    <Chip
+                      label={g.state}
+                      size="small"
+                      color={gateStateColor(g.state)}
+                    />
+                    {g.holds_exclusive && (
+                      <Chip
+                        label="holding"
+                        size="small"
+                        color="warning"
+                        variant="outlined"
+                      />
+                    )}
+                    {g.next_run_at && (
+                      <Typography
+                        variant="caption"
+                        sx={{ color: "text.secondary" }}
+                      >
+                        retries {new Date(g.next_run_at).toLocaleString()}
+                      </Typography>
+                    )}
+                  </Box>
+                </TableCell>
+                <TableCell sx={{ color: "text.secondary" }}>
+                  {g.last_success_generation === null
+                    ? "never"
+                    : `gen ${g.last_success_generation}`}
+                </TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>
+                  {g.after.length === 0
+                    ? "–"
+                    : g.after.map(targetLabel).join(", ")}
+                </TableCell>
+                <TableCell align="right">
+                  {g.state === "running" ? (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled
+                      startIcon={<CircularProgress size={12} />}
+                    >
+                      Running…
+                    </Button>
+                  ) : (
+                    <OutlinedActionButton
+                      safety="write"
+                      size="small"
+                      onClick={() => void run(g.name)}
+                      disabled={!canRun || loading}
+                    >
+                      Run
+                    </OutlinedActionButton>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </>
+  );
+}
+
 function ActionsSection({
   appName,
   actions,
@@ -2501,6 +2651,7 @@ const APP_DETAIL_EVENTS: Set<string> = new Set([
   "OperationCompleted",
   "OperationFailed",
   "OperationCancelled",
+  "GateStateChanged",
   "ParamsChanged",
   "ResourceStateChanged",
   "InstanceHealthChanged",
@@ -2627,6 +2778,7 @@ export default function AppDetail() {
                 label={statusLabel(
                   data.status,
                   data.current_operation?.action_name,
+                  data.current_operation?.gate,
                 )}
                 color={statusColor(data.status)}
                 size="small"
@@ -2674,7 +2826,12 @@ export default function AppDetail() {
               }
             >
               Operation in progress:{" "}
-              <strong>{data.current_operation.action_name}</strong> (gen{" "}
+              <strong>
+                {data.current_operation.gate
+                  ? `gate ${data.current_operation.gate}`
+                  : data.current_operation.action_name}
+              </strong>{" "}
+              (gen{" "}
               {data.current_operation.generation})
               {data.current_operation.barrier && (
                 <>
@@ -2874,6 +3031,23 @@ export default function AppDetail() {
                   transition: "opacity 0.15s",
                 }}
               >
+                {data.gates.length > 0 && (
+                  <>
+                    <Section title="Gates">
+                      <GatesSection
+                        appName={name!}
+                        gates={data.gates}
+                        status={data.status}
+                        hasScriptError={data.faults.some(
+                          (f) => f.kind === "script_error",
+                        )}
+                        onRefresh={refetch}
+                      />
+                    </Section>
+                    <Divider sx={{ my: 3 }} />
+                  </>
+                )}
+
                 <Section title="Actions">
                   <ActionsSection
                     appName={name!}
