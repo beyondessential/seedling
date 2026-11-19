@@ -258,7 +258,10 @@ pub fn probe_app(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are what one handler probe needs"
+)]
 fn probe_handler(
     engine: &Engine,
     app: &App,
