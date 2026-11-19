@@ -519,6 +519,7 @@ pub(crate) fn run_operation_loop(
     script_limits: &crate::ScriptLimits,
     cipher: Arc<crate::runtime::secrets::Cipher>,
     gate_runtime: &crate::runtime::gates::GateRuntime,
+    apps: &RwLock<crate::runtime::apps::AppRegistry>,
     cancel_token: Arc<CancelToken>,
     container_signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
     volume_writer: Option<Arc<dyn crate::runtime::barrier::VolumeWriter>>,
@@ -635,12 +636,14 @@ pub(crate) fn run_operation_loop(
                 gate_runtime.remembered(app_name),
             );
             let def = app.def.load_full();
+            let current = crate::runtime::gates::CurrentDefinition::of(apps, app_name);
             let running = target.gate().cloned();
             db.call(move |db| {
                 crate::runtime::gates::Exclusions::for_closure(
                     db,
                     &name,
                     &def,
+                    current.as_ref(),
                     &cipher,
                     &remembered,
                     running.as_ref(),
@@ -884,6 +887,7 @@ pub fn spawn_accepted_operation(
                 let cipher = Arc::clone(&cipher);
                 let cancel_token = Arc::clone(&cancel_token);
                 let gate_runtime = Arc::clone(&state.gate_runtime);
+                let apps = Arc::clone(&state.registry);
 
                 let signaler = make_container_signaler(&state);
                 let writer = make_volume_writer(&state);
@@ -911,6 +915,7 @@ pub fn spawn_accepted_operation(
                         &script_limits,
                         cipher,
                         &gate_runtime,
+                        &apps,
                         cancel_token,
                         signaler,
                         writer,

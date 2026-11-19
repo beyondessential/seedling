@@ -12,7 +12,7 @@ use std::{
 };
 
 use jiff::Timestamp;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use seedling_protocol::names::{AppName, GateName};
 
 use crate::{
@@ -22,6 +22,7 @@ use crate::{
         resource::{Resource, ResourceId, ResourceKind},
     },
     runtime::{
+        apps::AppRegistry,
         barrier::{
             CancelToken,
             oracle::{container_run_succeeded, derive_lifecycle_state},
@@ -226,19 +227,31 @@ pub fn evaluate(
     #[cfg(test)]
     READS.with(|reads| reads.set((reads.get().0 + 1, reads.get().1)));
     let holds = store::load_holds(db, app).map_err(|e| e.to_string());
-    if def.gates.is_empty() {
-        return AppGates {
-            gates: BTreeMap::new(),
-            holds,
-        };
-    }
-    let records: Result<Records, String> = store::load_records(db, app).map_err(|e| e.to_string());
+    let records = if def.gates.is_empty() {
+        Ok(Records::new())
+    } else {
+        store::load_records(db, app).map_err(|e| e.to_string())
+    };
+    evaluate_from(def, cipher, definition_error, remembered, holds, &records)
+}
+
+/// The state of every gate of `def`, as [`evaluate`] works it out, from the
+/// holds and records already read.
+// spec: GRUN#gate-state
+fn evaluate_from(
+    def: &AppDef,
+    cipher: &Cipher,
+    definition_error: Option<&str>,
+    remembered: &Remembered,
+    holds: Result<Holds, String>,
+    records: &Result<Records, String>,
+) -> AppGates {
     let gates = def
         .gates
         .iter()
         .map(|(name, gate)| {
             let digest = gate.key.digest(cipher);
-            let record = match &records {
+            let record = match records {
                 Ok(records) => records.get(name).cloned(),
                 Err(why) => Some(Err(why.clone())),
             };
@@ -498,16 +511,68 @@ pub fn rt_exclusions(
         .filter(|(_, by)| by.iter().any(|gate| Some(gate) != running))
         .map(|(id, _)| id)
         .collect();
+    excluded.extend(workloads_behind(def, |gate| {
+        Some(gate) != running && gates.state(gate).is_none_or(|state| !state.is_satisfied())
+    }));
+    Ok(excluded)
+}
+
+/// The workloads of `def` ordered after a gate that `waits_on` picks, directly
+/// or through other targets, found in one walk of the start order.
+// spec: GATE#start-order
+fn workloads_behind(def: &AppDef, waits_on: impl Fn(&GateName) -> bool) -> BTreeSet<ResourceId> {
+    let mut dependants: BTreeMap<AfterTarget, Vec<AfterTarget>> = BTreeMap::new();
     for id in workloads(def) {
-        let waits = gates_behind(def, id)
-            .into_iter()
-            .filter(|gate| Some(gate) != running)
-            .any(|gate| gates.state(&gate).is_none_or(|state| !state.is_satisfied()));
-        if waits {
-            excluded.insert(id.clone());
+        for target in workload_targets(def, id) {
+            dependants
+                .entry(target)
+                .or_default()
+                .push(AfterTarget::Workload(id.clone()));
         }
     }
-    Ok(excluded)
+    for (name, gate) in &def.gates {
+        for target in &gate.after {
+            dependants
+                .entry(target.clone())
+                .or_default()
+                .push(AfterTarget::Gate(name.clone()));
+        }
+    }
+    let mut queue: Vec<&AfterTarget> = dependants
+        .keys()
+        .filter(|target| matches!(target, AfterTarget::Gate(gate) if waits_on(gate)))
+        .collect();
+    let mut seen: BTreeSet<&AfterTarget> = queue.iter().copied().collect();
+    let mut behind = BTreeSet::new();
+    while let Some(target) = queue.pop() {
+        for dependant in dependants.get(target).into_iter().flatten() {
+            if seen.insert(dependant) {
+                if let AfterTarget::Workload(id) = dependant {
+                    behind.insert(id.clone());
+                }
+                queue.push(dependant);
+            }
+        }
+    }
+    behind
+}
+
+/// An installed app's current definition, as the registry holds it, and why
+/// its script fails to evaluate, while it does.
+#[derive(Debug, Clone)]
+pub struct CurrentDefinition {
+    pub def: Arc<AppDef>,
+    pub error: Option<String>,
+}
+
+impl CurrentDefinition {
+    /// What the registry holds of `app` now, or `None` where it holds nothing.
+    pub fn of(registry: &RwLock<AppRegistry>, app: &AppName) -> Option<Self> {
+        registry.read().get(app.as_str()).map(|entry| Self {
+            def: entry.app.def.load_full(),
+            error: entry.script_error.as_ref().map(|(why, _)| why.clone()),
+        })
+    }
 }
 
 /// What a runtime handle leaves out of the resources it acts on, as a
@@ -534,34 +599,64 @@ enum Gated {
 }
 
 impl Exclusions {
-    /// What is left out for a closure of `def` running for gate `running`, or
-    /// for no gate.
-    pub fn of(def: &AppDef, gates: &AppGates, running: Option<&GateName>) -> Self {
-        Self {
-            // spec: GATE#check
-            checks: check_jobs(def),
-            gated: match rt_exclusions(def, gates, running) {
-                Ok(ids) => Gated::Known(ids),
-                Err(why) => Gated::Unreadable(why),
-            },
-        }
-    }
-
-    /// What is left out for a closure of `app`, as its gates stand now.
+    /// What is left out for a closure of `app` running against `def`, as its
+    /// gates stand now, and as they stand against `current`, the app's current
+    /// definition, where the registry holds one.
     ///
-    /// The gates are evaluated here, as the reconciler evaluates them, so a
-    /// closure is kept from what the reconciler keeps from the app.
+    /// The gates are read as the reconciler reads them, and their holds and
+    /// records once for both definitions, so a closure is kept from what the
+    /// reconciler keeps from the app.
     // spec: RT#resources-a-gate-holds
     pub fn for_closure(
         db: &Db,
         app: &AppName,
         def: &AppDef,
+        current: Option<&CurrentDefinition>,
         cipher: &Cipher,
         remembered: &Remembered,
         running: Option<&GateName>,
     ) -> Self {
-        let gates = evaluate(db, app, def, cipher, None, remembered);
-        Self::of(def, &gates, running)
+        let holds = store::load_holds(db, app).map_err(|e| e.to_string());
+        let records = if def.gates.is_empty() && current.is_none_or(|c| c.def.gates.is_empty()) {
+            Ok(Records::new())
+        } else {
+            store::load_records(db, app).map_err(|e| e.to_string())
+        };
+        let exclusions = |def: &AppDef, definition_error: Option<&str>| {
+            let gates = evaluate_from(
+                def,
+                cipher,
+                definition_error,
+                remembered,
+                holds.clone(),
+                &records,
+            );
+            rt_exclusions(def, &gates, running)
+        };
+        let gated = match current {
+            // spec: GRUN#gate-state
+            Some(current) if std::ptr::eq(def, &*current.def) => {
+                exclusions(def, current.error.as_deref())
+            }
+            // spec: RT#resources-a-gate-holds
+            Some(current) => exclusions(def, None).and_then(|mut ids| {
+                ids.extend(exclusions(&current.def, current.error.as_deref())?);
+                Ok(ids)
+            }),
+            None => exclusions(def, None),
+        };
+        let mut checks = check_jobs(def);
+        if let Some(current) = current {
+            checks.extend(check_jobs(&current.def));
+        }
+        Self {
+            // spec: GATE#check
+            checks,
+            gated: match gated {
+                Ok(ids) => Gated::Known(ids),
+                Err(why) => Gated::Unreadable(why),
+            },
+        }
     }
 
     /// Whether the named workload is left out.

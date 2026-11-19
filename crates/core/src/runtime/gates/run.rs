@@ -522,6 +522,7 @@ impl Run<'_> {
                 &state.script_limits,
                 Arc::clone(&state.cipher),
                 &state.gate_runtime,
+                &state.registry,
                 cancel,
                 signaler,
                 writer,

@@ -959,3 +959,105 @@ fn uninstall_deletes_the_records_the_holds_and_the_setup_of_the_app_alone() {
     assert_eq!(store::load_holds(&db, &other).unwrap().len(), 1);
     assert!(store::is_set_up(&db, &other).unwrap());
 }
+
+fn left_out(exclusions: &Exclusions, name: &str) -> bool {
+    exclusions
+        .leaves_out(ResourceKind::Deployment, name)
+        .unwrap()
+}
+
+// spec: RT#resources-a-gate-holds
+// spec: GRUN#gate-state
+#[test]
+fn a_closure_is_kept_from_every_gated_workload_while_the_definition_fails_to_evaluate() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let current = std::sync::Arc::new(def(MIGRATE));
+    store::record_success(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &digest(&current, &cipher, "migrate"),
+        1,
+    )
+    .unwrap();
+    let exclusions = |def: &AppDef, error: Option<&str>| {
+        let current = CurrentDefinition {
+            def: std::sync::Arc::clone(&current),
+            error: error.map(str::to_owned),
+        };
+        Exclusions::for_closure(
+            &db,
+            &app(),
+            def,
+            Some(&current),
+            &cipher,
+            &Remembered::default(),
+            None,
+        )
+    };
+
+    let satisfied = exclusions(&current, None);
+    assert!(!left_out(&satisfied, "api"), "the gate is satisfied");
+
+    let generation = def(MIGRATE);
+    for def in [&*current, &generation] {
+        let failing = exclusions(def, Some("the script threw"));
+        for name in ["api", "sidecar"] {
+            assert!(
+                left_out(&failing, name),
+                "{name} waits on a gate whose state cannot be told"
+            );
+        }
+    }
+}
+
+// spec: RT#resources-a-gate-holds
+#[test]
+fn a_closure_is_kept_from_what_the_apps_current_definition_gates() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let generation = def(r#"
+        app.deployment("api").image("docker.io/library/nginx:1");
+        app.deployment("web").image("docker.io/library/nginx:1");
+        "#);
+    let current = CurrentDefinition {
+        def: std::sync::Arc::new(def(r#"
+            let api = app.deployment("api").image("docker.io/library/nginx:1");
+            let migrate = app.gate("migrate").key(1).exclusive(api);
+            app.deployment("web").image("docker.io/library/nginx:1").after(migrate);
+            "#)),
+        error: None,
+    };
+    store::set_hold(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &BTreeSet::from([id(ResourceKind::Deployment, "api")]),
+    )
+    .unwrap();
+    let exclusions = |current: Option<&CurrentDefinition>| {
+        Exclusions::for_closure(
+            &db,
+            &app(),
+            &generation,
+            current,
+            &cipher,
+            &Remembered::default(),
+            None,
+        )
+    };
+
+    let alone = exclusions(None);
+    assert!(
+        !left_out(&alone, "web"),
+        "the operation's generation orders web after nothing"
+    );
+
+    let both = exclusions(Some(&current));
+    assert!(
+        left_out(&both, "web"),
+        "the current definition orders web after an unsatisfied gate"
+    );
+    assert!(left_out(&both, "api"), "what the gate holds is left out");
+}

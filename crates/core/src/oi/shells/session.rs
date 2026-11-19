@@ -676,6 +676,7 @@ pub(super) async fn run_app_shell(
     let shell_name_for_task = shell_name.clone();
     let cancel = stop.cancel_token();
     let gate_runtime = Arc::clone(&state.gate_runtime);
+    let apps = Arc::clone(&state.registry);
 
     let script = tokio::task::spawn_blocking(move || {
         let (engine, mut scope, _) =
@@ -743,11 +744,14 @@ pub(super) async fn run_app_shell(
                     Arc::clone(&cipher),
                     gate_runtime.remembered(&app_name_for_task),
                 );
+                let current =
+                    crate::runtime::gates::CurrentDefinition::of(&apps, &app_name_for_task);
                 db.call(move |db| {
                     crate::runtime::gates::Exclusions::for_closure(
                         db,
                         &name,
                         &def,
+                        current.as_ref(),
                         &cipher,
                         &remembered,
                         None,

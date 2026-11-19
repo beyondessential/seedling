@@ -78,6 +78,8 @@ In a shell's closure, `rt.stop` MUST throw, without changing the desired state, 
 - each workload [ordered after](gate.md#start-order) a gate that is not satisfied, whether directly or through other targets;
 - the Job of each gate's [check](gate.md#check), which the runtime starts only to check the gate.
 
+The runtime MUST read these both against the definition the closure runs against and against the app's current definition, and MUST leave out every resource that either leaves out.
+
 In the [body](gate.md#body) of a gate, the runtime MUST NOT leave out a resource of that gate's own exclusive selection, nor a workload ordered after that gate, on account of that gate.
 `rt.restart` of a deployment that `rt.start` would leave out MUST throw.
 
