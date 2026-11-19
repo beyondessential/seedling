@@ -21,46 +21,56 @@ use crate::runtime::secrets::{Cipher, Error as SecretsError, KeyDigest};
 /// The value a gate's definition gives it, held as the JSON value it is the
 /// same as another key by.
 #[derive(Debug, Clone)]
-pub struct GateKey(Value);
+pub struct GateKey {
+    value: Value,
+    canonical: Box<[u8]>,
+}
 
 impl Default for GateKey {
     fn default() -> Self {
-        Self(Value::Null)
+        Self::new(Value::Null)
     }
 }
 
 impl PartialEq for GateKey {
     fn eq(&self, other: &Self) -> bool {
-        self.canonical_bytes() == other.canonical_bytes()
+        self.canonical == other.canonical
     }
 }
 
 impl Eq for GateKey {}
 
 impl GateKey {
+    fn new(value: Value) -> Self {
+        let mut canonical = String::new();
+        write_canonical(&value, &mut canonical);
+        Self {
+            value,
+            canonical: canonical.into_bytes().into_boxed_slice(),
+        }
+    }
+
     /// The key a script's value stands for, or a throw naming where the value
     /// is not representable in JSON.
     // spec: GATE#keys
     pub fn from_script(value: Dynamic) -> Result<Self, Box<EvalAltResult>> {
-        json_of("`key`", value).map(Self)
+        json_of("`key`", value).map(Self::new)
     }
 
     pub fn as_json(&self) -> &Value {
-        &self.0
+        &self.value
     }
 
     /// The bytes the key is told apart from another by: its JSON text, with
     /// the members of every map in order of name, so that two keys are the
     /// same exactly when these are.
     // spec: GATE#keys
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        let mut out = String::new();
-        write_canonical(&self.0, &mut out);
-        out.into_bytes()
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical
     }
 
     pub fn digest(&self, cipher: &Cipher) -> Result<KeyDigest, SecretsError> {
-        cipher.key_digest(&self.canonical_bytes())
+        cipher.key_digest(&self.canonical)
     }
 }
 
