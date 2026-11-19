@@ -763,6 +763,7 @@ async fn wait_for_check(
     cancel: Option<&Arc<CancelToken>>,
 ) -> CheckOutcome {
     let began = Instant::now();
+    let mut running_since: Option<Instant> = None;
     let mut ended_at: Option<Instant> = None;
     loop {
         if cancel.is_some_and(|c| c.is_cancelled()) {
@@ -775,8 +776,13 @@ async fn wait_for_check(
         match observed {
             Ok(observations) => {
                 let lifecycle = derive_lifecycle_state(instance, &observations);
+                if lifecycle.has_reached(LifecycleState::Running) {
+                    running_since.get_or_insert_with(Instant::now);
+                }
                 if lifecycle.has_reached(LifecycleState::Terminated) {
-                    match judge(&observations, deadline, began.elapsed()) {
+                    // spec: JOB#deadline
+                    let ran_for = running_since.unwrap_or(began).elapsed();
+                    match judge(&observations, deadline, ran_for) {
                         Some(outcome) => return outcome,
                         None => {
                             let since = *ended_at.get_or_insert_with(Instant::now);
