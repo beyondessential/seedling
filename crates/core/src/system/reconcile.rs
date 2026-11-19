@@ -6612,6 +6612,52 @@ mod tests {
         );
     }
 
+    // spec: UPD#stale-instances
+    #[test]
+    fn a_gate_key_that_cannot_be_found_is_an_error_rather_than_no_spec_hash() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"
+                    let migrate = app.gate("migrate").key("1.0.0");
+                    app.deployment("web").image("docker.io/library/nginx:1.30").after(migrate);
+                    app.deployment("plain").image("docker.io/library/nginx:1.30");
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let reconciler = test_reconciler(&oi);
+        let (apps, _) = reconciler.snapshot_all_apps();
+        let app = apps.iter().find(|a| a.name.as_str() == "demo").unwrap();
+        let hash = |name: &str| {
+            let dr = app
+                .desired
+                .resources
+                .iter()
+                .find(|r| r.instance.name.as_deref() == Some(name))
+                .unwrap();
+            reconciler.actuator.desired_spec_hash(
+                &dr.instance,
+                &dr.definition,
+                &GateKeyDigests::default(),
+            )
+        };
+        assert!(
+            matches!(
+                hash("web"),
+                Err(crate::system::actuator::SpecHashError::GateKey { .. })
+            ),
+            "web is ordered after a gate the digests hold nothing for"
+        );
+        assert!(
+            hash("plain").is_ok(),
+            "plain is ordered after no gate, so no key is missing"
+        );
+    }
+
     // spec: UPD#spec-hash
     #[test]
     fn a_workloads_spec_hash_moves_with_the_key_of_a_gate_it_is_ordered_directly_after_only() {
@@ -6688,6 +6734,7 @@ mod tests {
             reconciler
                 .actuator
                 .desired_spec_hash(&dr.instance, &dr.definition, keys)
+                .unwrap()
                 .unwrap_or_else(|| panic!("{name} has a spec hash"))
         };
         for directly_after in ["web", "report"] {

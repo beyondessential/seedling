@@ -253,6 +253,31 @@ async fn observe_one_pod<'a>(
         }
     };
 
+    let is_running = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
+
+    // spec: UPD#stale-instances
+    let desired_spec_hash = if is_running {
+        match actuator.desired_spec_hash(&dr.instance, &dr.definition, gate_keys) {
+            Ok(hash) => hash,
+            Err(e) => {
+                error!(
+                    instance = %dr.instance.display_name,
+                    error = %e,
+                    "pods: cannot work out the desired spec hash, skipping instance"
+                );
+                result.observe_failure = Some((dr.instance.clone(), e.to_string()));
+                return PodObservation::Failed {
+                    dr,
+                    result: Box::new(result),
+                };
+            }
+        }
+    } else {
+        None
+    };
+
     result.observed = Some(dr.instance.clone());
     for (fact, _ts) in &facts {
         for (kind, payload) in fact.to_obs_kinds() {
@@ -262,10 +287,6 @@ async fn observe_one_pod<'a>(
         }
     }
 
-    let is_running = facts
-        .iter()
-        .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
-
     // spec: UPD#stale-instances
     let observed_spec_hash = facts.iter().find_map(|(f, _)| {
         if let ObservationFact::ContainerSpecHash(h) = f {
@@ -274,12 +295,6 @@ async fn observe_one_pod<'a>(
             None
         }
     });
-
-    let desired_spec_hash = if is_running {
-        actuator.desired_spec_hash(&dr.instance, &dr.definition, gate_keys)
-    } else {
-        None
-    };
 
     // The spec is stale when the desired hash is known and either differs
     // from the observed hash or the observed hash is absent (container

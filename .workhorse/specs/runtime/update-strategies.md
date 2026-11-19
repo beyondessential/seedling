@@ -19,6 +19,7 @@ A running instance whose recorded spec hash differs from the spec hash its curre
 ## Stale instances
 
 On each iteration of the [reconciliation loop](reconciliation.md#reconciliation-loop), the runtime MUST compare the observed spec hash of each running Deployment and Job instance with the spec hash derived from its current definition.
+Where the runtime cannot work out the spec hash an instance's current definition yields, it MUST treat that iteration's observation of the instance as [failed](observation.md#failed-observation), and MUST NOT treat the instance as stale or as current.
 
 While a workload waits on a [target](../language/gate.md#start-order) that is not ready, the runtime MUST NOT stop its stale instances, whatever its update strategy, and replaces them once the target is ready.
 
