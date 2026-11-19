@@ -128,7 +128,8 @@ fn parse_row(raw: RawRow) -> Result<GateRecord, String> {
 /// Every gate record of `app`.
 ///
 /// A row that cannot be understood is that gate's alone to be unreadable,
-/// and a query that fails is every gate's: neither reads as no record.
+/// and a query that fails, or a row naming no gate, is every gate's: none
+/// reads as no record.
 // spec: GRUN#gate-state
 pub fn load_records(db: &Db, app: &AppName) -> rusqlite::Result<Records> {
     let mut stmt = db.conn.prepare(
@@ -156,10 +157,12 @@ pub fn load_records(db: &Db, app: &AppName) -> rusqlite::Result<Records> {
     let mut records = Records::new();
     for row in rows {
         let raw = row?;
-        let Ok(gate) = GateName::new(&raw.0) else {
-            tracing::warn!(%app, gate = %raw.0, "a gate record names no valid gate; ignoring it");
-            continue;
-        };
+        // spec: GRUN#gate-state
+        // The gate a row names that is not a gate name cannot be told, so it
+        // may be the record of any of them.
+        let gate = GateName::new(&raw.0).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
         records.insert(gate, parse_row(raw));
     }
     Ok(records)

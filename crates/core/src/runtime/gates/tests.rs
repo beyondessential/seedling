@@ -203,6 +203,25 @@ fn a_gate_record_table_that_cannot_be_queried_leaves_every_gate_undetermined() {
 
 // spec: GRUN#gate-state
 #[test]
+fn a_record_naming_no_valid_gate_leaves_every_gate_undetermined() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let def = def(MIGRATE);
+    db.conn
+        .execute(
+            "INSERT INTO gate_records (app, gate, valid) VALUES (?1, 'not a gate', 1)",
+            [app().as_str()],
+        )
+        .unwrap();
+    let gates = evaluate(&db, &app(), &def, &cipher, None, &Remembered::default());
+    assert!(matches!(
+        gates.state(&gate("migrate")),
+        Some(GateState::Undetermined(Undetermined::Record(_)))
+    ));
+}
+
+// spec: GRUN#gate-state
+#[test]
 fn a_definition_that_fails_to_evaluate_leaves_the_gates_undetermined() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
