@@ -10,7 +10,7 @@ use std::{
 use parking_lot::RwLock;
 use seedling_protocol::{
     events::OperationEventCtx,
-    names::{AppName, GateName, SessionId},
+    names::{AppName, GateName},
 };
 use tokio::sync::Notify;
 
@@ -32,6 +32,7 @@ use crate::{
         state::OiState,
     },
     runtime::{
+        apps::CheckId,
         barrier::{
             CancelToken, OperationId,
             oracle::{container_run_succeeded, derive_lifecycle_state},
@@ -727,9 +728,9 @@ pub enum CheckOutcome {
 /// Run `job`, the check of `gate`, and judge it by how it exits.
 ///
 /// The Job's instance is not part of the app's steady-state desired state: it
-/// is held in a slot of its own, as a shell session's resources are, so that it
-/// runs beside whatever else the app is doing. It is torn down once its
-/// outcome is known.
+/// is held in a slot of the check's own, beside the app's operation and shell
+/// sessions, so that it runs beside whatever else the app is doing. It is torn
+/// down once its outcome is known.
 // spec: GRUN#checks
 // spec: RCN#gate-holds
 pub async fn run_check(
@@ -739,11 +740,11 @@ pub async fn run_check(
     job: Resource,
     cancel: Option<&Arc<CancelToken>>,
 ) -> CheckOutcome {
-    let Some((sessions, tick_notify)) = state
+    let Some((checks, tick_notify)) = state
         .registry
         .read()
         .get(app.as_str())
-        .map(|entry| (Arc::clone(&entry.sessions), Arc::clone(&entry.tick_notify)))
+        .map(|entry| (Arc::clone(&entry.checks), Arc::clone(&entry.tick_notify)))
     else {
         return CheckOutcome::Unavailable(format!("{app} is not registered"));
     };
@@ -751,25 +752,25 @@ pub async fn run_check(
         Resource::Job(j) => j.def.lock().deadline.map(Duration::from_secs),
         _ => None,
     };
-    let session = SessionId::generate();
-    let slot = sessions.open(session);
+    let check = CheckId::generate();
+    let slot = checks.open(check);
     let instance = ResourceInstance::new_anonymous(app.clone(), ResourceKind::Job);
 
     let recorded = {
-        let (instance, owner) = (instance.clone(), session.to_string());
+        let (instance, owner) = (instance.clone(), check.to_string());
         let description = format!("the check of gate {gate}");
         state.db.call(move |db| {
             insert_dynamic_resource(
                 db,
                 &instance,
                 &owner,
-                DynamicCreator::ShellSession,
+                DynamicCreator::GateCheck,
                 Some(&description),
             )
         })
     };
     if let Err(e) = recorded {
-        sessions.close(&session);
+        checks.close(&check);
         return CheckOutcome::Unavailable(format!(
             "its instance could not be recorded before it was started: {e}"
         ));
@@ -784,11 +785,12 @@ pub async fn run_check(
 
     // The Job is torn down in the background: the outcome is known, and
     // tearing it down takes as long as it takes.
+    // spec: GRUN#cancellation
     let teardown = {
-        let (state, app, sessions, slot, tick_notify) = (
+        let (state, app, checks, slot, tick_notify) = (
             Arc::clone(state),
             app.clone(),
-            Arc::clone(&sessions),
+            Arc::clone(&checks),
             Arc::clone(&slot),
             Arc::clone(&tick_notify),
         );
@@ -797,12 +799,12 @@ pub async fn run_check(
                 &state.db,
                 &state.driver,
                 &app,
-                &session.to_string(),
+                &check.to_string(),
                 &slot,
                 &tick_notify,
             )
             .await;
-            sessions.close(&session);
+            checks.close(&check);
             tick_notify.notify_one();
         }
     };

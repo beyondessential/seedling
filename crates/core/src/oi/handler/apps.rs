@@ -12,7 +12,7 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        apps::{AppRegistry, AppStatus, status as app_status},
+        apps::{AppEntry, AppRegistry, AppStatus, status as app_status},
         definition::{Bundle, Source, version},
         desired::{DynamicCreator, list_dynamic_resources_for_app},
         faults,
@@ -853,6 +853,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 let dyn_records = list_dynamic_resources_for_app(db, &name_owned)?;
                 let mut out = Vec::new();
                 for rec in dyn_records {
+                    // spec: APPS#dynamic-resources
+                    // A gate check's Job is the runtime's, not a closure's.
+                    let (operation_id, session_id) = match rec.creator {
+                        DynamicCreator::Operation => (Some(rec.operation_id.clone()), None),
+                        DynamicCreator::ShellSession => (None, Some(rec.operation_id.clone())),
+                        DynamicCreator::GateCheck => continue,
+                    };
                     let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
                         continue;
                     };
@@ -898,14 +905,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         "type": kind_str,
                         "anonymous": rec.resource_name.is_none(),
                         // spec: APPS#dynamic-resources
-                        "operation_id": match rec.creator {
-                            DynamicCreator::Operation => Value::String(rec.operation_id.clone()),
-                            DynamicCreator::ShellSession => Value::Null,
-                        },
-                        "session_id": match rec.creator {
-                            DynamicCreator::Operation => Value::Null,
-                            DynamicCreator::ShellSession => Value::String(rec.operation_id.clone()),
-                        },
+                        "operation_id": operation_id,
+                        "session_id": session_id,
                         // spec: BSL#descriptions
                         "description": rec.description,
                         "instances": [{
@@ -1508,19 +1509,20 @@ pub(crate) fn deregister_app(
     }
 
     // spec: APPS#removal
-    // A session's teardown is driven through the app's entry, and the records
-    // it has yet to tear down are spared only while the entry holds its slot.
+    // The teardown of a session or a gate check is driven through the app's
+    // entry, and the records it has yet to tear down are spared only while the
+    // entry holds its slot.
     if state
         .registry
         .read()
         .get(name)
-        .is_some_and(|entry| !entry.sessions.is_empty())
+        .is_some_and(AppEntry::has_dynamic_slots)
     {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!(
-                "a shell session is open on the app or still tearing down what it started; \
-                 wait for it to finish: {name}"
+                "a shell session or gate check is running on the app or still tearing down \
+                 what it started; wait for it to finish: {name}"
             ),
         ));
     }

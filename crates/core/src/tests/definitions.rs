@@ -422,3 +422,24 @@ fn the_tamanu_definitions_refuse_a_database_or_role_name_that_needs_quoting() {
         }
     }
 }
+
+// spec: GATE#keys
+// A definition whose required parameters are set evaluates without an
+// advertised URL, so the config gate's run, not the evaluation, reports it.
+#[test]
+fn the_tamanu_definitions_evaluate_with_no_hostname_or_canonical_url() {
+    for (name, source, mut params) in [
+        ("tamanu-central", CENTRAL, central_params()),
+        ("tamanu-facility", FACILITY, facility_params()),
+    ] {
+        params.remove("public-hostname");
+        params.remove("canonical-url");
+        let (_, err) = crate::runtime::apps::evaluate_script(
+            &AppName::new_unchecked("demo"),
+            source,
+            &params,
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "{name}: {err:?}");
+    }
+}

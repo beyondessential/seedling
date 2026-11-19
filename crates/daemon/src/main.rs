@@ -1223,14 +1223,16 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
             .db
             .call(seedling_core::runtime::desired::list_dynamic_resources);
         // spec: OPS#shell-sessions
-        // A session open by the time this runs is the runtime's own, run since
-        // startup began; its resources are its to tear down.
-        let live_sessions = oi_state.registry.read().live_sessions();
+        // spec: GRUN#checks
+        // A session or gate check running by the time this runs is the
+        // runtime's own, run since startup began; its resources are its to
+        // tear down.
+        let live_slot_owners = oi_state.registry.read().live_slot_owners();
         let records = records.map(|rs| {
             seedling_core::runtime::dynamic_teardown::unspared(
                 rs,
                 replay_op_id.as_deref(),
-                &live_sessions,
+                &live_slot_owners,
             )
         });
         // spec: SUSP#abandoned-replay
@@ -1259,7 +1261,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
                     &replay_op_id
                         .iter()
                         .cloned()
-                        .chain(live_sessions.iter().cloned())
+                        .chain(live_slot_owners.iter().cloned())
                         .collect(),
                 );
                 Some(left)

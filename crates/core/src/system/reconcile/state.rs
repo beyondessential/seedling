@@ -669,7 +669,7 @@ fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDes
         if registry.get(name.as_str()).is_some_and(|entry| {
             *entry.phase.lock() == AppPhase::NotInstalled
                 && entry.active_progress.read().is_none()
-                && entry.sessions.is_empty()
+                && !entry.has_dynamic_slots()
         }) {
             known.insert_app(&name, []);
         }

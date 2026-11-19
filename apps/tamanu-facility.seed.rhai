@@ -424,7 +424,14 @@ let migrate_db = |rt| {
 // specs, so their rendered content is the key of a gate the parts that read
 // them come after.
 let config_gate = app.gate("config")
-    .key([production_json.call(), local_json.call()])
+    // The rendered config needs an advertised URL. Until one is set the key
+    // is the unit value, so evaluating the definition does not fail on it and
+    // the gate's run says what is missing.
+    .key(if canonical_url.is_set() || public_hostname.is_set() {
+        [production_json.call(), local_json.call()]
+    } else {
+        ()
+    })
     .run(|rt| { render_config.call(rt); });
 
 let database_check = app.job("database-check")

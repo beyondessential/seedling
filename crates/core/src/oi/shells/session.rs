@@ -13,7 +13,7 @@ use crate::{
     oi::state::OiState,
     runtime::{
         AppPhase,
-        apps::{SessionSlot, SessionSlots},
+        apps::{DynamicSlot, SessionSlots},
         barrier::{
             OperationId,
             oracle::DbWorldOracle,
@@ -351,7 +351,7 @@ pub(super) struct SessionTeardown {
     pub(super) app_name: AppName,
     pub(super) session_id: SessionId,
     pub(super) sessions: Arc<SessionSlots>,
-    pub(super) slot: SessionSlot,
+    pub(super) slot: DynamicSlot,
     pub(super) tick_notify: Arc<Notify>,
 }
 
@@ -391,7 +391,7 @@ pub(super) async fn tear_down_session_resources(
     app_name: AppName,
     session_id: SessionId,
     sessions: Arc<SessionSlots>,
-    slot: SessionSlot,
+    slot: DynamicSlot,
     tick_notify: Arc<Notify>,
 ) {
     cleanup_dynamic_resources(
@@ -566,7 +566,7 @@ pub(super) struct ShellRun {
 /// reconciler.
 pub(super) struct SessionProgress {
     pub(super) id: SessionId,
-    pub(super) slot: SessionSlot,
+    pub(super) slot: DynamicSlot,
     pub(super) tick_notify: Arc<Notify>,
 }
 

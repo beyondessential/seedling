@@ -122,7 +122,7 @@ The runtime MUST resolve an `rt.write` target to the volume's storage on the hos
 
 ## Abandoned replay
 
-When it starts, the runtime MUST tear down the [dynamic resources](../language/app.md#dynamic-resource-lifetime) that previous runs of the runtime recorded, except those recorded against the operation it is about to replay, which the replay adopts.
+When it starts, the runtime MUST tear down the [dynamic resources](../language/app.md#dynamic-resource-lifetime) and the Job instances of [gate checks](gates.md#checks) that previous runs of the runtime recorded, except those recorded against the operation it is about to replay, which the replay adopts.
 Where the replay does not then start, for any reason, the runtime MUST tear down the resources it spared and forget their records before it goes on serving.
 
 The runtime MUST forget only the records of resources it has torn down.

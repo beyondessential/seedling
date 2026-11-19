@@ -238,7 +238,14 @@ config_vol.write("/production.json5", INITIAL_CONFIG);
 // so the rendered content is the key of a gate the parts that read it come
 // after.
 let config_gate = app.gate("config")
-    .key(local_json5.call())
+    // The rendered config needs an advertised URL. Until one is set the key
+    // is the unit value, so evaluating the definition does not fail on it and
+    // the gate's run says what is missing.
+    .key(if canonical_url.is_set() || public_hostname.is_set() {
+        local_json5.call()
+    } else {
+        ()
+    })
     .run(|rt| {
         rt.write(config_vol, "/local.json5", local_json5.call());
     });

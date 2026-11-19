@@ -439,14 +439,35 @@ pub enum DynamicCreator {
     Operation,
     /// A shell session; the record holds the session's id.
     ShellSession,
+    /// A check of a gate, whose Job is the resource; the record holds the
+    /// check's id.
+    // spec: GRUN#checks
+    GateCheck,
+}
+
+impl DynamicCreator {
+    /// How a record names its creator.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Operation => "operation",
+            Self::ShellSession => "shell_session",
+            Self::GateCheck => "gate_check",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        [Self::Operation, Self::ShellSession, Self::GateCheck]
+            .into_iter()
+            .find(|creator| creator.as_str() == text)
+    }
 }
 
 /// A persisted dynamic resource record.
 pub struct DynamicResourceRecord {
     pub instance_id: String,
     pub app: AppName,
-    /// The id of the operation or shell session that created the resource, as
-    /// `creator` says.
+    /// The id of the operation, shell session or gate check that created the
+    /// resource, as `creator` says.
     pub operation_id: String,
     pub creator: DynamicCreator,
     pub kind: String,
@@ -469,13 +490,13 @@ pub fn insert_dynamic_resource(
     db.conn.execute(
         // spec: INFRA#database
         "INSERT INTO dynamic_resources
-             (instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+             (instance_id, app, operation_id, creator, kind, display_name, resource_name,
               description)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(instance_id) DO UPDATE SET
              app = excluded.app,
              operation_id = excluded.operation_id,
-             shell_session = excluded.shell_session,
+             creator = excluded.creator,
              kind = excluded.kind,
              display_name = excluded.display_name,
              resource_name = excluded.resource_name,
@@ -484,7 +505,7 @@ pub fn insert_dynamic_resource(
             instance.id.to_hex(),
             instance.app,
             operation_id,
-            creator == DynamicCreator::ShellSession,
+            creator.as_str(),
             format!("{:?}", instance.kind),
             instance.display_name,
             instance.name,
@@ -506,7 +527,7 @@ pub fn delete_dynamic_resource(db: &Db, instance_id: &str) -> rusqlite::Result<(
 /// Load all dynamic resource records (e.g., for startup orphan cleanup).
 pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+        "SELECT instance_id, app, operation_id, creator, kind, display_name, resource_name,
                 description
          FROM dynamic_resources ORDER BY app, instance_id",
     )?;
@@ -519,7 +540,7 @@ pub fn list_dynamic_resources_for_app(
     app: &AppName,
 ) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+        "SELECT instance_id, app, operation_id, creator, kind, display_name, resource_name,
                 description
          FROM dynamic_resources WHERE app = ?1 ORDER BY instance_id",
     )?;
@@ -533,7 +554,7 @@ pub fn list_dynamic_resources_for_operation(
     operation_id: &str,
 ) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+        "SELECT instance_id, app, operation_id, creator, kind, display_name, resource_name,
                 description
          FROM dynamic_resources WHERE operation_id = ?1 ORDER BY instance_id",
     )?;
@@ -545,10 +566,15 @@ fn parse_dynamic_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourc
         instance_id: row.get(0)?,
         app: row.get::<_, AppName>(1)?,
         operation_id: row.get(2)?,
-        creator: if row.get::<_, bool>(3)? {
-            DynamicCreator::ShellSession
-        } else {
-            DynamicCreator::Operation
+        creator: {
+            let text: String = row.get(3)?;
+            DynamicCreator::parse(&text).ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    format!("unknown dynamic resource creator {text:?}").into(),
+                )
+            })?
         },
         kind: row.get(4)?,
         display_name: row.get(5)?,

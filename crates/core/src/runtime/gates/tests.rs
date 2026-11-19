@@ -439,6 +439,27 @@ fn a_pause_holds_across_a_restart_until_an_operator_runs_the_gate_or_the_key_mov
     );
 }
 
+// spec: GRUN#pauses
+#[test]
+fn a_pause_the_key_moved_away_from_does_not_come_back_with_the_key() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let def = def(MIGRATE);
+    let moved = def_with_key("2.0.0");
+    let (key, other) = (
+        digest(&def, &cipher, "migrate"),
+        digest(&moved, &cipher, "migrate"),
+    );
+    store::record_failure(&db, &app(), &gate("migrate"), &key, at(100), "cancelled", Some(&key))
+        .unwrap();
+    store::record_failure(&db, &app(), &gate("migrate"), &other, at(200), "failed", None).unwrap();
+
+    assert!(
+        !status(&db, &def, &cipher, "migrate").paused,
+        "the pause ended when the key moved"
+    );
+}
+
 fn def_with_key(key: &str) -> AppDef {
     def(&MIGRATE.replace("1.0.0", key))
 }

@@ -974,12 +974,12 @@ impl Reconciler {
                 continue;
             }
             // spec: RCN#desired-state
-            // Only NotInstalled apps are skipped, unless a shell session that
-            // has ended is still tearing down what it started: nothing else
-            // stops those resources.
+            // Only NotInstalled apps are skipped, unless a shell session or a
+            // gate check that has ended is still tearing down what it started:
+            // nothing else stops those resources.
             match phase {
                 AppPhase::Installed | AppPhase::Uninstalling => {}
-                AppPhase::NotInstalled if entry.sessions.is_empty() => continue,
+                AppPhase::NotInstalled if !entry.has_dynamic_slots() => continue,
                 AppPhase::NotInstalled => {}
             }
             // Read before the progress is held, as it reads the progress
@@ -1076,7 +1076,12 @@ impl Reconciler {
             };
             // Read in place, as the operation's progress is, rather than
             // copied each tick.
-            let session_slots = entry.sessions.slots();
+            let session_slots: Vec<_> = entry
+                .sessions
+                .slots()
+                .into_iter()
+                .chain(entry.checks.slots())
+                .collect();
             let session_guards: Vec<_> = session_slots.iter().map(|slot| slot.read()).collect();
             let sessions: Vec<&crate::runtime::OperationProgress> =
                 session_guards.iter().filter_map(|g| g.as_ref()).collect();
@@ -1084,10 +1089,11 @@ impl Reconciler {
                 Ok(mut d) => {
                     self.clear_desired_state_fault(&name);
                     // spec: RCN#desired-state
-                    // Each open shell session's dynamic resources join the
-                    // desired state whatever phase the app is in and whatever
-                    // else it holds. Where the app is going or gone, they are
-                    // held stopped.
+                    // spec: RCN#gate-holds
+                    // Each open shell session's dynamic resources, and the Job
+                    // of each gate check being run, join the desired state
+                    // whatever phase the app is in and whatever else it holds.
+                    // Where the app is going or gone, they are held stopped.
                     merge_sessions(
                         &mut d,
                         &app_def,

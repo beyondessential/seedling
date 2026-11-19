@@ -109,42 +109,72 @@ impl AppStatus {
     }
 }
 
-/// Where a shell session's dynamic resources stand in the desired state, as
-/// an operation's stand in [`AppEntry::active_progress`].
-pub type SessionSlot = Arc<RwLock<Option<OperationProgress>>>;
+/// Where the dynamic resources of a shell session or a gate check stand in the
+/// desired state, as an operation's stand in [`AppEntry::active_progress`].
+pub type DynamicSlot = Arc<RwLock<Option<OperationProgress>>>;
 
-/// The slot of each shell session that is open on an app, or that has ended
-/// and is still tearing its dynamic resources down.
-///
-/// Unlike operations, of which one runs per host, any number of sessions run
-/// beside an operation and each other, so each has a slot of its own.
-// spec: RCN#desired-state
-#[derive(Default)]
-pub struct SessionSlots {
-    slots: RwLock<BTreeMap<SessionId, SessionSlot>>,
+/// Identifies one check of a gate, and so the record of its Job.
+// spec: GRUN#checks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CheckId(uuid::Uuid);
+
+impl CheckId {
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
 }
 
-impl SessionSlots {
-    /// Give `session` an empty slot, which stands until it is [closed](Self::close).
-    pub fn open(&self, session: SessionId) -> SessionSlot {
-        Arc::clone(self.slots.write().entry(session).or_default())
+impl std::fmt::Display for CheckId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// The slot of each owner of dynamic resources of one kind that is running on
+/// an app, or that has ended and is still tearing its dynamic resources down.
+///
+/// Unlike operations, of which one runs per host, any number of these run
+/// beside an operation and each other, so each has a slot of its own.
+// spec: RCN#desired-state
+pub struct Slots<K> {
+    slots: RwLock<BTreeMap<K, DynamicSlot>>,
+}
+
+/// The slots of an app's shell sessions.
+pub type SessionSlots = Slots<SessionId>;
+
+/// The slots of the checks of an app's gates.
+pub type CheckSlots = Slots<CheckId>;
+
+impl<K> Default for Slots<K> {
+    fn default() -> Self {
+        Self {
+            slots: RwLock::default(),
+        }
+    }
+}
+
+impl<K: Ord + Copy + std::fmt::Display> Slots<K> {
+    /// Give `owner` an empty slot, which stands until it is [closed](Self::close).
+    pub fn open(&self, owner: K) -> DynamicSlot {
+        Arc::clone(self.slots.write().entry(owner).or_default())
     }
 
-    pub fn close(&self, session: &SessionId) {
-        self.slots.write().remove(session);
+    pub fn close(&self, owner: &K) {
+        self.slots.write().remove(owner);
     }
 
     pub fn is_empty(&self) -> bool {
         self.slots.read().is_empty()
     }
 
-    /// The sessions that have a slot.
-    pub fn sessions(&self) -> Vec<SessionId> {
+    /// The owners that have a slot.
+    pub fn owners(&self) -> Vec<K> {
         self.slots.read().keys().copied().collect()
     }
 
-    /// Every session's slot, to be read in place.
-    pub fn slots(&self) -> Vec<SessionSlot> {
+    /// Every owner's slot, to be read in place.
+    pub fn slots(&self) -> Vec<DynamicSlot> {
         self.slots.read().values().map(Arc::clone).collect()
     }
 }
@@ -168,6 +198,9 @@ pub struct AppEntry {
     /// Shared with the reconciler and the shell sessions to track theirs.
     // spec: RCN#desired-state
     pub sessions: Arc<SessionSlots>,
+    /// Shared with the reconciler and the gate checks to track their Jobs.
+    // spec: RCN#gate-holds
+    pub checks: Arc<CheckSlots>,
     /// Wakes the reconciler for an immediate tick.
     pub tick_notify: Arc<Notify>,
     /// Active script-evaluation fault, if the last reload failed.
@@ -186,12 +219,21 @@ impl AppEntry {
     /// Whether the app's desired state is its whole resource graph, which
     /// nothing in flight can change: it is installed, and no operation or shell
     /// session is placing resources of its own.
+    ///
+    /// A running gate check leaves the app steady: its Job is anonymous and
+    /// joins the desired state beside the resource graph without changing it.
     // spec: RCN#desired-state
     // spec: GC#unscheduled-instances
     pub fn is_steady(&self) -> bool {
         *self.phase.lock() == AppPhase::Installed
             && self.active_progress.read().is_none()
             && self.sessions.is_empty()
+    }
+
+    /// Whether a shell session or a gate check has a slot on the app, so that
+    /// the reconciler still has dynamic resources of the app to drive.
+    pub fn has_dynamic_slots(&self) -> bool {
+        !self.sessions.is_empty() || !self.checks.is_empty()
     }
 }
 
@@ -267,6 +309,7 @@ impl AppRegistry {
                 phase: Arc::new(Mutex::new(AppPhase::NotInstalled)),
                 active_progress: Arc::new(RwLock::new(None)),
                 sessions: Arc::default(),
+                checks: Arc::default(),
                 tick_notify,
                 script_error,
                 current_generation: generation,
@@ -275,14 +318,19 @@ impl AppRegistry {
         );
     }
 
-    /// The id of every shell session that has a slot on any app: those open,
-    /// and those ended whose dynamic resources are still being torn down.
+    /// The id of every shell session and gate check that has a slot on any
+    /// app: those running, and those ended whose dynamic resources are still
+    /// being torn down.
     // spec: OPS#shell-sessions
-    pub fn live_sessions(&self) -> std::collections::HashSet<String> {
+    // spec: GRUN#checks
+    pub fn live_slot_owners(&self) -> std::collections::HashSet<String> {
         self.entries
             .values()
-            .flat_map(|entry| entry.sessions.sessions())
-            .map(|session| session.to_string())
+            .flat_map(|entry| {
+                let sessions = entry.sessions.owners().into_iter().map(|s| s.to_string());
+                let checks = entry.checks.owners().into_iter().map(|c| c.to_string());
+                sessions.chain(checks).collect::<Vec<_>>()
+            })
             .collect()
     }
 
@@ -468,6 +516,7 @@ impl AppRegistry {
                     phase: Arc::new(Mutex::new(phase)),
                     active_progress: Arc::new(RwLock::new(None)),
                     sessions: Arc::default(),
+                    checks: Arc::default(),
                     tick_notify: Arc::clone(&tick_notify),
                     script_error,
                     current_generation,

@@ -21,7 +21,7 @@ use crate::{
         test_support::{Loopback, TestOi, loopback},
     },
     runtime::{
-        apps::SessionSlot,
+        apps::DynamicSlot,
         barrier::shell::{ShellExecTarget, ShellExit, ShellHost},
     },
     system::types::ExecHandle,
@@ -313,7 +313,7 @@ struct ShellRan {
     outcome: SessionOutcome,
     session_id: SessionId,
     /// The slot the session placed its dynamic resources in.
-    slot: SessionSlot,
+    slot: DynamicSlot,
 }
 
 /// Run the `tools` shell of a `demo` app declared by `script`, with `params`,

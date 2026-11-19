@@ -130,3 +130,11 @@ CREATE TABLE gate_holds (
 -- An app that was installed before gates ran its setup then.
 ALTER TABLE registered_apps ADD COLUMN set_up INTEGER NOT NULL DEFAULT 0;
 UPDATE registered_apps SET set_up = installed;
+
+-- A dynamic resource's record names what created it, and so what its
+-- operation_id names: a lifecycle operation, a shell session, or a check of a
+-- gate, whose Job is neither an operation's nor a session's.
+ALTER TABLE dynamic_resources ADD COLUMN creator TEXT NOT NULL DEFAULT 'operation'
+    CHECK (creator IN ('operation', 'shell_session', 'gate_check'));
+UPDATE dynamic_resources SET creator = 'shell_session' WHERE shell_session != 0;
+ALTER TABLE dynamic_resources DROP COLUMN shell_session;

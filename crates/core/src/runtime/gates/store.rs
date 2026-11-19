@@ -227,7 +227,8 @@ pub fn record_success(
 }
 
 /// A run for `key` did not succeed, and ended at `at` in the way `how` says.
-/// `pause` is the key a cancelled run pauses the gate for.
+/// `pause` is the key a cancelled run pauses the gate for; a pause for any
+/// key but `key` ended when the key moved, and is dropped.
 // spec: GRUN#retries
 // spec: GRUN#pauses
 pub fn record_failure(
@@ -254,7 +255,11 @@ pub fn record_failure(
              last_failure_at = excluded.last_failure_at,
              last_failure = excluded.last_failure,
              failed_key_digest = excluded.failed_key_digest,
-             paused_key_digest = COALESCE(excluded.paused_key_digest, paused_key_digest)",
+             paused_key_digest = COALESCE(
+                 excluded.paused_key_digest,
+                 CASE WHEN paused_key_digest IS excluded.failed_key_digest
+                 THEN paused_key_digest END
+             )",
         params![
             app,
             gate,
