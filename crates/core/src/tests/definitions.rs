@@ -393,3 +393,32 @@ fn the_facility_gate_bodies_run_under_a_probe() {
         gate_probe(&probed, "migrate").contains("ghcr.io/beyondessential/tamanu-facility:v2.53.3")
     );
 }
+
+// spec: PRM#validation
+#[test]
+fn the_tamanu_definitions_refuse_a_database_or_role_name_that_needs_quoting() {
+    for (source, base) in [(CENTRAL, central_params()), (FACILITY, facility_params())] {
+        let bundle = Arc::new(Bundle::from_stored_script(source));
+        let rejected = |name: &str, value: &str| {
+            let mut proposed = base.clone();
+            proposed.insert(name.to_owned(), value.to_owned());
+            let (_, outcome) = crate::runtime::apps::evaluate_validated(
+                &AppName::new_unchecked("demo"),
+                &bundle,
+                &proposed,
+                &proposed,
+                &crate::ScriptLimits::default(),
+            );
+            outcome
+                .expect("the definition evaluates")
+                .into_iter()
+                .any(|r| r.name == name)
+        };
+        for name in ["db-name", "db-user"] {
+            assert!(!rejected(name, "tamanu_2"), "{name}: a plain name");
+            for bad in ["$(reboot)", "a\"b", "a'b", "a`b`", "a b", "A", ""] {
+                assert!(rejected(name, bad), "{name}: {bad:?} is refused");
+            }
+        }
+    }
+}

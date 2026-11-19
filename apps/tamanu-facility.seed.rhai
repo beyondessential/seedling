@@ -85,15 +85,28 @@ let default_location = app.param("default-location")
     .default_value("GenericClinic")
     .description("Default location code for surveys");
 
+// A database or role name reaches SQL identifiers and a shell string, so it is
+// limited to what needs no quoting.
+let sql_name = |v| {
+    if v.len() == 0 { throw "must not be empty"; }
+    for c in v.chars() {
+        if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+            throw `must be lower-case letters, digits and underscores, not "${v}"`;
+        }
+    }
+};
+
 let db_name = app.param("db-name")
     .required(false)
     .default_value("tamanu")
-    .description("PostgreSQL database name");
+    .description("PostgreSQL database name")
+    .validate(|v, all| sql_name.call(v));
 
 let db_user = app.param("db-user")
     .required(false)
     .default_value("tamanu")
-    .description("PostgreSQL role the facility server connects as (uses local-socket trust auth, no password)");
+    .description("PostgreSQL role the facility server connects as (uses local-socket trust auth, no password)")
+    .validate(|v, all| sql_name.call(v));
 
 // ── External resources ────────────────────────────────────────────────────────
 
