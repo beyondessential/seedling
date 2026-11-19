@@ -169,6 +169,19 @@ new definition, and each validator sees them together:
 seedling-ctl apps params set tamanu host=tamanu.example.org port=8443 --unset legacy-url
 ```
 
+Neither a parameter change nor an update runs anything by itself. A change that
+moves the key of one of the app's gates leaves the gate unsatisfied, and the
+daemon runs it; `apps plan` lists those gates as `gates_would_run`. To run a
+gate now, whether or not it is satisfied, for example to repeat a migration
+after restoring a database from a backup:
+
+```bash
+seedling-ctl apps gate run tamanu migrate
+```
+
+`apps install tamanu` takes no parameters: set them first with `apps params
+set`, or in the same generation as a definition with `apps update --set`.
+
 ### Publishing a definition to a registry
 
 A definition artefact is an OCI manifest with artifact type

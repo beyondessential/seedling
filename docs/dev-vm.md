@@ -65,8 +65,10 @@ sudo systemctl restart seedling
 
 ## Bringing up the postgres app
 
-The app declares an external `data` volume, so install fails with
-`external volume 'data' is not mapped` until one is attached:
+The app declares an external `data` volume, so until one is attached the app
+holds an `external_volume_not_mapped` fault (`external volume 'data' is not
+mapped`). Install takes no parameters, so set the app's parameters and attach
+the volume in any order:
 
 ```bash
 seedling-ctl volumes site create-managed pgdata
@@ -77,10 +79,17 @@ seedling-ctl apps install postgres
 
 Params set through `apps params set` persist across script updates.
 
-If an install fails partway, `apps uninstall` then `apps install` resets the
-reconciler's view cleanly; clearing faults alone can leave it oscillating
-(stopping and recreating a healthy container every few seconds). Data
-volumes survive an uninstall.
+The app stays `installing` until every gate it declares has been satisfied at
+once. A gate whose run fails holds a `gate_failed` fault and is retried at a
+growing delay, capped at an hour; `seedling-ctl apps gate run postgres <gate>`
+runs it now, and `apps show postgres` lists each gate's state. A gate whose key
+moves, through `apps params set` or a new definition, runs again on its own.
+
+If the app is wedged some other way, `apps uninstall` then `apps install`
+resets the reconciler's view cleanly; clearing faults alone can leave it
+oscillating (stopping and recreating a healthy container every few seconds).
+Data volumes survive an uninstall, and an uninstall discards every gate's
+record, so installing again runs each gate as for the first time.
 
 ## Disk pressure
 
