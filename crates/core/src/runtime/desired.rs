@@ -28,6 +28,11 @@ pub struct DesiredResource {
     pub instance: ResourceInstance,
     pub desired: LifecycleState,
     pub definition: Resource,
+    /// The definition of the operation that placed the instance, which
+    /// `definition` was resolved against; `None` for an instance the app's
+    /// current definition declares.
+    // spec: OPS#changes-to-an-app
+    pub declared_by: Option<Arc<AppDef>>,
     /// The instance has been demoted out of its scaled group: an excess
     /// replica, a singleton left behind by a deployment that has since become
     /// scaled, or a replica an operation stopped. Only a demoted instance may
@@ -294,6 +299,7 @@ pub fn compute_uninstalling(
                 desired: LifecycleState::Unscheduled,
                 definition,
                 // Uninstall tears the whole app down through its own phase.
+                declared_by: None,
                 demoted: false,
             }),
             None => state.undeclared.push(instance),
@@ -369,6 +375,7 @@ fn compute_steady(
                     instance: inst,
                     desired: LifecycleState::Ready,
                     definition: resource.clone(),
+                    declared_by: None,
                     demoted: false,
                 });
             }
@@ -377,6 +384,7 @@ fn compute_steady(
                     instance: inst,
                     desired: LifecycleState::Unscheduled,
                     definition: resource.clone(),
+                    declared_by: None,
                     demoted: true,
                 });
             }
@@ -396,6 +404,7 @@ fn compute_steady(
             instance: inst,
             desired,
             definition: resource.clone(),
+            declared_by: None,
             demoted: false,
         });
     }
@@ -418,6 +427,7 @@ fn compute_during_operation(progress: &OperationProgress) -> DesiredState {
                 instance: instance.clone(),
                 desired,
                 definition,
+                declared_by: progress.definition.clone(),
                 demoted: instance.variant == InstanceVariant::Scaled
                     && desired == LifecycleState::Unscheduled,
             })

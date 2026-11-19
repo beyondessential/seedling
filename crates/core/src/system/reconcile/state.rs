@@ -856,6 +856,7 @@ mod tests {
                 LifecycleState::Ready
             },
             definition: volume.clone(),
+            declared_by: None,
             demoted,
         };
         AppSnapshot {

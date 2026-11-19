@@ -5,7 +5,7 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use crate::{
-    defs::{enums::OnUpdate, gate::GateKeyDigests, resource::Resource},
+    defs::{app::AppDef, enums::OnUpdate, gate::GateKeyDigests, resource::Resource},
     runtime::{
         autonomous_ops,
         db::DbHandle,
@@ -14,6 +14,7 @@ use crate::{
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
         priority::AppPriority,
+        secrets::{Cipher, Error as SecretsError},
     },
     system::{System, actuator::Actuator, observer::Observer, types::ObservationFact},
 };
@@ -141,9 +142,65 @@ struct PodInstanceResult {
     completed_job: Option<InstanceId>,
 }
 
+/// The digests of the keys of the gates of each definition an app's desired
+/// state resolves its workloads against.
+#[derive(Debug, Default)]
+pub(super) struct GateKeys {
+    current: GateKeyDigests,
+    placed: Vec<(Arc<AppDef>, GateKeyDigests)>,
+}
+
+impl GateKeys {
+    /// Digest the gate keys of `current`, the app's current definition, and of
+    /// each operation definition `desired` resolves a resource against.
+    pub(super) fn of(
+        current: &AppDef,
+        desired: &DesiredState,
+        cipher: &Cipher,
+    ) -> Result<Self, SecretsError> {
+        let mut placed: Vec<(Arc<AppDef>, GateKeyDigests)> = Vec::new();
+        for def in desired
+            .resources
+            .iter()
+            .filter_map(|dr| dr.declared_by.as_ref())
+        {
+            if !placed.iter().any(|(known, _)| Arc::ptr_eq(known, def)) {
+                placed.push((Arc::clone(def), GateKeyDigests::of(def, cipher)?));
+            }
+        }
+        Ok(Self {
+            current: GateKeyDigests::of(current, cipher)?,
+            placed,
+        })
+    }
+
+    /// The digests of the gates of the definition `dr` was resolved against,
+    /// or `None` for a definition these digests were not taken for.
+    // spec: OPS#changes-to-an-app
+    fn of_resource(&self, dr: &DesiredResource) -> Option<&GateKeyDigests> {
+        match &dr.declared_by {
+            None => Some(&self.current),
+            Some(def) => self
+                .placed
+                .iter()
+                .find(|(known, _)| Arc::ptr_eq(known, def))
+                .map(|(_, digests)| digests),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn current(&self) -> &GateKeyDigests {
+        &self.current
+    }
+}
+
 /// Per-instance observation collected before any actuation decisions are made.
 struct ObservedInstance<'a> {
     dr: &'a DesiredResource,
+    /// The digests of the keys of the gates of the definition `dr` was
+    /// resolved against, which its spec hash carries.
+    // spec: UPD#spec-hash
+    gate_keys: &'a GateKeyDigests,
     is_running: bool,
     spec_stale: bool,
     unit_failed: bool,
@@ -206,7 +263,7 @@ async fn observe_one_pod<'a>(
     observer: &Observer,
     actuator: &Actuator,
     driver: &Arc<System>,
-    gate_keys: &GateKeyDigests,
+    gate_keys: &'a GateKeys,
     dr: &'a DesiredResource,
 ) -> PodObservation<'a> {
     let mut result = PodInstanceResult {
@@ -231,6 +288,22 @@ async fn observe_one_pod<'a>(
         replaced_failed_run: false,
         observed: None,
         completed_job: None,
+    };
+
+    let Some(gate_keys) = gate_keys.of_resource(dr) else {
+        error!(
+            instance = %dr.instance.display_name,
+            "pods: the gate keys of the definition the instance was placed by were not digested, skipping instance"
+        );
+        result.observe_failure = Some((
+            dr.instance.clone(),
+            "the gate keys of the definition the instance was placed by were not digested"
+                .to_owned(),
+        ));
+        return PodObservation::Failed {
+            dr,
+            result: Box::new(result),
+        };
     };
 
     let facts = match observer.observe(&dr.instance, &dr.definition).await {
@@ -415,6 +488,7 @@ async fn observe_one_pod<'a>(
 
     PodObservation::Observed(Box::new(ObservedInstance {
         dr,
+        gate_keys,
         is_running,
         spec_stale,
         unit_failed,
@@ -443,7 +517,6 @@ async fn actuate_one_pod(
     actuator: &Actuator,
     db: &DbHandle,
     app_priority: AppPriority,
-    gate_keys: &GateKeyDigests,
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
     hold_start: bool,
@@ -759,7 +832,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             };
             let outcome = match actuator
-                .start(&dr.instance, &dr.definition, app_priority, gate_keys)
+                .start(&dr.instance, &dr.definition, app_priority, obs.gate_keys)
                 .await
             {
                 Ok(Some(_)) | Ok(None) => {
@@ -1033,7 +1106,7 @@ pub(super) async fn observe_and_actuate(
     db: &DbHandle,
     desired: &DesiredState,
     app_priority: AppPriority,
-    gate_keys: &GateKeyDigests,
+    gate_keys: &GateKeys,
     gates: &GateView,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
@@ -1051,6 +1124,7 @@ pub(super) async fn observe_and_actuate(
                 instance: instance.clone(),
                 desired: LifecycleState::Unscheduled,
                 definition: undeclared_pod(instance)?,
+                declared_by: None,
                 demoted: false,
             })
         })
@@ -1153,7 +1227,6 @@ pub(super) async fn observe_and_actuate(
             actuator,
             db,
             app_priority,
-            gate_keys,
             obs,
             inhibit,
             hold_start,
@@ -1395,13 +1468,17 @@ mod update_tests {
                 frozen: false,
                 anon_id: None,
             }),
+            declared_by: None,
             demoted: false,
         }
     }
 
     fn observed(dr: &DesiredResource, stale: bool, running: bool) -> ObservedInstance<'_> {
+        static NO_GATE_KEYS: std::sync::LazyLock<GateKeyDigests> =
+            std::sync::LazyLock::new(GateKeyDigests::default);
         ObservedInstance {
             dr,
+            gate_keys: &NO_GATE_KEYS,
             is_running: running,
             spec_stale: stale,
             unit_failed: false,
@@ -1456,6 +1533,7 @@ mod update_tests {
             ),
             desired: LifecycleState::Ready,
             definition: Resource::Job(job),
+            declared_by: None,
             demoted: false,
         };
         let mut running = observed(&dr, true, true);
@@ -1469,7 +1547,6 @@ mod update_tests {
                     &reconciler.actuator,
                     &reconciler.db,
                     AppPriority::default(),
-                    &GateKeyDigests::default(),
                     running,
                     false,
                     false,
@@ -1554,6 +1631,7 @@ mod update_tests {
             ),
             desired: LifecycleState::Ready,
             definition: Resource::Job(job),
+            declared_by: None,
             demoted: false,
         };
 
@@ -1566,7 +1644,6 @@ mod update_tests {
                     &reconciler.actuator,
                     &reconciler.db,
                     AppPriority::default(),
-                    &GateKeyDigests::default(),
                     observed(&dr, false, false),
                     false,
                     false,
