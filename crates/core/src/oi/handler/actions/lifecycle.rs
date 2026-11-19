@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, path::Path, sync::Arc};
 
 use parking_lot::RwLock;
 use seedling_protocol::events::{OperationEventCtx, OperationTarget};
@@ -351,17 +351,18 @@ pub(crate) fn bind_volume_params(
     Ok(BoundParams { params, bindings })
 }
 
-/// The app as it was at `generation`, or `None` where `current` already is
-/// that, or the generation is not one that has been recorded.
+/// The app as it was at `generation`: `current` where that is the app's
+/// current generation or one that has not been recorded, and otherwise the
+/// app rebuilt from the generation's record.
 // spec: OPS#initiating-events
-pub(crate) fn app_at_generation(
+pub(crate) fn app_at_generation<'a>(
     db: &DbHandle,
     app_name: &AppName,
-    current: &App,
+    current: &'a App,
     generation: u64,
     limits: &crate::ScriptLimits,
     cipher: &Arc<crate::runtime::secrets::Cipher>,
-) -> Result<Option<App>, crate::runtime::generations::Error> {
+) -> Result<Cow<'a, App>, crate::runtime::generations::Error> {
     let name = app_name.clone();
     let now = db.call(move |db| crate::runtime::generations::current(db, &name))?;
     match now {
@@ -372,12 +373,9 @@ pub(crate) fn app_at_generation(
                     db, &name, generation, &limits, &cipher,
                 )
             })
-            .map(Some)
+            .map(Cow::Owned)
         }
-        _ => {
-            let _ = current;
-            Ok(None)
-        }
+        _ => Ok(Cow::Borrowed(current)),
     }
 }
 
@@ -553,8 +551,7 @@ pub(crate) fn run_operation_loop(
     // generation, however many generations have been committed since it was
     // dispatched, and on every replay. If that generation cannot be rebuilt
     // the operation fails; it is never run against another's state.
-    let generation_app;
-    let app = match app_at_generation(
+    let at_generation = match app_at_generation(
         &db,
         app_name,
         app,
@@ -562,11 +559,7 @@ pub(crate) fn run_operation_loop(
         script_limits,
         &cipher,
     ) {
-        Ok(Some(rebuilt)) => {
-            generation_app = rebuilt;
-            &generation_app
-        }
-        Ok(None) => app,
+        Ok(app) => app,
         Err(e) => {
             tracing::error!(app = %app_name, action = %action_name, "cannot rebuild generation {}: {e}", op_ctx.operation_generation);
             return OperationEnd::NotRun(format!(
@@ -575,6 +568,7 @@ pub(crate) fn run_operation_loop(
             ));
         }
     };
+    let app = &*at_generation;
 
     let (engine, mut scope, ast) = match language_for(app, script_limits) {
         Ok(language) => language,

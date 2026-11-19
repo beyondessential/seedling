@@ -190,7 +190,7 @@ impl Run<'_> {
             &state.script_limits,
             &state.cipher,
         ) {
-            Ok(rebuilt) => rebuilt,
+            Ok(app) => app,
             Err(e) => {
                 return RunEnd::Failed {
                     how: format!("generation {generation} cannot be rebuilt: {e}"),
@@ -198,7 +198,7 @@ impl Run<'_> {
                 };
             }
         };
-        let app = at_generation.as_ref().unwrap_or(&current);
+        let app = &*at_generation;
         let def = app.def.load_full();
         let Some(gate_def) = def.gates.get(&self.gate).cloned() else {
             return RunEnd::Failed {
@@ -650,11 +650,11 @@ pub(crate) fn last_success(
     let Some(generation) = generation else {
         return Ok(None);
     };
-    let rebuilt =
+    let app =
         app_at_generation(db, app_name, current, generation, limits, cipher).map_err(|e| {
             format!("generation {generation}, the gate's last success, cannot be rebuilt: {e}")
         })?;
-    Ok(Some(rebuilt.unwrap_or_else(|| current.clone())))
+    Ok(Some(app.into_owned()))
 }
 
 enum Finished {
