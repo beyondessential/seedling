@@ -545,6 +545,72 @@ fn list_returns_descending_with_limit_and_before() {
     assert!(before_3.iter().all(|e| e.generation < 3));
 }
 
+// spec: GEN#history-entries
+// spec: SEC#generation-history
+#[test]
+fn a_listing_carries_each_entrys_own_parameters() {
+    let db = test_db();
+    let cipher = test_cipher();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+    let first = bump_param_change(
+        &db,
+        &app(),
+        &[
+            ParamChange {
+                name: &param("b"),
+                previous: None,
+                new_value: Some("b1"),
+                is_secret: false,
+                previous_is_secret: false,
+            },
+            ParamChange {
+                name: &param("a"),
+                previous: None,
+                new_value: Some("a1"),
+                is_secret: false,
+                previous_is_secret: false,
+            },
+        ],
+        &cipher,
+    )
+    .unwrap();
+    let second = bump_param_set(&db, &app(), &param("token"), None, "t1", &cipher, true).unwrap();
+    let third = bump_param_set(&db, &app(), &param("a"), Some("a1"), "a2", &cipher, false).unwrap();
+
+    let listed = list(&db, &app(), None, 10).unwrap();
+    let changed: Vec<_> = listed
+        .iter()
+        .map(|entry| {
+            (
+                entry.generation,
+                entry
+                    .params
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.name.as_str(),
+                            p.new_value.as_deref(),
+                            p.new_value_redacted,
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        changed,
+        vec![
+            (third, vec![("a", Some("a2"), false)]),
+            (second, vec![("token", None, true)]),
+            (
+                first,
+                vec![("a", Some("a1"), false), ("b", Some("b1"), false)]
+            ),
+            (1, vec![]),
+        ]
+    );
+}
+
 // spec: GEN#lineage
 // spec: GEN#bundle-storage
 #[test]
