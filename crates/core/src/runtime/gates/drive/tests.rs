@@ -925,6 +925,58 @@ fn a_check_with_an_interval_runs_every_interval_while_no_run_is_in_progress() {
 
 // spec: GRUN#checks
 #[test]
+fn a_check_with_an_interval_runs_for_an_unsatisfied_gate_whose_run_is_queued() {
+    let oi = installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: 1 })"));
+    let (def, cipher) = {
+        let reg = oi.state.registry.read();
+        (
+            reg.get("demo").unwrap().app.def.load_full(),
+            Arc::clone(&oi.state.cipher),
+        )
+    };
+    oi.state
+        .db
+        .call(move |db| fail(db, &cipher, &def, "ready", Timestamp::now()));
+    // Another app's operation holds the scheduler, so the gate's run queues.
+    let phase = parking_lot::Mutex::new(AppPhase::Installed);
+    for (app, target) in [
+        (
+            AppName::new("other").unwrap(),
+            OperationTarget::Action(seedling_protocol::names::ActionName::new("busy").unwrap()),
+        ),
+        (app(), OperationTarget::Gate(gate("ready"))),
+    ] {
+        oi.state.scheduler.lock().admit(
+            &app,
+            &target,
+            serde_json::Map::new(),
+            1,
+            "test",
+            &phase,
+            None,
+        );
+    }
+    let stop = exit_checks_with(&oi, 0);
+
+    drive_once(&oi);
+    std::thread::sleep(Duration::from_millis(1100));
+    drive_once(&oi);
+    wait_until("the check to pass", || {
+        oi.state
+            .gate_runtime
+            .remembered(&app())
+            .cleared
+            .contains_key(&gate("ready"))
+    });
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        !ready_record(&oi).valid,
+        "a passing check leaves the gate unsatisfied, as its record says"
+    );
+}
+
+// spec: GRUN#checks
+#[test]
 fn a_check_that_cannot_be_run_leaves_the_gate_undetermined_and_is_retried_after_its_delay_across_a_restart()
  {
     let oi = satisfied_and_checked();

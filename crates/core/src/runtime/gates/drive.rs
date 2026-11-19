@@ -497,7 +497,7 @@ async fn start_checks(
             // is a new occasion for a check.
             state.gate_runtime.unclear(&app.name, name);
         }
-        if !eligible_for_check(status) || running(name) || queued.contains(name) {
+        if running(name) {
             continue;
         }
         let Some(digest) = status.key_digest else {
@@ -508,25 +508,27 @@ async fn start_checks(
         {
             continue;
         }
-        let due = match &status.state {
-            GateState::Undetermined(Undetermined::Check(_)) => {
-                check_retry_is_due(status.record.as_ref(), now)
+        let occasioned = eligible_for_check(status)
+            && !queued.contains(name)
+            && match &status.state {
+                GateState::Undetermined(Undetermined::Check(_)) => {
+                    check_retry_is_due(status.record.as_ref(), now)
+                }
+                _ => down && remembered.cleared.get(name) != Some(&digest),
+            };
+        // spec: GRUN#checks
+        // Whatever the gate's state, and whether or not a run of it is queued,
+        // though no sooner than a check that could not be run is retried.
+        let interval_due = check.interval.is_some_and(|interval| {
+            match state.gate_runtime.last_checked(&app.name, name) {
+                Some(at) => at.elapsed() >= interval,
+                None => {
+                    state.gate_runtime.note_checked(&app.name, name);
+                    false
+                }
             }
-            _ => {
-                let cleared = remembered.cleared.get(name) == Some(&digest);
-                let interval_due = check.interval.is_some_and(|interval| {
-                    match state.gate_runtime.last_checked(&app.name, name) {
-                        Some(at) => at.elapsed() >= interval,
-                        None => {
-                            state.gate_runtime.note_checked(&app.name, name);
-                            false
-                        }
-                    }
-                });
-                (down && !cleared) || interval_due
-            }
-        };
-        if !due {
+        }) && check_retry_is_due(status.record.as_ref(), now);
+        if !(occasioned || interval_due) {
             continue;
         }
         let Some(job) = app.def.resources.get(&check.job).cloned() else {
