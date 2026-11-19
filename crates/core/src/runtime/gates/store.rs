@@ -345,7 +345,8 @@ pub fn clear_pause(db: &Db, app: &AppName, gate: &GateName) -> rusqlite::Result<
     Ok(())
 }
 
-/// The gate's check could not be run, at `at`, for the reason `why`.
+/// The gate's check could not be run, at `at`, for the reason `why`. How
+/// many times in a row it now has not been.
 // spec: GRUN#checks
 pub fn record_check_unavailable(
     db: &Db,
@@ -353,18 +354,19 @@ pub fn record_check_unavailable(
     gate: &GateName,
     at: Timestamp,
     why: &str,
-) -> rusqlite::Result<()> {
-    db.conn.execute(
+) -> rusqlite::Result<u32> {
+    db.conn.query_row(
         "INSERT INTO gate_records
              (app, gate, valid, check_failures, check_unavailable_at, check_unavailable)
          VALUES (?1, ?2, 0, 1, ?3, ?4)
          ON CONFLICT(app, gate) DO UPDATE SET
              check_failures = check_failures + 1,
              check_unavailable_at = excluded.check_unavailable_at,
-             check_unavailable = excluded.check_unavailable",
+             check_unavailable = excluded.check_unavailable
+         RETURNING check_failures",
         params![app, gate, at.to_string(), why],
-    )?;
-    Ok(())
+        |row| row.get(0),
+    )
 }
 
 /// The gate's check ran to an outcome.

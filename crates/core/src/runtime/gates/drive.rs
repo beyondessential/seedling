@@ -571,34 +571,52 @@ async fn apply_check_outcome(
         }
         CheckOutcome::Unavailable(why) => {
             tracing::warn!(%app, %gate, "the check could not be run: {why}");
-            let (a, g, w) = (app.clone(), gate.clone(), why.clone());
-            let recorded = state
+            let (a, g) = (app.clone(), gate.clone());
+            let failures = state
                 .db
-                .call(move |db| store::record_check_unavailable(db, &a, &g, Timestamp::now(), &w));
-            // Whether or not it was written, the check is not tried again
-            // until a delay that grows with each time it could not be run.
-            let failures = match &recorded {
-                Ok(()) => state.db.call({
-                    let (a, g) = (app.clone(), gate.clone());
-                    move |db| {
-                        store::load_records(db, &a)
-                            .ok()
-                            .and_then(|mut records| records.remove(&g))
-                            .and_then(Result::ok)
-                            .map_or(1, |record| record.check_failures)
-                    }
-                }),
-                Err(e) => {
-                    tracing::error!(%app, %gate, "cannot record that the check could not be run: {e}");
-                    1
-                }
-            };
+                .call(move |db| record_unavailable_check(db, &a, &g, Timestamp::now(), &why));
             runtime.defer_check(app, gate, retry_delay(failures));
         }
         CheckOutcome::Cancelled => {}
     }
     sync_app(state, app).await;
     state.tick_notify.notify_one();
+}
+
+/// Record that the check of `gate` could not be run, and how many times in a
+/// row it has not been, which its next attempt waits out a delay for.
+///
+/// Whether or not it was written, this attempt counts: where the record cannot
+/// be written, it is the one after those the record holds, and the first where
+/// the record cannot be read either.
+// spec: GRUN#checks
+fn record_unavailable_check(
+    db: &Db,
+    app: &AppName,
+    gate: &GateName,
+    at: Timestamp,
+    why: &str,
+) -> u32 {
+    let e = match store::record_check_unavailable(db, app, gate, at, why) {
+        Ok(failures) => return failures,
+        Err(e) => e,
+    };
+    tracing::error!(%app, %gate, "cannot record that the check could not be run: {e}");
+    let held = store::load_records(db, app)
+        .map_err(|e| e.to_string())
+        .and_then(|mut records| {
+            records
+                .remove(gate)
+                .unwrap_or(Ok(store::GateRecord::default()))
+        })
+        .map(|record| record.check_failures);
+    match held {
+        Ok(held) => held.saturating_add(1),
+        Err(e) => {
+            tracing::error!(%app, %gate, "cannot read how many times in a row the check could not be run: {e}");
+            1
+        }
+    }
 }
 
 /// Initiate the run of the first gate that is due, in the order the script

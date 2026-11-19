@@ -979,6 +979,47 @@ fn a_check_that_cannot_be_run_leaves_the_gate_undetermined_and_is_retried_after_
     });
 }
 
+// spec: GRUN#checks
+#[test]
+fn a_check_that_could_not_be_run_backs_off_from_the_count_the_record_holds_when_it_cannot_be_written()
+ {
+    let db = Db::open_in_memory().unwrap();
+    register(&db);
+    let at = Timestamp::from_second(100).unwrap();
+    let ready = gate("ready");
+    for expected in 1..=3 {
+        assert_eq!(
+            record_unavailable_check(&db, &app(), &ready, at, "no podman"),
+            expected
+        );
+    }
+
+    db.conn
+        .execute_batch(
+            "CREATE TRIGGER read_only BEFORE UPDATE ON gate_records
+             BEGIN SELECT RAISE(ABORT, 'read-only'); END;",
+        )
+        .unwrap();
+    assert_eq!(
+        record_unavailable_check(&db, &app(), &ready, at, "no podman"),
+        4,
+        "the attempt counts after the three the record holds"
+    );
+    let held = store::load_records(&db, &app()).unwrap()[&ready]
+        .as_ref()
+        .unwrap()
+        .check_failures;
+    assert_eq!(held, 3, "the record was not written");
+
+    db.conn
+        .execute_batch("ALTER TABLE gate_records RENAME TO unreadable")
+        .unwrap();
+    assert_eq!(
+        record_unavailable_check(&db, &app(), &ready, at, "no podman"),
+        1
+    );
+}
+
 /// The instances of check Jobs the app has recorded.
 fn check_instances(db: &Db) -> Vec<crate::runtime::identity::ResourceInstance> {
     use crate::runtime::{
