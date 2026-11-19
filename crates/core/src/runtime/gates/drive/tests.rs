@@ -234,7 +234,13 @@ fn gate_check_unavailable_stands_until_a_check_runs_to_an_outcome() {
         vec![("gate_check_unavailable".to_owned(), "ready".to_owned())]
     );
 
-    store::clear_check_unavailable(&db, &app(), &gate("ready")).unwrap();
+    store::record_check_outcome(
+        &db,
+        &app(),
+        &gate("ready"),
+        Timestamp::from_second(200).unwrap(),
+    )
+    .unwrap();
     sync(&db, &def, &cipher, None);
     assert!(active_faults(&db).is_empty());
 }
@@ -973,6 +979,49 @@ fn a_check_with_an_interval_runs_for_an_unsatisfied_gate_whose_run_is_queued() {
         !ready_record(&oi).valid,
         "a passing check leaves the gate unsatisfied, as its record says"
     );
+}
+
+// spec: GRUN#checks
+#[test]
+fn an_interval_check_is_due_from_the_last_check_the_record_holds_after_a_restart() {
+    for (checked_ago, due) in [(120, true), (0, false)] {
+        let oi = installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: 60 })"));
+        let key = {
+            let reg = oi.state.registry.read();
+            digest(
+                &reg.get("demo").unwrap().app.def.load_full(),
+                &oi.state.cipher,
+                "ready",
+            )
+        };
+        oi.state.db.call(move |db| {
+            store::record_success(db, &app(), &gate("ready"), &key, 1).unwrap();
+        });
+        let at = Timestamp::from_second(Timestamp::now().as_second() - checked_ago).unwrap();
+        oi.state.db.call(move |db| {
+            store::record_check_outcome(db, &app(), &gate("ready"), at).unwrap();
+        });
+        // The runtime has restarted: nothing in memory remembers the check,
+        // and a check has already cleared the dependants to start, so only
+        // the interval can make one due.
+        oi.state.gate_runtime.forget_app(&app());
+        oi.state
+            .gate_runtime
+            .clear_for_start(&app(), &gate("ready"), key);
+        let stop = exit_checks_with(&oi, 1);
+
+        drive_once(&oi);
+        if due {
+            wait_until("the check to fail", || !ready_record(&oi).valid);
+        } else {
+            std::thread::sleep(Duration::from_millis(400));
+            assert!(
+                ready_record(&oi).valid,
+                "no check is made before the interval has passed"
+            );
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 // spec: GRUN#checks

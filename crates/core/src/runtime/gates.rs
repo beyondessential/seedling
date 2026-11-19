@@ -414,6 +414,16 @@ pub fn check_retry_due(record: &GateRecord) -> Option<Timestamp> {
     Timestamp::from_second(tried_at.as_second().saturating_add(delay.as_secs() as i64)).ok()
 }
 
+/// When the next interval check of a gate is due after one that ran to an
+/// outcome at `last`.
+// spec: GRUN#checks
+pub fn interval_check_due(last: Timestamp, interval: Duration) -> Timestamp {
+    jiff::SignedDuration::try_from(interval)
+        .ok()
+        .and_then(|interval| last.checked_add(interval).ok())
+        .unwrap_or(Timestamp::MAX)
+}
+
 // ---------------------------------------------------------------------------
 // Start order
 // ---------------------------------------------------------------------------
@@ -1024,7 +1034,7 @@ struct Memory {
     remembered: BTreeMap<AppName, Remembered>,
     reported: BTreeMap<(AppName, GateName), &'static str>,
     checking: BTreeMap<(AppName, GateName), Arc<CancelToken>>,
-    last_checked: BTreeMap<(AppName, GateName), Instant>,
+    last_checked: BTreeMap<(AppName, GateName), Timestamp>,
     not_before: BTreeMap<(AppName, GateName), Instant>,
     snapshots: BTreeMap<AppName, GateSnapshot>,
 }
@@ -1207,15 +1217,16 @@ impl GateRuntime {
             .contains_key(&(app.clone(), gate.clone()))
     }
 
-    /// A check of `gate` ran to an outcome, now.
-    pub fn note_checked(&self, app: &AppName, gate: &GateName) {
+    /// A check of `gate` ran to an outcome at `at`, or the interval before
+    /// its first check is counted from `at`.
+    pub fn note_checked(&self, app: &AppName, gate: &GateName, at: Timestamp) {
         self.inner
             .lock()
             .last_checked
-            .insert((app.clone(), gate.clone()), Instant::now());
+            .insert((app.clone(), gate.clone()), at);
     }
 
-    pub fn last_checked(&self, app: &AppName, gate: &GateName) -> Option<Instant> {
+    pub fn last_checked(&self, app: &AppName, gate: &GateName) -> Option<Timestamp> {
         self.inner
             .lock()
             .last_checked

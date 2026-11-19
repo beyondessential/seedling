@@ -14,7 +14,7 @@ One run of a gate as a [lifecycle operation](../overview.md#lifecycle-operation)
 
 ### Gate record
 
-The durable record the runtime keeps for each gate of an app: the gate's [last success](../language/gate.md#last-success) and whether it is still valid, the runs that have failed since, and whether the gate is paused.
+The durable record the runtime keeps for each gate of an app: the gate's [last success](../language/gate.md#last-success) and whether it is still valid, the runs that have failed since, whether the gate is paused, and when a check of it last ran to an outcome.
 
 ### Valid success
 
@@ -118,6 +118,8 @@ The runtime MUST check a gate that declares a check:
 - before it starts an instance of a dependant workload while no instance of that workload is running, where the gate's record holds a valid success for its current key;
 - after the gate's body returns in a run;
 - every `interval` seconds while the app is installed and no run of the gate is in progress, where the check declares an interval.
+
+The runtime MUST count each interval from when a check of the gate last ran to an outcome, as the gate's record holds it, whether or not the runtime has restarted since.
 
 To check a gate, the runtime MUST start an instance of the check's Job and wait for it to terminate.
 The Job's definition is that of the run's generation for the check that ends a run, and that of the app's current generation otherwise.

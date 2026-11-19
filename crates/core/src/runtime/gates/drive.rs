@@ -16,7 +16,8 @@ use seedling_protocol::{
 
 use super::{
     AppGates, Decision, GateSnapshot, GateState, Readiness, Remembered, Undetermined, decide,
-    declared_order, dependants_down, evaluate, held_resources, read_readiness, retry_delay,
+    declared_order, dependants_down, evaluate, held_resources, interval_check_due, read_readiness,
+    retry_delay,
     run::{CheckOutcome, check_retry_is_due, eligible_for_check, run_check},
     store::{self, FailedRuns},
     unready_targets,
@@ -520,10 +521,11 @@ async fn start_checks(
         // Whatever the gate's state, and whether or not a run of it is queued,
         // though no sooner than a check that could not be run is retried.
         let interval_due = check.interval.is_some_and(|interval| {
-            match state.gate_runtime.last_checked(&app.name, name) {
-                Some(at) => at.elapsed() >= interval,
+            let recorded = status.record.as_ref().and_then(|r| r.last_checked_at);
+            match recorded.max(state.gate_runtime.last_checked(&app.name, name)) {
+                Some(at) => now >= interval_check_due(at, interval),
                 None => {
-                    state.gate_runtime.note_checked(&app.name, name);
+                    state.gate_runtime.note_checked(&app.name, name, now);
                     false
                 }
             }
@@ -564,24 +566,24 @@ async fn apply_check_outcome(
     }
     match outcome {
         CheckOutcome::Passed => {
-            let (a, g) = (app.clone(), gate.clone());
-            let cleared = state
+            let (a, g, at) = (app.clone(), gate.clone(), Timestamp::now());
+            let recorded = state
                 .db
-                .call(move |db| store::clear_check_unavailable(db, &a, &g));
-            if let Err(e) = cleared {
+                .call(move |db| store::record_check_outcome(db, &a, &g, at));
+            if let Err(e) = recorded {
                 tracing::error!(%app, %gate, "cannot record that the check ran to an outcome: {e}");
             }
-            runtime.note_checked(app, gate);
+            runtime.note_checked(app, gate, at);
             runtime.clear_for_start(app, gate, digest);
         }
         CheckOutcome::Failed(why) => {
             tracing::warn!(%app, %gate, "the check failed, so the gate is no longer satisfied: {why}");
-            let (a, g) = (app.clone(), gate.clone());
+            let (a, g, at) = (app.clone(), gate.clone(), Timestamp::now());
             let cleared = state.db.call(move |db| {
-                store::clear_check_unavailable(db, &a, &g)?;
+                store::record_check_outcome(db, &a, &g, at)?;
                 store::invalidate(db, &a, &g)
             });
-            runtime.note_checked(app, gate);
+            runtime.note_checked(app, gate, at);
             runtime.unclear(app, gate);
             if let Err(e) = cleared {
                 tracing::error!(%app, %gate, "cannot record that the check failed: {e}");

@@ -295,16 +295,12 @@ impl Run<'_> {
                 return failed("the gate's check is not a Job of the app".to_owned());
             };
             match run_check(state, name, &self.gate, job, Some(&self.cancel)).await {
-                CheckOutcome::Passed => checked = true,
+                CheckOutcome::Passed => {
+                    self.record_check_outcome();
+                    checked = true;
+                }
                 CheckOutcome::Failed(why) => {
-                    // The check ran to an outcome, which ends whatever kept
-                    // an earlier one from being run.
-                    let (app, gate) = (name.clone(), self.gate.clone());
-                    state.db.call(move |db| {
-                        if let Err(e) = store::clear_check_unavailable(db, &app, &gate) {
-                            tracing::error!(%app, %gate, "cannot record that the check ran to an outcome: {e}");
-                        }
-                    });
+                    self.record_check_outcome();
                     return failed(format!("its check failed: {why}"));
                 }
                 CheckOutcome::Unavailable(why) => {
@@ -543,6 +539,22 @@ impl Run<'_> {
             Ok(end) => end,
             Err(e) => OperationEnd::Failed(format!("the body's task failed: {e}")),
         }
+    }
+
+    /// Record that the run's check ran to an outcome, now.
+    // spec: GRUN#checks
+    fn record_check_outcome(&self) {
+        let (app, gate, at) = (
+            self.app_name.clone(),
+            self.gate.clone(),
+            jiff::Timestamp::now(),
+        );
+        self.state.gate_runtime.note_checked(&app, &gate, at);
+        self.state.db.call(move |db| {
+            if let Err(e) = store::record_check_outcome(db, &app, &gate, at) {
+                tracing::error!(%app, %gate, "cannot record that the check ran to an outcome: {e}");
+            }
+        });
     }
 
     /// Record how the run ended and report it.

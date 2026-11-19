@@ -49,6 +49,8 @@ pub struct GateRecord {
     pub check_unavailable_at: Option<Timestamp>,
     /// Why the most recent check could not be run.
     pub check_unavailable: Option<String>,
+    /// When a check of the gate last ran to an outcome.
+    pub last_checked_at: Option<Timestamp>,
 }
 
 /// An app's gate records: each gate's, or why it cannot be read.
@@ -89,6 +91,7 @@ type RawRow = (
     i64,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 fn parse_row(raw: RawRow) -> Result<GateRecord, String> {
@@ -105,6 +108,7 @@ fn parse_row(raw: RawRow) -> Result<GateRecord, String> {
         check_failures,
         check_unavailable_at,
         check_unavailable,
+        last_checked_at,
     ) = raw;
     Ok(GateRecord {
         key_digest: digest("key digest", key_digest)?,
@@ -122,6 +126,7 @@ fn parse_row(raw: RawRow) -> Result<GateRecord, String> {
             .map_err(|_| "the check failure count is out of range".to_owned())?,
         check_unavailable_at: timestamp("check failure time", check_unavailable_at)?,
         check_unavailable,
+        last_checked_at: timestamp("last check time", last_checked_at)?,
     })
 }
 
@@ -135,7 +140,7 @@ pub fn load_records(db: &Db, app: &AppName) -> rusqlite::Result<Records> {
     let mut stmt = db.conn.prepare(
         "SELECT gate, key_digest, success_generation, valid, consecutive_failures,
                 last_failure_at, last_failure, failed_key_digest, paused_key_digest,
-                check_failures, check_unavailable_at, check_unavailable
+                check_failures, check_unavailable_at, check_unavailable, last_checked_at
          FROM gate_records WHERE app = ?1",
     )?;
     let rows = stmt.query_map(params![app], |row| {
@@ -152,6 +157,7 @@ pub fn load_records(db: &Db, app: &AppName) -> rusqlite::Result<Records> {
             row.get(9)?,
             row.get(10)?,
             row.get(11)?,
+            row.get(12)?,
         ))
     })?;
     let mut records = Records::new();
@@ -369,7 +375,30 @@ pub fn record_check_unavailable(
     )
 }
 
-/// The gate's check ran to an outcome.
+/// A check of the gate ran to an outcome at `at`, which ends whatever kept an
+/// earlier one from being run.
+// spec: GRUN#checks
+pub fn record_check_outcome(
+    db: &Db,
+    app: &AppName,
+    gate: &GateName,
+    at: Timestamp,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT INTO gate_records (app, gate, valid, last_checked_at)
+         VALUES (?1, ?2, 0, ?3)
+         ON CONFLICT(app, gate) DO UPDATE SET
+             check_failures = 0,
+             check_unavailable_at = NULL,
+             check_unavailable = NULL,
+             last_checked_at = excluded.last_checked_at",
+        params![app, gate, at.to_string()],
+    )?;
+    Ok(())
+}
+
+/// No check of the gate will run to an outcome to end whatever kept the last
+/// one from being run.
 // spec: GRUN#checks
 pub fn clear_check_unavailable(db: &Db, app: &AppName, gate: &GateName) -> rusqlite::Result<()> {
     db.conn.execute(

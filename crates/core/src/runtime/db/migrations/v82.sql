@@ -111,8 +111,9 @@ ALTER TABLE current_operation_new RENAME TO current_operation;
 -- of its last success and the generation that run was for, whether that
 -- success still stands, the runs that failed since, the key a cancelled run
 -- paused it for, the key a failed run was for (so that a move of the key makes
--- the next run due at once), and how its check has failed to run. Only a
--- digest of a key is held, since a key may carry a secret.
+-- the next run due at once), how its check has failed to run, and when a check
+-- of it last ran to an outcome. Only a digest of a key is held, since a key
+-- may carry a secret.
 CREATE TABLE gate_records (
     app                  TEXT    NOT NULL,
     gate                 TEXT    NOT NULL,
@@ -127,6 +128,7 @@ CREATE TABLE gate_records (
     check_failures       INTEGER NOT NULL DEFAULT 0,
     check_unavailable_at TEXT,
     check_unavailable    TEXT,
+    last_checked_at      TEXT,
     PRIMARY KEY (app, gate)
 );
 

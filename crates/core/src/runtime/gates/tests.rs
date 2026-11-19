@@ -263,7 +263,7 @@ fn a_valid_success_whose_check_could_not_be_run_is_undetermined() {
         GateState::Undetermined(Undetermined::Check(_))
     ));
 
-    store::clear_check_unavailable(&db, &app(), &gate("migrate")).unwrap();
+    store::record_check_outcome(&db, &app(), &gate("migrate"), at(20)).unwrap();
     assert_eq!(
         status(&db, &def, &cipher, "migrate").state,
         GateState::Satisfied
@@ -1060,4 +1060,28 @@ fn a_closure_is_kept_from_what_the_apps_current_definition_gates() {
         "the current definition orders web after an unsatisfied gate"
     );
     assert!(left_out(&both, "api"), "what the gate holds is left out");
+}
+
+// spec: GRUN#checks
+#[test]
+fn the_last_check_outlasts_a_restart_and_the_next_interval_check_is_counted_from_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("seedling.db");
+    {
+        let db = Db::open(&path).unwrap();
+        store::record_check_outcome(&db, &app(), &gate("ready"), at(1_000)).unwrap();
+    }
+
+    let db = Db::open(&path).unwrap();
+    let record = store::load_records(&db, &app())
+        .unwrap()
+        .remove(&gate("ready"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.last_checked_at, Some(at(1_000)));
+    assert!(!record.valid, "a check alone makes no success");
+    assert_eq!(
+        interval_check_due(record.last_checked_at.unwrap(), Duration::from_secs(60)),
+        at(1_060)
+    );
 }
