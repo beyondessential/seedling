@@ -109,6 +109,12 @@ impl ActorActivityRegistry {
 fn render_action(event_type: &str, obj: &serde_json::Map<String, Value>) -> String {
     let app = obj.get("app").and_then(|v| v.as_str());
     let action_name = obj.get("action_name").and_then(|v| v.as_str());
+    let gate = obj.get("gate").and_then(|v| v.as_str());
+    let target = match (action_name, gate) {
+        (Some(name), _) => Some(name.to_owned()),
+        (None, Some(gate)) => Some(format!("gate {gate}")),
+        (None, None) => None,
+    };
     let changed_params: Vec<&str> = obj
         .get("changes")
         .and_then(|v| v.as_array())
@@ -123,15 +129,15 @@ fn render_action(event_type: &str, obj: &serde_json::Map<String, Value>) -> Stri
     let scale = obj.get("scale").and_then(|v| v.as_i64());
 
     match (event_type, app) {
-        ("OperationStarted", Some(app)) => match action_name {
+        ("OperationStarted", Some(app)) => match target {
             Some(name) => format!("started {name} on {app}"),
             None => format!("started operation on {app}"),
         },
-        ("OperationCompleted", Some(app)) => match action_name {
+        ("OperationCompleted", Some(app)) => match target {
             Some(name) => format!("completed {name} on {app}"),
             None => format!("completed operation on {app}"),
         },
-        ("OperationFailed", Some(app)) => match action_name {
+        ("OperationFailed", Some(app)) => match target {
             Some(name) => format!("failed {name} on {app}"),
             None => format!("failed operation on {app}"),
         },
@@ -197,6 +203,22 @@ mod tests {
         assert_eq!(entries[0]["actor_kind"], "ctl");
         assert_eq!(entries[0]["actor_display"], "felix");
         assert_eq!(entries[0]["last_action"], "started dump on postgres");
+    }
+
+    #[test]
+    fn names_a_gate_run_as_a_gate() {
+        let reg = ActorActivityRegistry::new();
+        reg.record_from_event_line(&line(json!({
+            "type": "OperationFailed",
+            "timestamp": Timestamp::now().to_string(),
+            "app": "tamanu",
+            "gate": "migrate",
+            "actor": { "kind": "ctl", "id": "fingerprint-abc", "display": "felix" },
+        })));
+        assert_eq!(
+            reg.list_recent()[0]["last_action"],
+            "failed gate migrate on tamanu"
+        );
     }
 
     #[test]
