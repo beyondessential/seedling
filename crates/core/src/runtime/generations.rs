@@ -478,13 +478,33 @@ fn rows_to_entries(
     while let Some(row) = rows.next()? {
         let kind_str: String = row.get(2)?;
         let provenance: Option<String> = row.get(4)?;
+        // An entry whose kind or provenance cannot be read is an error, not
+        // a register with no provenance.
+        let kind = Kind::parse(&kind_str).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Text,
+                format!("unknown generation kind '{kind_str}'").into(),
+            )
+        })?;
+        let provenance = provenance
+            .as_deref()
+            .map(Source::from_db)
+            .transpose()
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
         out.push(HistoryEntry {
             generation: row.get::<_, i64>(0)? as Generation,
             created_at: row.get(1)?,
-            kind: Kind::parse(&kind_str).unwrap_or(Kind::Register),
+            kind,
             params: Vec::new(),
             bundle_hash: row.get(3)?,
-            provenance: provenance.as_deref().and_then(|p| Source::from_db(p).ok()),
+            provenance,
         });
     }
     let mut params = params_of(db, app, out.iter().map(|entry| entry.generation))?;

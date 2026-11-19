@@ -825,3 +825,19 @@ fn an_unreadable_secret_value_fails_reconstruction_rather_than_reading_as_unset(
     let err = param_map_at(&db, &app(), g, &cipher).unwrap_err();
     assert!(matches!(err, Error::UnreadableParam { .. }), "{err}");
 }
+
+// spec: GEN#history-entries
+#[test]
+fn an_entry_whose_kind_or_provenance_cannot_be_read_fails_the_listing() {
+    for (column, value) in [("kind", "mystery"), ("provenance", "not json")] {
+        let db = test_db();
+        register_script(&db, &app(), SCRIPT_A).unwrap();
+        db.conn
+            .execute(
+                &format!("UPDATE generations SET {column} = ?1 WHERE app = ?2"),
+                [value, app().as_str()],
+            )
+            .unwrap();
+        assert!(list(&db, &app(), None, 10).is_err(), "{column}");
+    }
+}
