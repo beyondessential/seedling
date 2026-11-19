@@ -926,40 +926,87 @@ fn cancelling_while_a_check_runs_ends_it_at_once() {
 fn a_check_is_judged_by_how_its_job_exited_and_by_its_deadline() {
     use crate::runtime::history::WorldObservation;
     let instance = ResourceInstance::new_singleton(app_name(), ResourceKind::Job, "probe");
-    let observation = |kind: &str, payload: serde_json::Value| WorldObservation {
+    let observation = |kind: &str, recorded_at: i64, payload: serde_json::Value| WorldObservation {
         id: 0,
-        recorded_at: 0,
+        recorded_at,
         resource: instance.clone(),
         obs_kind: kind.to_owned(),
         payload,
     };
-    let exited = |code: i64| {
+    let exited = |code: i64, after_ms: i64| {
         [
-            observation("container_running", json!({})),
-            observation("container_exited", json!({ "exit_code": code })),
+            observation("container_running", 0, json!({})),
+            observation("container_exited", after_ms, json!({ "exit_code": code })),
         ]
     };
     let deadline = Some(Duration::from_secs(10));
     assert_eq!(
-        judge(&exited(0), deadline, Duration::from_secs(1)),
+        judge(&exited(0, 1_000), deadline, Duration::from_secs(1)),
         Some(CheckOutcome::Passed)
     );
     assert!(matches!(
-        judge(&exited(1), deadline, Duration::from_secs(1)),
+        judge(&exited(1, 1_000), deadline, Duration::from_secs(1)),
         Some(CheckOutcome::Failed(_))
     ));
     assert!(matches!(
-        judge(&exited(137), deadline, Duration::from_secs(11)),
+        judge(&exited(137, 11_000), deadline, Duration::from_secs(11)),
         Some(CheckOutcome::Failed(why)) if why.contains("deadline")
     ));
     assert_eq!(
         judge(
-            &[observation("container_running", json!({}))],
+            &[observation("container_running", 0, json!({}))],
             deadline,
             Duration::from_secs(1)
         ),
         None,
         "a check that has not ended has no outcome yet"
+    );
+}
+
+// spec: GATE#check
+// spec: JOB#deadline
+#[test]
+fn a_check_stopped_at_its_deadline_fails_even_where_it_exits_0_and_one_that_exits_0_before_it_passes()
+ {
+    use crate::runtime::history::WorldObservation;
+    let instance = ResourceInstance::new_singleton(app_name(), ResourceKind::Job, "probe");
+    let observation = |kind: &str, recorded_at: i64, payload: serde_json::Value| WorldObservation {
+        id: 0,
+        recorded_at,
+        resource: instance.clone(),
+        obs_kind: kind.to_owned(),
+        payload,
+    };
+    let exited_0_after = |ms: i64| {
+        [
+            observation("container_running", 1_000, json!({})),
+            observation("container_exited", 1_000 + ms, json!({ "exit_code": 0 })),
+        ]
+    };
+    let deadline = Some(Duration::from_secs(10));
+
+    assert!(
+        matches!(
+            judge(&exited_0_after(10_200), deadline, Duration::from_secs(9)),
+            Some(CheckOutcome::Failed(why)) if why.contains("deadline")
+        ),
+        "a check that traps the stop signal and exits 0 still fails"
+    );
+    assert_eq!(
+        judge(&exited_0_after(9_900), deadline, Duration::from_secs(11)),
+        Some(CheckOutcome::Passed),
+        "the observations say it ended before its deadline, however late the poll saw it"
+    );
+    assert!(
+        matches!(
+            judge(
+                &[observation("container_exited", 0, json!({ "exit_code": 0 }))],
+                deadline,
+                Duration::from_secs(11)
+            ),
+            Some(CheckOutcome::Failed(why)) if why.contains("deadline")
+        ),
+        "without an observation of it running, how long it ran is as polled"
     );
 }
 

@@ -46,8 +46,8 @@ use crate::{
         desired::{DynamicCreator, OperationProgress, insert_dynamic_resource},
         dynamic_cleanup::cleanup_dynamic_resources,
         history::{
-            CurrentOperation, clear_current_operation, find_instances_for_group, load_action_log,
-            query_observations, save_current_operation,
+            CurrentOperation, WorldObservation, clear_current_operation, find_instances_for_group,
+            load_action_log, query_observations, save_current_operation,
         },
         identity::ResourceInstance,
         lifecycle::LifecycleState,
@@ -933,8 +933,8 @@ async fn wait_for_check(
                 }
                 if lifecycle.has_reached(LifecycleState::Terminated) {
                     // spec: JOB#deadline
-                    let ran_for = running_since.unwrap_or(began).elapsed();
-                    match judge(&observations, deadline, ran_for) {
+                    let polled = running_since.unwrap_or(began).elapsed();
+                    match judge(&observations, deadline, polled) {
                         Some(outcome) => return outcome,
                         None => {
                             let since = *ended_at.get_or_insert_with(Instant::now);
@@ -968,31 +968,51 @@ async fn wait_for_check(
 /// How a check that has terminated came out, or `None` while it cannot yet be
 /// told.
 ///
-/// A run that was stopped at its deadline failed, whatever the supervisor
-/// went on to say of the unit.
+/// How long it ran is as its observations say where they record both its
+/// reaching Running and its ending, and `polled` otherwise.
 // spec: GATE#check
 fn judge(
-    observations: &[crate::runtime::history::WorldObservation],
+    observations: &[WorldObservation],
     deadline: Option<Duration>,
-    ran_for: Duration,
+    polled: Duration,
 ) -> Option<CheckOutcome> {
-    let exited_zero = observations.iter().rev().any(|o| {
-        o.obs_kind == "container_exited"
-            && o.payload.get("exit_code").and_then(|c| c.as_i64()) == Some(0)
-    });
-    match container_run_succeeded(observations)? {
-        true if exited_zero || deadline.is_none_or(|d| ran_for < d) => Some(CheckOutcome::Passed),
-        true => Some(CheckOutcome::Failed(
+    let succeeded = container_run_succeeded(observations)?;
+    let ran_for = observed_run_time(observations).unwrap_or(polled);
+    // A check stopped at its deadline fails whatever status its container
+    // exited with on being stopped.
+    if deadline.is_some_and(|d| ran_for >= d) {
+        return Some(CheckOutcome::Failed(
             "it was stopped at its deadline".to_owned(),
-        )),
-        false => Some(CheckOutcome::Failed(
-            match deadline {
-                Some(d) if ran_for >= d => "it was stopped at its deadline",
-                _ => "it exited with a status other than 0",
-            }
-            .to_owned(),
-        )),
+        ));
     }
+    Some(if succeeded {
+        CheckOutcome::Passed
+    } else {
+        CheckOutcome::Failed("it exited with a status other than 0".to_owned())
+    })
+}
+
+/// How long the latest run of an instance ran, from when it was observed
+/// running to when it was observed to end, or `None` where either was not
+/// observed.
+// spec: JOB#deadline
+fn observed_run_time(observations: &[WorldObservation]) -> Option<Duration> {
+    let started = observations
+        .iter()
+        .rposition(|o| o.obs_kind == "container_running")?;
+    let began = observations[started].recorded_at;
+    let ended = observations[started..]
+        .iter()
+        .find(|o| {
+            matches!(
+                o.obs_kind.as_str(),
+                "container_exited" | "container_removed"
+            )
+        })?
+        .recorded_at;
+    u64::try_from(ended.saturating_sub(began))
+        .ok()
+        .map(Duration::from_millis)
 }
 
 /// Whether `status` is a gate whose check is due to be tried again after one
