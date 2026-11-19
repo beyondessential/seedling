@@ -88,6 +88,14 @@ impl TestOi {
         )
     }
 
+    /// A harness whose OI reaches containers through `container_runtime`
+    /// rather than the stub system's.
+    pub fn with_container_runtime(
+        container_runtime: Arc<dyn crate::system::ContainerRuntime>,
+    ) -> Self {
+        Self::build(None, Some(container_runtime), None)
+    }
+
     fn build(
         driver: Option<Arc<System>>,
         container_runtime: Option<Arc<dyn crate::system::ContainerRuntime>>,

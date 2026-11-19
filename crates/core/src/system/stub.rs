@@ -76,6 +76,15 @@ pub struct StubContainerRuntime {
     /// Whether removing a volume fails, as a container runtime refusing it
     /// does.
     refuse_volume_removal: std::sync::atomic::AtomicBool,
+    /// Images whose pulls do not succeed, and how each goes instead.
+    pull_faults: Mutex<HashMap<String, PullFault>>,
+}
+
+/// How a pull the stub is told to disturb goes instead of succeeding.
+#[derive(Clone, Copy)]
+pub enum PullFault {
+    Refuse,
+    Hang,
 }
 
 #[derive(Default)]
@@ -118,6 +127,7 @@ impl StubContainerRuntime {
             }),
             volumes_root,
             refuse_volume_removal: std::sync::atomic::AtomicBool::new(false),
+            pull_faults: Mutex::default(),
         }
     }
 
@@ -126,6 +136,12 @@ impl StubContainerRuntime {
     pub(crate) fn refuse_volume_removal(&self, refuse: bool) {
         self.refuse_volume_removal
             .store(refuse, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make every later pull of `image` go as `fault` says.
+    #[cfg(test)]
+    pub(crate) fn disturb_pulls_of(&self, image: &str, fault: PullFault) {
+        self.pull_faults.lock().insert(image.to_owned(), fault);
     }
 
     /// Add a running container carrying `labels`, as one left behind by a
@@ -298,6 +314,14 @@ impl ContainerRuntime for StubContainerRuntime {
 
     fn pull_image<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
+            let fault = self.pull_faults.lock().get(reference).copied();
+            match fault {
+                Some(PullFault::Refuse) => {
+                    return Err(format!("pull of {reference} refused").into());
+                }
+                Some(PullFault::Hang) => std::future::pending::<()>().await,
+                None => {}
+            }
             let mut s = self.state.lock();
             Self::ensure_image_for(&mut s, reference);
             Ok(())

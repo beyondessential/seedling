@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::{StreamExt, TryStreamExt, stream};
 use parking_lot::RwLock;
 use seedling_protocol::{
     events::OperationEventCtx,
@@ -55,6 +56,9 @@ use crate::{
         secrets::KeyDigest,
     },
 };
+
+/// How many of a run's images it pulls at once.
+const CONCURRENT_PULLS: usize = 4;
 
 /// How long a check's Job has to start before the check is taken as one that
 /// could not be run.
@@ -364,9 +368,11 @@ impl Run<'_> {
             .map_err(|e| format!("the gate's last success could not be invalidated: {e}"))?;
 
         let images = self.images(app, def, gate_def, last).await?;
-        for image in images {
-            self.ensure_image(&image).await?;
-        }
+        stream::iter(images)
+            .map(|image| async move { self.ensure_image(&image).await })
+            .buffer_unordered(CONCURRENT_PULLS)
+            .try_collect::<()>()
+            .await?;
 
         if !gate_def.exclusive.is_empty() {
             let (n, g, held) = (name.clone(), gate.clone(), gate_def.exclusive.clone());

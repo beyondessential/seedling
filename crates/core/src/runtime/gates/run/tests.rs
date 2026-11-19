@@ -262,6 +262,47 @@ fn a_run_whose_images_cannot_be_pulled_fails_with_nothing_stopped() {
 }
 
 // spec: GRUN#preparation
+#[test]
+fn a_run_fails_with_nothing_held_on_a_failed_pull_while_its_other_pulls_are_still_going() {
+    use crate::system::stub::{PullFault, StubContainerRuntime};
+
+    let dir = tempfile::tempdir().unwrap();
+    let containers = Arc::new(StubContainerRuntime::new(dir.path().join("vols")));
+    containers.disturb_pulls_of("docker.io/library/aaa:1", PullFault::Hang);
+    containers.disturb_pulls_of("docker.io/library/zzz:1", PullFault::Refuse);
+    let oi = TestOi::with_container_runtime(containers);
+    installed(
+        &oi,
+        r#"
+        let api = app.deployment("api").image("docker.io/library/nginx:1.29");
+        let migrate = app.gate("migrate").key("1.0.0").exclusive(api);
+        app.deployment("web").image("docker.io/library/aaa:1").after(migrate);
+        app.deployment("worker").image("docker.io/library/zzz:1").after(migrate);
+        "#,
+    );
+
+    let kinds = run_once(&oi, "migrate", false);
+    assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
+
+    let record = record(&oi, "migrate");
+    assert!(!record.valid);
+    assert!(
+        record
+            .last_failure
+            .as_deref()
+            .is_some_and(|how| how.contains("zzz:1 could not be pulled")),
+        "{:?}",
+        record.last_failure
+    );
+    assert_eq!(
+        holds(&oi),
+        0,
+        "the selection was never held, so nothing was stopped"
+    );
+    assert_eq!(persisted_operations(&oi), 0);
+}
+
+// spec: GRUN#preparation
 // spec: OPS#interrupted-operations
 #[test]
 fn a_replayed_run_whose_body_has_begun_is_not_prepared_for_again() {
