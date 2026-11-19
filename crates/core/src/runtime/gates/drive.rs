@@ -269,9 +269,7 @@ fn keep_what_cannot_be_told(
         .iter()
         .filter(|(_, status)| match &status.state {
             GateState::Undetermined(Undetermined::Definition(_)) => kind == "gate_failed",
-            GateState::Undetermined(Undetermined::Record(_)) => {
-                kind != "gate_state_unreadable"
-            }
+            GateState::Undetermined(Undetermined::Record(_)) => kind != "gate_state_unreadable",
             _ => false,
         })
         .map(|(name, _)| name)

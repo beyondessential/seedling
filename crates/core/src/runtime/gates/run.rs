@@ -588,9 +588,10 @@ pub(crate) fn last_success(
     let Some(generation) = generation else {
         return Ok(None);
     };
-    let rebuilt = app_at_generation(db, app_name, current, generation, limits, cipher).map_err(
-        |e| format!("generation {generation}, the gate's last success, cannot be rebuilt: {e}"),
-    )?;
+    let rebuilt =
+        app_at_generation(db, app_name, current, generation, limits, cipher).map_err(|e| {
+            format!("generation {generation}, the gate's last success, cannot be rebuilt: {e}")
+        })?;
     Ok(Some(rebuilt.unwrap_or_else(|| current.clone())))
 }
 

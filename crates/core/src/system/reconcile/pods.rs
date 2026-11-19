@@ -1503,7 +1503,9 @@ mod update_tests {
         ];
         let (waiting, kept) = instances_waiting_on_targets(&waiting(&["a", "c", "d"]), &observed);
         let names = |ids: &[&DesiredResource]| -> HashSet<String> {
-            ids.iter().map(|d| d.instance.display_name.clone()).collect()
+            ids.iter()
+                .map(|d| d.instance.display_name.clone())
+                .collect()
         };
         assert_eq!(waiting, names(&[&a, &c, &d]));
         assert_eq!(

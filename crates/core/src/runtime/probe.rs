@@ -118,15 +118,9 @@ pub fn probe_gate_body(
 ) -> Result<HandlerProbe, String> {
     let captured = capture_closures(engine, script_ast, app)?;
     match captured.gates.get(gate) {
-        Some(Some(body)) => probe_gate_closure(
-            engine,
-            script_ast,
-            app,
-            &registry,
-            gate,
-            body.clone(),
-            last,
-        ),
+        Some(Some(body)) => {
+            probe_gate_closure(engine, script_ast, app, &registry, gate, body.clone(), last)
+        }
         Some(None) => Ok(HandlerProbe {
             name: gate.as_str().to_owned(),
             kind: HandlerKind::Gate,
@@ -574,7 +568,10 @@ mod tests {
         .expect("probe");
         let migrate = &response.per_handler[0];
         assert_eq!(migrate.kind, HandlerKind::Gate);
-        assert_eq!(migrate.error.as_deref(), Some("generation 3 cannot be rebuilt"));
+        assert_eq!(
+            migrate.error.as_deref(),
+            Some("generation 3 cannot be rebuilt")
+        );
         assert!(migrate.images.is_empty());
         assert!(response.all_images.is_empty(), "{response:?}");
     }

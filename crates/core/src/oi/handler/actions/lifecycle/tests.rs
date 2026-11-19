@@ -766,7 +766,10 @@ fn failure_of(end: OperationEnd) -> String {
 fn a_gate_body_is_called_with_as_many_arguments_as_it_declares() {
     for (declared, body) in [
         ("no parameters", "|| { }"),
-        ("a runtime handle", "|rt| { rt.restart(app.deployment(\"web\")); }"),
+        (
+            "a runtime handle",
+            "|rt| { rt.restart(app.deployment(\"web\")); }",
+        ),
         (
             "a runtime handle and last",
             "|rt, last| { if last != () { throw \"last is not the unit value\"; } }",
@@ -830,8 +833,17 @@ fn last_is_the_app_at_the_last_success_and_the_unit_value_where_there_is_none() 
         ),
         "`last` shows the app as it was at the last success"
     );
-    failure_of(run_gate_body(&current, script, "gated", None, &db, "op-none"));
-    failure_of(run_gate_body(&current, script, "gated", Some(&current), &db, "op-current"));
+    failure_of(run_gate_body(
+        &current, script, "gated", None, &db, "op-none",
+    ));
+    failure_of(run_gate_body(
+        &current,
+        script,
+        "gated",
+        Some(&current),
+        &db,
+        "op-current",
+    ));
 }
 
 // spec: RT#resources-a-gate-holds
@@ -929,4 +941,132 @@ fn rt_start_leaves_out_what_a_gate_holds_and_what_waits_on_it_except_in_that_gat
         vec!["api"],
         "the gate's body starts what it holds"
     );
+}
+
+/// Run the action `name` of `app` outside any gate, against `db`.
+fn run_action_body(app: &App, name: &str, db: &DbHandle, operation_id: &str) -> OperationEnd {
+    let action = ActionName::new(name).unwrap();
+    let tx = new_event_channel();
+    let op_ctx = tx.operation(
+        AppName::new("demo").unwrap(),
+        action.into(),
+        operation_id,
+        1,
+        None,
+    );
+    super::run_operation_loop(
+        app,
+        db.clone(),
+        Ok(BoundParams {
+            params: serde_json::Map::new(),
+            bindings: HashMap::new(),
+        }),
+        Arc::new(RwLock::new(None)),
+        Arc::new(Notify::new()),
+        &op_ctx,
+        &crate::ScriptLimits::default(),
+        Arc::new(Cipher::for_tests()),
+        &crate::runtime::gates::GateRuntime::new(),
+        Arc::new(CancelToken::new()),
+        None,
+        None,
+        None,
+        None,
+        Persisted::No,
+    )
+}
+
+const HELD_SCRIPT: &str = r#"
+    let api = app.deployment("api").image("docker.io/library/nginx:1");
+    let migrate = app.gate("migrate").key(1).exclusive(api);
+    app.deployment("web").image("docker.io/library/nginx:1").after(migrate);
+    app.on_action("restart-api", |rt, _p| { rt.restart(api); });
+    app.on_action("restart-web", |rt, _p| { rt.restart(app.deployment("web")); });
+    app.on_action("stop-all", |rt, _p| { rt.stop(app); });
+"#;
+
+fn db_holding_api(script: &str) -> DbHandle {
+    let db = DbHandle::open_in_memory().unwrap();
+    let (name, script) = (AppName::new("demo").unwrap(), script.to_owned());
+    db.call(move |db| {
+        generations::register_script(db, &name, &script).unwrap();
+        let api = crate::defs::resource::ResourceId {
+            kind: crate::defs::resource::ResourceKind::Deployment,
+            name: Arc::new("api".to_owned()),
+        };
+        crate::runtime::gates::store::set_hold(
+            db,
+            &name,
+            &GateName::new("migrate").unwrap(),
+            &[api].into(),
+        )
+        .unwrap();
+    });
+    db
+}
+
+// spec: RT#resources-a-gate-holds
+#[test]
+fn rt_restart_of_a_deployment_a_gate_holds_or_that_waits_on_a_gate_throws() {
+    let app = evaluated(HELD_SCRIPT);
+    let db = db_holding_api(HELD_SCRIPT);
+    for (action, id) in [("restart-api", "op-api"), ("restart-web", "op-web")] {
+        let why = failure_of(run_action_body(&app, action, &db, id));
+        assert!(why.contains("a gate holds it"), "{action}: {why}");
+    }
+}
+
+// spec: RT#resources-a-gate-holds
+#[test]
+fn rt_stop_leaves_out_what_a_gate_holds_and_what_waits_on_it() {
+    use crate::runtime::barrier::replay::DbActionLog;
+
+    let name = AppName::new("demo").unwrap();
+    let app = evaluated(HELD_SCRIPT);
+    let db = db_holding_api(HELD_SCRIPT);
+    let end = run_action_body(&app, "stop-all", &db, "op-stop");
+    assert!(
+        matches!(end, OperationEnd::Completed),
+        "{}",
+        match end {
+            OperationEnd::Failed(why) | OperationEnd::NotRun(why) => why,
+            _ => String::new(),
+        }
+    );
+    let log = DbActionLog::new(
+        db.clone(),
+        OperationId("op-stop".to_owned()),
+        name,
+        ActionName::new("stop-all").unwrap().into(),
+    );
+    let stopped: Vec<_> = log
+        .load()
+        .unwrap()
+        .into_iter()
+        .flat_map(|entry| entry.resources)
+        .filter_map(|resource| resource.name)
+        .collect();
+    assert!(
+        stopped.is_empty(),
+        "api is held and web waits on the unsatisfied gate: {stopped:?}"
+    );
+}
+
+// spec: RT#resources-a-gate-holds
+#[test]
+fn a_call_that_would_act_on_a_workload_fails_while_what_gates_hold_cannot_be_read() {
+    let script = r#"
+        let api = app.deployment("api").image("docker.io/library/nginx:1");
+        app.gate("migrate").key(1).exclusive(api);
+        app.on_action("poke", |rt, _p| { rt.start(app); });
+    "#;
+    let app = evaluated(script);
+    let db = db_holding_api(script);
+    db.call(|db| {
+        db.conn
+            .execute("ALTER TABLE gate_holds RENAME TO gate_holds_away", [])
+            .unwrap();
+    });
+    let why = failure_of(run_action_body(&app, "poke", &db, "op-unreadable"));
+    assert!(why.contains("cannot tell whether a gate holds"), "{why}");
 }

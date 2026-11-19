@@ -4890,8 +4890,12 @@ mod tests {
             let app = app.clone();
             oi.state.db.call(move |db| {
                 (
-                    crate::runtime::gates::store::load_records(db, &app).unwrap().len(),
-                    crate::runtime::gates::store::load_holds(db, &app).unwrap().len(),
+                    crate::runtime::gates::store::load_records(db, &app)
+                        .unwrap()
+                        .len(),
+                    crate::runtime::gates::store::load_holds(db, &app)
+                        .unwrap()
+                        .len(),
                     crate::runtime::gates::store::is_set_up(db, &app).unwrap(),
                 )
             })
