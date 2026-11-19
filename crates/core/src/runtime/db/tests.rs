@@ -788,3 +788,42 @@ fn gate_storage_exists_and_an_installed_app_is_already_set_up() {
         "a gate has one record per app"
     );
 }
+
+// spec: GRUN#checks
+// spec: APP#dynamic-resource-lifetime
+#[test]
+fn dynamic_resource_records_name_their_creator_and_refuse_an_unknown_one() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO dynamic_resources
+                 (instance_id, app, operation_id, kind, display_name, shell_session)
+                 VALUES ('a', 'web', 'op-1', 'Job', 'web-a', 0),
+                        ('b', 'web', 'sess-1', 'Job', 'web-b', 1);",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let creators: Vec<(String, String)> = db
+        .conn
+        .prepare("SELECT instance_id, creator FROM dynamic_resources ORDER BY instance_id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        creators,
+        [
+            ("a".to_owned(), "operation".to_owned()),
+            ("b".to_owned(), "shell_session".to_owned())
+        ]
+    );
+    let refused = db.conn.execute(
+        "INSERT INTO dynamic_resources (instance_id, app, operation_id, kind, display_name, creator)
+             VALUES ('c', 'web', 'x', 'Job', 'web-c', 'gate')",
+        [],
+    );
+    assert!(refused.is_err(), "an unknown creator was stored");
+}

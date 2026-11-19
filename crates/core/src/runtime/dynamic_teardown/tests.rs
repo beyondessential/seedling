@@ -329,3 +329,50 @@ fn startup_tears_down_the_resources_of_sessions_a_previous_run_left() {
     assert!(!remaining.contains(&left), "its record is forgotten");
     assert!(remaining.contains(&open) && remaining.contains(&"op-replayed".to_owned()));
 }
+
+// spec: GRUN#checks
+// spec: SUSP#abandoned-replay
+// A gate check is never replayed, so the Job of one a previous run left is torn
+// down at startup, while that of a check run since startup is its own.
+#[test]
+fn startup_tears_down_the_job_of_a_gate_check_a_previous_run_left() {
+    use crate::runtime::apps::CheckId;
+
+    let h = harness();
+    let (orphaned, running) = (CheckId::generate(), CheckId::generate());
+    stuck_job_of(&h, &orphaned.to_string(), DynamicCreator::GateCheck);
+    stuck_job_of(&h, &running.to_string(), DynamicCreator::GateCheck);
+    h.containers.refuse_volume_removal(false);
+    let mut registry = AppRegistry::new();
+    registry
+        .register(
+            AppName::new("app").unwrap(),
+            Arc::default(),
+            crate::runtime::definition::Source::unknown_push(),
+            Arc::default(),
+            &crate::ScriptLimits::default(),
+        )
+        .unwrap();
+    registry.get("app").unwrap().checks.open(running);
+
+    let all = h.db.call(list_dynamic_resources).unwrap();
+    let taken = super::unspared(all, None, &registry.live_slot_owners());
+    assert_eq!(
+        taken
+            .iter()
+            .map(|r| (r.operation_id.clone(), r.creator))
+            .collect::<Vec<_>>(),
+        [(orphaned.to_string(), DynamicCreator::GateCheck)],
+        "only the check no one holds is taken"
+    );
+
+    let retained = with_paused_clock(tear_down(&h.driver, &h.db, taken));
+    assert!(retained.is_empty());
+    let remaining: Vec<String> =
+        h.db.call(list_dynamic_resources)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.operation_id)
+            .collect();
+    assert_eq!(remaining, [running.to_string()]);
+}

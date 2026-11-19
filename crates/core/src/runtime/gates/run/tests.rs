@@ -688,6 +688,53 @@ fn a_check_passes_when_its_job_exits_zero_and_fails_otherwise() {
 
 // spec: GRUN#checks
 #[test]
+fn a_running_check_is_not_a_shell_session() {
+    let oi = TestOi::new();
+    installed(&oi, CHECKED);
+    let job = probe_job(&oi);
+    let state = Arc::clone(&oi.state);
+    oi.block_on(async move {
+        let runner = tokio::spawn({
+            let state = Arc::clone(&state);
+            async move { run_check(&state, &app_name(), &gate("ready"), job, None).await }
+        });
+        let until = Instant::now() + Duration::from_secs(60);
+        let record = loop {
+            let found = state.db.call(|db| {
+                list_dynamic_resources_for_app(db, &app_name())
+                    .unwrap()
+                    .pop()
+            });
+            if let Some(record) = found {
+                break record;
+            }
+            assert!(Instant::now() < until, "the check never recorded its Job");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(record.creator, DynamicCreator::GateCheck);
+        {
+            let registry = state.registry.read();
+            let entry = registry.get("demo").unwrap();
+            assert!(
+                entry.sessions.is_empty(),
+                "a check opened a shell session slot"
+            );
+            let checks: Vec<String> = entry
+                .checks
+                .owners()
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            assert_eq!(checks, std::slice::from_ref(&record.operation_id));
+            assert!(registry.live_slot_owners().contains(&record.operation_id));
+        }
+        feed_check(&state, exits(0)).await;
+        assert_eq!(runner.await.unwrap(), CheckOutcome::Passed);
+    });
+}
+
+// spec: GRUN#checks
+#[test]
 fn a_check_whose_job_cannot_be_recorded_could_not_be_run() {
     let oi = TestOi::new();
     installed(&oi, CHECKED);

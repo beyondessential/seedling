@@ -906,8 +906,22 @@ mod tests {
             .sessions
             .open(seedling_protocol::names::SessionId::generate());
 
+        // A gate check is running, which leaves the app steady.
+        register(&mut reg, "checking", AppPhase::Installed);
+        reg.get("checking")
+            .unwrap()
+            .checks
+            .open(crate::runtime::apps::CheckId::generate());
+        // Not installed, but a gate check that has ended is still tearing down.
+        register(&mut reg, "check-ended", AppPhase::NotInstalled);
+        reg.get("check-ended")
+            .unwrap()
+            .checks
+            .open(crate::runtime::apps::CheckId::generate());
+
         let apps = [
             steady_snapshot("steady", &[&member], &[&excess]),
+            steady_snapshot("checking", &[&member], &[&excess]),
             steady_snapshot("busy", &[&member], &[]),
             steady_snapshot("sessioned", &[&member], &[]),
             // Snapshotted, but no longer held by the registry.
@@ -921,6 +935,9 @@ mod tests {
         assert!(!known.sweepable("busy", unrelated.id));
         assert!(!known.sweepable("sessioned", unrelated.id));
         assert!(!known.sweepable("ended", unrelated.id));
+        assert!(!known.sweepable("checking", member.id));
+        assert!(known.sweepable("checking", excess.id));
+        assert!(!known.sweepable("check-ended", unrelated.id));
         assert!(!known.sweepable("unloaded", unrelated.id));
         assert!(known.sweepable("absent", unrelated.id));
     }

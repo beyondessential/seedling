@@ -1,9 +1,9 @@
-//! Tearing down the dynamic resources of a lifecycle operation or shell
-//! session that has ended, while the runtime goes on running.
+//! Tearing down the dynamic resources of a lifecycle operation, shell session
+//! or gate check that has ended, while the runtime goes on running.
 //!
 //! The reconciler does the stopping: the cleanup places each resource in the
 //! desired state of the progress slot it is given as stopped, and waits for the
-//! world to agree. The slot is the operation's, or the session's.
+//! world to agree. The slot is the operation's, the session's or the check's.
 
 use std::time::Duration;
 
@@ -92,8 +92,8 @@ impl CleanupPace<'_> {
 }
 
 /// Tear down the dynamic resources recorded against `owner_id`, the id of an
-/// operation or shell session that has ended, and forget their records once
-/// they are gone.
+/// operation, shell session or gate check that has ended, and forget their
+/// records once they are gone.
 ///
 /// The records are the only thing that knows the resources exist, so neither
 /// a record that cannot be read nor a teardown that is taking long ends the
