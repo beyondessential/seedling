@@ -18,7 +18,8 @@ use super::{
     AppGates, Decision, GateState, Readiness, Remembered, Undetermined, decide, declared_order,
     dependants_down, evaluate, held_resources, read_readiness, retry_delay,
     run::{CheckOutcome, check_retry_is_due, eligible_for_check, run_check},
-    store, unready_targets,
+    store::{self, FailedRuns},
+    unready_targets,
 };
 use crate::{
     defs::{app::AppDef, resource::ResourceId},
@@ -318,16 +319,18 @@ async fn drive_app(state: &Arc<OiState>, app: &Tracked) {
     initiate_runs(state, app, &synced).await;
 }
 
-/// A failed check whose invalidation could not be written is written as soon
-/// as it can be.
+/// A failed check whose invalidation could not be written, and a failed run
+/// that could not be written, are written as soon as they can be.
 // spec: GRUN#checks
+// spec: GRUN#retries
 async fn settle_unrecorded(state: &Arc<OiState>, app: &Tracked) {
-    for gate in state
-        .gate_runtime
-        .remembered(&app.name)
-        .unrecorded
-        .into_keys()
-    {
+    let remembered = state.gate_runtime.remembered(&app.name);
+    for (gate, failed) in &remembered.failed {
+        if let Err(e) = write_failed_runs(state, &app.name, gate, failed) {
+            tracing::warn!(app = %app.name, %gate, "still cannot record that a run of the gate did not succeed: {e}");
+        }
+    }
+    for gate in remembered.unrecorded.into_keys() {
         let (name, g) = (app.name.clone(), gate.clone());
         match state.db.call(move |db| store::invalidate(db, &name, &g)) {
             Ok(()) => state.gate_runtime.settle_unrecorded(&app.name, &gate),
@@ -336,6 +339,23 @@ async fn settle_unrecorded(state: &Arc<OiState>, app: &Tracked) {
             }
         }
     }
+}
+
+/// Write the failed runs of `gate` that are held to be written, and stop
+/// holding them once they are.
+// spec: GRUN#retries
+pub(super) fn write_failed_runs(
+    state: &OiState,
+    app: &AppName,
+    gate: &GateName,
+    failed: &FailedRuns,
+) -> rusqlite::Result<()> {
+    let (a, g, f) = (app.clone(), gate.clone(), failed.clone());
+    state
+        .db
+        .call(move |db| store::record_failure(db, &a, &g, &f))?;
+    state.gate_runtime.settle_failed_runs(app, gate, failed);
+    Ok(())
 }
 
 /// Withdraw the queued runs of gates the definition no longer declares.

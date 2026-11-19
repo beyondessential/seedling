@@ -422,6 +422,84 @@ fn a_run_whose_success_cannot_be_recorded_counts_as_failed_and_keeps_its_hold() 
     assert_eq!(faults_of(&oi), vec!["gate_failed"]);
 }
 
+// spec: GRUN#retries
+#[test]
+fn a_run_whose_failure_cannot_be_written_still_waits_out_its_delay_and_files_gate_failed() {
+    use crate::runtime::gates::{Decision, NotDue, decide, drive, evaluate};
+
+    let oi = TestOi::with_unreadable_containers();
+    installed(&oi, SCRIPT);
+    oi.state.db.call(|db| {
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER refuse_failure BEFORE UPDATE ON gate_records
+                 WHEN NEW.last_failure IS NOT NULL
+                 BEGIN SELECT RAISE(ABORT, 'no room'); END;
+                 CREATE TRIGGER refuse_first_failure BEFORE INSERT ON gate_records
+                 WHEN NEW.last_failure IS NOT NULL
+                 BEGIN SELECT RAISE(ABORT, 'no room'); END;",
+            )
+            .unwrap();
+    });
+
+    let kinds = run_once(&oi, "migrate", false);
+    assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
+    assert!(
+        record(&oi, "migrate").last_failure_at.is_none(),
+        "the failure is not on record"
+    );
+
+    let def = oi
+        .state
+        .registry
+        .read()
+        .get("demo")
+        .unwrap()
+        .app
+        .def
+        .load_full();
+    let status = {
+        let (cipher, remembered) = (
+            Arc::clone(&oi.state.cipher),
+            oi.state.gate_runtime.remembered(&app_name()),
+        );
+        let def = Arc::clone(&def);
+        oi.state.db.call(move |db| {
+            evaluate(db, &app_name(), &def, &cipher, None, &remembered).gates[&gate("migrate")]
+                .clone()
+        })
+    };
+    assert!(
+        matches!(
+            decide(&status, Vec::new(), jiff::Timestamp::now()),
+            Decision::Hold(NotDue::BackOff(_))
+        ),
+        "the next run waits out the delay after the failure held in memory: {status:?}"
+    );
+    assert_eq!(faults_of(&oi), vec!["gate_failed"]);
+
+    oi.state.db.call(|db| {
+        db.conn
+            .execute_batch("DROP TRIGGER refuse_failure; DROP TRIGGER refuse_first_failure;")
+            .unwrap();
+    });
+    oi.block_on(drive::drive(&oi.state));
+    let written = record(&oi, "migrate");
+    assert!(
+        written.last_failure_at.is_some(),
+        "the failure is written once it can be"
+    );
+    assert_eq!(written.consecutive_failures, 1);
+    assert!(
+        oi.state
+            .gate_runtime
+            .remembered(&app_name())
+            .failed
+            .is_empty()
+    );
+    assert_eq!(faults_of(&oi), vec!["gate_failed"]);
+}
+
 // spec: GRUN#preparation
 #[test]
 fn a_run_that_cannot_invalidate_the_last_success_fails_before_anything_else_is_done() {

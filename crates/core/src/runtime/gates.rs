@@ -280,9 +280,7 @@ fn status_of(
     // Runs whose failure could not be written count as they will once it is,
     // so that the next run waits them out and the gate is reported failing.
     let record = match remembered.failed.get(name) {
-        Some(failed) if unreadable.is_none() => {
-            Some(failed.applied_to(record.unwrap_or_default()))
-        }
+        Some(failed) if unreadable.is_none() => Some(failed.applied_to(record.unwrap_or_default())),
         _ => record,
     };
     // Each reason that the state cannot be told outranks the next, in the
@@ -944,7 +942,12 @@ impl GateRuntime {
     /// Runs of `gate` did not succeed, after any already held that are not yet
     /// written, returning everything now held to be written.
     // spec: GRUN#retries
-    pub fn note_failed_runs(&self, app: &AppName, gate: &GateName, failed: FailedRuns) -> FailedRuns {
+    pub fn note_failed_runs(
+        &self,
+        app: &AppName,
+        gate: &GateName,
+        failed: FailedRuns,
+    ) -> FailedRuns {
         let mut inner = self.inner.lock();
         let held = inner.remembered.entry(app.clone()).or_default();
         let failed = match held.failed.remove(gate) {

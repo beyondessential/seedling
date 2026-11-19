@@ -58,10 +58,7 @@ fn fail(db: &Db, cipher: &Cipher, def: &AppDef, name: &str, at: Timestamp) {
         db,
         &app(),
         &gate(name),
-        &digest(def, cipher, name),
-        at,
-        "the body threw",
-        None,
+        &store::FailedRuns::one(digest(def, cipher, name), at, "the body threw", false),
     )
     .unwrap();
 }
@@ -532,10 +529,12 @@ fn a_gate_waiting_out_its_back_off_a_paused_gate_and_a_gate_after_one_are_not_ru
             db,
             &app(),
             &gate("paused"),
-            &key,
-            Timestamp::from_second(1).unwrap(),
-            "cancelled by an operator",
-            Some(&key),
+            &store::FailedRuns::one(
+                key,
+                Timestamp::from_second(1).unwrap(),
+                "cancelled by an operator",
+                true,
+            ),
         )
         .unwrap();
     });

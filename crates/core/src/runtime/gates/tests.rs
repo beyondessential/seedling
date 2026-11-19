@@ -64,10 +64,7 @@ fn failure(db: &Db, cipher: &Cipher, def: &AppDef, at: Timestamp) {
         db,
         &app(),
         &gate("migrate"),
-        &digest(def, cipher, "migrate"),
-        at,
-        "the body threw",
-        None,
+        &store::FailedRuns::one(digest(def, cipher, "migrate"), at, "the body threw", false),
     )
     .unwrap();
 }
@@ -412,10 +409,7 @@ fn a_pause_holds_across_a_restart_until_an_operator_runs_the_gate_or_the_key_mov
             &db,
             &app(),
             &gate("migrate"),
-            &key,
-            at(100),
-            "cancelled",
-            Some(&key),
+            &store::FailedRuns::one(key, at(100), "cancelled", true),
         )
         .unwrap();
     }
@@ -454,20 +448,14 @@ fn a_pause_the_key_moved_away_from_does_not_come_back_with_the_key() {
         &db,
         &app(),
         &gate("migrate"),
-        &key,
-        at(100),
-        "cancelled",
-        Some(&key),
+        &store::FailedRuns::one(key, at(100), "cancelled", true),
     )
     .unwrap();
     store::record_failure(
         &db,
         &app(),
         &gate("migrate"),
-        &other,
-        at(200),
-        "failed",
-        None,
+        &store::FailedRuns::one(other, at(200), "failed", false),
     )
     .unwrap();
 

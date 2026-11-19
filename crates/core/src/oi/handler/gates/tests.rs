@@ -121,10 +121,7 @@ fn pause(oi: &TestOi) {
             db,
             &app_name(),
             &gate("migrate"),
-            &key,
-            Timestamp::now(),
-            "cancelled",
-            Some(&key),
+            &store::FailedRuns::one(key, Timestamp::now(), "cancelled", true),
         )
         .unwrap();
     });
@@ -228,10 +225,7 @@ fn a_gate_whose_last_run_failed_reports_when_it_runs_next() {
             db,
             &app_name(),
             &gate("migrate"),
-            &key,
-            Timestamp::now(),
-            "the body threw",
-            None,
+            &store::FailedRuns::one(key, Timestamp::now(), "the body threw", false),
         )
         .unwrap();
     });

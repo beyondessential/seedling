@@ -16,7 +16,7 @@ use tokio::sync::Notify;
 
 use super::{
     GateStatus, gates_behind,
-    store::{self, GateRecord},
+    store::{self, FailedRuns, GateRecord},
 };
 use crate::{
     defs::{
@@ -549,6 +549,7 @@ impl Run<'_> {
                     .call(move |db| store::record_success(db, &a, &g, &key, generation))
                 {
                     Ok(()) => {
+                        state.gate_runtime.forget_failed_runs(&app, &gate);
                         // spec: FLT#app-faults
                         // A gate run is a lifecycle operation, so its success
                         // supersedes an earlier operation's failure.
@@ -600,15 +601,19 @@ impl Run<'_> {
             return;
         };
         tracing::warn!(app = %self.app_name, gate = %self.gate, "a run of the gate did not succeed: {how}");
-        let (app, gate, how) = (self.app_name.clone(), self.gate.clone(), how.to_owned());
-        self.state.db.call(move |db| {
-            let pause = pause.then_some(&key);
-            if let Err(e) =
-                store::record_failure(db, &app, &gate, &key, jiff::Timestamp::now(), &how, pause)
-            {
-                tracing::error!(%app, %gate, "cannot record that a run of the gate did not succeed: {e}");
-            }
-        });
+        // spec: GRUN#retries
+        // The failure is held in memory until it is written, so that a
+        // failure that cannot be written still spaces the next run.
+        let failed = self.state.gate_runtime.note_failed_runs(
+            &self.app_name,
+            &self.gate,
+            FailedRuns::one(key, jiff::Timestamp::now(), how, pause),
+        );
+        if let Err(e) =
+            super::drive::write_failed_runs(self.state, &self.app_name, &self.gate, &failed)
+        {
+            tracing::error!(app = %self.app_name, gate = %self.gate, "cannot record that a run of the gate did not succeed, so it is held until it can be: {e}");
+        }
     }
 }
 
