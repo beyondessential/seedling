@@ -156,6 +156,9 @@ A ticked case names the automated test that covers it.
 - [x] A validator sees the whole change, and a rejection stores none of it (verifies spec: PRM#validation) [`validators_see_the_whole_change_and_a_rejection_stores_none_of_it`]
 - [x] A value for a parameter the definition does not declare is stored (verifies spec: PRM#parameter-storage) [`set_undeclared_param_is_stored_as_unknown`]
 - [x] A parameter that is secret moves to protected storage (verifies spec: PRM#parameter-storage) [`a_param_made_secret_by_a_param_change_moves_to_secret_storage`]
+- [x] A plan treats proposed parameters with no members as none, and refuses a name given twice (verifies spec: PRM#change-planning) [`a_plan_treats_proposed_params_with_no_members_as_none_and_refuses_what_a_change_refuses`]
+- [x] Install refusals come in the order the spec lists them (verifies spec: ACI#install) [`install_refusals_are_given_in_the_order_the_spec_lists_them`]
+- [x] `col` of a gate is an empty collection (verifies spec: COL#collection) [`col_from_gate_yields_empty`]
 - [ ] A change whose new values make the definition fail to evaluate files `script_error` and the request still succeeds (verifies spec: PRM#parameter-changes)
 - [ ] A change that moves a gate's key leaves it unsatisfied and the gate runs (verifies spec: PRM#parameter-changes)
 
