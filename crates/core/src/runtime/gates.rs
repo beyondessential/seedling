@@ -434,42 +434,6 @@ fn workloads(def: &AppDef) -> impl Iterator<Item = &ResourceId> {
         .filter(|id| matches!(id.kind, ResourceKind::Deployment | ResourceKind::Job))
 }
 
-/// Every gate `workload` is ordered after, directly or through other targets.
-// spec: GATE#start-order
-pub fn gates_behind(def: &AppDef, workload: &ResourceId) -> BTreeSet<GateName> {
-    fn walk(
-        def: &AppDef,
-        targets: &BTreeSet<AfterTarget>,
-        seen_workloads: &mut BTreeSet<ResourceId>,
-        gates: &mut BTreeSet<GateName>,
-    ) {
-        for target in targets {
-            match target {
-                AfterTarget::Gate(name) => {
-                    if gates.insert(name.clone())
-                        && let Some(gate) = def.gates.get(name)
-                    {
-                        walk(def, &gate.after, seen_workloads, gates);
-                    }
-                }
-                AfterTarget::Workload(id) => {
-                    if seen_workloads.insert(id.clone()) {
-                        walk(def, &workload_targets(def, id), seen_workloads, gates);
-                    }
-                }
-            }
-        }
-    }
-    let mut gates = BTreeSet::new();
-    walk(
-        def,
-        &workload_targets(def, workload),
-        &mut BTreeSet::from([workload.clone()]),
-        &mut gates,
-    );
-    gates
-}
-
 /// What a gate holds stopped, as its record and the definition's current
 /// selection together say.
 ///
@@ -520,7 +484,10 @@ pub fn rt_exclusions(
 /// The workloads of `def` ordered after a gate that `waits_on` picks, directly
 /// or through other targets, found in one walk of the start order.
 // spec: GATE#start-order
-fn workloads_behind(def: &AppDef, waits_on: impl Fn(&GateName) -> bool) -> BTreeSet<ResourceId> {
+pub fn workloads_behind(
+    def: &AppDef,
+    waits_on: impl Fn(&GateName) -> bool,
+) -> BTreeSet<ResourceId> {
     let mut dependants: BTreeMap<AfterTarget, Vec<AfterTarget>> = BTreeMap::new();
     for id in workloads(def) {
         for target in workload_targets(def, id) {

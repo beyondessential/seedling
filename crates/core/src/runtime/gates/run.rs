@@ -17,8 +17,9 @@ use seedling_protocol::{
 use tokio::sync::Notify;
 
 use super::{
-    GateStatus, gates_behind,
+    GateStatus,
     store::{self, FailedRuns, GateRecord},
+    workloads_behind,
 };
 use crate::{
     defs::{
@@ -421,10 +422,8 @@ impl Run<'_> {
         {
             images.insert(image);
         }
-        for (id, resource) in &def.resources {
-            if gates_behind(def, id).contains(&self.gate)
-                && let Some(image) = image_of(resource)
-            {
+        for id in workloads_behind(def, |gate| gate == &self.gate) {
+            if let Some(image) = def.resources.get(&id).and_then(image_of) {
                 images.insert(image);
             }
         }
