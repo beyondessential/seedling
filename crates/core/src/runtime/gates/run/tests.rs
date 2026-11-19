@@ -898,3 +898,43 @@ fn a_run_gives_up_once_its_exclusive_selection_has_been_unreadable_for_long_enou
         since + SELECTION_READ_WAIT
     ));
 }
+
+// spec: GRUN#preparation
+// spec: RCN#gate-holds
+#[test]
+fn a_run_does_not_wait_for_a_resource_a_change_removed_from_its_hold() {
+    use crate::runtime::history::{insert_instance, insert_observation};
+    let oi = TestOi::new();
+    installed(&oi, SCRIPT);
+    let api = ResourceInstance::new_singleton(app_name(), ResourceKind::Deployment, "api");
+    oi.state.db.call(move |db| {
+        insert_instance(db, &api).unwrap();
+        insert_observation(db, &api, "container_running", &json!({})).unwrap();
+    });
+
+    let input = gate_input(&oi, "migrate", false);
+    let state = Arc::clone(&oi.state);
+    let ended = oi.block_on(async move {
+        let run = tokio::spawn({
+            let state = Arc::clone(&state);
+            async move { run_gate(&state, input).await }
+        });
+        let until = Instant::now() + Duration::from_secs(60);
+        while state
+            .db
+            .call(|db| store::load_holds(db, &app_name()).unwrap())
+            .is_empty()
+        {
+            assert!(Instant::now() < until, "the run never held its selection");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!run.is_finished(), "the run waits for api to stop");
+        state.db.call(|db| {
+            store::set_hold(db, &app_name(), &gate("migrate"), &BTreeSet::new()).unwrap();
+        });
+        tokio::time::timeout(Duration::from_secs(10), run).await
+    });
+    assert!(ended.is_ok(), "the run went on waiting for a released api");
+    assert!(record(&oi, "migrate").valid);
+}

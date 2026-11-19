@@ -70,6 +70,7 @@ If a pull fails, the run MUST fail with nothing stopped, and the instances that 
 
 The runtime MUST then stop the gate's [exclusive selection](../language/gate.md#exclusive-selection), wait until every instance of it has reached Terminated, and only then run the body.
 How the selection is held from then on is specified by [gate holds](reconciliation.md#gate-holds).
+The runtime MUST NOT keep a run waiting for a resource that a change has removed from the selection once the gate's hold no longer covers it.
 
 ## Outcome
 

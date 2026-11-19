@@ -437,7 +437,8 @@ impl Run<'_> {
         }
     }
 
-    /// Wait until every instance of the exclusive selection has stopped.
+    /// Wait until every instance of the exclusive selection that the gate's
+    /// hold still covers has stopped.
     ///
     /// An instance that never started is as stopped as one that ended.
     // spec: GRUN#preparation
@@ -447,11 +448,12 @@ impl Run<'_> {
             if self.cancel.is_cancelled() {
                 return Err(Stopped::Cancelled);
             }
-            let (app, selection) = (self.app_name.clone(), selection.clone());
+            let (app, gate, selection) =
+                (self.app_name.clone(), self.gate.clone(), selection.clone());
             match self
                 .state
                 .db
-                .call(move |db| still_running(db, &app, &selection))
+                .call(move |db| held_and_running(db, &app, &gate, &selection))
             {
                 Ok(None) => return Ok(()),
                 Ok(Some(what)) => {
@@ -658,6 +660,23 @@ fn image_of(resource: &Resource) -> Option<String> {
         _ => None,
     }
     .filter(|image| !image.is_empty())
+}
+
+/// What of `selection` that the hold of `gate` still covers is running or
+/// stopping, if any.
+///
+/// A resource a change has removed from the selection is released once the
+/// hold no longer covers it, and is no longer the run's to wait for.
+// spec: GRUN#preparation
+// spec: RCN#gate-holds
+fn held_and_running(
+    db: &Db,
+    app: &AppName,
+    gate: &GateName,
+    selection: &BTreeSet<ResourceId>,
+) -> rusqlite::Result<Option<String>> {
+    let held = store::load_holds(db, app)?.remove(gate).unwrap_or_default();
+    still_running(db, app, &selection.intersection(&held).cloned().collect())
 }
 
 /// What of `selection` is still running or stopping, if any.
