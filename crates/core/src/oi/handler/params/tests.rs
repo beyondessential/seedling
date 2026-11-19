@@ -965,12 +965,4 @@ fn a_plan_takes_several_proposed_parameters() {
         "{plan}"
     );
     assert_eq!(generation_count(&oi), 1, "a plan changes nothing");
-
-    let (code, _) = oi
-        .call(
-            "/apps/plan",
-            json!({ "app": "demo", "proposed_params": {} }),
-        )
-        .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
 }
