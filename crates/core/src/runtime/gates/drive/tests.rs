@@ -88,7 +88,8 @@ const MIGRATE: &str = r#"
 
 // spec: FLT#app-faults
 #[test]
-fn gate_failed_stands_while_the_gate_is_unsatisfied_after_a_failed_run_and_clears_when_it_is_satisfied() {
+fn gate_failed_stands_while_the_gate_is_unsatisfied_after_a_failed_run_and_clears_when_it_is_satisfied()
+ {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
     let def = def(MIGRATE);
@@ -97,7 +98,13 @@ fn gate_failed_stands_while_the_gate_is_unsatisfied_after_a_failed_run_and_clear
     sync(&db, &def, &cipher, None);
     assert!(active_faults(&db).is_empty(), "no run has failed");
 
-    fail(&db, &cipher, &def, "migrate", Timestamp::from_second(100).unwrap());
+    fail(
+        &db,
+        &cipher,
+        &def,
+        "migrate",
+        Timestamp::from_second(100).unwrap(),
+    );
     sync(&db, &def, &cipher, None);
     assert_eq!(
         active_faults(&db),
@@ -115,13 +122,28 @@ fn gate_failed_stands_while_the_gate_is_unsatisfied_after_a_failed_run_and_clear
     sync(&db, &def, &cipher, None);
     assert!(active_faults(&db).is_empty());
 
-    fail(&db, &cipher, &def, "migrate", Timestamp::from_second(200).unwrap());
+    fail(
+        &db,
+        &cipher,
+        &def,
+        "migrate",
+        Timestamp::from_second(200).unwrap(),
+    );
     sync(&db, &def, &cipher, None);
     assert_eq!(active_faults(&db).len(), 1);
-    store::record_success(&db, &app(), &gate("migrate"), &digest(&def, &cipher, "migrate"), 1)
-        .unwrap();
+    store::record_success(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &digest(&def, &cipher, "migrate"),
+        1,
+    )
+    .unwrap();
     sync(&db, &def, &cipher, None);
-    assert!(active_faults(&db).is_empty(), "a satisfied gate has no fault");
+    assert!(
+        active_faults(&db).is_empty(),
+        "a satisfied gate has no fault"
+    );
 }
 
 // spec: FLT#app-faults
@@ -132,7 +154,13 @@ fn a_gate_failed_fault_survives_what_leaves_the_gate_undetermined() {
     let cipher = Cipher::for_tests();
     let def = def(MIGRATE);
     register(&db);
-    fail(&db, &cipher, &def, "migrate", Timestamp::from_second(100).unwrap());
+    fail(
+        &db,
+        &cipher,
+        &def,
+        "migrate",
+        Timestamp::from_second(100).unwrap(),
+    );
     sync(&db, &def, &cipher, None);
     assert_eq!(active_faults(&db).len(), 1);
 
@@ -176,15 +204,20 @@ fn a_gate_failed_fault_survives_what_leaves_the_gate_undetermined() {
 fn gate_check_unavailable_stands_until_a_check_runs_to_an_outcome() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
-    let def = def(
-        r#"
+    let def = def(r#"
         let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
         let ready = app.gate("ready").key(1).check(probe);
         app.deployment("web").image("docker.io/library/nginx:1").after(ready);
-        "#,
-    );
+        "#);
     register(&db);
-    store::record_success(&db, &app(), &gate("ready"), &digest(&def, &cipher, "ready"), 1).unwrap();
+    store::record_success(
+        &db,
+        &app(),
+        &gate("ready"),
+        &digest(&def, &cipher, "ready"),
+        1,
+    )
+    .unwrap();
     store::record_check_unavailable(
         &db,
         &app(),
@@ -218,7 +251,13 @@ fn a_gate_the_definition_no_longer_declares_loses_its_faults_and_its_hold_but_ke
     let with_gate = def(MIGRATE);
     let without = def(r#"app.deployment("api").image("docker.io/library/nginx:1");"#);
     register(&db);
-    fail(&db, &cipher, &with_gate, "migrate", Timestamp::from_second(100).unwrap());
+    fail(
+        &db,
+        &cipher,
+        &with_gate,
+        "migrate",
+        Timestamp::from_second(100).unwrap(),
+    );
     let api = ResourceId {
         kind: ResourceKind::Deployment,
         name: std::sync::Arc::new("api".to_owned()),
@@ -259,8 +298,14 @@ fn a_hold_is_cleared_once_its_gate_is_satisfied_and_not_before() {
     assert_eq!(synced.held.len(), 1);
     assert_eq!(store::load_holds(&db, &app()).unwrap().len(), 1);
 
-    store::record_success(&db, &app(), &gate("migrate"), &digest(&def, &cipher, "migrate"), 1)
-        .unwrap();
+    store::record_success(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &digest(&def, &cipher, "migrate"),
+        1,
+    )
+    .unwrap();
     let synced = sync(&db, &def, &cipher, None);
     assert!(synced.held.is_empty());
     assert!(store::load_holds(&db, &app()).unwrap().is_empty());
@@ -271,13 +316,11 @@ fn a_hold_is_cleared_once_its_gate_is_satisfied_and_not_before() {
 fn a_hold_is_brought_up_to_what_the_definition_now_selects() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
-    let def = def(
-        r#"
+    let def = def(r#"
         app.deployment("api").image("docker.io/library/nginx:1");
         app.deployment("tasks").image("docker.io/library/nginx:1");
         app.gate("migrate").key(1).exclusive(app);
-        "#,
-    );
+        "#);
     register(&db);
     let api = ResourceId {
         kind: ResourceKind::Deployment,
@@ -308,8 +351,14 @@ fn an_app_is_marked_set_up_the_first_time_every_gate_is_satisfied_and_stays_so()
     sync(&db, &def, &cipher, None);
     assert!(!store::is_set_up(&db, &app()).unwrap());
 
-    store::record_success(&db, &app(), &gate("migrate"), &digest(&def, &cipher, "migrate"), 1)
-        .unwrap();
+    store::record_success(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &digest(&def, &cipher, "migrate"),
+        1,
+    )
+    .unwrap();
     sync(&db, &def, &cipher, None);
     assert!(store::is_set_up(&db, &app()).unwrap());
 
@@ -329,8 +378,14 @@ fn an_app_that_cannot_be_judged_is_not_marked_set_up() {
     db.conn
         .execute("UPDATE registered_apps SET set_up = 0", [])
         .unwrap();
-    store::record_success(&db, &app(), &gate("migrate"), &digest(&def, &cipher, "migrate"), 1)
-        .unwrap();
+    store::record_success(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &digest(&def, &cipher, "migrate"),
+        1,
+    )
+    .unwrap();
     sync(&db, &def, &cipher, Some("a typo"));
     assert!(
         !store::is_set_up(&db, &app()).unwrap(),
@@ -415,7 +470,9 @@ fn due_gates_run_one_at_a_time_in_the_order_the_script_declared_them() {
     );
 
     drive_once(&oi);
-    wait_until("the second run to end", || valid(&oi, "second") && idle(&oi));
+    wait_until("the second run to end", || {
+        valid(&oi, "second") && idle(&oi)
+    });
 }
 
 // spec: GRUN#initiating-runs
@@ -548,7 +605,15 @@ fn a_queued_run_of_a_gate_the_definition_no_longer_declares_is_withdrawn() {
         result,
         crate::runtime::scheduler::ScheduleResult::Queued
     ));
-    let id = oi.state.scheduler.lock().queue_iter().next().unwrap().operation_id.clone();
+    let id = oi
+        .state
+        .scheduler
+        .lock()
+        .queue_iter()
+        .next()
+        .unwrap()
+        .operation_id
+        .clone();
     crate::oi::handler::actions::lifecycle::persist_queued(&oi.state, &id).unwrap();
     let persisted = |oi: &TestOi, gate: &'static str| -> i64 {
         oi.state.db.call(move |db| {
@@ -669,7 +734,10 @@ fn a_check_that_passes_leaves_the_gate_satisfied_and_clears_its_dependants_to_st
     });
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
 
-    assert!(ready_record(&oi).valid, "a passing check leaves the record as it was");
+    assert!(
+        ready_record(&oi).valid,
+        "a passing check leaves the record as it was"
+    );
     assert!(oi.state.db.call(|db| active_faults(db)).is_empty());
 }
 
@@ -688,7 +756,10 @@ fn a_check_that_fails_invalidates_the_last_success_so_the_gate_is_run_again() {
 
     let (def, cipher) = {
         let reg = oi.state.registry.read();
-        (reg.get("demo").unwrap().app.def.load_full(), Arc::clone(&oi.state.cipher))
+        (
+            reg.get("demo").unwrap().app.def.load_full(),
+            Arc::clone(&oi.state.cipher),
+        )
     };
     let state = oi.state.db.call(move |db| {
         evaluate(db, &app(), &def, &cipher, None, &Remembered::default())
@@ -710,7 +781,43 @@ fn a_check_that_fails_invalidates_the_last_success_so_the_gate_is_run_again() {
 
 // spec: GRUN#checks
 #[test]
-fn a_check_that_cannot_be_run_leaves_the_gate_undetermined_and_is_retried_after_its_delay_across_a_restart() {
+fn a_check_with_an_interval_runs_every_interval_while_no_run_is_in_progress() {
+    let oi = installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: 1 })"));
+    let (def, cipher) = {
+        let reg = oi.state.registry.read();
+        (
+            reg.get("demo").unwrap().app.def.load_full(),
+            Arc::clone(&oi.state.cipher),
+        )
+    };
+    let key = digest(&def, &cipher, "ready");
+    oi.state.db.call(move |db| {
+        store::record_success(db, &app(), &gate("ready"), &key, 1).unwrap();
+    });
+    // A check has already cleared the dependants to start, so only the
+    // interval can make one due.
+    oi.state
+        .gate_runtime
+        .clear_for_start(&app(), &gate("ready"), key);
+    let stop = exit_checks_with(&oi, 1);
+
+    drive_once(&oi);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        ready_record(&oi).valid,
+        "no check is made before the interval has passed"
+    );
+
+    std::thread::sleep(Duration::from_millis(1000));
+    drive_once(&oi);
+    wait_until("the check to fail", || !ready_record(&oi).valid);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+// spec: GRUN#checks
+#[test]
+fn a_check_that_cannot_be_run_leaves_the_gate_undetermined_and_is_retried_after_its_delay_across_a_restart()
+ {
     let oi = satisfied_and_checked();
     oi.state.db.call(|db| {
         db.conn
@@ -726,7 +833,10 @@ fn a_check_that_cannot_be_run_leaves_the_gate_undetermined_and_is_retried_after_
         !oi.state.gate_runtime.is_checking(&app(), &gate("ready"))
     });
     assert_eq!(ready_record(&oi).check_failures, 1);
-    assert!(ready_record(&oi).valid, "an unrun check does not invalidate");
+    assert!(
+        ready_record(&oi).valid,
+        "an unrun check does not invalidate"
+    );
     let faults = oi.state.db.call(|db| active_faults(db));
     assert_eq!(
         faults,
