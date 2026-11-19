@@ -27,7 +27,8 @@ use crate::{
             oracle::{container_run_succeeded, derive_lifecycle_state},
         },
         db::Db,
-        history::{find_instances_for_group, query_observations_for},
+        history::{instances_for_app, query_observations_for},
+        identity::ResourceInstance,
         lifecycle::LifecycleState,
         scaling,
         secrets::{Cipher, KeyDigest},
@@ -631,76 +632,93 @@ pub fn read_readiness(
             }
         }
     }
-    let mut readiness = Readiness::default();
-    for id in wanted {
-        match read_workload(db, app, def, id, held, stopped) {
-            Ok((ready, live)) => {
-                if ready {
-                    readiness.ready.insert(id.clone());
-                }
-                if live {
-                    readiness.live.insert(id.clone());
-                }
-            }
-            Err(e) => {
-                readiness.ready.clear();
-                readiness.unreadable = Some(format!("{} {}: {e}", id.kind.type_name(), id.name));
-                return readiness;
-            }
-        }
+    match read_wanted(db, app, def, &wanted, held, stopped) {
+        Ok(readiness) => readiness,
+        Err(e) => Readiness {
+            unreadable: Some(e),
+            ..Readiness::default()
+        },
     }
-    readiness
 }
 
-fn read_workload(
+/// Readiness of the `wanted` workloads, from one read of the app's instances,
+/// one of their observations and one of its scaling decisions.
+fn read_wanted(
     db: &Db,
     app: &AppName,
     def: &AppDef,
-    id: &ResourceId,
+    wanted: &BTreeSet<&ResourceId>,
     held: &BTreeSet<ResourceId>,
     stopped: &StoppedSet,
-) -> rusqlite::Result<(bool, bool)> {
-    let instances = find_instances_for_group(db, app, id.kind, Some(id.name.as_str()))?;
-    let histories = query_observations_for(db, &instances)?;
-    let history = |instance: &crate::runtime::identity::ResourceInstance| {
+) -> Result<Readiness, String> {
+    let mut readiness = Readiness::default();
+    if wanted.is_empty() {
+        return Ok(readiness);
+    }
+    let mut instances: BTreeMap<&ResourceId, Vec<ResourceInstance>> = BTreeMap::new();
+    for instance in instances_for_app(db, app).map_err(|e| e.to_string())? {
+        let id = wanted.iter().copied().find(|id| {
+            id.kind == instance.kind && instance.name.as_deref() == Some(id.name.as_str())
+        });
+        if let Some(id) = id {
+            instances.entry(id).or_default().push(instance);
+        }
+    }
+    let all: Vec<ResourceInstance> = instances.values().flatten().cloned().collect();
+    let histories = query_observations_for(db, &all).map_err(|e| e.to_string())?;
+    let history = |instance: &ResourceInstance| {
         histories
             .get(&instance.id)
             .map(Vec::as_slice)
             .unwrap_or_default()
     };
-    let live = instances.iter().any(|instance| {
-        matches!(
-            derive_lifecycle_state(instance, history(instance)),
-            LifecycleState::Scheduled | LifecycleState::Running | LifecycleState::Ready
-        )
-    });
-    if held.contains(id) || stopped.contains(&(id.kind, id.name.as_str().to_owned())) {
-        return Ok((false, live));
-    }
-    let ready = match id.kind {
-        ResourceKind::Deployment => {
-            let scale = match def.resources.get(id) {
-                Some(Resource::Deployment(d)) => {
-                    let scale = &d.def.lock().scale;
-                    Some((*scale.start(), *scale.end()))
-                }
-                _ => None,
-            };
-            let at_zero = match scale {
-                Some((low, high)) => scaling::effective_scale(db, app, &id.name, low, high)? == 0,
-                None => false,
-            };
-            !at_zero
-                && instances.iter().any(|instance| {
-                    derive_lifecycle_state(instance, history(instance)) == LifecycleState::Ready
-                })
-        }
-        ResourceKind::Job => instances
-            .last()
-            .is_some_and(|instance| container_run_succeeded(history(instance)) == Some(true)),
-        _ => false,
+    let decisions = if wanted.iter().any(|id| id.kind == ResourceKind::Deployment) {
+        scaling::load_scaling_decisions_for_app(db, app).map_err(|e| e.to_string())?
+    } else {
+        Default::default()
     };
-    Ok((ready, live))
+    for id in wanted.iter().copied() {
+        let instances = instances.get(id).map(Vec::as_slice).unwrap_or_default();
+        let live = instances.iter().any(|instance| {
+            matches!(
+                derive_lifecycle_state(instance, history(instance)),
+                LifecycleState::Scheduled | LifecycleState::Running | LifecycleState::Ready
+            )
+        });
+        if live {
+            readiness.live.insert(id.clone());
+        }
+        if held.contains(id) || stopped.contains(&(id.kind, id.name.as_str().to_owned())) {
+            continue;
+        }
+        let ready = match id.kind {
+            ResourceKind::Deployment => {
+                let at_zero = match def.resources.get(id) {
+                    Some(Resource::Deployment(d)) => {
+                        let scale = &d.def.lock().scale;
+                        scaling::effective_scale_from(
+                            decisions.get(id.name.as_str()).copied(),
+                            *scale.start(),
+                            *scale.end(),
+                        ) == 0
+                    }
+                    _ => false,
+                };
+                !at_zero
+                    && instances.iter().any(|instance| {
+                        derive_lifecycle_state(instance, history(instance)) == LifecycleState::Ready
+                    })
+            }
+            ResourceKind::Job => instances
+                .last()
+                .is_some_and(|instance| container_run_succeeded(history(instance)) == Some(true)),
+            _ => false,
+        };
+        if ready {
+            readiness.ready.insert(id.clone());
+        }
+    }
+    Ok(readiness)
 }
 
 /// The targets in `targets` that are not ready.
