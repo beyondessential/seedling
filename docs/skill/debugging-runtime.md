@@ -187,13 +187,17 @@ disagrees.
 ### 5. Check the status computation
 
 App status is computed in `src/runtime/apps/status.rs`. For an installed app
-with no operation running, `steady` reports `Faulted`, `Degraded` or `Running`
-by checking each resource's instances against its desired state: `Ready`, or
+with no operation running, `steady` reports `Faulted`, `Installing` (until the
+setup record says every gate has been satisfied at once), `Degraded` or
+`Running` by checking each resource's instances against its desired state: `Ready`, or
 `Unscheduled` for a stopped resource or a deployment scaled to zero, while a
 Job is also at its desired state after a successful run. Cross-reference what
 it sees (all instances from `find_instances_for_group`) against what the
 reconciler considers active (the `keep` set from `ensure_scaled_group`).
-Mismatches here are a common source of false `Degraded`.
+Mismatches here are a common source of false `Degraded`. A resource a gate
+holds is desired `Unscheduled`; `/apps/show` reports the gates holding it as
+`held_by`, what a workload waits on as `waiting_on`, and each gate's state under
+`gates` (`undetermined` where its record cannot be read, never `unsatisfied`).
 
 ### 6. Check for stuck operations
 
