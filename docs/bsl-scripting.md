@@ -426,7 +426,7 @@ A key can carry a secret, such as a password a gate rotates: the runtime stores 
 ### How gates run
 
 - A gate is _satisfied_ when its last success is for its current key and nothing has undone it since. A run starts by invalidating the last success, so a migration that fails part way leaves the gate unsatisfied and its exclusive selection stopped.
-- The runtime pulls the images a run needs, stops the exclusive selection, waits for it to terminate, and runs the body. The body directs the gate's own exclusive selection and the workloads ordered after the gate; `rt.start` in a body does not wait for the gate.
+- The runtime pulls the images a run needs, stops the exclusive selection, waits for it to terminate, and runs the body. A selection that has not stopped within ten minutes fails the run, which is retried with back-off. The body directs the gate's own exclusive selection and the workloads ordered after the gate; `rt.start` in a body does not wait for the gate.
 - The gate's check then runs. A run succeeds when the body returns and the check, if any, passes.
 - A failed run is retried after a delay that starts at 30 seconds, doubles with each failure, and is capped at one hour. The runtime never gives up: it files a `gate_failed` fault and keeps retrying at the cap. A change of key makes the next run due at once, and a success resets the delay.
 - Cancelling a gate run pauses the gate for its key. It stays paused until an operator runs it or its key moves.

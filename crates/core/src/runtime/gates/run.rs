@@ -62,16 +62,18 @@ const CHECK_POLL: Duration = Duration::from_millis(500);
 /// How long a run waits between looks at the world while it prepares.
 const PREPARE_POLL: Duration = Duration::from_millis(500);
 
-/// How long a run goes on failing to read whether its exclusive selection has
-/// stopped before it fails, so that it ends and is retried with back-off
-/// rather than holding the app's operation for as long as the reads fail.
-const SELECTION_READ_WAIT: Duration = Duration::from_secs(300);
+/// How long a run waits for its exclusive selection to stop, or for a read
+/// that tells it so, before it fails, so that it ends and is retried with
+/// back-off rather than holding the app's operation for as long as an
+/// instance is wedged or the reads fail.
+const SELECTION_WAIT: Duration = Duration::from_secs(600);
 
-/// Whether a run that has failed to read its exclusive selection since
-/// `failing_since` has failed for long enough to give up.
+/// Whether a run that began waiting for its exclusive selection at `began`
+/// has waited for long enough to give up.
+// spec: GRUN#preparation
 // spec: GRUN#retries
-fn selection_unreadable_for_too_long(failing_since: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(failing_since) >= SELECTION_READ_WAIT
+fn selection_waited_too_long(began: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(began) >= SELECTION_WAIT
 }
 
 /// What a gate run needs of the operation that dispatched it.
@@ -443,7 +445,7 @@ impl Run<'_> {
     /// An instance that never started is as stopped as one that ended.
     // spec: GRUN#preparation
     async fn wait_for_selection(&self, selection: &BTreeSet<ResourceId>) -> Result<(), Stopped> {
-        let mut failing_since: Option<Instant> = None;
+        let began = Instant::now();
         loop {
             if self.cancel.is_cancelled() {
                 return Err(Stopped::Cancelled);
@@ -457,13 +459,17 @@ impl Run<'_> {
             {
                 Ok(None) => return Ok(()),
                 Ok(Some(what)) => {
-                    failing_since = None;
                     tracing::debug!(app = %self.app_name, gate = %self.gate, "waiting for {what} to stop");
+                    if selection_waited_too_long(began, Instant::now()) {
+                        return Err(Stopped::Failed(format!(
+                            "its exclusive selection had not stopped after {} seconds: {what}",
+                            SELECTION_WAIT.as_secs()
+                        )));
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(app = %self.app_name, gate = %self.gate, "cannot tell whether the exclusive selection has stopped: {e}");
-                    let since = *failing_since.get_or_insert_with(Instant::now);
-                    if selection_unreadable_for_too_long(since, Instant::now()) {
+                    if selection_waited_too_long(began, Instant::now()) {
                         return Err(Stopped::Failed(format!(
                             "whether its exclusive selection had stopped could not be read: {e}"
                         )));
