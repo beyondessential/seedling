@@ -16,6 +16,10 @@ CREATE TABLE generation_params (
     FOREIGN KEY (app, generation) REFERENCES generations (app, generation)
         ON DELETE CASCADE
 );
+-- Reconstructing a generation reads the latest change of each parameter up
+-- to it.
+CREATE INDEX generation_params_by_name
+    ON generation_params (app, param_name, generation DESC);
 
 INSERT INTO generation_params
     (app, generation, param_name, previous_value, previous_value_ciphertext,

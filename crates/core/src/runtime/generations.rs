@@ -588,7 +588,7 @@ pub fn param_map_at(
 ) -> Result<BTreeMap<String, String>, Error> {
     let mut stmt = db.conn.prepare(
         "SELECT param_name, new_value, new_value_ciphertext
-         FROM generation_params
+         FROM generation_params INDEXED BY generation_params_by_name
          WHERE app = ?1 AND generation <= ?2
          ORDER BY param_name ASC, generation DESC",
     )?;

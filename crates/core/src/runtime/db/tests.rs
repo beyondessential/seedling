@@ -873,3 +873,32 @@ fn dynamic_resource_records_name_their_creator_and_refuse_an_unknown_one() {
     );
     assert!(refused.is_err(), "an unknown creator was stored");
 }
+
+// spec: GEN#reconstruction
+#[test]
+fn reconstruction_reads_each_parameters_latest_change_through_an_index() {
+    let db = Db::open_in_memory().unwrap();
+    let plan: Vec<String> = db
+        .conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT param_name, new_value, new_value_ciphertext
+             FROM generation_params INDEXED BY generation_params_by_name
+             WHERE app = ?1 AND generation <= ?2
+             ORDER BY param_name ASC, generation DESC",
+        )
+        .unwrap()
+        .query_map(rusqlite::params!["demo", 5], |r| r.get(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("generation_params_by_name")),
+        "{plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|step| step.contains("TEMP B-TREE")),
+        "{plan:?}"
+    );
+}
