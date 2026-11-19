@@ -836,3 +836,18 @@ fn a_run_whose_check_cannot_be_run_does_not_succeed_and_files_gate_check_unavail
         vec!["gate_check_unavailable", "gate_failed"]
     );
 }
+
+// spec: GRUN#retries
+#[test]
+fn a_run_gives_up_once_its_exclusive_selection_has_been_unreadable_for_long_enough() {
+    let since = Instant::now();
+    assert!(!selection_unreadable_for_too_long(since, since));
+    assert!(!selection_unreadable_for_too_long(
+        since,
+        since + SELECTION_READ_WAIT - Duration::from_secs(1)
+    ));
+    assert!(selection_unreadable_for_too_long(
+        since,
+        since + SELECTION_READ_WAIT
+    ));
+}
