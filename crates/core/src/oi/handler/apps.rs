@@ -84,7 +84,7 @@ pub(crate) struct PlanParams {
     pub proposed_bundle: Option<serde_json::Map<String, Value>>,
     #[serde(default)]
     pub proposed_reference: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::params::proposed_changes")]
     pub proposed_params: Option<ParamChanges>,
 }
 

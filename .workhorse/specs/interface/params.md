@@ -92,6 +92,7 @@ It MUST NOT change any stored definition, parameter value or other state.
 A request MUST carry at most one of `proposed_script`, `proposed_bundle` and `proposed_reference`, and the server MUST refuse one that carries more with `requirements_invalid`.
 Without a proposed definition, the server MUST evaluate the app's current one.
 A parameter that `proposed_params` has no member for keeps its stored value.
+A `proposed_params` with no members is the same as none.
 
 The server MUST refuse the request with `not_found` if the app is not registered.
 The server MUST refuse a proposed definition that cannot be fetched, breaks the bundle rules, or does not support the running Seedling version, with the error [`/apps/update`](apps.md#update) would give, before evaluating anything.

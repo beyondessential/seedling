@@ -878,6 +878,31 @@ fn an_update_without_a_parameter_change_has_no_changes_member() {
     assert!(updated.get("changes").is_none(), "{updated}");
 }
 
+// spec: PRM#change-planning
+#[test]
+fn a_plan_treats_proposed_params_with_no_members_as_none_and_refuses_what_a_change_refuses() {
+    let oi = oi_with_params_app();
+    let plan = |proposed: &str| {
+        let request = format!(
+            r#"{{"method":"/apps/plan","params":{{"app":"demo","proposed_params":{proposed}}}}}"#
+        );
+        oi.call_raw(request.as_bytes())
+    };
+
+    let none = oi.call("/apps/plan", json!({ "app": "demo" })).unwrap();
+    assert_eq!(plan("{}").unwrap(), none);
+    assert_eq!(plan("null").unwrap(), none);
+    assert!(none["rejections"].as_array().unwrap().is_empty());
+
+    let (code, message) = plan(r#"{"greeting":"a","greeting":"b"}"#).unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(message.contains("greeting"), "{message}");
+    let (code, _) = plan(r#"{"not a name":"y"}"#).unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    let (code, _) = plan(r#"{"greeting":3}"#).unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+}
+
 // spec: APPS#update
 #[test]
 fn an_update_refuses_what_a_parameter_change_refuses() {

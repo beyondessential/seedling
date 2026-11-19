@@ -63,9 +63,39 @@ impl ParamChanges {
 
 impl<'de> Deserialize<'de> for ParamChanges {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(deserializer, false)
+    }
+}
+
+/// Parameter changes a dry run is asked to evaluate, where an object with no
+/// members is the same as none.
+// spec: PRM#change-planning
+pub(crate) fn proposed_changes<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ParamChanges>, D::Error> {
+    struct Lenient(ParamChanges);
+
+    impl<'de> Deserialize<'de> for Lenient {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            ParamChanges::parse(deserializer, true).map(Lenient)
+        }
+    }
+
+    Ok(Option::<Lenient>::deserialize(deserializer)?
+        .map(|Lenient(changes)| changes)
+        .filter(|changes| !changes.0.is_empty()))
+}
+
+impl ParamChanges {
+    fn parse<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+        allow_empty: bool,
+    ) -> Result<Self, D::Error> {
         use serde::de::{Error, MapAccess, Visitor};
 
-        struct Changes;
+        struct Changes {
+            allow_empty: bool,
+        }
 
         impl<'de> Visitor<'de> for Changes {
             type Value = ParamChanges;
@@ -93,14 +123,14 @@ impl<'de> Deserialize<'de> for ParamChanges {
                         )));
                     }
                 }
-                if changes.is_empty() {
+                if changes.is_empty() && !self.allow_empty {
                     return Err(A::Error::custom("params must name at least one parameter"));
                 }
                 Ok(ParamChanges(changes))
             }
         }
 
-        deserializer.deserialize_map(Changes)
+        deserializer.deserialize_map(Changes { allow_empty })
     }
 }
 
