@@ -284,16 +284,17 @@ thread_local! {
 }
 
 /// Install an `ActionCallTable` for the duration of the closure passed to
-/// `f`. The outer action's name seeds the call stack so `.call(<self>)`
-/// inside it is rejected as recursion.
+/// `f`. An outer action's name seeds the call stack so `.call(<self>)`
+/// inside it is rejected as recursion; a gate's body, which no action can
+/// call, seeds none.
 pub(crate) fn with_action_call_table<R>(
     actions: BTreeMap<ActionName, FnPtr>,
-    outer: ActionName,
+    outer: Option<ActionName>,
     f: impl FnOnce() -> R,
 ) -> R {
     let table = ActionCallTable {
         actions,
-        stack: vec![outer],
+        stack: outer.into_iter().collect(),
     };
     ACTION_CALL_TABLE.with(|t| *t.borrow_mut() = Some(table));
     let result = f();

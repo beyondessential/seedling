@@ -603,11 +603,11 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // The action call table makes captured FnPtrs available to
     // app.action(name) / Action.call(...) for the duration of the
     // outer closure body. The outer action's name seeds the call
-    // stack so a self-call is rejected as recursion.
-    let outer_name = ActionName::new_unchecked(match &gate {
-        Some(_) => format!("gate {action_name}"),
-        None => action_name.to_owned(),
-    });
+    // stack so a self-call is rejected as recursion; a gate's body is not
+    // an action, so it seeds nothing.
+    let outer_name = gate
+        .is_none()
+        .then(|| ActionName::new_unchecked(action_name.to_owned()));
     let rt_for_table = rt_clone_for_active.clone();
     let result = crate::defs::app::with_action_call_table(captured_actions, outer_name, || {
         let _guard =
