@@ -517,6 +517,13 @@ impl Run<'_> {
                     .call(move |db| store::record_success(db, &a, &g, &key, generation))
                 {
                     Ok(()) => {
+                        // spec: FLT#app-faults
+                        // A gate run is a lifecycle operation, so its success
+                        // supersedes an earlier operation's failure.
+                        let a = app.clone();
+                        state.db.call(move |db| {
+                            crate::oi::handler::actions::lifecycle::clear_superseded_operation_faults(db, &a)
+                        });
                         if checked {
                             state.gate_runtime.clear_for_start(&app, &gate, key);
                         }

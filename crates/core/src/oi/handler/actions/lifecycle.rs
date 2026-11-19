@@ -412,6 +412,18 @@ pub(crate) enum OperationEnd {
 /// operation, and report it.
 ///
 /// A gate run ends otherwise, as its outcome says.
+/// Clear the faults a lifecycle operation that completes supersedes: an
+/// earlier operation that failed or was cancelled no longer describes the
+/// app.
+// spec: FLT#app-faults
+pub(crate) fn clear_superseded_operation_faults(db: &crate::runtime::db::Db, app: &AppName) {
+    for kind in ["operation_failed", "operation_cancelled"] {
+        if let Err(e) = faults::clear_faults_by_kind(db, app, kind) {
+            tracing::error!(%app, "cannot clear {kind} after an operation completed: {e}");
+        }
+    }
+}
+
 // spec: OPS#completion
 // spec: OPS#cancellation
 fn end_action(db: &DbHandle, op_ctx: &OperationEventCtx, end: OperationEnd) {
@@ -420,17 +432,7 @@ fn end_action(db: &DbHandle, op_ctx: &OperationEventCtx, end: OperationEnd) {
     match end {
         OperationEnd::Completed => {
             db.call(move |db| {
-                // Clear stale "the previous attempt didn't run to
-                // completion" faults for this app: a fresh successful
-                // operation supersedes both prior `operation_failed`
-                // (a previous attempt errored out) and
-                // `operation_cancelled` (a previous attempt was
-                // operator-cancelled). Without this, a successful
-                // retry leaves the app stuck in `Faulted` even though
-                // its current state is fine.
-                for kind in ["operation_failed", "operation_cancelled"] {
-                    faults::clear_faults_by_kind(db, &app_name, kind).ok();
-                }
+                clear_superseded_operation_faults(db, &app_name);
                 let _ = clear_current_operation(db);
             });
             op_ctx.completed();

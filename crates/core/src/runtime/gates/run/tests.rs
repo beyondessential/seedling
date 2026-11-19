@@ -179,6 +179,27 @@ fn a_run_that_succeeds_records_the_digest_of_its_key_and_its_generation_and_rele
     assert!(faults_of(&oi).is_empty());
 }
 
+// spec: FLT#app-faults
+#[test]
+fn a_run_that_succeeds_clears_the_faults_of_operations_that_failed_or_were_cancelled_before_it() {
+    let oi = TestOi::new();
+    installed(&oi, SCRIPT);
+    oi.state.db.call(|db| {
+        for kind in ["operation_failed", "operation_cancelled"] {
+            faults::file_fault(db, &app_name(), None, None, None, kind, "an earlier action")
+                .unwrap();
+        }
+    });
+    assert_eq!(faults_of(&oi), ["operation_cancelled", "operation_failed"]);
+
+    let kinds = run_once(&oi, "migrate", false);
+    assert!(
+        kinds.contains(&"OperationCompleted".to_owned()),
+        "{kinds:?}"
+    );
+    assert!(faults_of(&oi).is_empty(), "{:?}", faults_of(&oi));
+}
+
 // spec: GRUN#preparation
 #[test]
 fn a_run_starts_by_invalidating_the_last_success_and_keeps_its_generation_for_last() {
