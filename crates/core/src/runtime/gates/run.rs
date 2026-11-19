@@ -33,6 +33,7 @@ use crate::{
     },
     runtime::{
         apps::CheckId,
+        autonomous_ops,
         barrier::{
             CancelToken, OperationId,
             oracle::{container_run_succeeded, derive_lifecycle_state},
@@ -42,7 +43,7 @@ use crate::{
         dynamic_cleanup::cleanup_dynamic_resources,
         history::{
             CurrentOperation, clear_current_operation, find_instances_for_group, load_action_log,
-            query_autonomous_operations, query_observations, save_current_operation,
+            query_observations, save_current_operation,
         },
         identity::ResourceInstance,
         lifecycle::LifecycleState,
@@ -715,7 +716,7 @@ fn still_running(
                 | LifecycleState::Terminated
                 | LifecycleState::Unscheduled) => {
                     let seen = observations.last().map_or(i64::MIN, |o| o.recorded_at);
-                    if start_unobserved_since(db, &instance, seen)? {
+                    if autonomous_ops::start_unobserved_since(db, &instance, seen)? {
                         return Ok(Some(format!(
                             "{} ({state:?}, being started)",
                             instance.display_name
@@ -727,22 +728,6 @@ fn still_running(
         }
     }
     Ok(None)
-}
-
-/// Whether the latest start of `instance` was made at or after `seen`, the time
-/// of its latest observation, and has not failed: it is under way, or the host
-/// has not yet shown what it did.
-fn start_unobserved_since(
-    db: &Db,
-    instance: &ResourceInstance,
-    seen: i64,
-) -> rusqlite::Result<bool> {
-    let latest = query_autonomous_operations(db, instance.id)?
-        .into_iter()
-        .rfind(|op| op.operation == "start");
-    Ok(latest.is_some_and(|op| {
-        op.recorded_at >= seen && op.outcome.as_deref().is_none_or(|outcome| outcome == "ok")
-    }))
 }
 
 // ---------------------------------------------------------------------------

@@ -487,7 +487,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => "ok".to_owned(),
+                Ok(()) => autonomous_ops::OK.to_owned(),
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -575,7 +575,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => "ok".to_owned(),
+                Ok(()) => autonomous_ops::OK.to_owned(),
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -654,7 +654,7 @@ async fn actuate_one_pod(
                     return Some(obs.result);
                 };
                 let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                    Ok(()) => "ok".to_owned(),
+                    Ok(()) => autonomous_ops::OK.to_owned(),
                     Err(e) => {
                         error!(
                             instance = %dr.instance.display_name,
@@ -702,7 +702,7 @@ async fn actuate_one_pod(
             // Repeated starts of one instance are spaced, so one that exits
             // as soon as it starts is not restarted at full speed.
             if !restart_at_once {
-                match autonomous_ops::back_off(db, &dr.instance, "start") {
+                match autonomous_ops::back_off(db, &dr.instance, autonomous_ops::START) {
                     Ok(None) => {}
                     Ok(Some(wait)) => {
                         tracing::debug!(
@@ -739,7 +739,8 @@ async fn actuate_one_pod(
                     return Some(obs.result);
                 }
             };
-            let Some(op) = autonomous_ops::record(db, &dr.instance, "start", rule) else {
+            let Some(op) = autonomous_ops::record(db, &dr.instance, autonomous_ops::START, rule)
+            else {
                 return Some(obs.result);
             };
             let outcome = match actuator
@@ -757,7 +758,7 @@ async fn actuate_one_pod(
                     // whoever performs it. The unit's failure may not be
                     // recorded yet, so this tick's observation counts too.
                     result.replaced_failed_run = obs.unit_failed || prior_run_failed;
-                    "ok".to_owned()
+                    autonomous_ops::OK.to_owned()
                 }
                 Err(crate::system::actuator::ActuateError::ImageUnavailable {
                     ref reference,
@@ -843,7 +844,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => "ok".to_owned(),
+                Ok(()) => autonomous_ops::OK.to_owned(),
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,

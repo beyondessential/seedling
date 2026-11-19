@@ -6,10 +6,16 @@
 //! with its outcome afterwards.
 
 use crate::runtime::{
-    db::DbHandle,
+    db::{Db, DbHandle},
     history::{self, Provenance},
     identity::ResourceInstance,
 };
+
+/// The operation that starts an instance.
+pub const START: &str = "start";
+
+/// The outcome of an operation that did what it set out to do.
+pub const OK: &str = "ok";
 
 /// Handle returned by [`record`]; call [`AutonomousOpHandle::complete`] when
 /// the operation finishes to attach the outcome.
@@ -109,6 +115,22 @@ pub fn back_off(
         &recent,
         std::time::SystemTime::now(),
     ))
+}
+
+/// Whether the latest start of `instance` was made at or after `since`, in
+/// the milliseconds the log records times in, and has not failed: it is under
+/// way, or the host has not yet shown what it did.
+pub fn start_unobserved_since(
+    db: &Db,
+    instance: &ResourceInstance,
+    since: i64,
+) -> rusqlite::Result<bool> {
+    let latest = history::query_autonomous_operations(db, instance.id)?
+        .into_iter()
+        .rfind(|op| op.operation == START);
+    Ok(latest.is_some_and(|op| {
+        op.recorded_at >= since && op.outcome.as_deref().is_none_or(|outcome| outcome == OK)
+    }))
 }
 
 #[cfg(test)]

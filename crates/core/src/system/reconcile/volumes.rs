@@ -170,7 +170,7 @@ async fn process_one_volume(
             {
                 Ok(()) => {
                     result.removed = true;
-                    "ok".to_owned()
+                    autonomous_ops::OK.to_owned()
                 }
                 Err(e) => {
                     error!(
@@ -197,7 +197,7 @@ async fn process_one_volume(
             let create_outcome = match actuator.start_volume(instance, definition).await {
                 Ok(_) => {
                     result.present = true;
-                    "ok".to_owned()
+                    autonomous_ops::OK.to_owned()
                 }
                 Err(e) => {
                     error!(
@@ -225,7 +225,7 @@ async fn process_one_volume(
             let outcome = match actuator.start_volume(instance, definition).await {
                 Ok(_) => {
                     result.present = true;
-                    "ok".to_owned()
+                    autonomous_ops::OK.to_owned()
                 }
                 Err(e) => {
                     error!(
@@ -260,7 +260,7 @@ async fn process_one_volume(
             let outcome = match stopped {
                 Ok(()) => {
                     result.removed = true;
-                    "ok".to_owned()
+                    autonomous_ops::OK.to_owned()
                 }
                 Err(e) => {
                     error!(

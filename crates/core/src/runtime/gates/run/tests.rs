@@ -664,7 +664,7 @@ fn an_instance_with_a_start_that_has_not_ended_is_still_running_until_the_start_
         insert_autonomous_operation(
             db,
             i.id,
-            "start",
+            crate::runtime::autonomous_ops::START,
             &Provenance {
                 observation_ids: Vec::new(),
                 rule: "test".to_owned(),
