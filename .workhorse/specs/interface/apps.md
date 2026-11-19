@@ -85,7 +85,7 @@ An update that moves the key of one of the app's [gates](../language/gate.md) le
 `/apps/remove` takes an `app` parameter and removes a registered app that is not installed.
 
 The server MUST refuse the request with `not_found` if the app is not registered.
-It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, a change to it is being applied, or a [shell session](shells.md#shell-session) on it is open or its [dynamic resources](../runtime/operations.md#shell-sessions) are still being torn down.
+It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, a change to it is being applied, a [shell session](shells.md#shell-session) on it is open or its [dynamic resources](../runtime/operations.md#shell-sessions) are still being torn down, or a [check](../runtime/gates.md#checks) of one of its gates is running or its Job is still being torn down.
 It MUST refuse it with `requirements_invalid` if the app is installed or uninstalling, with a `message` saying which.
 
 On success the server MUST discard the app's state as [deregistration](../runtime/app-teardown.md#deregistration) requires, MUST remove the app, and MUST emit an `AppDeregistered` event.

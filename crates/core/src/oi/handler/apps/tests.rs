@@ -1828,6 +1828,23 @@ fn an_app_cannot_be_removed_while_a_session_on_it_has_a_slot() {
     assert!(!oi.state.registry.read().is_registered("demo"));
 }
 
+// spec: APPS#removal
+#[test]
+fn an_app_cannot_be_removed_while_a_check_of_its_gates_has_a_slot() {
+    let oi = TestOi::with_app("demo");
+    let check = crate::runtime::apps::CheckId::generate();
+    let checks = std::sync::Arc::clone(&oi.state.registry.read().get("demo").unwrap().checks);
+    checks.open(check);
+
+    let (code, _) = oi
+        .call("/apps/remove", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+
+    checks.close(&check);
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+}
+
 // spec: ACI#install
 #[test]
 fn install_takes_only_the_app_and_moves_it_straight_to_installed() {
