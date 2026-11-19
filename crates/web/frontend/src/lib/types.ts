@@ -810,7 +810,7 @@ export interface ImagePin {
   expires_at: string | null;
 }
 
-export type HandlerKind = "action" | "shell" | "param_change";
+export type HandlerKind = "action" | "shell" | "gate";
 
 export interface HandlerProbe {
   name: string;
