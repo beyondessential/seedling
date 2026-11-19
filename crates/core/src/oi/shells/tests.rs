@@ -905,3 +905,91 @@ fn a_session_dropped_mid_run_still_lets_go_of_its_slot() {
         .expect("the slot is let go");
     });
 }
+
+// spec: RT#resources-a-gate-holds
+#[test]
+fn a_shell_closure_leaves_out_what_a_gate_came_to_hold_after_the_session_opened() {
+    use crate::{
+        defs::resource::{ResourceId, ResourceKind},
+        runtime::{history::insert_observation, identity::ResourceInstance},
+    };
+
+    let script = format!(
+        r#"{TOOLS_JOB}
+        let api = app.deployment("api").image("docker.io/library/nginx:1");
+        app.gate("migrate").key(1).exclusive(api);
+        app.deployment("plain").image("docker.io/library/nginx:1");
+        app.on_shell("tools", |rt, shell, p| {{
+            rt.start(app.job().image("{SHELL_JOB}").command("true")).terminated();
+            rt.start(app);
+        }});"#
+    );
+    let ran = run_shell_session(
+        &script,
+        serde_json::json!({}),
+        &FakeHost::answering(Ok(ShellExit::ended())),
+        Some(std::time::Duration::from_secs(20)),
+        |oi| {
+            let db = oi.state.db.clone();
+            std::thread::spawn(move || {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let first_call = loop {
+                    let found = db.call(|db| {
+                        db.conn
+                            .query_row(
+                                "SELECT resources FROM action_log WHERE app = 'demo' AND call_index = 0",
+                                [],
+                                |row| row.get::<_, String>(0),
+                            )
+                            .ok()
+                    });
+                    if let Some(found) = found {
+                        break found;
+                    }
+                    assert!(std::time::Instant::now() < until, "the closure never began");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                };
+                let job: Vec<ResourceInstance> = serde_json::from_str(&first_call).unwrap();
+                db.call(move |db| {
+                    let api = ResourceId {
+                        kind: ResourceKind::Deployment,
+                        name: Arc::new("api".to_owned()),
+                    };
+                    crate::runtime::gates::store::set_hold(
+                        db,
+                        &"demo".parse().unwrap(),
+                        &"migrate".parse().unwrap(),
+                        &[api].into(),
+                    )
+                    .unwrap();
+                    insert_observation(
+                        db,
+                        &job[0],
+                        "container_exited",
+                        &serde_json::json!({ "exit_code": 0 }),
+                    )
+                    .unwrap();
+                });
+            });
+        },
+    );
+
+    let id = ran.session_id.to_string();
+    let log = ran.oi.state.db.call(move |db| {
+        crate::runtime::history::load_action_log(db, &crate::runtime::barrier::OperationId(id))
+            .unwrap()
+    });
+    let mut started: Vec<_> = log
+        .get(1)
+        .expect("the closure went on to its second call")
+        .resources
+        .iter()
+        .filter_map(|resource| resource.name.clone())
+        .collect();
+    started.sort();
+    assert_eq!(
+        started,
+        vec!["plain", "tools"],
+        "api is held by a gate that held it only after the session opened"
+    );
+}

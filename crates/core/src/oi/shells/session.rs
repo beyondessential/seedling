@@ -675,7 +675,7 @@ pub(super) async fn run_app_shell(
     let app_name_for_task = app_name.clone();
     let shell_name_for_task = shell_name.clone();
     let cancel = stop.cancel_token();
-    let remembered = state.gate_runtime.remembered(app_name);
+    let gate_runtime = Arc::clone(&state.gate_runtime);
 
     let script = tokio::task::spawn_blocking(move || {
         let (engine, mut scope, _) =
@@ -725,28 +725,6 @@ pub(super) async fn run_app_shell(
             shell_as_action,
         );
         let world = Arc::new(DbWorldOracle::new(db.clone()));
-        // spec: RT#resources-a-gate-holds
-        // What gates keep from a closure is read when the session opens: a
-        // shell's `Started` leaves it out as an operation's does.
-        let exclusions = {
-            let (name, def, cipher, remembered) = (
-                app_name_for_task.clone(),
-                app.def.load_full(),
-                Arc::clone(&cipher),
-                remembered,
-            );
-            db.call(move |db| {
-                crate::runtime::gates::Exclusions::for_closure(
-                    db,
-                    &name,
-                    &def,
-                    &cipher,
-                    &remembered,
-                    None,
-                )
-            })
-        };
-
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,
@@ -754,6 +732,28 @@ pub(super) async fn run_app_shell(
         });
 
         let end = loop {
+            // spec: RT#resources-a-gate-holds
+            // What gates keep from the closure is read for each pass, as an
+            // operation's is, so a pass that follows a wait sees the gates as
+            // they stand then.
+            let exclusions = {
+                let (name, def, cipher, remembered) = (
+                    app_name_for_task.clone(),
+                    app.def.load_full(),
+                    Arc::clone(&cipher),
+                    gate_runtime.remembered(&app_name_for_task),
+                );
+                db.call(move |db| {
+                    crate::runtime::gates::Exclusions::for_closure(
+                        db,
+                        &name,
+                        &def,
+                        &cipher,
+                        &remembered,
+                        None,
+                    )
+                })
+            };
             let result = run_operation(
                 OperationContext {
                     engine: &engine,
@@ -780,7 +780,7 @@ pub(super) async fn run_app_shell(
                     container_signaler: None,
                     volume_writer: None,
                     executor: None,
-                    exclusions: exclusions.clone(),
+                    exclusions,
                 },
                 &mut scope,
             );
