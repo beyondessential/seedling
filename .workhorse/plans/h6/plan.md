@@ -214,14 +214,14 @@ Build order, with the labels used in commit history and conversation (these are 
 
 ### Gate runtime
 
-- [ ] `runtime/gates.rs`: record load and write (unreadable is its own outcome), key digests from the evaluated definition, state per gate
-- [ ] Initiation from the reconciliation loop: due when unsatisfied, not paused, targets ready, back-off due; declaration order; admit with trigger `gate`; a refused admission is retried, not failed
-- [ ] Run preparation: invalidate the record, pre-pull the body's probed images, the check's and the dependants', fail with nothing stopped on a pull failure; record the hold, stop the selection, wait for Terminated
-- [ ] Outcome: run the check at the run's generation, write the success record (digest, generation, valid) or count the failure; a failed record write fails the run; clear the hold on satisfaction
-- [ ] Back-off (30s doubling to 1h, due at once on a key move), pauses on cancel, `gate_failed` while unsatisfied after a failed or cancelled run
-- [ ] Checks: before starting a dependant with no running instance, after a body, on the interval outside runs; check Job started outside the desired state and judged by exit status; a failed check invalidates; an unstartable check makes the gate undetermined and holds `gate_check_unavailable` with back-off
-- [ ] `gate_state_unreadable`; gates no longer declared (withdraw queued run, clear faults, release hold, keep record); setup record; uninstall deletes records, holds and setup, retrying before `NotInstalled`
-- [ ] Gate faults in `WITHHOLDING_KINDS`, with `fault_standing` building its placeholders from the array
+- [x] `runtime/gates.rs`: record load and write (unreadable is its own outcome), key digests from the evaluated definition, state per gate
+- [x] Initiation from the reconciliation loop: due when unsatisfied, not paused, targets ready, back-off due; declaration order; admit with trigger `gate`; a refused admission is retried, not failed
+- [x] Run preparation: invalidate the record, pre-pull the body's probed images, the check's and the dependants', fail with nothing stopped on a pull failure; record the hold, stop the selection, wait for Terminated
+- [x] Outcome: run the check at the run's generation, write the success record (digest, generation, valid) or count the failure; a failed record write fails the run; clear the hold on satisfaction
+- [x] Back-off (30s doubling to 1h, due at once on a key move), pauses on cancel, `gate_failed` while unsatisfied after a failed or cancelled run
+- [x] Checks: before starting a dependant with no running instance, after a body, on the interval outside runs; check Job started outside the desired state and judged by exit status; a failed check invalidates; an unstartable check makes the gate undetermined and holds `gate_check_unavailable` with back-off
+- [x] `gate_state_unreadable`; gates no longer declared (withdraw queued run, clear faults, release hold, keep record); setup record; uninstall deletes records, holds and setup, retrying before `NotInstalled`
+- [x] Gate faults in `WITHHOLDING_KINDS`, with `fault_standing` building its placeholders from the array
 
 ### Operations and lifecycle
 
@@ -280,7 +280,7 @@ Build order, with the labels used in commit history and conversation (these are 
 
 - [x] Rewrite the BSL tests that use the removed handlers (`crates/core/src/tests/param.rs`, `barrier.rs`, `action.rs`, `runtime.rs`, `app.rs`, `action_call.rs`) onto actions and gates, deleting those that only covered `on_change`, `on_start` or `on_install`
 - [x] New BSL tests for `Gate`: builder errors, key equality, cycles and self-waits, `last` at the last success
-- [ ] Gate runtime tests that sever in-memory state between the record write and its read: hold across a restart, pause across a restart, back-off across a restart, unreadable record leaving the gate undetermined
+- [x] Gate runtime tests that sever in-memory state between the record write and its read: hold across a restart, pause across a restart, back-off across a restart, unreadable record leaving the gate undetermined
 - [ ] Reconciler tests: held selection stays down whatever the scale, waiting workload keeps its stale instances, check Job never in the desired state, spec hash moves with a direct gate key only
 - [ ] OI tests: multi-parameter set and update refusals, events and history; `/apps/install`; `/apps/gates/run` refusals; changes accepted while an operation runs
 - [ ] Draft the card's test cases (`.workhorse/test-cases/h6/overview.md`) from the gate, gate-run and parameter-change specs
