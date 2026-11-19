@@ -129,7 +129,6 @@ The runtime stops a gate's exclusive selection before running the gate, and hold
 Each call MUST add its targets to those already given.
 `after` MUST throw when called outside the static context.
 
-A target MUST be of the same app.
 A script MUST NOT order a gate or workload after itself, whether directly or through other targets, and the evaluation of a script whose `after` calls form a cycle MUST fail.
 
 A target is ready when:
