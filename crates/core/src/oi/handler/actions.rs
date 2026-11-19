@@ -119,6 +119,34 @@ fn apply_action_param_schema(
     action_params::apply_schema(action_params_schema, params).map_err(validation_error_to_oi)
 }
 
+/// The refusal of a request the scheduler's admission rejected.
+// spec: ACI#invoking-an-action
+pub(crate) fn rejection_error(app_name: &AppName, reason: RejectReason) -> OiError {
+    match reason {
+        RejectReason::SameAppOperationInProgress => OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("operation in progress for app: {app_name}"),
+        ),
+        RejectReason::SameAppAlreadyQueued => OiError::new(
+            ErrorCode::AlreadyQueued,
+            format!("already queued for app: {app_name}"),
+        ),
+        RejectReason::ChangeBeingApplied => OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("a change to {app_name} is being applied; try again once it is applied"),
+        ),
+        // spec: TRD#uninstall-admission
+        RejectReason::AppUninstalling => OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is being uninstalled: {app_name}"),
+        ),
+        // spec: OPS#unreadable-operation-state
+        RejectReason::OperationStateUnreadable => OiError::internal(
+            "the persisted operation state cannot be read, so no operation can start",
+        ),
+    }
+}
+
 // spec: ACI#invoking-an-action
 pub(crate) fn invoke_action(
     state: &Arc<OiState>,
@@ -202,31 +230,7 @@ pub(crate) fn invoke_action(
             Ok(json!({ "schedule": "queued", "operation_id": operation_id.0 }))
         }
         lifecycle::Admission::CannotPersist(e) => Err(e),
-        lifecycle::Admission::Rejected(RejectReason::SameAppOperationInProgress) => {
-            Err(OiError::new(
-                ErrorCode::OperationInProgress,
-                format!("operation in progress for app: {app_name}"),
-            ))
-        }
-        lifecycle::Admission::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
-            ErrorCode::AlreadyQueued,
-            format!("already queued for app: {app_name}"),
-        )),
-        lifecycle::Admission::Rejected(RejectReason::ChangeBeingApplied) => Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("a change to {app_name} is being applied; try again once it is applied"),
-        )),
-        // spec: TRD#uninstall-admission
-        lifecycle::Admission::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
-            ErrorCode::NotInstalled,
-            format!("app is being uninstalled: {app_name}"),
-        )),
-        // spec: OPS#unreadable-operation-state
-        lifecycle::Admission::Rejected(RejectReason::OperationStateUnreadable) => {
-            Err(OiError::internal(
-                "the persisted operation state cannot be read, so no operation can start",
-            ))
-        }
+        lifecycle::Admission::Rejected(reason) => Err(rejection_error(app_name, reason)),
     }
 }
 

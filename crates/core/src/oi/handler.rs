@@ -67,6 +67,7 @@ mod apps;
 mod canopy;
 mod definition;
 mod faults;
+mod gates;
 mod images;
 mod ingresses;
 mod key_mgmt;
@@ -254,6 +255,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/apps/params/set" => params::set_params(state, parse_raw_params(&raw_params)?, ctx),
         // spec: ACI#invoking-an-action
         "/apps/action/invoke" => actions::invoke_action(state, parse_params(req.params)?, ctx),
+        // spec: CTL#gate-runs
+        "/apps/gates/run" => gates::run_gate(state, parse_params(req.params)?, ctx),
         // spec: ACI#cancellation
         "/apps/action/cancel" => actions::cancel_action(state, parse_params(req.params)?),
         // spec: ACI#install

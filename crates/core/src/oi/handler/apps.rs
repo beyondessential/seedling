@@ -33,6 +33,7 @@ use super::{
         shell_entry_json,
     },
     definition::{self, DefinitionInput, Resolved},
+    gates as gate_surface,
     params::ParamChanges,
 };
 
@@ -595,6 +596,24 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     let def = entry.app.def.load();
 
+    // spec: APPS#gates
+    let gate_standing = gate_surface::read(
+        state,
+        &params.app,
+        &entry.app.def.load_full(),
+        entry.script_error.as_ref().map(|(why, _)| why.clone()),
+        *entry.phase.lock() == AppPhase::Installed,
+        stopped_set.clone(),
+    )?;
+    let running_gate = active
+        .as_ref()
+        .filter(|a| a.app == params.app)
+        .and_then(|a| match &a.target {
+            OperationTarget::Gate(gate) => Some(gate.clone()),
+            OperationTarget::Action(_) => None,
+        });
+    let gates_json = gate_surface::gates_json(&def, &gate_standing, running_gate.as_ref());
+
     // spec: APPS#description
     // spec: APPS#parameters
     let params_json: Vec<Value> = def
@@ -661,6 +680,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // def. The DB closure below only needs plain data (no locks) to augment
     // with instance state, faults, stopped flag, and current scale.
     struct ResourceInfo {
+        held_by: Vec<String>,
+        waiting_on: Option<Vec<Value>>,
         kind: ResourceKind,
         name_str: String,
         base_json: Value,
@@ -671,6 +692,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .resources
         .iter()
         .map(|(id, resource)| ResourceInfo {
+            held_by: gate_surface::held_by(&gate_standing, id),
+            waiting_on: gate_surface::waiting_on(&gate_standing, id),
             kind: id.kind,
             name_str: id.name.as_str().to_owned(),
             base_json: resource_static_json(id.kind, id.name.as_str(), resource, &def),
@@ -749,6 +772,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     resource_obj["instances"] = json!(instances_json);
                     resource_obj["faults"] = json!(resource_faults);
                     resource_obj["stopped"] = json!(is_stopped);
+                    // spec: APPS#resources
+                    resource_obj["held_by"] = json!(info.held_by);
+                    if let Some(waiting_on) = info.waiting_on {
+                        resource_obj["waiting_on"] = json!(waiting_on);
+                    }
 
                     // spec: CTL#scaling
                     if let Some((low, high)) = info.scale_bounds {
@@ -940,6 +968,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         "params": params_json,
         "unknown_params": unknown_params_json,
         "actions": actions_json,
+        "gates": gates_json,
     });
 
     // spec: APPS#current-operation
@@ -1215,9 +1244,29 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     // Empty input → empty diff.
     // spec: PRM#change-planning
     if proposed_definition.is_empty() && params.proposed_params.is_none() {
+        // spec: PRM#change-planning
+        // The evaluated definition is the current one, which fails to
+        // evaluate while the app has a script error.
+        let (current, script_error, installed) = {
+            let reg = state.registry.read();
+            let entry = reg.get(name).expect("confirmed registered");
+            (
+                entry.app.def.load_full(),
+                entry.script_error.as_ref().map(|(why, _)| why.clone()),
+                *entry.phase.lock() == AppPhase::Installed,
+            )
+        };
+        if let Some(why) = script_error {
+            return Ok(json!({ "errors": [why] }));
+        }
+        let gates_would_run = if installed {
+            gate_surface::would_run(state, &params.app, &current, None)?
+        } else {
+            Vec::new()
+        };
         return Ok(json!({
             "diff": Vec::<Value>::new(),
-            "gates_would_run": Vec::<String>::new(),
+            "gates_would_run": gates_would_run,
             "rejections": Vec::<Value>::new(),
             "errors": Vec::<String>::new(),
         }));
@@ -1270,6 +1319,18 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     let cur_def = current_app.def.load();
     let prop_def = proposed_app.def.load();
 
+    // spec: PRM#change-planning
+    let installed = state
+        .registry
+        .read()
+        .get(name)
+        .is_some_and(|entry| *entry.phase.lock() == AppPhase::Installed);
+    let gates_would_run = if installed {
+        gate_surface::would_run(state, &params.app, &proposed_app.def.load_full(), None)?
+    } else {
+        Vec::new()
+    };
+
     let mut diff: Vec<Value> = Vec::new();
     for id in prop_def.resources.keys() {
         if !cur_def.resources.contains_key(id) {
@@ -1312,7 +1373,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
 
     Ok(json!({
         "diff": diff,
-        "gates_would_run": Vec::<String>::new(),
+        "gates_would_run": gates_would_run,
         "errors": Vec::<String>::new(),
         "rejections": rejections,
     }))
@@ -2062,6 +2123,27 @@ pub(crate) fn restart_deployment(
         return Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is not installed: {name}"),
+        ));
+    }
+
+    // spec: CTL#deployment-restart
+    let holders = gate_surface::holders_of(
+        state,
+        &params.app,
+        &entry.app.def.load(),
+        &crate::defs::resource::ResourceId {
+            kind: ResourceKind::Deployment,
+            name: Arc::new(deployment_name.to_owned()),
+        },
+    )?;
+    if !holders.is_empty() {
+        let holders: Vec<&str> = holders.iter().map(|g| g.as_str()).collect();
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "deployment {deployment_name} cannot be restarted while a gate holds it: {}",
+                holders.join(", ")
+            ),
         ));
     }
 

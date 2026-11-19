@@ -133,6 +133,18 @@ impl GateStatus {
     pub fn unreadable(&self) -> Option<&str> {
         self.record_error.as_deref()
     }
+
+    /// When the runtime next runs the gate, for an unsatisfied gate whose last
+    /// run failed and that is not paused: `None` where there is no such run
+    /// to wait out, or where the gate's key has moved since and its run is due
+    /// at once.
+    // spec: APPS#gates
+    pub fn next_run_at(&self) -> Option<Timestamp> {
+        if self.paused || self.failed_run().is_none() {
+            return None;
+        }
+        retry_due(self.record.as_ref(), self.key_digest.as_ref())
+    }
 }
 
 impl GateStatus {
@@ -693,6 +705,9 @@ pub struct GateView {
     /// stopped, with the targets each waits on.
     // spec: GATE#start-order
     pub waiting: BTreeMap<ResourceId, Vec<AfterTarget>>,
+    /// Why readiness could not be read, where it could not: every workload
+    /// then waits on whatever it is ordered after.
+    pub readiness_unreadable: Option<String>,
 }
 
 impl GateView {
@@ -754,6 +769,7 @@ pub fn view(
     if let Some(why) = &readiness.unreadable {
         tracing::error!(%app, "cannot read whether the app's workloads are ready; starting none that wait on one: {why}");
     }
+    view.readiness_unreadable = readiness.unreadable.clone();
     for id in workloads(def) {
         let mut waiting_on = unready_targets(&workload_targets(def, id), gates, &readiness);
         // A gate that declares a check clears its dependants to start from

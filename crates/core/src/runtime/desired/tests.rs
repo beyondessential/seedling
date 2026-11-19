@@ -1014,6 +1014,7 @@ fn held_by(def: &AppDef, gate: &str, names: &[&str]) -> crate::runtime::gates::G
     crate::runtime::gates::GateView {
         held: crate::runtime::gates::held_resources(def, &holds),
         waiting: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -1095,6 +1096,7 @@ fn a_job_a_gate_holds_is_desired_unscheduled() {
             )]),
         ),
         waiting: Default::default(),
+        ..Default::default()
     };
     let state = compute(
         &app_name("myapp"),
