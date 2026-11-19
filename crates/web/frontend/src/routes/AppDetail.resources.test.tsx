@@ -77,6 +77,17 @@ describe("AppDetail params", () => {
   });
 
   // spec: UI#operator-capabilities
+  it("does not stage a set secret left blank", async () => {
+    mount(baseFixtures(makeDetail()), "write");
+    expect(await screen.findByText("admin_password")).toBeTruthy();
+    const row = screen.getByText("admin_password").closest("tr") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    expect(iconButton("Stage this change").disabled).toBe(true);
+    fireEvent.keyDown(screen.getByDisplayValue(""), { key: "Enter" });
+    expect(screen.queryByText("1 change is waiting to be applied.")).toBeNull();
+  });
+
+  // spec: UI#operator-capabilities
   // spec: PRM#parameter-changes
   it("applies several staged edits in one change", async () => {
     const { request } = mount(

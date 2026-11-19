@@ -1106,8 +1106,14 @@ function ParamsSection({
     setAddValue("");
   };
 
+  // A secret's value is never sent to the console, so an empty draft of a
+  // set secret is one nobody typed, not a value to store.
+  const blankSecret = (p: AppParam) => p.secret && p.is_set && draft === "";
+
   const save = () => {
     if (!editing) return;
+    const p = params.find((q) => q.name === editing);
+    if (p && blankSecret(p)) return;
     stage(editing, draft);
     setEditing(null);
   };
@@ -1377,6 +1383,7 @@ function ParamsSection({
                                 <IconButton
                                   size="small"
                                   aria-label="Plan this change"
+                                  disabled={blankSecret(p)}
                                   onClick={() =>
                                     setPlanning({ ...staged, [p.name]: draft })
                                   }
@@ -1390,7 +1397,7 @@ function ParamsSection({
                                     size="small"
                                     aria-label="Stage this change"
                                     onClick={save}
-                                    disabled={loading}
+                                    disabled={loading || blankSecret(p)}
                                   >
                                     <CheckIcon fontSize="small" />
                                   </IconButton>
