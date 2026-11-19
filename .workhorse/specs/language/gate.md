@@ -102,7 +102,7 @@ It fails when the instance exits with any other status, or is stopped at its [de
 
 The runtime starts a check's Job only to check the gate, as [gate checks](../runtime/gates.md#checks) specify.
 A Job MUST NOT be the check of more than one gate, and declaring it as a second gate's check MUST throw.
-The evaluation of a script MUST fail where a gate's check Job is in the gate's exclusive selection, or is ordered after the gate, whether directly or through other targets.
+The evaluation of a script MUST fail where a gate's check Job is in the gate's exclusive selection, is ordered after the gate, or is a target of the gate, whether directly or through other targets.
 
 > [!NOTE]
 > A check lets a gate see a change made outside Seedling, such as a database restored from a backup taken before a migration.

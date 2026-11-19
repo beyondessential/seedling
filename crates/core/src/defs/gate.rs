@@ -728,6 +728,14 @@ pub(crate) fn check_gates(def: &AppDef) -> Result<(), String> {
                     check.job.name
                 ));
             }
+            // spec: GATE#check
+            // The gate would wait for a Job that runs only to check it.
+            if waits.contains(&AfterTarget::Workload(check.job.clone())) {
+                return Err(format!(
+                    "gate '{name}' is ordered after job '{}', its own check",
+                    check.job.name
+                ));
+            }
         }
     }
     Ok(())

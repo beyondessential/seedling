@@ -376,6 +376,23 @@ fn a_check_job_in_its_gates_exclusive_selection_fails_evaluation() {
 
 // spec: GATE#check
 #[test]
+fn a_gate_ordered_after_its_own_check_job_fails_evaluation_directly_or_through_other_targets() {
+    let direct = evaluation_error(&format!(
+        r#"{WORKLOADS}
+        app.gate("migrate").check(tool).after(tool);"#
+    ));
+    assert!(direct.contains("its own check"), "{direct}");
+
+    let through = evaluation_error(&format!(
+        r#"{WORKLOADS}
+        api.after(tool);
+        app.gate("migrate").check(tool).after(api);"#
+    ));
+    assert!(through.contains("its own check"), "{through}");
+}
+
+// spec: GATE#check
+#[test]
 fn a_check_job_ordered_after_its_gate_fails_evaluation_directly_or_through_other_targets() {
     let direct = evaluation_error(&format!(
         r#"{WORKLOADS}
