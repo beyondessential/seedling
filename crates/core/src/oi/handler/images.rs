@@ -419,7 +419,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         }
         proposed_app
     } else {
-        stored_app
+        stored_app.clone()
     };
 
     let script = bundle.script()?;
@@ -443,8 +443,19 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         action_params: params.action_params,
         lenient: params.lenient,
     };
-    let response = probe_app(&engine, &ast, &app, registry, &request)
-        .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
+    // A gate's body is probed with `last` as a run of it would give it, which
+    // is the app as stored, not as a proposed script would make it.
+    let response = probe_app(&engine, &ast, &app, registry, &request, &|gate| {
+        crate::runtime::gates::run::last_success(
+            &state.db,
+            &name,
+            gate,
+            &stored_app,
+            &state.script_limits,
+            &state.cipher,
+        )
+    })
+    .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
 
     let per_handler: Vec<Value> = response
         .per_handler
@@ -548,6 +559,16 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
         &ProbeRequest {
             lenient: true,
             ..Default::default()
+        },
+        &|gate| {
+            crate::runtime::gates::run::last_success(
+                &state.db,
+                app_name,
+                gate,
+                &app,
+                &state.script_limits,
+                &state.cipher,
+            )
         },
     ) {
         Ok(r) => r,

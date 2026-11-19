@@ -301,31 +301,14 @@ impl Run<'_> {
     /// that has none.
     // spec: GATE#body
     async fn last(&self, current: &App) -> Result<Option<App>, String> {
-        let (app, gate) = (self.app_name.clone(), self.gate.clone());
-        let generation = self
-            .state
-            .db
-            .call(move |db| store::load_records(db, &app))
-            .map_err(|e| format!("the gate's record cannot be read: {e}"))?
-            .remove(&gate)
-            .map(|record| record.map_err(|why| format!("the gate's record cannot be read: {why}")))
-            .transpose()?
-            .and_then(|record| record.success_generation);
-        let Some(generation) = generation else {
-            return Ok(None);
-        };
-        let rebuilt = app_at_generation(
+        last_success(
             &self.state.db,
             &self.app_name,
+            &self.gate,
             current,
-            generation,
             &self.state.script_limits,
             &self.state.cipher,
         )
-        .map_err(|e| {
-            format!("generation {generation}, the gate's last success, cannot be rebuilt: {e}")
-        })?;
-        Ok(Some(rebuilt.unwrap_or_else(|| current.clone())))
     }
 
     /// Everything a run does before its body: invalidate the last success,
@@ -577,6 +560,38 @@ impl Run<'_> {
             }
         });
     }
+}
+
+/// The app as it was at the last success of `gate`, as a run gives it to the
+/// gate's body, or `None` for a gate with none. `current` is the app as it
+/// stands, standing in for a last success at its own generation.
+///
+/// `Err` where the record cannot be read or the generation cannot be rebuilt,
+/// which is not a gate with no last success.
+// spec: GATE#body
+pub(crate) fn last_success(
+    db: &DbHandle,
+    app_name: &AppName,
+    gate: &GateName,
+    current: &App,
+    limits: &crate::ScriptLimits,
+    cipher: &Arc<crate::runtime::secrets::Cipher>,
+) -> Result<Option<App>, String> {
+    let (app, name) = (app_name.clone(), gate.clone());
+    let generation = db
+        .call(move |db| store::load_records(db, &app))
+        .map_err(|e| format!("the gate's record cannot be read: {e}"))?
+        .remove(&name)
+        .map(|record| record.map_err(|why| format!("the gate's record cannot be read: {why}")))
+        .transpose()?
+        .and_then(|record| record.success_generation);
+    let Some(generation) = generation else {
+        return Ok(None);
+    };
+    let rebuilt = app_at_generation(db, app_name, current, generation, limits, cipher).map_err(
+        |e| format!("generation {generation}, the gate's last success, cannot be rebuilt: {e}"),
+    )?;
+    Ok(Some(rebuilt.unwrap_or_else(|| current.clone())))
 }
 
 enum Finished {

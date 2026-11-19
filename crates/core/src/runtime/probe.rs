@@ -1,5 +1,5 @@
 //! Handler probe — dry-run execution mode that enumerates container image
-//! references an app's action and shell handlers might pull.
+//! references an app's action and shell handlers and gate bodies might pull.
 //!
 //! See `spec: IMG#image-discovery` for semantics. The
 //! behaviour of individual `rt.*` calls under probe mode is implemented in
@@ -117,25 +117,43 @@ pub fn probe_gate_body(
     last: Option<&App>,
 ) -> Result<HandlerProbe, String> {
     let captured = capture_closures(engine, script_ast, app)?;
-    let body = match captured.gates.get(gate) {
-        Some(Some(body)) => body.clone(),
-        Some(None) => {
-            return Ok(HandlerProbe {
-                name: gate.as_str().to_owned(),
-                kind: HandlerKind::Gate,
-                images: BTreeSet::new(),
-                error: None,
-                skipped_reason: None,
-            });
-        }
-        None => return Err(format!("gate '{gate}' is not declared")),
-    };
+    match captured.gates.get(gate) {
+        Some(Some(body)) => probe_gate_closure(
+            engine,
+            script_ast,
+            app,
+            &registry,
+            gate,
+            body.clone(),
+            last,
+        ),
+        Some(None) => Ok(HandlerProbe {
+            name: gate.as_str().to_owned(),
+            kind: HandlerKind::Gate,
+            images: BTreeSet::new(),
+            error: None,
+            skipped_reason: None,
+        }),
+        None => Err(format!("gate '{gate}' is not declared")),
+    }
+}
+
+/// Probe the body `body` of gate `gate`.
+fn probe_gate_closure(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+    registry: &Arc<dyn InstanceRegistry>,
+    gate: &GateName,
+    body: FnPtr,
+    last: Option<&App>,
+) -> Result<HandlerProbe, String> {
     let arity = closure_arity(script_ast, &body)
         .ok_or_else(|| format!("the body of gate '{gate}' cannot be called"))?;
     Ok(run_probe(
         engine,
         app,
-        &registry,
+        registry,
         gate.as_str(),
         HandlerKind::Gate,
         body,
@@ -146,6 +164,9 @@ pub fn probe_gate_body(
     ))
 }
 
+/// `last_of` gives the app as it was at a gate's last success, `None` for a
+/// gate with none, or why that could not be worked out, as a gate run would
+/// give it to the body.
 // spec: IMG#image-discovery
 pub fn probe_app(
     engine: &Engine,
@@ -153,6 +174,7 @@ pub fn probe_app(
     app: &App,
     registry: Arc<dyn InstanceRegistry>,
     request: &ProbeRequest,
+    last_of: &dyn Fn(&GateName) -> Result<Option<App>, String>,
 ) -> Result<ProbeResponse, String> {
     // Re-run the script to capture every registered closure. The script
     // itself must not fail; if it does, the caller can surface that as an
@@ -204,6 +226,29 @@ pub fn probe_app(
             request,
         );
         results.push(probe_result);
+    }
+
+    // A gate without a body has nothing to probe.
+    for (name, body) in &captured.gates {
+        let Some(body) = body else { continue };
+        let probed = last_of(name).and_then(|last| {
+            probe_gate_closure(
+                engine,
+                script_ast,
+                app,
+                &registry,
+                name,
+                body.clone(),
+                last.as_ref(),
+            )
+        });
+        results.push(probed.unwrap_or_else(|error| HandlerProbe {
+            name: name.as_str().to_owned(),
+            kind: HandlerKind::Gate,
+            images: BTreeSet::new(),
+            error: Some(error),
+            skipped_reason: None,
+        }));
     }
 
     let mut all_images = BTreeSet::new();
@@ -423,6 +468,17 @@ mod tests {
         (engine, ast, app)
     }
 
+    /// Probe `app` as it stands, where no gate has a last success.
+    fn probe(
+        engine: &Engine,
+        ast: &AST,
+        app: &App,
+        registry: Arc<dyn InstanceRegistry>,
+        request: &ProbeRequest,
+    ) -> Result<ProbeResponse, String> {
+        probe_app(engine, ast, app, registry, request, &|_| Ok(None))
+    }
+
     // spec: IMG#image-discovery
     #[test]
     fn probes_dynamic_job_images_in_action() {
@@ -437,7 +493,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         let preload = response
             .per_handler
@@ -454,6 +510,92 @@ mod tests {
         assert!(response.all_images.contains("ghcr.io/example/foo:1.2.3"));
     }
 
+    const GATED: &str = r#"
+        app.gate("bare").key(1);
+        app.gate("migrate").key(1).run(|rt, last| {
+            let image = if last == () { "ghcr.io/example/first:1" } else { "ghcr.io/example/again:1" };
+            rt.warm_images(app.job().image(image)).ready();
+        });
+    "#;
+
+    // spec: IMG#image-discovery
+    #[test]
+    fn probes_a_gate_body_with_last_as_a_run_would_give_it() {
+        let (engine, ast, app) = setup_engine_and_app(GATED);
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let probed = |last: Option<App>| {
+            probe_app(
+                &engine,
+                &ast,
+                &app,
+                Arc::clone(&registry),
+                &ProbeRequest::default(),
+                &move |_| Ok(last.clone()),
+            )
+            .expect("probe")
+        };
+
+        let first = probed(None);
+        let [migrate] = first.per_handler.as_slice() else {
+            panic!("only the gate with a body is probed: {first:?}");
+        };
+        assert_eq!(migrate.name, "migrate");
+        assert_eq!(migrate.kind, HandlerKind::Gate);
+        assert!(migrate.error.is_none(), "{migrate:?}");
+        assert_eq!(
+            migrate.images,
+            BTreeSet::from(["ghcr.io/example/first:1".to_owned()]),
+            "a gate with no last success is probed with the unit value"
+        );
+        assert!(first.all_images.contains("ghcr.io/example/first:1"));
+
+        let (_, _, earlier) = setup_engine_and_app(GATED);
+        let again = probed(Some(earlier));
+        assert_eq!(
+            again.per_handler[0].images,
+            BTreeSet::from(["ghcr.io/example/again:1".to_owned()]),
+            "a gate with a last success is probed with that app"
+        );
+    }
+
+    // spec: IMG#image-discovery
+    #[test]
+    fn a_gate_whose_last_cannot_be_worked_out_is_reported_as_an_error_and_not_as_having_none() {
+        let (engine, ast, app) = setup_engine_and_app(GATED);
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Err("generation 3 cannot be rebuilt".to_owned()),
+        )
+        .expect("probe");
+        let migrate = &response.per_handler[0];
+        assert_eq!(migrate.kind, HandlerKind::Gate);
+        assert_eq!(migrate.error.as_deref(), Some("generation 3 cannot be rebuilt"));
+        assert!(migrate.images.is_empty());
+        assert!(response.all_images.is_empty(), "{response:?}");
+    }
+
+    // spec: IMG#image-discovery
+    // spec: GATE#body
+    #[test]
+    fn a_gate_body_may_declare_no_parameter_or_one_under_a_probe() {
+        for body in [
+            "|| { app.job().image(\"ghcr.io/example/x:1\"); }",
+            "|rt| { rt.warm_images(app.job().image(\"ghcr.io/example/x:1\")).ready(); }",
+        ] {
+            let (engine, ast, app) =
+                setup_engine_and_app(&format!("app.gate(\"gated\").key(1).run({body});"));
+            let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+            let response =
+                probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            assert!(response.per_handler[0].error.is_none(), "{response:?}");
+        }
+    }
+
     // spec: IMG#image-discovery
     #[test]
     fn probes_rt_start_dynamic_deployment_image() {
@@ -467,7 +609,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         assert!(
             response
@@ -490,7 +632,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         assert!(
             response
@@ -536,7 +678,7 @@ mod tests {
         });
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response = probe_app(
+        let response = probe(
             &engine,
             &ast,
             &app,
@@ -600,7 +742,7 @@ mod tests {
         };
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response = probe_app(
+        let response = probe(
             &engine,
             &ast,
             &app,
@@ -613,7 +755,7 @@ mod tests {
             "{response:?}"
         );
 
-        let response = probe_app(&engine, &ast, &app, registry, &supplied("shell")).expect("probe");
+        let response = probe(&engine, &ast, &app, registry, &supplied("shell")).expect("probe");
         let deploy = &response.per_handler[0];
         assert!(
             deploy.error.is_some(),
@@ -647,7 +789,7 @@ mod tests {
         });
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response = probe_app(
+        let response = probe(
             &engine,
             &ast,
             &app,
@@ -692,7 +834,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         let handler = response
             .per_handler
@@ -728,7 +870,7 @@ mod tests {
         );
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response = probe_app(
+        let response = probe(
             &engine,
             &ast,
             &app,
@@ -775,7 +917,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         assert!(response.all_images.contains("ghcr.io/example/step1:latest"));
         assert!(response.all_images.contains("ghcr.io/example/step2:latest"));
