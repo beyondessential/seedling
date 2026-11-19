@@ -51,8 +51,15 @@ ALTER TABLE registered_apps DROP COLUMN installing;
 DELETE FROM queued_operations
 WHERE trigger IN ('boot', 'install', 'param_change')
    OR action IN ('install', 'start');
--- An install or start interrupted by a restart has nothing to replay either.
-DELETE FROM current_operation WHERE action_name IN ('install', 'start');
+-- Nor has an install, a start or a parameter's change handler interrupted by
+-- a restart, the last persisted under the parameter's name. An action that
+-- shares a parameter's name goes with it: it is not replayed, which is safer
+-- than replaying a handler as that action.
+DELETE FROM current_operation
+WHERE action_name IN ('install', 'start')
+   OR action_name IN (SELECT param_name FROM generation_params WHERE app = current_operation.app)
+   OR action_name IN (SELECT param_name FROM params WHERE app_name = current_operation.app)
+   OR action_name IN (SELECT param_name FROM secret_params WHERE app_name = current_operation.app);
 
 -- An operation runs against one generation, the one current when it was
 -- dispatched, and is a run of an action or of a gate: never both.
