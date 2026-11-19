@@ -117,8 +117,15 @@ fn kinds_of(
 /// Run `name` once, as the dispatcher does, and report the kinds of the
 /// events it emitted.
 fn run_once(oi: &TestOi, name: &str, cancelled: bool) -> Vec<String> {
+    run_at(oi, name, cancelled, 1)
+}
+
+/// As [`run_once`], for a run against `generation`.
+fn run_at(oi: &TestOi, name: &str, cancelled: bool, generation: u64) -> Vec<String> {
     let mut events = oi.state.event_tx.subscribe();
-    oi.block_on(run_gate(&oi.state, gate_input(oi, name, cancelled)));
+    let mut input = gate_input(oi, name, cancelled);
+    input.op_ctx.operation_generation = generation;
+    oi.block_on(run_gate(&oi.state, input));
     kinds_of(&mut events)
 }
 
@@ -231,6 +238,42 @@ fn a_run_whose_images_cannot_be_pulled_fails_with_nothing_stopped() {
     );
     assert_eq!(faults_of(&oi), vec!["gate_failed"]);
     assert_eq!(persisted_operations(&oi), 0);
+}
+
+// spec: GRUN#retries
+#[test]
+fn a_run_that_fails_before_it_has_its_generations_key_is_recorded_against_the_current_key() {
+    let oi = TestOi::new();
+    installed(&oi, SCRIPT);
+    oi.state.db.call(|db| {
+        db.conn
+            .execute(
+                "UPDATE registered_apps SET current_generation = 5 WHERE name = 'demo'",
+                [],
+            )
+            .unwrap();
+    });
+
+    let kinds = run_at(&oi, "migrate", false, 9999);
+    assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
+
+    let record = record(&oi, "migrate");
+    assert_eq!(record.consecutive_failures, 1);
+    assert_eq!(
+        record.failed_key_digest,
+        Some(key(&oi, "migrate")),
+        "the failure is on record, so the retry waits out its delay"
+    );
+    assert!(
+        record
+            .last_failure
+            .as_deref()
+            .is_some_and(|how| how.contains("cannot be rebuilt")),
+        "{:?}",
+        record.last_failure
+    );
+    assert_eq!(faults_of(&oi), vec!["gate_failed"]);
+    assert_eq!(holds(&oi), 0, "nothing was stopped");
 }
 
 // spec: GRUN#retries

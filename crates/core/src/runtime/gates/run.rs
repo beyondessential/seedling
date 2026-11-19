@@ -149,6 +149,17 @@ impl Run<'_> {
         let state = self.state;
         let (name, generation) = (&self.app_name, self.op_ctx.operation_generation);
 
+        // spec: GRUN#retries
+        // A run that fails before it has the key of its own generation is
+        // still recorded, against the gate's current key: with nothing on
+        // record the gate would be due again at once, whatever had gone wrong.
+        let current_key = current
+            .def
+            .load()
+            .gates
+            .get(&self.gate)
+            .and_then(|gate| gate.key.digest(&state.cipher).ok());
+
         // spec: OPS#initiating-events
         // The run is against the definition of its generation, however many
         // have been committed since, and on every replay.
@@ -164,7 +175,7 @@ impl Run<'_> {
             Err(e) => {
                 return RunEnd::Failed {
                     how: format!("generation {generation} cannot be rebuilt: {e}"),
-                    key: None,
+                    key: current_key,
                 };
             }
         };
@@ -173,7 +184,7 @@ impl Run<'_> {
         let Some(gate_def) = def.gates.get(&self.gate).cloned() else {
             return RunEnd::Failed {
                 how: format!("the gate is not declared at generation {generation}"),
-                key: None,
+                key: current_key,
             };
         };
         let key = match gate_def.key.digest(&state.cipher) {
@@ -181,7 +192,7 @@ impl Run<'_> {
             Err(e) => {
                 return RunEnd::Failed {
                     how: format!("the gate's key cannot be digested: {e}"),
-                    key: None,
+                    key: current_key,
                 };
             }
         };
