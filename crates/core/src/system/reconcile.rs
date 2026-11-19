@@ -4838,6 +4838,121 @@ mod tests {
         assert_eq!(stop_failed_faults(&oi, &job), 0);
     }
 
+    // spec: RCN#gate-holds
+    // spec: GRUN#gate-state
+    // What the gates say is read afresh for each iteration: a hold on record
+    // keeps its selection at `Unscheduled` whatever the scale, a hold that
+    // cannot be read starts none of the selection, and a gate that is
+    // satisfied no longer keeps its dependants waiting.
+    #[test]
+    fn each_iteration_reads_what_the_gates_hold_and_which_workloads_wait() {
+        use crate::runtime::{gates::store, secrets::Cipher};
+        use seedling_protocol::names::GateName;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": r#"
+                    let api = app.deployment("api").image("docker.io/library/nginx:1").scale(1..=3);
+                    let migrate = app.gate("migrate").key(1).exclusive(api);
+                    app.deployment("web").image("docker.io/library/nginx:1").after(migrate);
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let (app, gate) = (
+            AppName::new("app").unwrap(),
+            GateName::new("migrate").unwrap(),
+        );
+        let reconciler = test_reconciler(&oi);
+        let snapshot = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            let snapshot = apps.into_iter().find(|a| a.name.as_str() == "app").unwrap();
+            let desired = |name: &str| -> Vec<LifecycleState> {
+                snapshot
+                    .desired
+                    .resources
+                    .iter()
+                    .filter(|r| r.instance.name.as_deref() == Some(name))
+                    .map(|r| r.desired)
+                    .collect()
+            };
+            let (api, web) = (desired("api"), desired("web"));
+            (api, web, snapshot.gates)
+        };
+        let waits =
+            |gates: &GateView, name: &str| gates.waiting.keys().any(|id| id.name.as_str() == name);
+        let api_id = crate::defs::resource::ResourceId {
+            kind: crate::defs::resource::ResourceKind::Deployment,
+            name: Arc::new("api".to_owned()),
+        };
+
+        let (api, _, gates) = snapshot();
+        assert!(gates.held.is_empty(), "nothing holds the selection yet");
+        assert_eq!(api, vec![LifecycleState::Ready]);
+        assert!(waits(&gates, "web"), "web waits for the unsatisfied gate");
+
+        let (a, g, id) = (app.clone(), gate.clone(), api_id.clone());
+        oi.state.db.call(move |db| {
+            store::set_hold(db, &a, &g, &[id].into()).unwrap();
+        });
+        let (api, _, gates) = snapshot();
+        assert_eq!(
+            gates.held.keys().cloned().collect::<Vec<_>>(),
+            vec![api_id.clone()]
+        );
+        assert!(
+            !api.is_empty() && api.iter().all(|d| *d == LifecycleState::Unscheduled),
+            "a held selection stays down: {api:?}"
+        );
+
+        oi.state.db.call(|db| {
+            db.conn
+                .execute("ALTER TABLE gate_holds RENAME TO gate_holds_away", [])
+                .unwrap();
+        });
+        let (_, _, gates) = snapshot();
+        assert!(
+            gates.held.is_empty(),
+            "nothing is stopped for what cannot be read"
+        );
+        assert!(
+            waits(&gates, "api") && waits(&gates, "web"),
+            "nothing of the selection starts while its hold cannot be read"
+        );
+        oi.state.db.call(|db| {
+            db.conn
+                .execute("ALTER TABLE gate_holds_away RENAME TO gate_holds", [])
+                .unwrap();
+        });
+
+        let def = oi
+            .state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .app
+            .def
+            .load_full();
+        let digest = def.gates["migrate"]
+            .key
+            .digest(&Cipher::for_tests())
+            .unwrap();
+        let (a, g) = (app.clone(), gate.clone());
+        oi.state.db.call(move |db| {
+            store::record_success(db, &a, &g, &digest, 1).unwrap();
+        });
+        let (_, _, gates) = snapshot();
+        assert!(
+            !waits(&gates, "web"),
+            "web no longer waits once the gate is satisfied"
+        );
+    }
+
     // spec: GRUN#uninstall
     // The records of the app's gates, their holds and the record that it is
     // set up go with the uninstall, so that installing again runs every gate
