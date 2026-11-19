@@ -1626,10 +1626,21 @@ pub(crate) fn install_app(state: &OiState, params: AppParams, ctx: &RequestCtx) 
     };
 
     let hold = super::params::hold_for_change(state, &params.app)?;
-    // The phase was read before the hold, so another install can have landed
-    // in between.
+    // The phase and the script error were read before the hold, so another
+    // install, or a change that failed to evaluate, can have landed in between.
     if !matches!(*phase_arc.lock(), AppPhase::NotInstalled) {
         return Err(already_installed(name));
+    }
+    // spec: ACI#install
+    if state
+        .registry
+        .read()
+        .get(name)
+        .is_some_and(|entry| entry.script_error.is_some())
+    {
+        return Err(OiError::script_error(format!(
+            "app has a script error: {name}"
+        )));
     }
 
     // spec: ING#claims-across-apps
