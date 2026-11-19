@@ -83,6 +83,9 @@ Calling a resource method on `last` MUST NOT affect the app.
 
 A run of a gate without a body goes from its preparation straight to its check, so that the gate is satisfied once its check passes.
 
+> [!NOTE]
+> A key is held only as a digest, but what a body throws is recorded as how its run ended and is shown wherever the gate's failure is, so a body whose key carries a secret keeps the secret out of what it throws.
+
 The body directs the gate's own exclusive selection and the workloads ordered after the gate, as [resources a gate holds](rt.md#resources-a-gate-holds) specifies.
 A resource the body starts that is ordered after the gate MUST start without waiting for the gate.
 
