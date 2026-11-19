@@ -1633,9 +1633,9 @@ pub(crate) fn install_app(state: &OiState, params: AppParams, ctx: &RequestCtx) 
     }
 
     // spec: ING#claims-across-apps
-    // The install takes its place after every install before it, and the app
-    // becomes `Installed`, in one durable step: neither is observable without
-    // the other.
+    // The install takes its place after every install before it, the app
+    // becomes `Installed`, and an app with no gates is set up, in one durable
+    // step: none is observable without the others.
     let name_owned = params.app.clone();
     // spec: GRUN#app-setup
     // An app that declares no gates is set up once it is installed.
@@ -1647,11 +1647,15 @@ pub(crate) fn install_app(state: &OiState, params: AppParams, ctx: &RequestCtx) 
     let install_seq = state
         .db
         .call(move |db| {
-            let seq = AppRegistry::record_install_completed(db, &name_owned)?;
-            transition_phase(&phase_arc, AppPhase::Installed, db, &name_owned)?;
-            if declares_no_gates {
-                crate::runtime::gates::store::mark_set_up(db, &name_owned)?;
-            }
+            let seq = db.atomically(|db| {
+                let seq = AppRegistry::record_install_completed(db, &name_owned)?;
+                crate::runtime::apps::write_phase(db, &name_owned, &AppPhase::Installed)?;
+                if declares_no_gates {
+                    crate::runtime::gates::store::mark_set_up(db, &name_owned)?;
+                }
+                Ok(seq)
+            })?;
+            *phase_arc.lock() = AppPhase::Installed;
             Ok::<_, rusqlite::Error>(seq)
         })
         .map_err(|e| OiError::internal(format!("recording the install: {e}")))?;

@@ -1936,6 +1936,48 @@ fn install_refusals_are_given_in_the_order_the_spec_lists_them() {
 
 // spec: ACI#install
 #[test]
+fn an_install_that_cannot_be_recorded_in_full_leaves_the_app_not_installed() {
+    use crate::runtime::apps::AppPhase;
+
+    let oi = TestOi::with_app("demo");
+    oi.state.db.call(|db| {
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER refuse_set_up BEFORE UPDATE OF set_up ON registered_apps
+                 BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            )
+            .unwrap()
+    });
+
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "internal");
+    assert_eq!(
+        *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+        AppPhase::NotInstalled
+    );
+    let (installed, seq): (i64, Option<i64>) = oi.state.db.call(|db| {
+        db.conn
+            .query_row(
+                "SELECT installed, install_seq FROM registered_apps WHERE name = 'demo'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    });
+    assert_eq!((installed, seq), (0, None));
+
+    oi.state.db.call(|db| {
+        db.conn
+            .execute_batch("DROP TRIGGER refuse_set_up;")
+            .unwrap()
+    });
+    oi.call("/apps/install", json!({ "app": "demo" })).unwrap();
+}
+
+// spec: ACI#install
+#[test]
 fn install_is_refused_while_a_change_to_the_app_is_being_applied() {
     use crate::runtime::{apps::AppPhase, scheduler::AppHold};
     use seedling_protocol::names::AppName;

@@ -627,12 +627,19 @@ pub fn transition_phase(
     db: &Db,
     app_name: &AppName,
 ) -> rusqlite::Result<()> {
-    let (installed, uninstalling) = encode_phase(&new_phase);
+    write_phase(db, app_name, &new_phase)?;
+    *phase_arc.lock() = new_phase;
+    Ok(())
+}
+
+/// Persist the phase alone, for a caller that makes it observable once the
+/// writes it belongs with are durable.
+pub fn write_phase(db: &Db, app_name: &AppName, phase: &AppPhase) -> rusqlite::Result<()> {
+    let (installed, uninstalling) = encode_phase(phase);
     db.conn.execute(
         "UPDATE registered_apps SET installed = ?1, uninstalling = ?2 WHERE name = ?3",
         rusqlite::params![installed as i64, uninstalling as i64, app_name],
     )?;
-    *phase_arc.lock() = new_phase;
     Ok(())
 }
 
