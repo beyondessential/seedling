@@ -261,16 +261,16 @@ Build order, with the labels used in commit history and conversation (these are 
 ### CLI
 
 - [x] `crates/ctl/src/apps.rs`: `apps install <app>` without parameters (drop `parse_install_params`); `apps params set <app> name=value... --unset name...`; drop `apps params unset`; `apps update --set/--unset` repeatable, refusing a parameter named twice (`definition::param_change` in `crates/ctl/src/definition.rs`); `apps plan --param` building the object, with `--unset`
-- [ ] `apps gate run <app> <gate>` as a `GateCommand` beside `ParamCommand`
+- [x] `apps gate run <app> <gate>` as a `GateCommand` beside `ParamCommand`
 
 ### Console
 
-- [ ] `crates/web/frontend/src/lib/types.ts`: gates, `held_by`, `waiting_on`, `CurrentOperation.gate`/`generation`, `GenerationKind` and entry `params`, `PlanResponse.gates_would_run`, event fields; drop install requirement types
-- [ ] `routes/AppDetail.tsx`: install without the parameter dialog; params section staging several edits into one `/apps/params/set`; a gates section with state and a run button; held and waiting markers on resources; current-operation banner for gate runs; event lists (done: install without the dialog, staged params; open: gates section, held and waiting markers, gate banner)
-- [ ] `components/UpdateDefinitionDialog.tsx` and `PlanParamDialog.tsx`: several parameter changes; `PlanDiff.tsx` reads `gates_would_run` (done: several parameter changes; open: `PlanDiff` reading real `gates_would_run`)
+- [x] `crates/web/frontend/src/lib/types.ts`: gates, `held_by`, `waiting_on`, `CurrentOperation.gate`/`generation`, `GenerationKind` and entry `params`, `PlanResponse.gates_would_run`, event fields; drop install requirement types
+- [x] `routes/AppDetail.tsx`: install without the parameter dialog; params section staging several edits into one `/apps/params/set`; a gates section with state and a run button; held and waiting markers on resources; current-operation banner for gate runs; event lists
+- [x] `components/UpdateDefinitionDialog.tsx` and `PlanParamDialog.tsx`: several parameter changes; `PlanDiff.tsx` reads `gates_would_run`
 - [x] `components/GenerationHistory.tsx` and `EventsSidebar.tsx`: `param_change` lists, `ParamsChanged`, `GateStateChanged`
 - [x] `crates/web/src/actor_activity.rs` and `event_broker.rs` tests: new event names
-- [ ] Frontend tests listed against these files (`AppDetail.test.tsx`, `AppDetail.resources.test.tsx`, `AppDetail.fixtures.ts`, `GenerationHistory.test.tsx`, `DefinitionSection.test.tsx`, `PlanDiff.test.tsx`, `EditScript.test.tsx`) (done for the parameter and install files; open for gates)
+- [x] Frontend tests listed against these files (`AppDetail.test.tsx`, `AppDetail.resources.test.tsx`, `AppDetail.fixtures.ts`, `GenerationHistory.test.tsx`, `DefinitionSection.test.tsx`, `PlanDiff.test.tsx`, `EditScript.test.tsx`)
 
 ### Images
 
