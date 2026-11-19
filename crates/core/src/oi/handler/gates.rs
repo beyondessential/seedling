@@ -267,10 +267,7 @@ pub(crate) fn run_gate(
     // Ended once the run is admitted, so that a refused request leaves the
     // gate paused. A run that starts ends the pause as well.
     let (app, gate) = (app_name.clone(), gate_name.clone());
-    if let Err(e) = state
-        .db
-        .call(move |db| store::clear_pause(db, &app, &gate))
-    {
+    if let Err(e) = state.db.call(move |db| store::clear_pause(db, &app, &gate)) {
         tracing::error!(app = %app_name, gate = %gate_name, "cannot end the pause of a gate an operator runs: {e}");
     }
     state.tick_notify.notify_one();
