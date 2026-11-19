@@ -499,7 +499,7 @@ fn a_run_the_concurrency_rules_do_not_admit_is_retried_and_has_not_failed() {
         }),
         "a refused admission records no failure"
     );
-    let faults = oi.state.db.call(|db| active_faults(db));
+    let faults = oi.state.db.call(active_faults);
     assert!(faults.is_empty(), "and files no fault: {faults:?}");
 
     oi.state.scheduler.lock().complete_current();
@@ -560,7 +560,7 @@ fn a_gate_whose_record_cannot_be_read_is_not_run_and_a_fault_says_so() {
 
     drive_once(&oi);
     assert!(idle(&oi), "an undetermined gate is not run");
-    let faults = oi.state.db.call(|db| active_faults(db));
+    let faults = oi.state.db.call(active_faults);
     assert_eq!(
         faults,
         vec![("gate_state_unreadable".to_owned(), "seed".to_owned())]
@@ -572,7 +572,7 @@ fn a_gate_whose_record_cannot_be_read_is_not_run_and_a_fault_says_so() {
     });
     drive_once(&oi);
     wait_until("the run to end", || valid(&oi, "seed") && idle(&oi));
-    let faults = oi.state.db.call(|db| active_faults(db));
+    let faults = oi.state.db.call(active_faults);
     assert!(faults.is_empty(), "{faults:?}");
 }
 
@@ -738,7 +738,7 @@ fn a_check_that_passes_leaves_the_gate_satisfied_and_clears_its_dependants_to_st
         ready_record(&oi).valid,
         "a passing check leaves the record as it was"
     );
-    assert!(oi.state.db.call(|db| active_faults(db)).is_empty());
+    assert!(oi.state.db.call(active_faults).is_empty());
 }
 
 // spec: GRUN#checks
@@ -837,7 +837,7 @@ fn a_check_that_cannot_be_run_leaves_the_gate_undetermined_and_is_retried_after_
         ready_record(&oi).valid,
         "an unrun check does not invalidate"
     );
-    let faults = oi.state.db.call(|db| active_faults(db));
+    let faults = oi.state.db.call(active_faults);
     assert_eq!(
         faults,
         vec![("gate_check_unavailable".to_owned(), "ready".to_owned())]
