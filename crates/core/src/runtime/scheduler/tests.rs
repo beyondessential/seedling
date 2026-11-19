@@ -130,7 +130,9 @@ fn a_queued_operation_carries_the_actor_it_was_admitted_with() {
         ScheduleResult::Queued
     );
 
-    let dequeued = s.complete_current().expect("the queued request starts");
+    let dequeued = s
+        .complete_current(|_| None)
+        .expect("the queued request starts");
     assert_eq!(dequeued.actor, Some(actor));
 }
 
@@ -360,9 +362,63 @@ fn complete_current_with_empty_queue_clears_active() {
         "operator",
         None,
     );
-    let next = s.complete_current();
+    let next = s.complete_current(|_| None);
     assert!(next.is_none());
     assert!(s.active().is_none());
+}
+
+// spec: OPS#initiating-events
+#[test]
+fn dequeued_operation_is_active_at_the_generation_current_at_dispatch() {
+    let mut s = Scheduler::new();
+    s.request(
+        &app("app1"),
+        &act("start"),
+        serde_json::Map::new(),
+        1,
+        "operator",
+        None,
+    );
+    s.request(
+        &app("app2"),
+        &act("deploy"),
+        serde_json::Map::new(),
+        1,
+        "operator",
+        None,
+    );
+
+    let next = s
+        .complete_current(|a| (*a == app("app2")).then_some(3))
+        .expect("app2 is dequeued");
+    assert_eq!(next.generation, 3);
+    assert_eq!(s.active().expect("app2 is active").generation, 3);
+}
+
+// spec: OPS#initiating-events
+#[test]
+fn dequeued_operation_of_an_app_with_no_current_generation_keeps_its_requested_one() {
+    let mut s = Scheduler::new();
+    s.request(
+        &app("app1"),
+        &act("start"),
+        serde_json::Map::new(),
+        1,
+        "operator",
+        None,
+    );
+    s.request(
+        &app("app2"),
+        &act("deploy"),
+        serde_json::Map::new(),
+        2,
+        "operator",
+        None,
+    );
+
+    let next = s.complete_current(|_| None).expect("app2 is dequeued");
+    assert_eq!(next.generation, 2);
+    assert_eq!(s.active().expect("app2 is active").generation, 2);
 }
 
 // spec: OPS#completion
@@ -387,7 +443,7 @@ fn complete_current_dequeues_next_and_makes_it_active() {
         None,
     );
 
-    let next = s.complete_current().expect("should dequeue app2");
+    let next = s.complete_current(|_| None).expect("should dequeue app2");
     assert_eq!(next.app, "app2");
     assert_eq!(next.target, act("deploy"));
 
@@ -426,13 +482,13 @@ fn queue_is_drained_in_fifo_order() {
         None,
     );
 
-    let first = s.complete_current().expect("app2");
+    let first = s.complete_current(|_| None).expect("app2");
     assert_eq!(first.app, "app2");
 
-    let second = s.complete_current().expect("app3");
+    let second = s.complete_current(|_| None).expect("app3");
     assert_eq!(second.app, "app3");
 
-    let none = s.complete_current();
+    let none = s.complete_current(|_| None);
     assert!(none.is_none());
     assert!(s.active().is_none());
 }
@@ -449,7 +505,7 @@ fn after_complete_same_app_can_be_requested_again() {
         "operator",
         None,
     );
-    s.complete_current();
+    s.complete_current(|_| None);
     // No active operation; app1 should be accepted again.
     assert_eq!(
         s.request(
@@ -564,7 +620,7 @@ fn complete_current_clears_call_stack() {
     s.push_call(&aname("start")).unwrap();
     s.push_call(&aname("setup")).unwrap();
 
-    s.complete_current();
+    s.complete_current(|_| None);
     assert!(s.call_stack().is_empty());
 }
 
@@ -757,7 +813,7 @@ fn a_held_app_admits_nothing_until_the_hold_ends() {
         ScheduleResult::Accepted,
         "other apps are not held"
     );
-    s.lock().complete_current();
+    s.lock().complete_current(|_| None);
 
     drop(hold);
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);

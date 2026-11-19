@@ -366,13 +366,22 @@ impl Scheduler {
 
     /// Mark the current operation as complete and dequeue the next one, if any.
     ///
-    /// Returns the newly-started operation so the caller knows what to run.
+    /// Returns the newly-started operation so the caller knows what to run,
+    /// carrying the generation it runs against: the one `current_generation`
+    /// gives for its app, or the one it was requested at where that gives none.
     // spec: OPS#completion
-    pub fn complete_current(&mut self) -> Option<QueuedOperation> {
+    pub fn complete_current(
+        &mut self,
+        current_generation: impl FnOnce(&AppName) -> Option<u64>,
+    ) -> Option<QueuedOperation> {
         self.active = None;
         self.call_stack.clear();
 
-        let next = self.queue.pop_front()?;
+        let mut next = self.queue.pop_front()?;
+        // spec: OPS#initiating-events
+        if let Some(current) = current_generation(&next.app) {
+            next.generation = current;
+        }
         self.active = Some(ActiveOperation {
             app: next.app.clone(),
             target: next.target.clone(),
@@ -381,20 +390,6 @@ impl Scheduler {
             cancel_token: Arc::new(CancelToken::new()),
         });
         Some(next)
-    }
-
-    /// Record `generation` as the operation generation of the active
-    /// operation `operation_id`, which was dispatched from the queue and so
-    /// runs against the generation current when it left it.
-    // spec: OPS#initiating-events
-    pub fn set_active_generation(&mut self, operation_id: &OperationId, generation: u64) {
-        if let Some(active) = self
-            .active
-            .as_mut()
-            .filter(|a| a.operation_id == *operation_id)
-        {
-            active.generation = generation;
-        }
     }
 
     /// Request cancellation of the active operation if it belongs to `app`.

@@ -499,7 +499,7 @@ fn a_run_the_concurrency_rules_do_not_admit_is_retried_and_has_not_failed() {
     let faults = oi.state.db.call(active_faults);
     assert!(faults.is_empty(), "and files no fault: {faults:?}");
 
-    oi.state.scheduler.lock().complete_current();
+    oi.state.scheduler.lock().complete_current(|_| None);
     drive_once(&oi);
     wait_until("the run to end", || valid(&oi, "seed") && idle(&oi));
 }

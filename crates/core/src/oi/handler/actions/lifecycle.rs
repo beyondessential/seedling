@@ -962,17 +962,15 @@ pub fn spawn_accepted_operation(
         *active_progress.write() = None;
         tick_notify.notify_one();
 
-        let next = state.scheduler.lock().complete_current();
+        let next = complete_and_dequeue(&state);
         if let Some(queued) = next {
-            let generation =
-                dispatch_generation(&state, &queued.app, &queued.operation_id, queued.generation);
             spawn_accepted_operation(
                 Arc::clone(&state),
                 queued.app,
                 queued.target,
                 queued.operation_id,
                 OperationParams::Requested(queued.params),
-                generation,
+                queued.generation,
                 queued.trigger,
                 queued.actor,
             );
@@ -980,27 +978,20 @@ pub fn spawn_accepted_operation(
     });
 }
 
-/// The generation a request that has just left the queue runs against: the one
-/// current now, as the scheduler's record of the active operation is made to
-/// say, or the one it was requested at where the app is no longer registered.
+/// End the active operation and start the next queued one, if any, at the
+/// generation current as it leaves the queue.
+///
+/// The registry is read before the scheduler is locked: the scheduler lock is
+/// never held while waiting on the registry.
 // spec: OPS#initiating-events
-fn dispatch_generation(
+pub(crate) fn complete_and_dequeue(
     state: &OiState,
-    app: &AppName,
-    operation_id: &OperationId,
-    requested: u64,
-) -> u64 {
-    let current = state
-        .registry
-        .read()
-        .get(app.as_str())
-        .map(|entry| entry.current_generation);
-    let generation = current.unwrap_or(requested);
+) -> Option<crate::runtime::scheduler::QueuedOperation> {
+    let registry = state.registry.read();
     state
         .scheduler
         .lock()
-        .set_active_generation(operation_id, generation);
-    generation
+        .complete_current(|app| registry.get(app.as_str()).map(|e| e.current_generation))
 }
 
 /// What came of asking for a lifecycle operation.
@@ -1129,28 +1120,34 @@ pub fn restore_queue(
 ) {
     use crate::runtime::scheduler::ScheduleResult;
     for op in queued {
-        let registered = state.registry.read().get(op.app.as_str()).is_some();
-        if !registered {
+        // spec: OPS#initiating-events
+        // A request that starts at once is dispatched now, so it runs against
+        // the generation current now; one that queues is resolved again as it
+        // leaves the queue.
+        let current = state
+            .registry
+            .read()
+            .get(op.app.as_str())
+            .map(|entry| entry.current_generation);
+        let Some(generation) = current else {
             tracing::warn!(app = %op.app, operation = %op.target, "queued operation names an unregistered app; discarding");
             let id = op.operation_id.clone();
             state.db.call(move |db| {
                 let _ = crate::runtime::history::clear_queued_operation(db, &id);
             });
             continue;
-        }
+        };
         let result = state.scheduler.lock().request_with_id(
             &op.app,
             &op.target,
             op.params.clone(),
-            op.generation,
+            generation,
             &op.trigger,
             op.operation_id.clone(),
             op.actor.clone(),
         );
         match result {
             ScheduleResult::Accepted => {
-                let generation =
-                    dispatch_generation(state, &op.app, &op.operation_id, op.generation);
                 spawn_accepted_operation(
                     Arc::clone(state),
                     op.app,

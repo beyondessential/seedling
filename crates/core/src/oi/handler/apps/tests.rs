@@ -350,7 +350,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     assert_ne!(desc["status"], "not_installed");
 
     // Once the action is done the uninstall goes through.
-    oi.state.scheduler.lock().complete_current();
+    oi.state.scheduler.lock().complete_current(|_| None);
     oi.call("/apps/uninstall", json!({ "app": "demo" }))
         .unwrap();
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
@@ -1421,7 +1421,7 @@ fn no_operation_is_reported_for_an_app_the_scheduler_is_not_running() {
     assert_ne!(desc["status"], "operating");
     assert!(desc.get("current_operation").is_none(), "{desc}");
 
-    oi.state.scheduler.lock().complete_current();
+    oi.state.scheduler.lock().complete_current(|_| None);
     oi.call("/apps/uninstall", json!({ "app": "demo" }))
         .unwrap();
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
