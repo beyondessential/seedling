@@ -1894,6 +1894,48 @@ fn install_refusals() {
 
 // spec: ACI#install
 #[test]
+fn install_refusals_are_given_in_the_order_the_spec_lists_them() {
+    use crate::runtime::scheduler::AppHold;
+    use jiff::Timestamp;
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::with_app("demo");
+    let name = AppName::new("demo").unwrap();
+    let break_app = || {
+        oi.state
+            .registry
+            .write()
+            .get_mut("demo")
+            .unwrap()
+            .script_error = Some(("it broke".to_owned(), Timestamp::now()));
+    };
+
+    let hold = AppHold::take(&oi.state.scheduler, &name).expect("nothing holds the app");
+    break_app();
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "script_error", "before a change being applied");
+    drop(hold);
+
+    oi.state
+        .registry
+        .write()
+        .get_mut("demo")
+        .unwrap()
+        .script_error = None;
+    oi.install("demo");
+    let hold = AppHold::take(&oi.state.scheduler, &name).expect("nothing holds the app");
+    break_app();
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "already_installed", "before a script error");
+    drop(hold);
+}
+
+// spec: ACI#install
+#[test]
 fn install_is_refused_while_a_change_to_the_app_is_being_applied() {
     use crate::runtime::{apps::AppPhase, scheduler::AppHold};
     use seedling_protocol::names::AppName;

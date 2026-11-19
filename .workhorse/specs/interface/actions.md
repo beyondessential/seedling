@@ -66,6 +66,7 @@ The server MUST reject a request naming an app that is not registered with `not_
 The server MUST reject the request with `already_installed` while the app is `Installed` or `Uninstalling`.
 If the app has an active `script_error` fault, the server MUST reject the request with `script_error`.
 The server MUST reject the request with `operation_in_progress` while a change to the app is being applied.
+Where several of these apply, the server MUST reject the request with the first in the order given.
 
 Otherwise the server MUST durably move the app to `Installed`, emit an `AppPhaseChanged` [event](events.md#app-events), and answer `{}`.
 The runtime then brings the app up as [desired state](../runtime/reconciliation.md#desired-state) specifies, running each of its [gates](../runtime/gates.md) for the first time.
