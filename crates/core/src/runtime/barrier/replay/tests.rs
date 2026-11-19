@@ -411,3 +411,60 @@ mod positional {
         assert!(!message.contains("None"), "{message}");
     }
 }
+
+// spec: OPS#changes-to-an-app
+// spec: RCN#desired-state
+#[test]
+fn an_operations_progress_resolves_against_the_definition_it_ran_against() {
+    let progress = Arc::new(RwLock::new(None));
+    let (result, app) = crate::tests::run_action_on(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:1");
+        app.on_action("work", |rt, _param| {
+            rt.start(web);
+        });
+        "#,
+        &[],
+        "work",
+        None,
+        crate::tests::ActionHooks {
+            active_progress: Some(Arc::clone(&progress)),
+            ..Default::default()
+        },
+    );
+    assert!(matches!(result, OperationResult::Completed), "{result:?}");
+    let (changed, error) = crate::runtime::apps::evaluate_script(
+        &app.def.load().name,
+        r#"app.deployment("web").image("docker.io/library/nginx:2");"#,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    );
+    assert!(error.is_none(), "{error:?}");
+    let changed = changed.def.load_full();
+
+    let progress = progress.read();
+    let state = crate::runtime::desired::compute(
+        &changed.name,
+        &changed,
+        progress.as_ref(),
+        &crate::runtime::EphemeralInstanceRegistry::new(),
+        &Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+
+    let images: Vec<_> = state
+        .resources
+        .iter()
+        .map(|resource| {
+            let crate::defs::resource::Resource::Deployment(deployment) = &resource.definition
+            else {
+                panic!("{resource:?}")
+            };
+            let def = deployment.def.lock();
+            let pod = def.pod.lock();
+            pod.container.lock().image.clone()
+        })
+        .collect();
+    assert_eq!(images, [Some("docker.io/library/nginx:1".to_owned())]);
+}

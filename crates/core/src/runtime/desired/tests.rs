@@ -1225,6 +1225,144 @@ fn a_gate_run_holds_the_steady_state_with_what_its_body_placed_over_it() {
     assert_eq!(map["web"], LifecycleState::Ready);
 }
 
+fn image_of(resource: &Resource) -> Option<String> {
+    let Resource::Deployment(deployment) = resource else {
+        panic!("{resource:?}")
+    };
+    let def = deployment.def.lock();
+    let pod = def.pod.lock();
+    pod.container.lock().image.clone()
+}
+
+/// The image of `name` in a desired state.
+fn desired_image(state: &DesiredState, name: &str) -> Option<String> {
+    state
+        .resources
+        .iter()
+        .find(|r| r.instance.name.as_deref() == Some(name))
+        .and_then(|r| image_of(&r.definition))
+}
+
+// spec: OPS#changes-to-an-app
+// spec: RCN#desired-state
+#[test]
+fn what_an_operation_started_keeps_its_generations_definition_after_a_change() {
+    let generation = gated_def(r#"app.deployment("web").image("docker.io/library/nginx:1");"#);
+    let changed = gated_def(r#"app.deployment("web").image("docker.io/library/nginx:2");"#);
+    let progress = ran_against(
+        &generation,
+        OperationProgress::from_log(&[log_entry(CallKind::Start, vec![dep("myapp", "web")])]),
+    );
+    let registry = EphemeralInstanceRegistry::new();
+
+    let state = compute(
+        &app_name("myapp"),
+        &changed,
+        Some(&progress),
+        &registry,
+        &default_effective_scales(&changed),
+        &StoppedSet::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        desired_image(&state, "web").as_deref(),
+        Some("docker.io/library/nginx:1")
+    );
+}
+
+// spec: OPS#changes-to-an-app
+// spec: RCN#desired-state
+#[test]
+fn what_an_operation_started_stays_desired_after_a_change_drops_it() {
+    let generation = gated_def(r#"app.deployment("web").image("docker.io/library/nginx:1");"#);
+    let changed = gated_def(r#"app.deployment("api").image("docker.io/library/nginx:1");"#);
+    let progress = ran_against(
+        &generation,
+        OperationProgress::from_log(&[log_entry(CallKind::Start, vec![dep("myapp", "web")])]),
+    );
+    let registry = EphemeralInstanceRegistry::new();
+
+    let state = compute(
+        &app_name("myapp"),
+        &changed,
+        Some(&progress),
+        &registry,
+        &default_effective_scales(&changed),
+        &StoppedSet::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        to_map(state),
+        HashMap::from([("web".to_owned(), LifecycleState::Ready)])
+    );
+}
+
+// spec: OPS#changes-to-an-app
+// spec: RCN#desired-state
+#[test]
+fn a_gate_run_lays_its_generation_over_the_current_steady_state() {
+    let generation = gated_def(
+        r#"
+        let api = app.deployment("api").image("docker.io/library/nginx:1");
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.gate("migrate").key(1).exclusive(api);
+        "#,
+    );
+    let changed = gated_def(
+        r#"
+        let api = app.deployment("api").image("docker.io/library/nginx:2");
+        app.deployment("web").image("docker.io/library/nginx:2");
+        app.gate("migrate").key(1).exclusive(api);
+        "#,
+    );
+    let registry = EphemeralInstanceRegistry::new();
+    let scales = default_effective_scales(&changed);
+    let steady = compute(
+        &app_name("myapp"),
+        &changed,
+        None,
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
+    let api = steady
+        .resources
+        .iter()
+        .find(|r| r.instance.name.as_deref() == Some("api"))
+        .map(|r| r.instance.clone())
+        .unwrap();
+    let mut progress = ran_against(
+        &generation,
+        OperationProgress::from_log(&[log_entry(CallKind::Start, vec![api])]),
+    );
+    progress.gate_run = Some(seedling_protocol::names::GateName::new("migrate").unwrap());
+
+    let state = compute(
+        &app_name("myapp"),
+        &changed,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
+
+    assert_eq!(state.resources.len(), 2, "{state:?}");
+    assert_eq!(
+        desired_image(&state, "api").as_deref(),
+        Some("docker.io/library/nginx:1"),
+        "what the body started is at the run's generation"
+    );
+    assert_eq!(
+        desired_image(&state, "web").as_deref(),
+        Some("docker.io/library/nginx:2"),
+        "the rest of the app is at the current one"
+    );
+}
+
 // -----------------------------------------------------------------------
 // from_log — non-lifecycle call kinds
 // -----------------------------------------------------------------------
