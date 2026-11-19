@@ -1101,7 +1101,6 @@ impl Reconciler {
                     // Where the app is going or gone, they are held stopped.
                     merge_sessions(
                         &mut d,
-                        &app_def,
                         &sessions,
                         matches!(phase, AppPhase::Uninstalling | AppPhase::NotInstalled),
                     );

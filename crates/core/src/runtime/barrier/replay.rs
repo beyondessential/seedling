@@ -639,6 +639,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         };
         let mut progress = OperationProgress::from_log(&loaded);
         progress.dynamic_defs = ctx.lock().dynamic_defs.clone();
+        // spec: OPS#initiating-events
+        progress.definition = Some(app.def.load_full());
         // spec: RCN#desired-state
         progress.gate_run = gate.map(|gate| gate.name.clone());
         // spec: RT#starting-resources

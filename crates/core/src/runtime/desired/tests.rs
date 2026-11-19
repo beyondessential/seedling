@@ -66,6 +66,12 @@ fn make_app_def_scaled(entries: &[(&str, std::ops::RangeInclusive<u16>)]) -> App
     def
 }
 
+/// `progress` as that of an operation running against `def`.
+fn ran_against(def: &AppDef, mut progress: OperationProgress) -> OperationProgress {
+    progress.definition = Some(Arc::new(def.clone()));
+    progress
+}
+
 fn dep(app: &str, name: &str) -> ResourceInstance {
     ResourceInstance::new_singleton(app_name(app), ResourceKind::Deployment, name)
 }
@@ -227,7 +233,7 @@ fn operation_with_no_starts_gives_empty_desired_state() {
 #[test]
 fn started_resource_is_desired_at_ready() {
     let app_def = make_app_def(&["web", "api"]);
-    let mut progress = OperationProgress::new();
+    let mut progress = ran_against(&app_def, OperationProgress::new());
     progress.started(dep("myapp", "web"));
 
     let registry = EphemeralInstanceRegistry::new();
@@ -251,7 +257,7 @@ fn started_resource_is_desired_at_ready() {
 #[test]
 fn stopped_resource_is_desired_at_unscheduled() {
     let app_def = make_app_def(&["web"]);
-    let mut progress = OperationProgress::new();
+    let mut progress = ran_against(&app_def, OperationProgress::new());
     progress.stopped(dep("myapp", "web"));
 
     let registry = EphemeralInstanceRegistry::new();
@@ -278,7 +284,7 @@ fn stopped_resource_is_desired_at_unscheduled() {
 #[test]
 fn replica_stopped_by_an_operation_is_demoted() {
     let app_def = make_app_def(&["web"]);
-    let mut progress = OperationProgress::new();
+    let mut progress = ran_against(&app_def, OperationProgress::new());
     progress.stopped(ResourceInstance::new_scaled(
         app_name("myapp"),
         ResourceKind::Deployment,
@@ -306,7 +312,7 @@ fn replica_stopped_by_an_operation_is_demoted() {
 fn stop_after_start_overrides_to_unscheduled() {
     let app_def = make_app_def(&["web"]);
     let web = dep("myapp", "web");
-    let mut progress = OperationProgress::new();
+    let mut progress = ran_against(&app_def, OperationProgress::new());
     progress.started(web.clone());
     progress.stopped(web);
 
@@ -330,7 +336,7 @@ fn stop_after_start_overrides_to_unscheduled() {
 #[test]
 fn started_resource_not_in_app_def_is_dropped() {
     let app_def = make_app_def(&["web"]);
-    let mut progress = OperationProgress::new();
+    let mut progress = ran_against(&app_def, OperationProgress::new());
     progress.started(dep("myapp", "unknown"));
 
     let registry = EphemeralInstanceRegistry::new();
@@ -357,7 +363,7 @@ fn started_resource_not_in_app_def_is_dropped() {
 fn from_log_start_entry_maps_to_ready() {
     let app_def = make_app_def(&["web"]);
     let entries = [log_entry(CallKind::Start, vec![dep("myapp", "web")])];
-    let progress = OperationProgress::from_log(&entries);
+    let progress = ran_against(&app_def, OperationProgress::from_log(&entries));
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
@@ -380,7 +386,7 @@ fn from_log_start_entry_maps_to_ready() {
 fn from_log_stop_entry_maps_to_unscheduled() {
     let app_def = make_app_def(&["web"]);
     let entries = [log_entry(CallKind::Stop, vec![dep("myapp", "web")])];
-    let progress = OperationProgress::from_log(&entries);
+    let progress = ran_against(&app_def, OperationProgress::from_log(&entries));
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
@@ -415,7 +421,7 @@ fn from_log_later_entry_overrides_earlier_for_same_resource() {
         log_entry(CallKind::Start, vec![web.clone()]),
         log_entry(CallKind::Stop, vec![web]),
     ];
-    let progress = OperationProgress::from_log(&entries);
+    let progress = ran_against(&app_def, OperationProgress::from_log(&entries));
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
@@ -441,7 +447,7 @@ fn from_log_multiple_resources_in_one_entry() {
         CallKind::Start,
         vec![dep("myapp", "web"), dep("myapp", "api")],
     )];
-    let progress = OperationProgress::from_log(&entries);
+    let progress = ran_against(&app_def, OperationProgress::from_log(&entries));
 
     let registry = EphemeralInstanceRegistry::new();
     let scales = default_effective_scales(&app_def);
@@ -1196,7 +1202,10 @@ fn a_gate_run_holds_the_steady_state_with_what_its_body_placed_over_it() {
     );
 
     let api = dep("myapp", "api");
-    let mut progress = OperationProgress::from_log(&[log_entry(CallKind::Start, vec![api])]);
+    let mut progress = ran_against(
+        &def,
+        OperationProgress::from_log(&[log_entry(CallKind::Start, vec![api])]),
+    );
     progress.gate_run = Some(seedling_protocol::names::GateName::new("migrate").unwrap());
     let started = compute(
         &app_name("myapp"),

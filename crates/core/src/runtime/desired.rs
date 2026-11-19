@@ -76,6 +76,14 @@ pub struct OperationProgress {
     /// over.
     // spec: RCN#desired-state
     pub gate_run: Option<GateName>,
+    /// The definition the operation runs against, that of its operation
+    /// generation, which the declared resources it places are resolved
+    /// against whatever the app's current definition has since become.
+    /// `None` for progress that places only dynamic resources, which carry
+    /// their own definitions.
+    // spec: OPS#initiating-events
+    // spec: OPS#changes-to-an-app
+    pub definition: Option<Arc<AppDef>>,
 }
 
 impl OperationProgress {
@@ -85,7 +93,19 @@ impl OperationProgress {
             dynamic_defs: HashMap::new(),
             warm_cert_hostnames: BTreeSet::new(),
             gate_run: None,
+            definition: None,
         }
+    }
+
+    /// The definition of a resource this progress has placed: the declaration
+    /// in the operation's own definition, or the definition a dynamic
+    /// resource was started with.
+    // spec: OPS#initiating-events
+    fn definition_of(&self, instance: &ResourceInstance) -> Option<Resource> {
+        self.definition
+            .as_deref()
+            .and_then(|def| lookup_definition(def, instance))
+            .or_else(|| self.dynamic_defs.get(instance).cloned())
     }
 
     /// Mark a resource as explicitly started (desired state: `Ready`).
@@ -207,8 +227,9 @@ impl OperationProgress {
 /// resources at desired state `Ready` (steady-state maintenance).
 ///
 /// When an operation is in progress, only resources the action closure has
-/// explicitly placed into the desired state are included. A gate run holds
-/// the steady state besides, with what its body has placed in it laid over.
+/// explicitly placed into the desired state are included, each as the
+/// operation's own definition declares it. A gate run holds the steady state
+/// of `app_def` besides, with what its body has placed in it laid over.
 ///
 /// `stopped` holds the resources kept at `Unscheduled` whatever their scale:
 /// the ones an operator stopped, and the ones a gate holds.
@@ -225,10 +246,10 @@ pub fn compute(
         None => compute_steady(app_name, app_def, registry, effective_scales, stopped),
         Some(progress) if progress.gate_run.is_some() => {
             let mut state = compute_steady(app_name, app_def, registry, effective_scales, stopped)?;
-            overlay(&mut state, compute_during_operation(app_def, progress));
+            overlay(&mut state, compute_during_operation(progress));
             Ok(state)
         }
-        Some(progress) => Ok(compute_during_operation(app_def, progress)),
+        Some(progress) => Ok(compute_during_operation(progress)),
     }
 }
 
@@ -383,13 +404,13 @@ fn compute_steady(
 }
 
 // spec: RCN#desired-state
-fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> DesiredState {
+fn compute_during_operation(progress: &OperationProgress) -> DesiredState {
     let resources = progress
         .resources
         .iter()
         .filter_map(|(instance, &desired)| {
-            let definition = lookup_definition(app_def, instance)
-                .or_else(|| progress.dynamic_defs.get(instance).cloned())?;
+            // spec: OPS#changes-to-an-app
+            let definition = progress.definition_of(instance)?;
             Some(DesiredResource {
                 instance: instance.clone(),
                 desired,
@@ -415,7 +436,6 @@ fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> D
 // spec: RCN#desired-state
 pub fn merge_sessions(
     state: &mut DesiredState,
-    app_def: &AppDef,
     sessions: &[&OperationProgress],
     hold_stopped: bool,
 ) {
@@ -429,7 +449,7 @@ pub fn merge_sessions(
         .chain(state.undeclared.iter().map(|instance| instance.id))
         .collect();
     for progress in sessions {
-        for mut resource in compute_during_operation(app_def, progress).resources {
+        for mut resource in compute_during_operation(progress).resources {
             if !held.insert(resource.instance.id) {
                 continue;
             }

@@ -632,20 +632,10 @@ fn session_records(ran: &ShellRan) -> Vec<crate::runtime::desired::DynamicResour
 /// What the session has placed in its app's desired state, as the reconciler
 /// reads it.
 fn session_desired(ran: &ShellRan) -> Vec<crate::runtime::DesiredResource> {
-    let app_def = ran
-        .oi
-        .state
-        .registry
-        .read()
-        .get("demo")
-        .unwrap()
-        .app
-        .def
-        .load_full();
     let slot = ran.slot.read();
     let progress: Vec<_> = slot.iter().collect();
     let mut state = crate::runtime::DesiredState::default();
-    crate::runtime::desired::merge_sessions(&mut state, &app_def, &progress, false);
+    crate::runtime::desired::merge_sessions(&mut state, &progress, false);
     state.resources
 }
 
