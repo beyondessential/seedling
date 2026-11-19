@@ -243,6 +243,7 @@ pub fn evaluate(
                 name.clone(),
                 status_of(
                     name,
+                    gate.check.is_some(),
                     digest.map_err(|e| e.to_string()),
                     record,
                     definition_error,
@@ -259,6 +260,7 @@ pub fn evaluate(
 /// cannot be read.
 fn status_of(
     name: &GateName,
+    declares_check: bool,
     digest: Result<KeyDigest, String>,
     record: Option<Result<GateRecord, String>>,
     definition_error: Option<&str>,
@@ -308,8 +310,11 @@ fn status_of(
                 if record.valid && record.key_digest.as_ref() == Some(digest) =>
             {
                 match &record.check_unavailable {
-                    Some(why) => GateState::Undetermined(Undetermined::Check(why.clone())),
-                    None => GateState::Satisfied,
+                    // spec: GRUN#gate-state
+                    Some(why) if declares_check => {
+                        GateState::Undetermined(Undetermined::Check(why.clone()))
+                    }
+                    _ => GateState::Satisfied,
                 }
             }
             _ => GateState::Unsatisfied,

@@ -240,6 +240,71 @@ fn gate_check_unavailable_stands_until_a_check_runs_to_an_outcome() {
 }
 
 // spec: FLT#app-faults
+// spec: GRUN#checks
+#[test]
+fn a_check_that_could_not_be_run_is_cleared_once_the_definition_no_longer_declares_the_check() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let checked = def(r#"
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        let ready = app.gate("ready").key(1).check(probe);
+        app.deployment("web").image("docker.io/library/nginx:1").after(ready);
+        "#);
+    let unchecked = def(r#"
+        let ready = app.gate("ready").key(1);
+        app.deployment("web").image("docker.io/library/nginx:1").after(ready);
+        "#);
+    register(&db);
+    store::record_success(
+        &db,
+        &app(),
+        &gate("ready"),
+        &digest(&checked, &cipher, "ready"),
+        1,
+    )
+    .unwrap();
+    store::record_check_unavailable(
+        &db,
+        &app(),
+        &gate("ready"),
+        Timestamp::from_second(100).unwrap(),
+        "no podman",
+    )
+    .unwrap();
+    sync(&db, &checked, &cipher, None);
+    assert_eq!(
+        active_faults(&db),
+        vec![("gate_check_unavailable".to_owned(), "ready".to_owned())]
+    );
+
+    sync(&db, &unchecked, &cipher, Some("the script threw"));
+    let records = store::load_records(&db, &app()).unwrap();
+    assert!(
+        records[&gate("ready")]
+            .as_ref()
+            .unwrap()
+            .check_unavailable
+            .is_some(),
+        "a definition that fails to evaluate does not say the check is gone"
+    );
+
+    let synced = sync(&db, &unchecked, &cipher, None);
+    assert_eq!(
+        synced.gates.state(&gate("ready")),
+        Some(&GateState::Satisfied)
+    );
+    let records = store::load_records(&db, &app()).unwrap();
+    assert!(
+        records[&gate("ready")]
+            .as_ref()
+            .unwrap()
+            .check_unavailable
+            .is_none()
+    );
+    assert!(active_faults(&db).is_empty());
+}
+
+// spec: FLT#app-faults
 // spec: GRUN#gates-no-longer-declared
 #[test]
 fn a_gate_the_definition_no_longer_declares_loses_its_faults_and_its_hold_but_keeps_its_record() {

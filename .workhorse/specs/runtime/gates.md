@@ -35,7 +35,7 @@ A gate is undetermined while:
 
 - the app's definition fails to evaluate;
 - the runtime cannot read the gate's record;
-- its record holds a valid success for its current key, and its most recent check could not be run, as [checks](#checks) specify.
+- its record holds a valid success for its current key, the gate declares a check, and its most recent check could not be run, as [checks](#checks) specify.
 
 The runtime MUST NOT treat an undetermined gate as satisfied or as unsatisfied.
 It MUST NOT run an undetermined gate, nor start a dependant waiting on it, and MUST NOT stop anything because of it.
@@ -135,7 +135,7 @@ A check that fails MUST invalidate the gate's last success in its record, so tha
 If the runtime cannot record the failure, the gate is undetermined.
 
 A check could not be run when the runtime could not start its Job's instance.
-The runtime MUST then hold a `gate_check_unavailable` [fault](faults.md#app-faults) against the gate until a check of it next runs to an outcome, and MUST check it again with a delay that grows as for [retries](#retries).
+The runtime MUST then hold a `gate_check_unavailable` [fault](faults.md#app-faults) against the gate until a check of it next runs to an outcome or the definition no longer declares a check for the gate, and MUST check it again with a delay that grows as for [retries](#retries).
 
 ## Cancellation
 

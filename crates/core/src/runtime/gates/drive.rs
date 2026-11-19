@@ -140,7 +140,10 @@ fn sync_db(
     definition_error: Option<&str>,
     remembered: &Remembered,
 ) -> Synced {
-    let gates = evaluate(db, app, def, cipher, definition_error, remembered);
+    let mut gates = evaluate(db, app, def, cipher, definition_error, remembered);
+    if definition_error.is_none() && clear_dropped_checks(db, app, def, &gates) {
+        gates = evaluate(db, app, def, cipher, definition_error, remembered);
+    }
 
     if let Ok(holds) = &gates.holds {
         for (gate, covered) in holds {
@@ -196,6 +199,28 @@ fn sync_db(
         readiness,
         held,
     }
+}
+
+/// Clear the check that could not be run from the record of each gate whose
+/// definition no longer declares a check, as no check of it will ever run to
+/// an outcome. Whether any was cleared.
+// spec: GRUN#checks
+fn clear_dropped_checks(db: &Db, app: &AppName, def: &AppDef, gates: &AppGates) -> bool {
+    let mut cleared = false;
+    for (gate, status) in &gates.gates {
+        if status.check_unavailable().is_none()
+            || def.gates.get(gate).is_none_or(|gate| gate.check.is_some())
+        {
+            continue;
+        }
+        match store::clear_check_unavailable(db, app, gate) {
+            Ok(()) => cleared = true,
+            Err(e) => {
+                tracing::error!(%app, %gate, "cannot clear the unavailable check of a gate that no longer declares one: {e}")
+            }
+        }
+    }
+    cleared
 }
 
 /// File and clear the gate faults of `app` so that they are what its gates
