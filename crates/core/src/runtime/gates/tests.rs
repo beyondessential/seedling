@@ -450,9 +450,26 @@ fn a_pause_the_key_moved_away_from_does_not_come_back_with_the_key() {
         digest(&def, &cipher, "migrate"),
         digest(&moved, &cipher, "migrate"),
     );
-    store::record_failure(&db, &app(), &gate("migrate"), &key, at(100), "cancelled", Some(&key))
-        .unwrap();
-    store::record_failure(&db, &app(), &gate("migrate"), &other, at(200), "failed", None).unwrap();
+    store::record_failure(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &key,
+        at(100),
+        "cancelled",
+        Some(&key),
+    )
+    .unwrap();
+    store::record_failure(
+        &db,
+        &app(),
+        &gate("migrate"),
+        &other,
+        at(200),
+        "failed",
+        None,
+    )
+    .unwrap();
 
     assert!(
         !status(&db, &def, &cipher, "migrate").paused,
