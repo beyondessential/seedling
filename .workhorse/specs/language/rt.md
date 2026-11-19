@@ -75,7 +75,8 @@ In a shell's closure, `rt.stop` MUST throw, without changing the desired state, 
 `rt.start` and `rt.stop` MUST leave these resources out of the resources they act on, out of the `Started` they return, and out of every barrier they wait on:
 
 - each resource in the [exclusive selection](gate.md#exclusive-selection) of a gate while the gate [holds](../runtime/reconciliation.md#gate-holds) it;
-- each workload [ordered after](gate.md#start-order) a gate that is not satisfied, whether directly or through other targets.
+- each workload [ordered after](gate.md#start-order) a gate that is not satisfied, whether directly or through other targets;
+- the Job of each gate's [check](gate.md#check), which the runtime starts only to check the gate.
 
 In the [body](gate.md#body) of a gate, the runtime MUST NOT leave out a resource of that gate's own exclusive selection, nor a workload ordered after that gate, on account of that gate.
 `rt.restart` of a deployment that `rt.start` would leave out MUST throw.

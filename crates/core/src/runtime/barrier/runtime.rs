@@ -993,8 +993,9 @@ impl RuntimeInstance {
         )))
     }
 
-    /// `selected` less the named workloads a gate keeps from a closure, which
-    /// is what `rt.start` and `rt.stop` act on.
+    /// `selected` less the named workloads a gate keeps from a closure and the
+    /// Jobs of the gates' checks, which is what `rt.start` and `rt.stop` act
+    /// on.
     ///
     /// A call that would act on a workload while what the gates hold cannot
     /// be read fails, since the workload may be held.

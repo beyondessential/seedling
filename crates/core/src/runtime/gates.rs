@@ -511,8 +511,16 @@ pub fn rt_exclusions(
 /// closure's pass was given it.
 // spec: RT#resources-a-gate-holds
 #[derive(Debug, Clone, Default)]
-pub enum Exclusions {
-    /// Nothing is left out: the closure runs outside an installed app, as in a
+pub struct Exclusions {
+    /// The Jobs of the gates' checks.
+    checks: BTreeSet<ResourceId>,
+    gated: Gated,
+}
+
+/// What the gates keep from a closure.
+#[derive(Debug, Clone, Default)]
+enum Gated {
+    /// Nothing: the closure runs outside an installed app, as in a
     /// language-only test.
     #[default]
     None,
@@ -526,9 +534,13 @@ impl Exclusions {
     /// What is left out for a closure of `def` running for gate `running`, or
     /// for no gate.
     pub fn of(def: &AppDef, gates: &AppGates, running: Option<&GateName>) -> Self {
-        match rt_exclusions(def, gates, running) {
-            Ok(ids) => Self::Known(ids),
-            Err(why) => Self::Unreadable(why),
+        Self {
+            // spec: GATE#check
+            checks: check_jobs(def),
+            gated: match rt_exclusions(def, gates, running) {
+                Ok(ids) => Gated::Known(ids),
+                Err(why) => Gated::Unreadable(why),
+            },
         }
     }
 
@@ -551,12 +563,18 @@ impl Exclusions {
 
     /// Whether the named workload is left out.
     pub fn leaves_out(&self, kind: ResourceKind, name: &str) -> Result<bool, String> {
-        match self {
-            Self::None => Ok(false),
-            Self::Known(ids) => Ok(ids
-                .iter()
-                .any(|id| id.kind == kind && id.name.as_str() == name)),
-            Self::Unreadable(why) => Err(why.clone()),
+        let named = |ids: &BTreeSet<ResourceId>| {
+            ids.iter()
+                .any(|id| id.kind == kind && id.name.as_str() == name)
+        };
+        // spec: GATE#check
+        if named(&self.checks) {
+            return Ok(true);
+        }
+        match &self.gated {
+            Gated::None => Ok(false),
+            Gated::Known(ids) => Ok(named(ids)),
+            Gated::Unreadable(why) => Err(why.clone()),
         }
     }
 }

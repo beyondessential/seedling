@@ -943,6 +943,63 @@ fn rt_start_leaves_out_what_a_gate_holds_and_what_waits_on_it_except_in_that_gat
     );
 }
 
+// spec: GATE#check
+#[test]
+fn rt_start_and_rt_stop_leave_out_the_job_of_a_gates_check() {
+    use crate::runtime::barrier::replay::DbActionLog;
+
+    let script = r#"
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        app.gate("ready").key(1).check(probe).run(|rt| { rt.start(app); });
+        app.deployment("plain").image("docker.io/library/nginx:1");
+        app.on_action("poke", |rt, _p| { rt.start(app); });
+        app.on_action("halt", |rt, _p| { rt.stop(app.job("probe")); });
+    "#;
+    let name = AppName::new("demo").unwrap();
+    let app = evaluated(script);
+    let db = DbHandle::open_in_memory().unwrap();
+    {
+        let (name, script) = (name.clone(), script.to_owned());
+        db.call(move |db| generations::register_script(db, &name, &script).unwrap());
+    }
+    let acted_on = |target: OperationTarget, id: &str| -> Vec<String> {
+        let log = DbActionLog::new(db.clone(), OperationId(id.to_owned()), name.clone(), target);
+        let mut names: Vec<_> = log
+            .load()
+            .unwrap()
+            .into_iter()
+            .flat_map(|entry| entry.resources)
+            .filter_map(|resource| resource.name)
+            .collect();
+        names.sort();
+        names
+    };
+
+    for (action, id, expected) in [
+        ("poke", "op-poke", vec!["plain"]),
+        ("halt", "op-halt", vec![]),
+    ] {
+        let end = run_action_body(&app, action, &db, id);
+        assert!(matches!(end, OperationEnd::Completed), "{action}");
+        assert_eq!(
+            acted_on(ActionName::new(action).unwrap().into(), id),
+            expected,
+            "{action} leaves the check's Job alone"
+        );
+    }
+
+    let end = run_gate_body(&app, script, "ready", None, &db, "op-gate");
+    assert!(matches!(end, OperationEnd::Completed));
+    assert_eq!(
+        acted_on(
+            OperationTarget::Gate(GateName::new("ready").unwrap()),
+            "op-gate"
+        ),
+        vec!["plain"],
+        "the gate's own body leaves its check's Job alone"
+    );
+}
+
 /// Run the action `name` of `app` outside any gate, against `db`.
 fn run_action_body(app: &App, name: &str, db: &DbHandle, operation_id: &str) -> OperationEnd {
     let action = ActionName::new(name).unwrap();
