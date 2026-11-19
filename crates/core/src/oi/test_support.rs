@@ -408,9 +408,10 @@ mod tests {
                 .execute_batch(
                     "CREATE TABLE queued_operations (
                         seq INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE,
-                        app TEXT NOT NULL, action TEXT NOT NULL, trigger TEXT NOT NULL,
+                        app TEXT NOT NULL, action TEXT, gate TEXT, trigger TEXT NOT NULL,
                         generation INTEGER NOT NULL,
-                        params_ciphertext BLOB NOT NULL, actor TEXT);",
+                        params_ciphertext BLOB NOT NULL, actor TEXT,
+                        CHECK ((action IS NULL) != (gate IS NULL)));",
                 )
                 .unwrap()
         });
