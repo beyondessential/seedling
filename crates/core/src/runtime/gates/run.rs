@@ -405,6 +405,12 @@ impl Run<'_> {
             .await
             .map_err(|e| format!("the probe of the gate's body failed: {e}"))?
             .map_err(|why| format!("the gate's body cannot be probed for its images: {why}"))?;
+            // spec: GRUN#preparation
+            if let Some(why) = probed.error {
+                return Err(Stopped::Failed(format!(
+                    "the gate's body throws when probed for its images: {why}"
+                )));
+            }
             images.extend(probed.images);
         }
         if let Some(check) = &gate_def.check

@@ -561,6 +561,41 @@ fn a_run_pulls_the_images_of_its_body_its_check_and_its_dependants_and_no_others
 
 // spec: GRUN#preparation
 #[test]
+fn a_run_whose_body_throws_when_probed_fails_with_nothing_stopped() {
+    let oi = TestOi::new();
+    installed(
+        &oi,
+        r#"
+        let api = app.deployment("api").image("docker.io/library/api:1");
+        let migrate = app.gate("migrate").key(1).exclusive(api).run(|rt, last| {
+            throw "refusing to downgrade";
+        });
+        app.deployment("web").image("docker.io/library/web:1").after(migrate);
+    "#,
+    );
+
+    let kinds = run_once(&oi, "migrate", false);
+    assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
+
+    let record = record(&oi, "migrate");
+    assert!(
+        record
+            .last_failure
+            .as_deref()
+            .is_some_and(|how| how.contains("refusing to downgrade")),
+        "{:?}",
+        record.last_failure
+    );
+    assert_eq!(
+        holds(&oi),
+        0,
+        "the selection was never held, so nothing was stopped"
+    );
+    assert_eq!(faults_of(&oi), vec!["gate_failed"]);
+}
+
+// spec: GRUN#preparation
+#[test]
 fn an_instance_that_has_started_and_not_ended_is_still_running_and_one_that_never_started_is_not() {
     use crate::runtime::history::{insert_instance, insert_observation};
     let oi = TestOi::new();
