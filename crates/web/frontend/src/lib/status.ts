@@ -1,4 +1,9 @@
-import type { AppPriority, AppStatus, DeploymentPriority } from "./types";
+import type {
+  AppPriority,
+  AppStatus,
+  DeploymentPriority,
+  GateState,
+} from "./types";
 
 type ChipColor = "success" | "warning" | "error" | "default" | "info";
 
@@ -19,8 +24,13 @@ export function statusColor(status: AppStatus): ChipColor {
   }
 }
 
-export function statusLabel(status: AppStatus, actionName?: string): string {
+export function statusLabel(
+  status: AppStatus,
+  actionName?: string,
+  gate?: string,
+): string {
   if (status === "installing") return "installing\u2026";
+  if (status === "operating" && gate) return `operating: gate ${gate}`;
   if (status === "operating" && actionName) return `operating: ${actionName}`;
   return status.replace("_", " ");
 }
@@ -50,6 +60,20 @@ export function deploymentPriorityColor(priority: DeploymentPriority): ChipColor
     case "low":
       return "warning";
     case "normal":
+      return "default";
+  }
+}
+
+export function gateStateColor(state: GateState): ChipColor {
+  switch (state) {
+    case "satisfied":
+      return "success";
+    case "running":
+      return "info";
+    case "unsatisfied":
+    case "paused":
+      return "warning";
+    case "undetermined":
       return "default";
   }
 }

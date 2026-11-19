@@ -35,6 +35,11 @@ function eventColor(type: string): "default" | "success" | "error" | "warning" |
   return "default";
 }
 
+function operationLabel(ev: SeedlingEvent): string {
+  if (ev.gate) return `gate ${ev.gate}`;
+  return ev.action_name ?? "operation";
+}
+
 function eventSummary(ev: SeedlingEvent): string {
   switch (ev.type) {
     case "AppRegistered": return `registered (gen ${ev.generation ?? "?"})`;
@@ -42,13 +47,14 @@ function eventSummary(ev: SeedlingEvent): string {
     case "AppUpdated": return `updated to gen ${ev.generation ?? "?"}`;
     case "AppPhaseChanged": return `phase → ${ev.phase ?? "?"}`;
     case "ParamsChanged": return `params ${(ev.changes ?? []).map((c) => c.name).join(", ")} changed`;
-    case "OperationStarted": return `${ev.action_name ?? "operation"} started`;
-    case "OperationCompleted": return `${ev.action_name ?? "operation"} completed`;
-    case "OperationFailed": return `${ev.action_name ?? "operation"} failed: ${ev.error ?? ""}`;
-    case "OperationCancelled": return `${ev.action_name ?? "operation"} cancelled`;
+    case "OperationStarted": return `${operationLabel(ev)} started`;
+    case "OperationCompleted": return `${operationLabel(ev)} completed`;
+    case "OperationFailed": return `${operationLabel(ev)} failed: ${ev.error ?? ""}`;
+    case "OperationCancelled": return `${operationLabel(ev)} cancelled`;
     case "FaultFiled": return `fault: ${ev.kind ?? ""} — ${ev.description ?? ""}`;
     case "FaultCleared": return `fault cleared: ${ev.kind ?? ""}`;
     case "ResourceStateChanged": return `${ev.resource_type ?? ""}/${ev.resource_name ?? ""} → ${ev.state ?? ""}`;
+    case "GateStateChanged": return `gate ${ev.gate ?? ""}: ${ev.previous_state ?? "?"} → ${ev.state ?? ""}`;
     case "ScaleChanged": return `${ev.deployment ?? ""} scaled to ${ev.scale ?? "?"}`;
     case "DeploymentRestarted": return `${ev.deployment ?? ""} restarted`;
     case "ResourceStopped": return `${ev.kind ?? ""}/${ev.name ?? ""} stopped`;

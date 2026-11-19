@@ -17,6 +17,8 @@ export interface AppSummary {
   name: string;
   status: AppStatus;
   action_name?: string;
+  /** Present while the running operation is a gate run. */
+  gate?: string;
   has_stopped_resources?: boolean;
   fault_count?: number;
   priority?: AppPriority;
@@ -202,6 +204,11 @@ export interface AppResource {
   priority?: DeploymentPriority;
   def?: ResourceDef;
   stopped?: boolean;
+  /** Names of the gates whose holds keep the resource stopped, ascending. */
+  held_by?: string[];
+  /** Deployments and Jobs only: the targets its starts wait on that are not
+   *  ready. */
+  waiting_on?: GateTarget[];
   /** True for entries returned via `dynamic_resources` (jobs / volumes etc.
    * created inside an action closure). Anonymous dynamic resources have a
    * generated `name` (the display_name) and no BSL-level identifier. */
@@ -248,8 +255,34 @@ export interface AppAction {
   schedules: ActionSchedule[];
 }
 
+export type GateState =
+  | "satisfied"
+  | "unsatisfied"
+  | "running"
+  | "paused"
+  | "undetermined";
+
+/** What a gate or a workload is ordered after. */
+export interface GateTarget {
+  kind: "gate" | "deployment" | "job";
+  name: string;
+}
+
+export interface AppGate {
+  name: string;
+  state: GateState;
+  last_success_generation: number | null;
+  holds_exclusive: boolean;
+  /** When the runtime next runs an unsatisfied gate whose last run failed. */
+  next_run_at: string | null;
+  after: GateTarget[];
+}
+
 export interface CurrentOperation {
-  action_name: string;
+  /** The action an operation runs; absent for a gate run. */
+  action_name?: string;
+  /** The gate a gate run runs; absent for any other operation. */
+  gate?: string;
   generation: number;
   barrier: {
     resources: string[];
@@ -332,6 +365,7 @@ export interface AppDetail {
   params: AppParam[];
   unknown_params: AppParam[];
   actions: AppAction[];
+  gates: AppGate[];
   current_operation?: CurrentOperation;
 }
 
@@ -386,6 +420,7 @@ export interface SeedlingEvent {
   name?: string;
   // OperationStarted / OperationCompleted / OperationFailed / OperationCancelled
   action_name?: string;
+  gate?: string;
   operation_id?: string;
   operation_generation?: number;
   trigger?: string;
@@ -397,8 +432,9 @@ export interface SeedlingEvent {
   resource_name?: string;
   instance_id?: string;
   description?: string;
-  // ResourceStateChanged
+  // ResourceStateChanged / GateStateChanged
   state?: string;
+  previous_state?: string;
   // ScaleChanged
   deployment?: string;
   scale?: number;
