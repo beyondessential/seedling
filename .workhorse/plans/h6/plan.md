@@ -184,7 +184,7 @@ Build order, with the labels used in commit history and conversation (these are 
 - **B2, `on_change` and edge-triggered plumbing removed:** done.
 - **G1, BSL gates and storage:** done (the BSL steps, the keyed digest, the spec hash).
 - **G2, gate runtime and reconciler:** done (the Gate runtime, Operations and lifecycle, Reconciler and Images steps, each checked against its code and a test).
-- **G3, gate surfaces:** not started. `/apps/show` gates, `held_by`, `waiting_on`; `/apps/gates/run`; `/apps/restart` and `/apps/resource/stop` for held resources; `gates_would_run`; `apps gate run`; the console's gate parts; the OI and event tests.
+- **G3, gate surfaces:** done (`/apps/show`, `/apps/gates/run`, held restarts and stops, `gates_would_run`, `apps gate run`, the console, the OI and event tests).
 - **G4, definitions, docs and test cases:** not started. The demo definitions, docs, test cases, citations for the gate code.
 
 ### Baseline
@@ -246,16 +246,16 @@ Build order, with the labels used in commit history and conversation (these are 
 - [x] `runtime/generations.rs`: `Kind::ParamChange` with a list; `bump_param_change` takes several changes; `param_map_at` and `reconstruct_app_def` read the child table; `script_update` with several parameters
 - [x] `oi/handler/params.rs`: `/apps/params/set` with `params` (refusals for empty, duplicate names, bad names, non-string values), one generation and one `ParamsChanged`; remove `unset_param` and `schedule_on_change`; `hold_for_change` refuses only a concurrent change
 - [x] `oi/handler/apps.rs::update_app`: `params` object with the same refusals; `AppUpdated` with `changes`
-- [ ] `oi/handler/apps.rs::dry_run_plan`: `proposed_params` object, `gates_would_run` in place of `on_change_would_fire` (done: `proposed_params` object; open: `gates_would_run` is an always-empty placeholder until gate state feeds it)
+- [x] `oi/handler/apps.rs::dry_run_plan`: `proposed_params` object, `gates_would_run` in place of `on_change_would_fire`
 
 ### Operator Interface and protocol
 
 - [x] `crates/protocol/src/events.rs`: `ParamsChanged` and the change entry shape shared with `AppUpdated`; drop `ParamSet`/`ParamUnset` and `AppUpdatedParam`; operation events with `operation_generation` and optional `gate`; `GateStateChanged`; builders on both senders; wire-shape tests in `events/tests.rs`
 - [x] `crates/protocol/src/error.rs`: drop `InstallInProgress`
-- [ ] `oi/handler.rs` routing: `/apps/install` (app only, refusals per ACI) in place of `/apps/install/invoke`; drop `/apps/params/unset`; add `/apps/gates/run` with the refusals in CTL; delete `oi/handler/actions/install.rs` and its tests (done: `/apps/install`, `/apps/params/unset` dropped; open: `/apps/gates/run`)
-- [ ] `/apps/show`: `gates`, per-resource `held_by` and `waiting_on`, `current_operation` with `gate` and `generation`, action kinds without `install`; `/apps/list` with `gate`; status from the setup record and gate faults (`runtime/apps/status.rs`)
+- [x] `oi/handler.rs` routing: `/apps/install` (app only, refusals per ACI) in place of `/apps/install/invoke`; drop `/apps/params/unset`; add `/apps/gates/run` with the refusals in CTL; delete `oi/handler/actions/install.rs` and its tests
+- [x] `/apps/show`: `gates`, per-resource `held_by` and `waiting_on`, `current_operation` with `gate` and `generation`, action kinds without `install`; `/apps/list` with `gate`; status from the setup record and gate faults (`runtime/apps/status.rs`)
 - [x] `/apps/generations`: `param_change` with a `params` list; no operation outcome
-- [ ] `/apps/restart` refused while a gate holds the deployment; `/apps/resource/stop` accepted for a held resource
+- [x] `/apps/restart` refused while a gate holds the deployment; `/apps/resource/stop` accepted for a held resource
 - [x] `oi/test_support.rs`: `TestOi::install` against `/apps/install`
 
 ### CLI
@@ -282,7 +282,7 @@ Build order, with the labels used in commit history and conversation (these are 
 - [x] New BSL tests for `Gate`: builder errors, key equality, cycles and self-waits, `last` at the last success
 - [x] Gate runtime tests that sever in-memory state between the record write and its read: hold across a restart, pause across a restart, back-off across a restart, unreadable record leaving the gate undetermined
 - [x] Reconciler tests: held selection stays down whatever the scale, waiting workload keeps its stale instances, check Job never in the desired state, spec hash moves with a direct gate key only
-- [ ] OI tests: multi-parameter set and update refusals, events and history; `/apps/install`; `/apps/gates/run` refusals; changes accepted while an operation runs
+- [x] OI tests: multi-parameter set and update refusals, events and history; `/apps/install`; `/apps/gates/run` refusals; changes accepted while an operation runs
 - [ ] Draft the card's test cases (`.workhorse/test-cases/h6/overview.md`) from the gate, gate-run and parameter-change specs
 
 ### Definitions and docs
