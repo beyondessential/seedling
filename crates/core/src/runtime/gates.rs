@@ -39,7 +39,7 @@ pub mod drive;
 pub mod run;
 pub mod store;
 
-use store::{GateRecord, Holds, Records};
+use store::{FailedRuns, GateRecord, Holds, Records};
 
 /// How long after its first failed run a gate waits before it runs again.
 // spec: GRUN#retries
@@ -203,6 +203,9 @@ pub struct Remembered {
     /// Gates a check has cleared for the dependants that start from stopped,
     /// for the key given.
     pub cleared: BTreeMap<GateName, KeyDigest>,
+    /// Runs of each gate that did not succeed and are not yet written to its
+    /// record.
+    pub failed: BTreeMap<GateName, FailedRuns>,
 }
 
 /// Work out the state of every gate of `app`, as its definition and records
@@ -272,6 +275,15 @@ fn status_of(
         None => (None, None),
         Some(Ok(record)) => (Some(record), None),
         Some(Err(why)) => (None, Some(why)),
+    };
+    // spec: GRUN#retries
+    // Runs whose failure could not be written count as they will once it is,
+    // so that the next run waits them out and the gate is reported failing.
+    let record = match remembered.failed.get(name) {
+        Some(failed) if unreadable.is_none() => {
+            Some(failed.applied_to(record.unwrap_or_default()))
+        }
+        _ => record,
     };
     // Each reason that the state cannot be told outranks the next, in the
     // order the specification lists them.
@@ -926,6 +938,38 @@ impl GateRuntime {
     pub fn settle_unrecorded(&self, app: &AppName, gate: &GateName) {
         if let Some(remembered) = self.inner.lock().remembered.get_mut(app) {
             remembered.unrecorded.remove(gate);
+        }
+    }
+
+    /// Runs of `gate` did not succeed, after any already held that are not yet
+    /// written, returning everything now held to be written.
+    // spec: GRUN#retries
+    pub fn note_failed_runs(&self, app: &AppName, gate: &GateName, failed: FailedRuns) -> FailedRuns {
+        let mut inner = self.inner.lock();
+        let held = inner.remembered.entry(app.clone()).or_default();
+        let failed = match held.failed.remove(gate) {
+            Some(earlier) => earlier.followed_by(failed),
+            None => failed,
+        };
+        held.failed.insert(gate.clone(), failed.clone());
+        failed
+    }
+
+    /// `written`, the failed runs of `gate` held to be written, are on its
+    /// record. Runs noted since are still held.
+    pub fn settle_failed_runs(&self, app: &AppName, gate: &GateName, written: &FailedRuns) {
+        if let Some(remembered) = self.inner.lock().remembered.get_mut(app)
+            && remembered.failed.get(gate) == Some(written)
+        {
+            remembered.failed.remove(gate);
+        }
+    }
+
+    /// A run of `gate` succeeded, and its success is on record.
+    // spec: GRUN#retries
+    pub fn forget_failed_runs(&self, app: &AppName, gate: &GateName) {
+        if let Some(remembered) = self.inner.lock().remembered.get_mut(app) {
+            remembered.failed.remove(gate);
         }
     }
 

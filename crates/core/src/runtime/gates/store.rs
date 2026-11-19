@@ -226,31 +226,93 @@ pub fn record_success(
     Ok(())
 }
 
-/// A run for `key` did not succeed, and ended at `at` in the way `how` says.
-/// `pause` is the key a cancelled run pauses the gate for; a pause for any
-/// key but `key` ended when the key moved, and is dropped.
+/// Runs of a gate for one key that did not succeed, one after another.
+// spec: GRUN#retries
+// spec: GRUN#pauses
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedRuns {
+    /// The digest of the key the runs were for.
+    pub key: KeyDigest,
+    /// How many runs these are.
+    pub runs: u32,
+    /// When the most recent of them ended.
+    pub at: Timestamp,
+    /// How the most recent of them ended.
+    pub how: String,
+    /// Whether the most recent of them was cancelled, pausing the gate for
+    /// `key`.
+    pub paused: bool,
+}
+
+impl FailedRuns {
+    /// One run for `key` that ended at `at` in the way `how` says.
+    pub fn one(key: KeyDigest, at: Timestamp, how: &str, paused: bool) -> Self {
+        Self {
+            key,
+            runs: 1,
+            at,
+            how: how.to_owned(),
+            paused,
+        }
+    }
+
+    /// These runs followed by `later`, which counts on from them where it was
+    /// for the same key.
+    pub fn followed_by(self, later: Self) -> Self {
+        let runs = if later.key == self.key {
+            self.runs.saturating_add(later.runs)
+        } else {
+            later.runs
+        };
+        Self { runs, ..later }
+    }
+
+    /// `record` as [`record_failure`] leaves it once these runs are written
+    /// to it.
+    pub fn applied_to(&self, record: GateRecord) -> GateRecord {
+        let same_key = record.failed_key_digest == Some(self.key);
+        GateRecord {
+            valid: false,
+            consecutive_failures: if same_key {
+                record.consecutive_failures.saturating_add(self.runs)
+            } else {
+                self.runs
+            },
+            last_failure_at: Some(self.at),
+            last_failure: Some(self.how.clone()),
+            failed_key_digest: Some(self.key),
+            paused_key_digest: if self.paused || record.paused_key_digest == Some(self.key) {
+                Some(self.key)
+            } else {
+                None
+            },
+            ..record
+        }
+    }
+}
+
+/// Runs of the gate did not succeed, as `failed` says. A cancelled run
+/// pauses the gate for its key; a pause for any other key ended when the key
+/// moved, and is dropped.
 // spec: GRUN#retries
 // spec: GRUN#pauses
 pub fn record_failure(
     db: &Db,
     app: &AppName,
     gate: &GateName,
-    key: &KeyDigest,
-    at: Timestamp,
-    how: &str,
-    pause: Option<&KeyDigest>,
+    failed: &FailedRuns,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT INTO gate_records
              (app, gate, valid, consecutive_failures, last_failure_at, last_failure,
               failed_key_digest, paused_key_digest)
-         VALUES (?1, ?2, 0, 1, ?3, ?4, ?5, ?6)
+         VALUES (?1, ?2, 0, ?7, ?3, ?4, ?5, ?6)
          ON CONFLICT(app, gate) DO UPDATE SET
              valid = 0,
              consecutive_failures = CASE
                  WHEN failed_key_digest IS excluded.failed_key_digest
-                 THEN consecutive_failures + 1
-                 ELSE 1
+                 THEN consecutive_failures + excluded.consecutive_failures
+                 ELSE excluded.consecutive_failures
              END,
              last_failure_at = excluded.last_failure_at,
              last_failure = excluded.last_failure,
@@ -263,10 +325,11 @@ pub fn record_failure(
         params![
             app,
             gate,
-            at.to_string(),
-            how,
-            key.as_bytes(),
-            pause.map(KeyDigest::as_bytes)
+            failed.at.to_string(),
+            failed.how,
+            failed.key.as_bytes(),
+            failed.paused.then_some(failed.key.as_bytes()),
+            i64::from(failed.runs),
         ],
     )?;
     Ok(())
