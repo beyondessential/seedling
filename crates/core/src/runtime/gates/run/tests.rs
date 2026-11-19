@@ -67,10 +67,7 @@ fn holds(oi: &TestOi) -> usize {
         .len()
 }
 
-/// Run `name` once, as the dispatcher does, and report the kinds of the
-/// events it emitted.
-fn run_once(oi: &TestOi, name: &str, cancelled: bool) -> Vec<String> {
-    let mut events = oi.state.event_tx.subscribe();
+fn gate_input(oi: &TestOi, name: &str, cancelled: bool) -> GateRunInput {
     let (app, active_progress, tick_notify) = {
         let reg = oi.state.registry.read();
         let entry = reg.get("demo").unwrap();
@@ -91,18 +88,20 @@ fn run_once(oi: &TestOi, name: &str, cancelled: bool) -> Vec<String> {
         1,
         None,
     );
-    oi.block_on(run_gate(
-        &oi.state,
-        GateRunInput {
-            app,
-            gate: gate(name),
-            op_ctx,
-            active_progress,
-            tick_notify,
-            cancel_token,
-            db_path: oi.state.db_path.clone(),
-        },
-    ));
+    GateRunInput {
+        app,
+        gate: gate(name),
+        op_ctx,
+        active_progress,
+        tick_notify,
+        cancel_token,
+        db_path: oi.state.db_path.clone(),
+    }
+}
+
+fn kinds_of(
+    events: &mut tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
+) -> Vec<String> {
     let mut kinds = Vec::new();
     while let Ok(event) = events.try_recv() {
         kinds.push(
@@ -113,6 +112,14 @@ fn run_once(oi: &TestOi, name: &str, cancelled: bool) -> Vec<String> {
         );
     }
     kinds
+}
+
+/// Run `name` once, as the dispatcher does, and report the kinds of the
+/// events it emitted.
+fn run_once(oi: &TestOi, name: &str, cancelled: bool) -> Vec<String> {
+    let mut events = oi.state.event_tx.subscribe();
+    oi.block_on(run_gate(&oi.state, gate_input(oi, name, cancelled)));
+    kinds_of(&mut events)
 }
 
 fn faults_of(oi: &TestOi) -> Vec<String> {
@@ -142,15 +149,26 @@ fn a_run_that_succeeds_records_the_digest_of_its_key_and_its_generation_and_rele
     installed(&oi, SCRIPT);
 
     let kinds = run_once(&oi, "migrate", false);
-    assert!(kinds.contains(&"OperationCompleted".to_owned()), "{kinds:?}");
+    assert!(
+        kinds.contains(&"OperationCompleted".to_owned()),
+        "{kinds:?}"
+    );
 
     let record = record(&oi, "migrate");
     assert!(record.valid);
     assert_eq!(record.key_digest, Some(key(&oi, "migrate")));
     assert_eq!(record.success_generation, Some(1));
     assert_eq!(record.consecutive_failures, 0);
-    assert_eq!(holds(&oi), 0, "the hold is cleared once the gate is satisfied");
-    assert_eq!(persisted_operations(&oi), 0, "the operation record is cleared");
+    assert_eq!(
+        holds(&oi),
+        0,
+        "the hold is cleared once the gate is satisfied"
+    );
+    assert_eq!(
+        persisted_operations(&oi),
+        0,
+        "the operation record is cleared"
+    );
     assert!(faults_of(&oi).is_empty());
 }
 
@@ -168,7 +186,10 @@ fn a_run_starts_by_invalidating_the_last_success_and_keeps_its_generation_for_la
     assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
 
     let record = record(&oi, "migrate");
-    assert!(!record.valid, "the gate is unsatisfied until a run succeeds");
+    assert!(
+        !record.valid,
+        "the gate is unsatisfied until a run succeeds"
+    );
     assert_eq!(
         record.success_generation,
         Some(1),
@@ -199,8 +220,15 @@ fn a_run_whose_images_cannot_be_pulled_fails_with_nothing_stopped() {
     );
     assert!(record.last_failure_at.is_some());
     assert_eq!(record.failed_key_digest, Some(key(&oi, "migrate")));
-    assert_eq!(holds(&oi), 0, "the selection was never held, so nothing was stopped");
-    assert!(record.paused_key_digest.is_none(), "a failed run does not pause the gate");
+    assert_eq!(
+        holds(&oi),
+        0,
+        "the selection was never held, so nothing was stopped"
+    );
+    assert!(
+        record.paused_key_digest.is_none(),
+        "a failed run does not pause the gate"
+    );
     assert_eq!(faults_of(&oi), vec!["gate_failed"]);
     assert_eq!(persisted_operations(&oi), 0);
 }
@@ -230,7 +258,10 @@ fn a_cancelled_run_pauses_the_gate_for_its_key_and_files_gate_failed() {
     installed(&oi, SCRIPT);
 
     let kinds = run_once(&oi, "migrate", true);
-    assert!(kinds.contains(&"OperationCancelled".to_owned()), "{kinds:?}");
+    assert!(
+        kinds.contains(&"OperationCancelled".to_owned()),
+        "{kinds:?}"
+    );
     assert!(!kinds.contains(&"OperationFailed".to_owned()));
 
     let after = record(&oi, "migrate");
@@ -281,7 +312,11 @@ fn a_run_whose_success_cannot_be_recorded_counts_as_failed_and_keeps_its_hold() 
         "{:?}",
         record.last_failure
     );
-    assert_eq!(holds(&oi), 1, "an unsatisfied gate keeps holding its selection");
+    assert_eq!(
+        holds(&oi),
+        1,
+        "an unsatisfied gate keeps holding its selection"
+    );
     assert_eq!(faults_of(&oi), vec!["gate_failed"]);
 }
 
@@ -304,6 +339,91 @@ fn a_run_that_cannot_invalidate_the_last_success_fails_before_anything_else_is_d
     assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
 }
 
+const IMAGES: &str = r#"
+    let probe = app.job("probe").image("docker.io/library/tools:1").deadline(60);
+    let api = app.deployment("api").image("docker.io/library/api:1");
+    app.deployment("other").image("docker.io/library/other:1");
+    let migrate = app.gate("migrate").key(1).check(probe).exclusive(api).run(|rt, last| {
+        rt.warm_images(app.job().image("docker.io/library/body:1")).ready();
+    });
+    app.deployment("web").image("docker.io/library/web:1").after(migrate);
+"#;
+
+// spec: GRUN#preparation
+#[test]
+fn a_run_pulls_the_images_of_its_body_its_check_and_its_dependants_and_no_others() {
+    let oi = TestOi::new();
+    installed(&oi, IMAGES);
+    let input = gate_input(&oi, "migrate", false);
+    let def = input.app.def.load_full();
+    let run = Run {
+        state: &oi.state,
+        app_name: app_name(),
+        gate: gate("migrate"),
+        op_ctx: input.op_ctx.clone(),
+        active_progress: Arc::clone(&input.active_progress),
+        tick_notify: Arc::clone(&input.tick_notify),
+        cancel: Arc::clone(&input.cancel_token),
+        db_path: input.db_path.clone(),
+    };
+    let images = oi
+        .block_on(run.images(&input.app, &def, &def.gates["migrate"], None))
+        .unwrap_or_else(|_| panic!("the images are worked out"));
+    assert_eq!(
+        images.into_iter().collect::<Vec<_>>(),
+        [
+            "docker.io/library/body:1",
+            "docker.io/library/tools:1",
+            "docker.io/library/web:1"
+        ]
+    );
+}
+
+// spec: GRUN#preparation
+#[test]
+fn an_instance_that_has_started_and_not_ended_is_still_running_and_one_that_never_started_is_not() {
+    use crate::runtime::history::{insert_instance, insert_observation};
+    let oi = TestOi::new();
+    let instance = ResourceInstance::new_singleton(app_name(), ResourceKind::Deployment, "api");
+    let selection = BTreeSet::from([ResourceId {
+        kind: ResourceKind::Deployment,
+        name: Arc::new("api".to_owned()),
+    }]);
+    let running = |oi: &TestOi| {
+        let selection = selection.clone();
+        oi.state
+            .db
+            .call(move |db| still_running(db, &app_name(), &selection).unwrap())
+    };
+    let i = instance.clone();
+    oi.state.db.call(move |db| insert_instance(db, &i).unwrap());
+    assert_eq!(
+        running(&oi),
+        None,
+        "an instance that never started is as stopped as one that ended"
+    );
+
+    let i = instance.clone();
+    oi.state.db.call(move |db| {
+        insert_observation(db, &i, "container_running", &json!({})).unwrap();
+    });
+    assert!(
+        running(&oi).is_some(),
+        "a started instance holds up the run"
+    );
+
+    oi.state.db.call(move |db| {
+        insert_observation(
+            db,
+            &instance,
+            "container_exited",
+            &json!({ "exit_code": 0 }),
+        )
+        .unwrap();
+    });
+    assert_eq!(running(&oi), None, "an instance that ended no longer does");
+}
+
 // ---------------------------------------------------------------------------
 // Checks
 // ---------------------------------------------------------------------------
@@ -315,13 +435,58 @@ const CHECKED: &str = r#"
 "#;
 
 fn probe_job(oi: &TestOi) -> Resource {
-    let def = oi.state.registry.read().get("demo").unwrap().app.def.load_full();
+    let def = oi
+        .state
+        .registry
+        .read()
+        .get("demo")
+        .unwrap()
+        .app
+        .def
+        .load_full();
     let (_, job) = def
         .resources
         .iter()
         .find(|(id, _)| id.kind == ResourceKind::Job)
         .unwrap();
     job.clone()
+}
+
+/// Wait for the check's instance to be started, and report the host's
+/// observations of it as `observed` says.
+async fn feed_check(
+    state: &Arc<OiState>,
+    observed: impl Fn(&Db, &ResourceInstance) + Send + 'static,
+) {
+    let until = Instant::now() + Duration::from_secs(60);
+    let instance = loop {
+        // The check that is waiting is the one whose instance has not been
+        // observed yet.
+        let found = state.db.call(|db| {
+            list_dynamic_resources_for_app(db, &app_name())
+                .unwrap()
+                .into_iter()
+                .map(|record| ResourceInstance {
+                    id: InstanceId::from_hex(&record.instance_id).unwrap(),
+                    app: app_name(),
+                    kind: ResourceKind::Job,
+                    name: None,
+                    variant: InstanceVariant::Singleton,
+                    display_name: record.display_name,
+                })
+                .find(|instance| {
+                    crate::runtime::history::query_observations(db, instance)
+                        .unwrap()
+                        .is_empty()
+                })
+        });
+        if let Some(instance) = found {
+            break instance;
+        }
+        assert!(Instant::now() < until, "the check never started");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    state.db.call(move |db| observed(db, &instance));
 }
 
 /// Run the check of `ready` while the host reports the check's instance as
@@ -340,35 +505,7 @@ fn check_with(
             async move { run_check(&state, &app_name(), &gate("ready"), job, cancel.as_ref()).await }
         });
         if cancel.is_none() {
-            let until = Instant::now() + Duration::from_secs(60);
-            let instance = loop {
-                // The check that is waiting is the one whose instance has
-                // not been observed yet.
-                let found = state.db.call(|db| {
-                    list_dynamic_resources_for_app(db, &app_name())
-                        .unwrap()
-                        .into_iter()
-                        .map(|record| ResourceInstance {
-                            id: InstanceId::from_hex(&record.instance_id).unwrap(),
-                            app: app_name(),
-                            kind: ResourceKind::Job,
-                            name: None,
-                            variant: InstanceVariant::Singleton,
-                            display_name: record.display_name,
-                        })
-                        .find(|instance| {
-                            crate::runtime::history::query_observations(db, instance)
-                                .unwrap()
-                                .is_empty()
-                        })
-                });
-                if let Some(instance) = found {
-                    break instance;
-                }
-                assert!(Instant::now() < until, "the check never started");
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            };
-            state.db.call(move |db| observed(db, &instance));
+            feed_check(&state, observed).await;
         }
         runner.await.unwrap()
     })
@@ -416,7 +553,10 @@ fn a_check_whose_job_cannot_be_recorded_could_not_be_run() {
         probe_job(&oi),
         None,
     ));
-    assert!(matches!(outcome, CheckOutcome::Unavailable(_)), "{outcome:?}");
+    assert!(
+        matches!(outcome, CheckOutcome::Unavailable(_)),
+        "{outcome:?}"
+    );
 }
 
 // spec: GRUN#cancellation
@@ -469,5 +609,80 @@ fn a_check_is_judged_by_how_its_job_exited_and_by_its_deadline() {
         ),
         None,
         "a check that has not ended has no outcome yet"
+    );
+}
+
+/// Run `ready`, the gate of `CHECKED`, with the host observing its check's
+/// instance as `observed` says.
+fn run_ready(
+    oi: &TestOi,
+    observed: impl Fn(&Db, &ResourceInstance) + Send + 'static,
+) -> Vec<String> {
+    let mut events = oi.state.event_tx.subscribe();
+    let state = Arc::clone(&oi.state);
+    let input = gate_input(oi, "ready", false);
+    oi.block_on(async move {
+        let feeder = tokio::spawn({
+            let state = Arc::clone(&state);
+            async move { feed_check(&state, observed).await }
+        });
+        run_gate(&state, input).await;
+        feeder.await.unwrap();
+    });
+    kinds_of(&mut events)
+}
+
+// spec: GRUN#outcome
+#[test]
+fn a_run_succeeds_only_once_its_check_passes() {
+    let oi = TestOi::new();
+    installed(&oi, CHECKED);
+
+    let kinds = run_ready(&oi, exits(0));
+    assert!(
+        kinds.contains(&"OperationCompleted".to_owned()),
+        "{kinds:?}"
+    );
+    assert!(record(&oi, "ready").valid);
+
+    let oi = TestOi::new();
+    installed(&oi, CHECKED);
+    let kinds = run_ready(&oi, exits(1));
+    assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
+    let after = record(&oi, "ready");
+    assert!(
+        !after.valid,
+        "a run whose check fails does not satisfy the gate"
+    );
+    assert!(
+        after
+            .last_failure
+            .as_deref()
+            .is_some_and(|how| how.contains("its check failed")),
+        "{:?}",
+        after.last_failure
+    );
+    assert_eq!(faults_of(&oi), vec!["gate_failed"]);
+}
+
+// spec: GRUN#outcome
+#[test]
+fn a_run_whose_check_cannot_be_run_does_not_succeed_and_files_gate_check_unavailable() {
+    let oi = TestOi::new();
+    installed(&oi, CHECKED);
+    oi.state.db.call(|db| {
+        db.conn
+            .execute_batch("DROP TABLE dynamic_resources;")
+            .unwrap();
+    });
+
+    let kinds = run_once(&oi, "ready", false);
+    assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
+    let after = record(&oi, "ready");
+    assert!(!after.valid);
+    assert_eq!(after.check_failures, 1);
+    assert_eq!(
+        faults_of(&oi),
+        vec!["gate_check_unavailable", "gate_failed"]
     );
 }
