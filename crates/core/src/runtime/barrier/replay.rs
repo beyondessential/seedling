@@ -472,6 +472,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
                 )));
             }
         };
+        let _evaluation = fresh_app.guard_evaluation();
         fresh_app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = app_name.clone();
@@ -484,7 +485,6 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         let run_result = engine.run_ast_with_scope(&mut fresh_scope, script_ast);
         let captured = end_closure_capture(); // always drain, even on error
         if let Err(e) = run_result {
-            drop(fresh_app.take_gate_selections());
             return OperationResult::Failed(e);
         }
         if let Err(e) = crate::defs::gate::resolve_exclusive_selections(&fresh_app) {

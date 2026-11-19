@@ -783,6 +783,7 @@ fn run_definition(
             return (App::with_bundle(Arc::clone(bundle)), Err(ScriptError(e)));
         }
     };
+    let _evaluation = app.guard_evaluation();
     let script = match bundle.script() {
         Ok(s) => s,
         // A stored definition that no longer reads as one (only possible
@@ -822,10 +823,7 @@ fn run_definition(
     let validators = validate.map(|_| crate::defs::app::end_validator_capture());
     let ast = match ran {
         Ok(ast) => ast,
-        Err(e) => {
-            drop(app.take_gate_selections());
-            return (app, Err(e));
-        }
+        Err(e) => return (app, Err(e)),
     };
     // spec: BSL#evaluation
     if let Err(e) = crate::defs::finish_evaluation(&app) {

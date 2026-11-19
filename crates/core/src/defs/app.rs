@@ -1,6 +1,9 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, GateName, ParamName, ShellName};
@@ -350,11 +353,6 @@ impl Drop for SubActionFrame {
 }
 
 thread_local! {
-    static GATE_SELECTIONS: RefCell<BTreeMap<(usize, GateName), Collection>> =
-        const { RefCell::new(BTreeMap::new()) };
-}
-
-thread_local! {
     static APPDEF_HOLDER: RefCell<Option<Arc<arc_swap::ArcSwap<AppDef>>>> = const { RefCell::new(None) };
 }
 
@@ -429,6 +427,51 @@ fn is_valid_canopy_type(value: &str) -> bool {
     }) && value.starts_with(|c: char| c.is_ascii_lowercase())
 }
 
+thread_local! {
+    static GATE_SELECTIONS: RefCell<BTreeMap<(EvaluationId, GateName), Collection>> =
+        const { RefCell::new(BTreeMap::new()) };
+}
+
+/// One evaluation of a script, never shared with another, so that what an
+/// evaluation leaves on its thread cannot be taken up by a later one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct EvaluationId(u64);
+
+impl EvaluationId {
+    fn fresh() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Releases the gate selections an evaluation holds when it is dropped,
+/// whether the evaluation completed, failed, or unwound.
+#[must_use = "the selections are released when the guard is dropped"]
+pub(crate) struct EvaluationGuard {
+    evaluation: EvaluationId,
+    _thread: PhantomData<Rc<()>>,
+}
+
+impl Drop for EvaluationGuard {
+    fn drop(&mut self) {
+        drop(take_gate_selections(self.evaluation));
+    }
+}
+
+fn take_gate_selections(evaluation: EvaluationId) -> BTreeMap<GateName, Collection> {
+    GATE_SELECTIONS.with(|s| {
+        let mut held = s.borrow_mut();
+        let mine: Vec<_> = held
+            .keys()
+            .filter(|(e, _)| *e == evaluation)
+            .cloned()
+            .collect();
+        mine.into_iter()
+            .filter_map(|key| held.remove(&key).map(|c| (key.1, c)))
+            .collect()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // App — the BSL-facing handle; !Send (Rc inside), stays on the BSL thread
 // ---------------------------------------------------------------------------
@@ -444,6 +487,9 @@ pub struct App {
     /// `app.file` and `app.dir`.
     // spec: BND#bundle-files
     pub bundle: Arc<Bundle>,
+    /// The evaluation this app is declared by, which holds the selections
+    /// its script gives its gates.
+    evaluation: EvaluationId,
 }
 
 impl App {
@@ -452,32 +498,34 @@ impl App {
             def: Arc::new(arc_swap::ArcSwap::new(Arc::new(AppDef::default()))),
             stored: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
             bundle,
+            evaluation: EvaluationId::fresh(),
         }
     }
 
     /// Hold the selection the script gave gate `name`, to be resolved once its
-    /// evaluation completes.
+    /// evaluation completes, replacing any it gave before.
     ///
     /// A selection is not `Send`, so it stays on the evaluating thread rather
-    /// than in the definition. It holds the `App` it was made from, so it is
-    /// released with [`App::take_gate_selections`] when the evaluation ends,
-    /// whether or not it succeeded.
+    /// than in the definition, until it is taken or the evaluation's
+    /// [`EvaluationGuard`] is dropped.
     // spec: GATE#exclusive-selection
     pub(crate) fn hold_gate_selection(&self, name: GateName, selection: Collection) {
-        let key = (Arc::as_ptr(&self.def) as usize, name);
+        let key = (self.evaluation, name);
         GATE_SELECTIONS.with(|s| s.borrow_mut().insert(key, selection));
     }
 
     /// Take the selections the script gave this app's gates, leaving none.
     pub(crate) fn take_gate_selections(&self) -> BTreeMap<GateName, Collection> {
-        let app = Arc::as_ptr(&self.def) as usize;
-        GATE_SELECTIONS.with(|s| {
-            let mut held = s.borrow_mut();
-            let mine: Vec<_> = held.keys().filter(|(a, _)| *a == app).cloned().collect();
-            mine.into_iter()
-                .filter_map(|key| held.remove(&key).map(|c| (key.1, c)))
-                .collect()
-        })
+        take_gate_selections(self.evaluation)
+    }
+
+    /// Guard the evaluation this app is declared by, releasing the
+    /// selections it holds when the guard is dropped.
+    pub(crate) fn guard_evaluation(&self) -> EvaluationGuard {
+        EvaluationGuard {
+            evaluation: self.evaluation,
+            _thread: PhantomData,
+        }
     }
 }
 

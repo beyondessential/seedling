@@ -88,6 +88,7 @@ fn capture_closures(
     let app_name = app.def.load().name.clone();
     let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle))
         .map_err(|e| format!("script evaluation failed: {e}"))?;
+    let _evaluation = fresh_app.guard_evaluation();
     fresh_app.def.rcu(|d| {
         let mut d = (**d).clone();
         d.name = app_name.clone();
@@ -97,7 +98,6 @@ fn capture_closures(
     begin_closure_capture();
     let run_result = engine.run_ast_with_scope(&mut scope, script_ast);
     let captured = end_closure_capture();
-    drop(fresh_app.take_gate_selections());
     run_result.map_err(|e| format!("script evaluation failed: {e}"))?;
     Ok(captured)
 }

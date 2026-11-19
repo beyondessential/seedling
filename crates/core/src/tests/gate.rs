@@ -535,6 +535,20 @@ fn an_exclusive_selection_may_hold_the_dependants_of_its_gate() {
     assert!(app.def.load().gates["migrate"].after.is_empty());
 }
 
+// spec: GATE#exclusive-selection
+#[test]
+fn a_selection_held_by_an_evaluation_that_did_not_complete_is_not_taken_up_by_a_later_one() {
+    for _ in 0..64 {
+        drop(run_test_script_err(&format!(
+            r#"{WORKLOADS}
+            app.gate("migrate").exclusive(api);
+            throw "abandoned";"#
+        )));
+        let later = defs::app::App::default();
+        assert!(later.take_gate_selections().is_empty());
+    }
+}
+
 // spec: GATE#start-order
 #[test]
 fn after_orders_a_workload_or_gate_after_gates_deployments_and_jobs() {
