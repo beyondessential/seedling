@@ -133,6 +133,8 @@ pub async fn run_gate(state: &Arc<OiState>, input: GateRunInput) {
         db_path,
     } = input;
 
+    // spec: GRUN#checks
+    let _claim = state.gate_runtime.claim_for_run(&op_ctx.app, &gate).await;
     let run = Run {
         state,
         app_name: op_ctx.app.clone(),
