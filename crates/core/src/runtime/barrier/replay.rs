@@ -6,7 +6,7 @@ use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, GateName};
 use tokio::sync::Notify;
 
-use crate::defs::app::{App, AppDef, begin_closure_capture, end_closure_capture};
+use crate::defs::app::{App, capture_closures};
 use crate::defs::volume::OperationVolumeBinding;
 use crate::runtime::barrier::oracle::WorldStateOracle;
 use crate::runtime::barrier::runtime::{
@@ -456,44 +456,13 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // RuntimeInstance field is Arc'd.
     let rt_clone_for_active = rt.clone();
 
-    // Re-run the BSL script with a fresh scope and App to recover the FnPtr
-    // for this action. FnPtrs are not stored in AppDef (which must be Send);
-    // the thread-local capture buffer collects them during the re-run and is
-    // discarded immediately after. The fresh AppDef is compared against the
-    // stored one as an idempotency check, then also discarded.
+    // FnPtrs are not stored in AppDef (which must be Send), so the script is
+    // evaluated again to recover this action's.
     let (closure, is_shell, captured_actions) = {
-        let (mut fresh_scope, fresh_app) = match crate::defs::scope(Arc::clone(&app.bundle)) {
-            Ok(language) => language,
-            // spec: CONST#host-constants
-            Err(e) => {
-                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
-                    e.into(),
-                    rhai::Position::NONE,
-                )));
-            }
+        let captured = match capture_closures(engine, script_ast, app) {
+            Ok(captured) => captured,
+            Err(e) => return OperationResult::Failed(e),
         };
-        let _evaluation = fresh_app.guard_evaluation();
-        fresh_app.def.rcu(|d| {
-            let mut d = (**d).clone();
-            d.name = app_name.clone();
-            d
-        });
-        // spec: PRM#parameter-storage — restore persisted param values so is_set()/value()
-        // return correct results when the script is re-evaluated for closure recovery.
-        *fresh_app.stored.lock() = app.stored.lock().clone();
-        begin_closure_capture();
-        let run_result = engine.run_ast_with_scope(&mut fresh_scope, script_ast);
-        let captured = end_closure_capture(); // always drain, even on error
-        if let Err(e) = run_result {
-            return OperationResult::Failed(e);
-        }
-        if let Err(e) = crate::defs::gate::resolve_exclusive_selections(&fresh_app) {
-            return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
-                e.into(),
-                rhai::Position::NONE,
-            )));
-        }
-        check_idempotent(&fresh_app.def.load(), &app.def.load());
 
         let captured_actions = captured.actions.clone();
         let (closure, is_shell) = if let Some(gate) = &gate {
@@ -535,8 +504,6 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
             )));
         };
         (closure, is_shell, captured_actions)
-        // captured (minus the cloned actions map kept in captured_actions),
-        // fresh_scope, and fresh_app are all dropped here.
     };
 
     // spec: GATE#body
@@ -667,39 +634,6 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
                 None => OperationResult::Failed(result.unwrap_err()),
             }
         }
-    }
-}
-
-/// Compare a freshly-evaluated AppDef against the stored one and warn if they
-/// differ. A mismatch means the BSL script produces different structure on
-/// re-run, which indicates a non-idempotent script and may cause the closure's
-/// captured variables to be inconsistent with the stored resource state.
-// spec: SUSP#replay
-fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
-    let mut diffs: Vec<&str> = Vec::new();
-
-    if fresh.actions.keys().ne(stored.actions.keys()) {
-        diffs.push("actions");
-    }
-    if fresh.shells.keys().ne(stored.shells.keys()) {
-        diffs.push("shells");
-    }
-    if fresh.resources.keys().ne(stored.resources.keys()) {
-        diffs.push("resources");
-    }
-    if fresh.params != stored.params {
-        diffs.push("params");
-    }
-    if fresh.gates != stored.gates {
-        diffs.push("gates");
-    }
-
-    if !diffs.is_empty() {
-        tracing::warn!(
-            fields = diffs.join(", "),
-            "BSL script produced a different AppDef on re-run; \
-             script may not be idempotent"
-        );
     }
 }
 

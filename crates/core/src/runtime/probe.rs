@@ -16,7 +16,7 @@ use seedling_protocol::names::{ActionName, AppName, GateName, ParamName};
 
 use crate::{
     defs::{
-        app::{App, ClosureCapture, begin_closure_capture, end_closure_capture},
+        app::{App, capture_closures},
         param_def::ParamDef,
     },
     runtime::{
@@ -78,30 +78,6 @@ pub struct ProbeResponse {
     pub all_images: BTreeSet<String>,
 }
 
-/// Evaluate the script again to recover the closures it registered, which the
-/// definition does not keep.
-fn capture_closures(
-    engine: &Engine,
-    script_ast: &AST,
-    app: &App,
-) -> Result<ClosureCapture, String> {
-    let app_name = app.def.load().name.clone();
-    let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle))
-        .map_err(|e| format!("script evaluation failed: {e}"))?;
-    let _evaluation = fresh_app.guard_evaluation();
-    fresh_app.def.rcu(|d| {
-        let mut d = (**d).clone();
-        d.name = app_name.clone();
-        d
-    });
-    *fresh_app.stored.lock() = app.stored.lock().clone();
-    begin_closure_capture();
-    let run_result = engine.run_ast_with_scope(&mut scope, script_ast);
-    let captured = end_closure_capture();
-    run_result.map_err(|e| format!("script evaluation failed: {e}"))?;
-    Ok(captured)
-}
-
 /// The images the body of gate `gate` might pull in a run, as a probe of it
 /// reports them, with `last` as the run would give it.
 ///
@@ -116,7 +92,8 @@ pub fn probe_gate_body(
     gate: &GateName,
     last: Option<&App>,
 ) -> Result<HandlerProbe, String> {
-    let captured = capture_closures(engine, script_ast, app)?;
+    let captured = capture_closures(engine, script_ast, app)
+        .map_err(|e| format!("script evaluation failed: {e}"))?;
     match captured.gates.get(gate) {
         Some(Some(body)) => {
             probe_gate_closure(engine, script_ast, app, &registry, gate, body.clone(), last)
@@ -173,7 +150,8 @@ pub fn probe_app(
     // Re-run the script to capture every registered closure. The script
     // itself must not fail; if it does, the caller can surface that as an
     // app-level script_error fault and there's nothing to probe.
-    let captured = capture_closures(engine, script_ast, app)?;
+    let captured = capture_closures(engine, script_ast, app)
+        .map_err(|e| format!("script evaluation failed: {e}"))?;
 
     // Build the per-handler probe list in declaration order from the def.
     let def = app.def.load_full();

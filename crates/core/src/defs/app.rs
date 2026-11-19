@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
+use rhai::{AST, CustomType, Dynamic, Engine, EvalAltResult, FnPtr, Map, Position, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, GateName, ParamName, ShellName};
 
 use crate::runtime::definition::Bundle;
@@ -60,6 +60,71 @@ pub(crate) fn begin_closure_capture() {
 /// exactly once after `begin_closure_capture`, even if the script run fails.
 pub(crate) fn end_closure_capture() -> ClosureCapture {
     CLOSURE_CAPTURE.with(|c| c.borrow_mut().take().unwrap_or_default())
+}
+
+/// Evaluate `app`'s script again to recover the closures it registered, which
+/// the definition does not keep.
+///
+/// The evaluation sees `app`'s name and stored parameter values, and is
+/// discarded once the closures are taken from it.
+pub(crate) fn capture_closures(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+) -> Result<ClosureCapture, Box<EvalAltResult>> {
+    let (mut scope, fresh_app) = super::scope(Arc::clone(&app.bundle))
+        // spec: CONST#host-constants
+        .map_err(|e| Box::new(EvalAltResult::ErrorRuntime(e.into(), Position::NONE)))?;
+    let _evaluation = fresh_app.guard_evaluation();
+    let app_name = app.def.load().name.clone();
+    fresh_app.def.rcu(|d| {
+        let mut d = (**d).clone();
+        d.name = app_name.clone();
+        d
+    });
+    // spec: PRM#parameter-storage
+    *fresh_app.stored.lock() = app.stored.lock().clone();
+    begin_closure_capture();
+    let run_result = engine.run_ast_with_scope(&mut scope, script_ast);
+    let captured = end_closure_capture();
+    run_result?;
+    super::gate::resolve_exclusive_selections(&fresh_app)
+        .map_err(|e| Box::new(EvalAltResult::ErrorRuntime(e.into(), Position::NONE)))?;
+    check_idempotent(&fresh_app.def.load(), &app.def.load());
+    Ok(captured)
+}
+
+/// Compare a freshly-evaluated AppDef against the stored one and warn if they
+/// differ. A mismatch means the BSL script produces different structure on
+/// re-run, which indicates a non-idempotent script and may cause the closure's
+/// captured variables to be inconsistent with the stored resource state.
+// spec: SUSP#replay
+fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
+    let mut diffs: Vec<&str> = Vec::new();
+
+    if fresh.actions.keys().ne(stored.actions.keys()) {
+        diffs.push("actions");
+    }
+    if fresh.shells.keys().ne(stored.shells.keys()) {
+        diffs.push("shells");
+    }
+    if fresh.resources.keys().ne(stored.resources.keys()) {
+        diffs.push("resources");
+    }
+    if fresh.params != stored.params {
+        diffs.push("params");
+    }
+    if fresh.gates != stored.gates {
+        diffs.push("gates");
+    }
+
+    if !diffs.is_empty() {
+        tracing::warn!(
+            fields = diffs.join(", "),
+            "BSL script produced a different AppDef on re-run; \
+             script may not be idempotent"
+        );
+    }
 }
 
 fn capture_action(name: ActionName, fnptr: FnPtr) {
