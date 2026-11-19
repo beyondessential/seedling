@@ -51,6 +51,8 @@ ALTER TABLE registered_apps DROP COLUMN installing;
 DELETE FROM queued_operations
 WHERE trigger IN ('boot', 'install', 'param_change')
    OR action IN ('install', 'start');
+-- An install or start interrupted by a restart has nothing to replay either.
+DELETE FROM current_operation WHERE action_name IN ('install', 'start');
 
 -- An operation runs against one generation, the one current when it was
 -- dispatched, and is a run of an action or of a gate: never both.

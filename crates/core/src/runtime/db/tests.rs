@@ -650,6 +650,30 @@ fn requests_queued_for_a_parameter_change_leave_the_queue() {
     assert_eq!(queued, ["action"]);
 }
 
+// spec: OPS#interrupted-operations
+#[test]
+fn an_interrupted_install_or_start_is_not_kept_to_be_replayed() {
+    for action in ["install", "start"] {
+        let db = Db::open_in_memory_through(81).expect("open at v81");
+        db.conn
+            .execute(
+                "INSERT INTO current_operation
+                     (singleton, operation_id, app, action_name, source_generation, target_generation)
+                     VALUES (1, 'running', 'live', ?1, 1, 1)",
+                [action],
+            )
+            .expect("seed v81 data");
+
+        db.finish_migrations().expect("migrate to the latest");
+
+        let kept: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM current_operation", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, 0, "{action}");
+    }
+}
+
 // spec: OPS#initiating-events
 #[test]
 fn a_persisted_operation_keeps_its_target_generation_as_its_generation() {
