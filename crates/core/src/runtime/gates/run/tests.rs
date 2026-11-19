@@ -240,6 +240,44 @@ fn a_run_whose_images_cannot_be_pulled_fails_with_nothing_stopped() {
     assert_eq!(persisted_operations(&oi), 0);
 }
 
+// spec: GRUN#preparation
+// spec: OPS#interrupted-operations
+#[test]
+fn a_replayed_run_whose_body_has_begun_is_not_prepared_for_again() {
+    use crate::runtime::{
+        barrier::{ActionLogEntry, CallKind, OperationId},
+        history::insert_action_log_entry,
+    };
+
+    let oi = TestOi::with_unreadable_containers();
+    installed(&oi, SCRIPT);
+    oi.state.db.call(|db| {
+        insert_action_log_entry(
+            db,
+            &OperationId("op-1".to_owned()),
+            &app_name(),
+            "migrate",
+            &ActionLogEntry {
+                call_index: 0,
+                call_kind: CallKind::Query,
+                resources: Vec::new(),
+                barriers: Vec::new(),
+                extra: None,
+                begun: false,
+            },
+        )
+        .unwrap();
+    });
+
+    let kinds = run_once(&oi, "migrate", false);
+    assert!(
+        kinds.contains(&"OperationCompleted".to_owned()),
+        "a pull that would fail is not attempted again for a body that has begun: {kinds:?}"
+    );
+    assert!(record(&oi, "migrate").valid);
+    assert_eq!(persisted_operations(&oi), 0);
+}
+
 // spec: GRUN#retries
 #[test]
 fn a_run_that_fails_before_it_has_its_generations_key_is_recorded_against_the_current_key() {
