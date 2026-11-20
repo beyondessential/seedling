@@ -7,10 +7,6 @@ pub enum ErrorCode {
     NotFound,
     NotInstalled,
     AlreadyInstalled,
-    // spec: WIRE#error-codes
-    // InstallInProgress distinguishes "install is running
-    // right now" from "install already succeeded (or uninstall is in flight)".
-    InstallInProgress,
     OperationInProgress,
     AlreadyQueued,
     RequirementsInvalid,
@@ -79,7 +75,6 @@ mod tests {
             (ErrorCode::NotFound, "not_found"),
             (ErrorCode::NotInstalled, "not_installed"),
             (ErrorCode::AlreadyInstalled, "already_installed"),
-            (ErrorCode::InstallInProgress, "install_in_progress"),
             (ErrorCode::OperationInProgress, "operation_in_progress"),
             (ErrorCode::AlreadyQueued, "already_queued"),
             (ErrorCode::RequirementsInvalid, "requirements_invalid"),

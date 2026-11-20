@@ -174,9 +174,14 @@ Defined in [APP](language/app.md#action-context).
 A named task an app declares, for an operator or the runtime to run.
 Defined in [ACN](language/action.md#action).
 
+### Gate
+
+A named step an app declares, which the runtime keeps satisfied by running it whenever its key moves.
+Defined in [GATE](language/gate.md#gate).
+
 ### Action closure
 
-A closure a script hands the runtime to run as a lifecycle operation: the closure of an action, a shell or the install action, or a parameter's change handler.
+A closure a script hands the runtime to run as a lifecycle operation: the closure of an action or a shell, or a gate's body.
 Defined in [ACN](language/action.md#action-closure).
 
 ### Runtime handle
@@ -241,12 +246,12 @@ Defined in [LCY](runtime/lifecycle.md#lifecycle-states).
 
 ### Install phase
 
-Where an app stands in being installed: `NotInstalled`, `Installing`, `Installed` or `Uninstalling`.
-An install moves an app through `Installing` to `Installed`, as [ACI](interface/actions.md#install) specifies, and an uninstall through `Uninstalling` back to `NotInstalled`, as [TRD](runtime/app-teardown.md) specifies.
+Where an app stands in being installed: `NotInstalled`, `Installed` or `Uninstalling`.
+An install moves an app to `Installed`, as [ACI](interface/actions.md#install) specifies, and an uninstall through `Uninstalling` back to `NotInstalled`, as [TRD](runtime/app-teardown.md) specifies.
 
 ### Lifecycle operation
 
-A single run of an action closure directing the runtime through a change to an app.
+A single run of an action closure, or of a gate, directing the runtime through a change to an app.
 Defined in [OPS](runtime/operations.md#operation).
 
 ### World observation history

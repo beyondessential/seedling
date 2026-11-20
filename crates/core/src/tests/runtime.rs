@@ -5,7 +5,7 @@ use super::*;
 fn rt_available_in_actions() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let t = rt.type_of();
             if t != "RuntimeInstance" { throw "rt must be RuntimeInstance, got: " + t; }
         });
@@ -18,7 +18,7 @@ fn rt_available_in_actions() {
 fn rt_methods_are_defined() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.ready();
@@ -34,7 +34,7 @@ fn rt_methods_are_defined() {
 fn rt_lifecycle_states_accessible() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.scheduled();
@@ -52,7 +52,7 @@ fn rt_lifecycle_states_accessible() {
 fn exercise_start_action() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let svc = app.service("web");
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             rt.start(svc);
@@ -67,7 +67,7 @@ fn exercise_start_action() {
 fn exercise_stop() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.ready();
@@ -82,7 +82,7 @@ fn exercise_stop() {
 fn exercise_stop_with_deadline() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             rt.start(dep).ready();
             rt.stop(dep, 10);
@@ -96,7 +96,7 @@ fn exercise_stop_with_deadline() {
 fn exercise_query() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let queried = rt.query(dep);
             queried.ready();
@@ -110,7 +110,7 @@ fn exercise_query() {
 fn exercise_warm_certs() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let svc = app.service("public");
             let ing = svc.ingress("test.example.com", 443).tls();
             let warm = rt.warm_certs(ing);
@@ -125,7 +125,7 @@ fn exercise_warm_certs() {
 fn exercise_warm_images() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let warm = rt.warm_images(dep);
             warm.ready();
@@ -139,7 +139,7 @@ fn exercise_warm_images() {
 fn warm_images_accepts_dynamic_job_with_image() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let warm = rt.warm_images(app.job().image("ghcr.io/example/foo:1.2.3"));
             warm.ready();
         });
@@ -152,7 +152,7 @@ fn warm_images_accepts_dynamic_job_with_image() {
 fn warm_images_ignores_non_container_resources() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let svc = app.service("public");
             // Passing a non-container should not throw — just be ignored.
             let warm = rt.warm_images(svc);
@@ -167,7 +167,7 @@ fn warm_images_ignores_non_container_resources() {
 fn warm_certs_ignores_non_ingress_resources() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             // Passing a non-ingress should not throw — just be ignored.
             let warm = rt.warm_certs(dep);
@@ -182,7 +182,7 @@ fn warm_certs_ignores_non_ingress_resources() {
 fn started_is_a_collection() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let svc = app.service("web");
             let started = rt.start(dep);
@@ -200,7 +200,7 @@ fn started_is_a_collection() {
 fn started_state_methods_with_deadline() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             started.scheduled(30);
@@ -218,7 +218,7 @@ fn started_state_methods_with_deadline() {
 fn exercise_terminated_ensure_success() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let job = app.job("init").image("docker.io/library/tools:latest").command("setup");
             rt.start(job).terminated().ensure_success();
         });
@@ -231,7 +231,7 @@ fn exercise_terminated_ensure_success() {
 fn termination_type_is_opaque() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let job = app.job("init").image("docker.io/library/tools:latest").command("setup");
             let term = rt.start(job).terminated();
             let t = term.type_of();
@@ -246,7 +246,7 @@ fn termination_type_is_opaque() {
 fn started_ready_eventually_is_callable() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             // ready_eventually should be callable; under the stubbed runtime
             // it resolves without suspending. Companion barrier-suspension
@@ -262,7 +262,7 @@ fn started_ready_eventually_is_callable() {
 fn rt_restart_is_callable() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             rt.restart(dep);
         });
@@ -275,7 +275,7 @@ fn rt_restart_is_callable() {
 fn rt_signal_is_callable() {
     exercise(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
             // Both canonical and bare signal names are accepted.
@@ -374,7 +374,7 @@ fn an_array_is_a_selection_of_its_elements_and_other_values_are_not() {
         r#"
         let a = app.deployment("alpha").image("docker.io/library/nginx:1");
         let b = app.deployment("bravo").image("docker.io/library/nginx:1");
-        app.on_start(|rt, _p| {
+        app.on_action("start", |rt, _p| {
             rt.warm_images([a, b]);
             rt.start([a, [b]]);
         });
@@ -387,44 +387,6 @@ fn an_array_is_a_selection_of_its_elements_and_other_values_are_not() {
         );
         assert!(err.contains("not a selection"), "{value}: {err}");
     }
-}
-
-// spec: ACN#start-action
-#[test]
-fn an_app_with_no_start_action_is_started_as_though_its_closure_called_rt_start() {
-    use crate::runtime::barrier::replay::ActionLog as _;
-    let log = crate::runtime::barrier::replay::InMemoryActionLog::new();
-    let result = run_action_with(
-        r#"
-        app.deployment("web").image("docker.io/library/nginx:1");
-        app.service("public");
-    "#,
-        &[],
-        "start",
-        Some(&log),
-        ActionHooks::default(),
-    );
-    assert!(
-        matches!(
-            result,
-            OperationResult::Completed | OperationResult::Suspended(_)
-        ),
-        "{result:?}"
-    );
-    let starts: Vec<_> = log
-        .load()
-        .unwrap()
-        .into_iter()
-        .filter(|e| e.call_kind == crate::runtime::barrier::CallKind::Start)
-        .collect();
-    assert_eq!(starts.len(), 1, "rt.start(app) is one call");
-    assert!(
-        starts[0]
-            .resources
-            .iter()
-            .any(|r| r.name.as_deref() == Some("web")),
-        "it starts the app's resources"
-    );
 }
 
 /// Stands in for the host: records each effect, and whether the call's entry

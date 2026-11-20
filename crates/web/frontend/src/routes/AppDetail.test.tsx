@@ -1,12 +1,11 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { AppAction } from "../lib/types";
 import { renderWithSession } from "../test/harness";
 import {
   baseFixtures,
-  installAction,
   makeDetail,
   makeFault,
+  makeGate,
 } from "./AppDetail.fixtures";
 import AppDetail from "./AppDetail";
 
@@ -94,8 +93,7 @@ describe("AppDetail page", () => {
       status: "operating",
       current_operation: {
         action_name: "backup",
-        source_generation: 4,
-        target_generation: 5,
+        generation: 5,
         barrier: {
           resources: ["web"],
           required_state: "ready",
@@ -107,10 +105,10 @@ describe("AppDetail page", () => {
     const { request } = mount(baseFixtures(detail), "dangerous");
     expect(await screen.findByText(/Operation in progress/)).toBeTruthy();
     expect(screen.getByText(/barrier: ready \(33s \/ 120s\)/)).toBeTruthy();
-    // Params are read-only during the operation.
+    // Params stay editable during an operation: a change does not wait for it.
     expect(
-      screen.getByText(/Params are read-only while an operation is in progress/),
-    ).toBeTruthy();
+      (screen.getByRole("button", { name: "Set param" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     // The running action shows a progress row; the other action can't run.
     expect(screen.getByRole("button", { name: /Running…/ })).toBeTruthy();
     const run = screen.getByRole("button", { name: "Run" }) as HTMLButtonElement;
@@ -122,6 +120,19 @@ describe("AppDetail page", () => {
         ["/apps/action/cancel", { app: "myapp" }],
       ]),
     );
+  });
+
+  it("names a running gate in the banner and the status chip", async () => {
+    const detail = makeDetail({
+      status: "operating",
+      gates: [makeGate({ state: "running" })],
+      current_operation: { gate: "migrate", generation: 6, barrier: null },
+    });
+    mount(baseFixtures(detail), "write");
+    expect(await screen.findByText(/Operation in progress/)).toBeTruthy();
+    expect(screen.getByText("operating: gate migrate")).toBeTruthy();
+    expect(screen.getByText("gate migrate")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Running…/ })).toBeTruthy();
   });
 
   it("surfaces stopped resources and unstops them", async () => {
@@ -181,81 +192,32 @@ describe("AppDetail page", () => {
   });
 
   describe("not-installed app", () => {
-    const notInstalled = (install: AppAction) =>
+    const notInstalled = () =>
       makeDetail({
         status: "not_installed",
         resources: [],
         params: [],
-        actions: [install],
+        actions: [],
       });
 
-    it("offers install directly when the install action takes no params", async () => {
-      const { request } = mount(baseFixtures(notInstalled(installAction)), "write");
+    it("offers install directly, with only the app", async () => {
+      const { request } = mount(baseFixtures(notInstalled()), "write");
       expect(
         await screen.findByText("This app has not been installed yet."),
       ).toBeTruthy();
       expect(screen.getByRole("button", { name: "Deregister" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Uninstall" })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Install" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
       await waitFor(() =>
-        expect(callsTo(request, "/apps/install/invoke")).toEqual([
-          ["/apps/install/invoke", { app: "myapp", params: {} }],
+        expect(callsTo(request, "/apps/install")).toEqual([
+          ["/apps/install", { app: "myapp" }],
         ]),
       );
-    });
-
-    // spec: UI#operator-capabilities
-    it("collects install requirements in a dialog before invoking", async () => {
-      const withParams: AppAction = {
-        ...installAction,
-        params: {
-          site_name: {
-            kind: "string",
-            required: true,
-            description: "Display name for the site",
-            default_value: null,
-          },
-        },
-      };
-      const { request } = mount(baseFixtures(notInstalled(withParams)), "write");
-      fireEvent.click(await screen.findByRole("button", { name: "Install" }));
-      const dialog = await screen.findByRole("dialog");
-      const input = within(dialog).getByLabelText(/site_name/);
-      fireEvent.change(input, { target: { value: "My Shop" } });
-      fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
-      await waitFor(() =>
-        expect(callsTo(request, "/apps/install/invoke")).toEqual([
-          ["/apps/install/invoke", { app: "myapp", params: { site_name: "My Shop" } }],
-        ]),
-      );
-    });
-
-    it("shows the last failed install attempt", async () => {
-      const detail = notInstalled(installAction);
-      detail.faults = [
-        makeFault({
-          id: "fault-op",
-          kind: "operation_failed",
-          resource_type: undefined,
-          resource_name: undefined,
-          instance_id: undefined,
-          description: "install handler panicked: db unreachable",
-        }),
-      ];
-      mount(baseFixtures(detail));
-      expect(
-        await screen.findByText("The last install attempt failed:"),
-      ).toBeTruthy();
-      expect(
-        screen.getAllByText(/install handler panicked: db unreachable/).length,
-      ).toBeGreaterThan(0);
     });
 
     it("deregisters the app through the confirm dialog", async () => {
-      const { request } = mount(
-        baseFixtures(notInstalled(installAction)),
-        "dangerous",
-      );
+      const { request } = mount(baseFixtures(notInstalled()), "dangerous");
       fireEvent.click(await screen.findByRole("button", { name: "Deregister" }));
       const dialog = await screen.findByRole("dialog");
       expect(within(dialog).getByText(/cannot be undone/)).toBeTruthy();
@@ -307,5 +269,95 @@ describe("AppDetail page", () => {
     // The unmapped volume offers Map instead.
     expect(screen.getByText("Not mapped")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Map" })).toBeTruthy();
+  });
+});
+
+describe("AppDetail gates", () => {
+  // spec: UI#operator-capabilities
+  it("lists gates with their state and runs one", async () => {
+    const detail = makeDetail({
+      gates: [
+        makeGate({
+          name: "migrate",
+          state: "unsatisfied",
+          last_success_generation: null,
+          holds_exclusive: true,
+          next_run_at: "2026-07-09T10:05:00Z",
+          after: [{ kind: "job", name: "initdb" }],
+        }),
+        makeGate({ name: "warm", state: "satisfied", last_success_generation: 3 }),
+      ],
+    });
+    const { request } = mount(baseFixtures(detail), "write");
+    expect(await screen.findByText("Gates")).toBeTruthy();
+    const row = screen.getByText("migrate").closest("tr")!;
+    expect(within(row).getByText("unsatisfied")).toBeTruthy();
+    expect(within(row).getByText("holding")).toBeTruthy();
+    expect(within(row).getByText("never")).toBeTruthy();
+    expect(within(row).getByText("job initdb")).toBeTruthy();
+    expect(within(row).getByText(/^retries /)).toBeTruthy();
+    const other = screen.getByText("warm").closest("tr")!;
+    expect(within(other).getByText("satisfied")).toBeTruthy();
+    expect(within(other).getByText("gen 3")).toBeTruthy();
+    fireEvent.click(within(row).getByRole("button", { name: "Run" }));
+    await waitFor(() =>
+      expect(callsTo(request, "/apps/gates/run")).toEqual([
+        ["/apps/gates/run", { app: "myapp", gate: "migrate" }],
+      ]),
+    );
+  });
+
+  it("shows the server's refusal of a gate run", async () => {
+    const fixtures = {
+      ...baseFixtures(makeDetail({ gates: [makeGate()] })),
+      "/apps/gates/run": {
+        ok: false,
+        error: {
+          code: "requirements_invalid",
+          message: "targets not ready: job initdb",
+        },
+      },
+    };
+    mount(fixtures, "write");
+    const row = (await screen.findByText("migrate")).closest("tr")!;
+    fireEvent.click(within(row).getByRole("button", { name: "Run" }));
+    expect(
+      await screen.findByText(/targets not ready: job initdb/),
+    ).toBeTruthy();
+  });
+
+  it("will not run a gate in read mode or while an operation runs", async () => {
+    const { unmount } = mount(
+      baseFixtures(makeDetail({ gates: [makeGate()] })),
+      "read",
+    );
+    const gate = (await screen.findByText("migrate")).closest("tr")!;
+    expect(
+      (within(gate).getByRole("button", { name: "Run" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    unmount();
+
+    mount(
+      baseFixtures(
+        makeDetail({
+          status: "operating",
+          gates: [makeGate()],
+          current_operation: { action_name: "backup", generation: 5, barrier: null },
+        }),
+      ),
+      "write",
+    );
+    const busy = (await screen.findByText("migrate")).closest("tr")!;
+    expect(
+      (within(busy).getByRole("button", { name: "Run" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("leaves out the section for an app with no gates", async () => {
+    mount(baseFixtures(makeDetail()));
+    expect(await screen.findByText("gen 4")).toBeTruthy();
+    expect(screen.queryByText("Gates")).toBeNull();
   });
 });

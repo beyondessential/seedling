@@ -16,6 +16,17 @@
 //
 // Scaling: API scales 1..(AVAILABLE_THREADS / 2); the frontend is fixed at 1
 // (rolling restarts handle blue/green rotation by themselves).
+//
+// Gates:
+//   - `config` writes production.json5 and local.json5 into the config volume
+//     whenever their content changes. The API and workers are ordered after
+//     it, so a change restarts them with the new content.
+//   - `database` provisions the database and roles, and checks they exist.
+//   - `migrate` runs the schema migration whenever the version moves. The API
+//     and workers are stopped for the run and come back up on the new tag once
+//     it succeeds. The frontend keeps serving cached pages through the brief
+//     outage and rolls to the new tag afterwards.
+//   - `certificates` warms the TLS certificate of the declared ingress.
 
 app.description("Tamanu facility server: API workers, scheduled tasks, sync worker, and frontend; syncs to a central server");
 
@@ -74,15 +85,28 @@ let default_location = app.param("default-location")
     .default_value("GenericClinic")
     .description("Default location code for surveys");
 
+// A database or role name reaches SQL identifiers and a shell string, so it is
+// limited to what needs no quoting.
+let sql_name = |v| {
+    if v.len() == 0 { throw "must not be empty"; }
+    for c in v.chars() {
+        if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+            throw `must be lower-case letters, digits and underscores, not "${v}"`;
+        }
+    }
+};
+
 let db_name = app.param("db-name")
     .required(false)
     .default_value("tamanu")
-    .description("PostgreSQL database name");
+    .description("PostgreSQL database name")
+    .validate(|v, all| sql_name.call(v));
 
 let db_user = app.param("db-user")
     .required(false)
     .default_value("tamanu")
-    .description("PostgreSQL role the facility server connects as (uses local-socket trust auth, no password)");
+    .description("PostgreSQL role the facility server connects as (uses local-socket trust auth, no password)")
+    .validate(|v, all| sql_name.call(v));
 
 // ── External resources ────────────────────────────────────────────────────────
 
@@ -103,9 +127,9 @@ let psql_image = "docker.io/library/postgres:18-alpine";
 
 // With no public hostname there is no HTTPS ingress to derive an advertised
 // URL from, so `canonical-url` has to supply one. Checked here rather than at
-// the top level: this closure only runs from `render_config` (install and
-// on_change), by which point params are supplied, whereas a top-level throw
-// would fire during first registration and leave the script unloadable.
+// the top level: this closure only runs when the config is rendered, by which
+// point params are supplied, whereas a top-level throw would fire during first
+// registration and leave the script unloadable.
 let canonical = || {
     if !canonical_url.is_set() && !public_hostname.is_set() {
         throw "set canonical-url when public-hostname is unset: the facility must advertise a URL"
@@ -129,6 +153,11 @@ let json_str = |s| {
     s.replace("\t", "\\t");
     `"${s}"`
 };
+
+// A database or role name goes into SQL and a shell command as it is, so it
+// is checked here as well as by its parameter's validator: a value stored
+// before the validator was declared is never written out unchecked.
+let sql_ident = |s| { sql_name.call(s); s };
 
 // production.json5: facility-side tamanu config, including the upstream
 // central-server URL and the sync credentials. Free-form overrides are not
@@ -347,12 +376,10 @@ let provision_db = |rt| {
         .description("DB provisioning SQL staged in RAM (creates roles and the facility database)");
     let dbn = db_name.value();
     let dbu = db_user.value();
-    // Mutate-in-place: see the comment on `json_str` for why a chain doesn't work.
-    let escape = |s| { s.replace("'", "''"); s };
     staging.write("/setup.sql", `
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${escape.call(dbu)}') THEN
-    EXECUTE format('CREATE ROLE %I LOGIN', '${escape.call(dbu)}');
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${sql_ident.call(dbu)}') THEN
+    EXECUTE format('CREATE ROLE %I LOGIN', '${sql_ident.call(dbu)}');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'raw') THEN
     EXECUTE 'CREATE ROLE raw LOGIN';
@@ -362,7 +389,7 @@ DO $$ BEGIN
   END IF;
 END $$;
 `);
-    staging.write("/createdb.sql", `SELECT 'CREATE DATABASE "${escape.call(dbn)}" OWNER "${escape.call(dbu)}"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${escape.call(dbn)}')\\gexec
+    staging.write("/createdb.sql", `SELECT 'CREATE DATABASE "${sql_ident.call(dbn)}" OWNER "${sql_ident.call(dbu)}"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${sql_ident.call(dbn)}')\\gexec
 `);
 
     rt.start(app.job()
@@ -393,17 +420,68 @@ let migrate_db = |rt| {
     ).terminated_eventually().ensure_success();
 };
 
-// ── Install ───────────────────────────────────────────────────────────────────
+// ── Gates ─────────────────────────────────────────────────────────────────────
 
-app.on_install(|rt, _param| {
-    copy_image_defaults.call(rt);
-    render_config.call(rt);
-    provision_db.call(rt);
-    migrate_db.call(rt);
+// The config files live in a persistent volume, outside the deployments'
+// specs, so their rendered content is the key of a gate the parts that read
+// them come after.
+let config_gate = app.gate("config")
+    // The rendered config needs an advertised URL. Until one is set the key
+    // is the unit value, so evaluating the definition does not fail on it and
+    // the gate's run says what is missing.
+    .key(if canonical_url.is_set() || public_hostname.is_set() {
+        [production_json.call(), local_json.call()]
+    } else {
+        ()
+    })
+    .run(|rt| { render_config.call(rt); });
 
-    rt.warm_certs(app).ready();
-    rt.start(app).ready(300);
-}, #{});
+let database_check = app.job("database-check")
+    .description("Check that the facility database exists on the postgres server")
+    .image(psql_image)
+    .writable_rootfs()
+    .mount("/var/run/postgresql", pg_socket)
+    .env("PGHOST", "/var/run/postgresql")
+    .env("PGUSER", "postgres")
+    .command(["sh", "-c",
+        `psql -d postgres -tA -c "SELECT 1 FROM pg_database WHERE datname = '${sql_ident.call(db_name.value())}'" | grep -qx 1`
+    ])
+    .deadline(30);
+
+// The server waits on a database the operator's postgres fulfils, so this gate
+// runs until it is reachable and holds the migration back until then.
+let database_gate = app.gate("database")
+    .key([db_name.value(), db_user.value()])
+    .check(database_check)
+    .run(|rt| { provision_db.call(rt); });
+
+// The API and workers are stopped while the schema migrates, which needs
+// exclusive database access. The frontend does not touch the database, and
+// rolls once the migration has succeeded.
+let migrate_gate = app.gate("migrate")
+    .key([version.value(), db_name.value()])
+    .after([config_gate, database_gate])
+    .exclusive(app.select(#{
+        types: [ResourceType.Deployment],
+        names: ["api", "tasks", "sync"],
+    }))
+    .run(|rt| {
+        copy_image_defaults.call(rt);
+        migrate_db.call(rt);
+    });
+
+for name in ["api", "tasks", "sync"] {
+    app.deployment(name).after([config_gate, migrate_gate]);
+}
+app.deployment("frontend").after(migrate_gate);
+
+// Nothing waits on this gate: a certificate that cannot be issued faults the
+// app without holding the server back.
+let hostnames = [];
+if public_hostname.is_set() { hostnames.push(public_hostname.value()); }
+app.gate("certificates")
+    .key(hostnames)
+    .run(|rt| { rt.warm_certs(app).ready(); });
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
 
@@ -429,7 +507,7 @@ app.on_action("copy-image-defaults", |rt, _param| {
 // Pre-pull the container images for a target version into local storage so
 // the actual version change can rotate without paying registry-fetch latency
 // inside the migration window. The images are pinned to this app until they
-// are observed in use, matching what `version.on_change` does at upgrade time.
+// are observed in use.
 app.on_action("warm-images", |rt, param| {
     let target = if "target-version" in param && param["target-version"] != "" {
         param["target-version"]
@@ -496,46 +574,3 @@ app.on_shell("run", |_rt, shell, param| {
         },
     },
 });
-
-// ── Version changes ───────────────────────────────────────────────────────────
-
-// Stop API + workers so the migration has exclusive database access; the
-// frontend keeps serving cached pages through the brief outage. `rt.start(app)`
-// afterwards rolls the frontend (rolling update) and brings the API + workers
-// back up on the new image.
-version.on_change(|rt, old| {
-    rt.warm_images([
-        app.job().image(server_image.call()),
-        app.job().image(frontend_image.call()),
-    ]).ready(600);
-
-    copy_image_defaults.call(rt);
-    render_config.call(rt);
-
-    rt.stop(old.select(#{
-        types: [ResourceType.Deployment],
-        names: ["api", "tasks", "sync"],
-    }));
-
-    migrate_db.call(rt);
-
-    rt.start(app).ready(300);
-});
-
-// ── Config parameter changes ──────────────────────────────────────────────────
-
-let restart_servers = |rt| {
-    rt.restart(app.deployment("api"));
-    rt.restart(app.deployment("tasks"));
-    rt.restart(app.deployment("sync"));
-};
-
-canonical_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-central_url.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-facility_id.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-sync_email.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-sync_password.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-timezone.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-auth_secret.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-default_department.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });
-default_location.on_change(|rt, _old| { render_config.call(rt); restart_servers.call(rt); });

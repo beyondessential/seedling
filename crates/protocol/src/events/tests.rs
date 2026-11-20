@@ -80,7 +80,7 @@ fn app_lifecycle_events_wire_shape() {
 
     let definition = json!({"kind": "pushed", "pushed_by": null, "reported_origin": null});
     assert_eq!(
-        shape(|tx| tx.app_updated(&app, 3, Some(2), definition.clone(), None, None)),
+        shape(|tx| tx.app_updated(&app, 3, Some(2), definition.clone(), vec![], None)),
         json!({
             "type": "AppUpdated",
             "app": "web",
@@ -91,7 +91,7 @@ fn app_lifecycle_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.app_updated(&app, 1, None, definition.clone(), None, None)),
+        shape(|tx| tx.app_updated(&app, 1, None, definition.clone(), vec![], None)),
         json!({
             "type": "AppUpdated",
             "app": "web",
@@ -107,11 +107,16 @@ fn app_lifecycle_events_wire_shape() {
             4,
             Some(3),
             definition.clone(),
-            Some(AppUpdatedParam {
-                name: ParamName::new("version").unwrap(),
-                previous_value: Some("2.11".into()),
-                new_value: Some("2.12".into()),
-            }),
+            vec![
+                ParamChangeEntry::new(ParamName::new("port").unwrap(), None, Some("8080".into()),),
+                ParamChangeEntry::new(
+                    ParamName::new("version").unwrap(),
+                    Some("2.11".into()),
+                    Some("2.12".into()),
+                ),
+                ParamChangeEntry::new(ParamName::new("workers").unwrap(), Some("4".into()), None,),
+                ParamChangeEntry::redacted(ParamName::new("password").unwrap()),
+            ],
             None,
         )),
         json!({
@@ -120,90 +125,52 @@ fn app_lifecycle_events_wire_shape() {
             "generation": 4,
             "previous_generation": 3,
             "definition": definition,
-            "name": "version",
-            "previous_value": "2.11",
-            "new_value": "2.12",
+            "changes": [
+                {"name": "port", "new_value": "8080"},
+                {"name": "version", "previous_value": "2.11", "new_value": "2.12"},
+                {"name": "workers", "previous_value": "4"},
+                {"name": "password", "redacted": true},
+            ],
         })
     );
 
     assert_eq!(
-        shape(|tx| tx.app_phase_changed(&app, "installing", None)),
-        json!({"type": "AppPhaseChanged", "app": "web", "phase": "installing"})
+        shape(|tx| tx.app_phase_changed(&app, "installed", None)),
+        json!({"type": "AppPhaseChanged", "app": "web", "phase": "installed"})
     );
 }
 
-// spec: EVT#event-types
-// spec: PRM#parameter-storage
-// spec: EVT#event-types
+// spec: EVT#app-events
+// spec: PRM#parameter-changes
 #[test]
-fn param_events_wire_shape() {
+fn params_changed_event_wire_shape() {
     let app = app();
-    let name = ParamName::new("db-url").unwrap();
+    let name = |n: &str| ParamName::new(n).unwrap();
 
     assert_eq!(
-        shape(|tx| tx
-            .param_change(app.clone(), 5, 4, None)
-            .set(&name, Some("old"), "new")),
+        shape(|tx| tx.params_changed(
+            &app,
+            vec![
+                ParamChangeEntry::new(name("db-url"), Some("old".into()), Some("new".into())),
+                ParamChangeEntry::new(name("port"), None, Some("5432".into())),
+                ParamChangeEntry::new(name("tls"), Some("on".into()), None),
+                ParamChangeEntry::redacted(name("password")),
+            ],
+            5,
+            4,
+            None,
+        )),
         json!({
-            "type": "ParamSet",
+            "type": "ParamsChanged",
             "app": "web",
-            "name": "db-url",
-            "previous_value": "old",
-            "new_value": "new",
+            "changes": [
+                {"name": "db-url", "previous_value": "old", "new_value": "new"},
+                {"name": "port", "new_value": "5432"},
+                {"name": "tls", "previous_value": "on"},
+                {"name": "password", "redacted": true},
+            ],
             "generation": 5,
             "previous_generation": 4,
-        })
-    );
-
-    assert_eq!(
-        shape(|tx| tx
-            .param_change(app.clone(), 2, 1, None)
-            .set(&name, None, "v")),
-        json!({
-            "type": "ParamSet",
-            "app": "web",
-            "name": "db-url",
-            "new_value": "v",
-            "generation": 2,
-            "previous_generation": 1,
-        })
-    );
-
-    assert_eq!(
-        shape(|tx| tx.param_change(app.clone(), 5, 4, None).set_redacted(&name)),
-        json!({
-            "type": "ParamSet",
-            "app": "web",
-            "name": "db-url",
-            "redacted": true,
-            "generation": 5,
-            "previous_generation": 4,
-        })
-    );
-
-    assert_eq!(
-        shape(|tx| tx.param_change(app.clone(), 6, 5, None).unset(&name, "old")),
-        json!({
-            "type": "ParamUnset",
-            "app": "web",
-            "name": "db-url",
-            "previous_value": "old",
-            "generation": 6,
-            "previous_generation": 5,
-        })
-    );
-
-    assert_eq!(
-        shape(|tx| tx
-            .param_change(app.clone(), 6, 5, None)
-            .unset_redacted(&name)),
-        json!({
-            "type": "ParamUnset",
-            "app": "web",
-            "name": "db-url",
-            "redacted": true,
-            "generation": 6,
-            "previous_generation": 5,
         })
     );
 }
@@ -217,45 +184,94 @@ fn operation_lifecycle_events_wire_shape() {
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 2, 3, None)
-            .started("param_change")),
+            .operation(app.clone(), action.clone().into(), "op-1", 3, None)
+            .started("operator")),
         json!({
             "type": "OperationStarted",
             "app": "web",
             "action_name": "start",
             "operation_id": "op-1",
-            "source_generation": 2,
-            "target_generation": 3,
-            "trigger": "param_change",
+            "operation_generation": 3,
+            "trigger": "operator",
         })
     );
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 2, 3, None)
+            .operation(app.clone(), action.clone().into(), "op-1", 3, None)
             .completed()),
         json!({
             "type": "OperationCompleted",
             "app": "web",
             "action_name": "start",
             "operation_id": "op-1",
-            "source_generation": 2,
-            "target_generation": 3,
+            "operation_generation": 3,
         })
     );
 
     assert_eq!(
         shape(|tx| tx
-            .operation(app.clone(), action.clone(), "op-1", 2, 3, None)
+            .operation(app.clone(), action.clone().into(), "op-1", 3, None)
             .failed("container exploded")),
         json!({
             "type": "OperationFailed",
             "app": "web",
             "action_name": "start",
             "operation_id": "op-1",
-            "source_generation": 2,
-            "target_generation": 3,
+            "operation_generation": 3,
             "error": "container exploded",
+        })
+    );
+}
+
+// spec: EVT#operation-events
+#[test]
+fn a_gate_runs_events_carry_the_gate_and_no_action() {
+    let app = app();
+    let gate = GateName::new("migrate").unwrap();
+
+    assert_eq!(
+        shape(|tx| tx
+            .operation(app.clone(), gate.clone().into(), "op-2", 4, None)
+            .started("gate")),
+        json!({
+            "type": "OperationStarted",
+            "app": "web",
+            "gate": "migrate",
+            "operation_id": "op-2",
+            "operation_generation": 4,
+            "trigger": "gate",
+        })
+    );
+
+    assert_eq!(
+        shape(|tx| tx
+            .operation(app.clone(), gate.clone().into(), "op-2", 4, None)
+            .cancelled()),
+        json!({
+            "type": "OperationCancelled",
+            "app": "web",
+            "gate": "migrate",
+            "operation_id": "op-2",
+            "operation_generation": 4,
+        })
+    );
+}
+
+// spec: EVT#app-events
+#[test]
+fn gate_state_changed_wire_shape() {
+    let app = app();
+    let gate = GateName::new("migrate").unwrap();
+
+    assert_eq!(
+        shape(|tx| tx.gate_state_changed(&app, &gate, "satisfied", "running", None)),
+        json!({
+            "type": "GateStateChanged",
+            "app": "web",
+            "gate": "migrate",
+            "state": "satisfied",
+            "previous_state": "running",
         })
     );
 }
@@ -918,18 +934,27 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
 
     sender.app_registered(&app, 1);
     sender.app_deregistered(&app);
-    sender.app_updated(&app, 2, Some(1), json!({"kind": "pushed"}), None);
+    sender.app_updated(&app, 2, Some(1), json!({"kind": "pushed"}), vec![]);
     sender.app_phase_changed(&app, "installed");
     sender.scale(app.clone(), "srv", 0, 4).changed(2, Some(1));
     sender
-        .operation(app.clone(), action.clone(), "op-1", 1, 1)
+        .operation(app.clone(), action.clone().into(), "op-1", 1)
         .started("operator");
-    sender
-        .param_change(app.clone(), 2, 1)
-        .set(&param, None, "v");
+    sender.params_changed(
+        &app,
+        vec![ParamChangeEntry::new(param, None, Some("v".into()))],
+        2,
+        1,
+    );
     sender.deployment_restarted(&app, "srv", "op-2");
     sender.resource_stopped(&app, "deployment", "srv");
     sender.resource_unstopped(&app, "deployment", "srv");
+    sender.gate_state_changed(
+        &app,
+        &GateName::new("migrate").unwrap(),
+        "satisfied",
+        "running",
+    );
     sender.held_volume_created(held, &app, "data", "uninstall");
     sender.held_volume_deleted(held);
     sender.held_volume_restored(held, "recovered");
@@ -1005,5 +1030,5 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
         );
         count += 1;
     }
-    assert_eq!(count, 42, "every delegate emitted exactly one event");
+    assert_eq!(count, 43, "every delegate emitted exactly one event");
 }

@@ -15,6 +15,7 @@ use crate::{
     defs::{
         container::VolumeMount,
         enums::{OnExit, Priority},
+        gate::GateKeyDigests,
         resource::{Resource, ResourceKind},
     },
     runtime::{
@@ -28,7 +29,7 @@ use crate::{
     system::{
         System,
         priority::WorkloadStanding,
-        translate::container::{deployment_spec, job_spec, podman_args, spec_hash},
+        translate::container::{ConfigStamp, deployment_spec, job_spec, podman_args, spec_hash},
     },
 };
 
@@ -111,6 +112,35 @@ pub enum ActuateError {
         name: String,
         backtrace: snafu::Backtrace,
     },
+    // spec: UPD#spec-hash
+    #[snafu(display("cannot start with a spec hash that leaves out a gate key: {source}"))]
+    GateKeyUnavailable {
+        source: crate::defs::gate::MissingGateKey,
+        backtrace: snafu::Backtrace,
+    },
+}
+
+/// Why the spec hash an instance would start with could not be worked out.
+///
+/// It is never "nothing to compare": the instance's drift is unknown, not
+/// absent.
+#[derive(Debug, Snafu)]
+#[snafu(module)]
+pub enum SpecHashError {
+    #[snafu(display("gate key lookup failed: {source}"))]
+    GateKey {
+        source: crate::defs::gate::MissingGateKey,
+    },
+    #[snafu(display("cannot read the pod network record: {source}"))]
+    PodNetwork { source: rusqlite::Error },
+    #[snafu(display("registry lookup failed: {source}"))]
+    Registry {
+        source: crate::runtime::registry::RegistryError,
+    },
+    #[snafu(display("cannot read the restart generation: {source}"))]
+    RestartGen { source: rusqlite::Error },
+    #[snafu(display("cannot read the external volume mappings: {source}"))]
+    ExternalVolumes { source: rusqlite::Error },
 }
 
 /// Remove the directory holding a tmpfs volume's data, not a stand-in for
@@ -339,7 +369,11 @@ impl Actuator {
         instance: &ResourceInstance,
         resource: &Resource,
         app_priority: AppPriority,
+        gate_keys: &GateKeyDigests,
     ) -> Result<Option<String>, ActuateError> {
+        let gate_keys = gate_keys
+            .directly_after(resource)
+            .context(GateKeyUnavailableSnafu)?;
         match resource {
             Resource::Deployment(dep) => {
                 let (image, raw_mounts, restart, vols, required_ext_vols) = {
@@ -389,6 +423,10 @@ impl Actuator {
                         restart_gens::load_restart_gen(db, &app_name, &dep_name).unwrap_or(0)
                     })
                 };
+                let stamp = ConfigStamp {
+                    restart_gen,
+                    gate_keys,
+                };
                 let (kill_signal, timeout_stop_secs, declared_priority) = {
                     let def = dep.def.lock();
                     let priority = def.priority;
@@ -417,7 +455,7 @@ impl Actuator {
                             &self.dns_servers,
                             Some(self.driver.volume_store.volumes_dir()),
                             &external_vols,
-                            restart_gen,
+                            &stamp,
                         );
                         podman_args(&spec)
                     },
@@ -475,6 +513,10 @@ impl Actuator {
                 // Priority is declared on Deployments only; every other
                 // workload stands at Normal within its app.
                 let standing = WorkloadStanding::new(app_priority, Priority::Normal);
+                let stamp = ConfigStamp {
+                    restart_gen: 0,
+                    gate_keys,
+                };
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -495,7 +537,7 @@ impl Actuator {
                             &self.dns_servers,
                             Some(self.driver.volume_store.volumes_dir()),
                             &external_vols,
-                            0,
+                            &stamp,
                         );
                         podman_args(&spec)
                     },
@@ -806,38 +848,58 @@ impl Actuator {
     }
 
     /// Compute the spec hash that would be used if this instance were started
-    /// right now. Returns `None` for resource kinds that have no container spec.
+    /// right now. Returns `Ok(None)` for resource kinds that have no container
+    /// spec, and for an instance whose pod network has no recorded prefix.
     ///
     /// This mirrors the hash stamped on the container at start time and lets the
     /// observer detect config drift for any field — not just the image.
+    ///
+    /// `gate_keys` holds the digests of the keys of the app's gates, of which
+    /// the hash carries those the workload is ordered directly after.
+    // spec: UPD#spec-hash
     pub fn desired_spec_hash(
         &self,
         instance: &ResourceInstance,
         resource: &Resource,
-    ) -> Option<String> {
+        gate_keys: &GateKeyDigests,
+    ) -> Result<Option<String>, SpecHashError> {
+        if !matches!(resource, Resource::Deployment(_) | Resource::Job(_)) {
+            return Ok(None);
+        }
+        let gate_keys = gate_keys
+            .directly_after(resource)
+            .context(spec_hash_error::GateKeySnafu)?;
         let net_name = format!("seedling-{}", instance.display_name);
+        let (node_prefix, lookup, kind) = (self.node_prefix, net_name.clone(), instance.kind);
         // A pod network that has no recorded prefix has no container running
         // on it to have drifted from anything.
-        let net_prefix = self.recorded_pod_prefix(instance)?;
+        let Some(net_prefix) = self
+            .db
+            .call(move |db| {
+                crate::runtime::pod_networks::recorded_prefix(db, &node_prefix, &lookup, kind)
+            })
+            .context(spec_hash_error::PodNetworkSnafu)?
+        else {
+            return Ok(None);
+        };
+        let external =
+            try_resolve_external_volumes(&self.db, &self.driver.volume_store, &instance.app)
+                .context(spec_hash_error::ExternalVolumesSnafu)?;
 
         let spec = match resource {
             Resource::Deployment(dep) => {
                 let def = dep.def.lock();
                 let raw_mounts = def.pod.lock().service_mounts.clone();
-                let mounts = match self.resolve_service_mounts(instance, &raw_mounts) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::error!(instance = %instance.display_name, error = %e, "registry lookup failed computing spec hash");
-                        return None;
-                    }
-                };
+                let mounts = self
+                    .resolve_service_mounts(instance, &raw_mounts)
+                    .context(spec_hash_error::RegistrySnafu)?;
                 // spec: CTL#deployment-restart
                 let dep_name = instance.name.as_deref().unwrap_or("").to_owned();
                 let restart_gen = {
                     let app_name = instance.app.clone();
-                    self.db.call(move |db| {
-                        restart_gens::load_restart_gen(db, &app_name, &dep_name).unwrap_or(0)
-                    })
+                    self.db
+                        .call(move |db| restart_gens::load_restart_gen(db, &app_name, &dep_name))
+                        .context(spec_hash_error::RestartGenSnafu)?
                 };
                 deployment_spec(
                     &def,
@@ -847,20 +909,19 @@ impl Actuator {
                     &mounts,
                     &self.dns_servers,
                     Some(self.driver.volume_store.volumes_dir()),
-                    &self.resolve_external_volumes(&instance.app),
-                    restart_gen,
+                    &external,
+                    &ConfigStamp {
+                        restart_gen,
+                        gate_keys,
+                    },
                 )
             }
             Resource::Job(job) => {
                 let def = job.def.lock();
                 let raw_mounts = def.pod.lock().service_mounts.clone();
-                let mounts = match self.resolve_service_mounts(instance, &raw_mounts) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::error!(instance = %instance.display_name, error = %e, "registry lookup failed computing spec hash");
-                        return None;
-                    }
-                };
+                let mounts = self
+                    .resolve_service_mounts(instance, &raw_mounts)
+                    .context(spec_hash_error::RegistrySnafu)?;
                 job_spec(
                     &def,
                     instance,
@@ -869,14 +930,17 @@ impl Actuator {
                     &mounts,
                     &self.dns_servers,
                     Some(self.driver.volume_store.volumes_dir()),
-                    &self.resolve_external_volumes(&instance.app),
-                    0,
+                    &external,
+                    &ConfigStamp {
+                        restart_gen: 0,
+                        gate_keys,
+                    },
                 )
             }
-            _ => return None,
+            _ => return Ok(None),
         };
 
-        Some(spec_hash(&spec))
+        Ok(Some(spec_hash(&spec)))
     }
 }
 

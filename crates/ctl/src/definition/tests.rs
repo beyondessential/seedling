@@ -112,19 +112,37 @@ fn a_pushed_bundle_carries_its_origin() {
     );
 }
 
-// spec: CLI#parameter-change-on-update
+// spec: CLI#parameter-changes
 #[test]
-fn one_param_change_rides_along() {
+fn several_parameter_changes_make_one_params_object() {
+    let strings = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    let changes = param_changes(
+        &strings(&["version=v2.12", "empty=", "url=https://x/?a=b"]),
+        &strings(&["old", "older"]),
+    )
+    .unwrap();
     assert_eq!(
-        param_change(Some("version=v2.12"), None).unwrap(),
-        Some(json!({ "name": "version", "value": "v2.12" }))
+        Value::Object(changes),
+        json!({
+            "version": "v2.12",
+            "empty": "",
+            "url": "https://x/?a=b",
+            "old": null,
+            "older": null,
+        })
     );
-    assert_eq!(
-        param_change(None, Some("version")).unwrap(),
-        Some(json!({ "name": "version", "value": null }))
-    );
-    assert!(param_change(Some("bare"), None).is_err());
-    assert!(param_change(Some("a=b"), Some("c")).is_err());
+    assert!(param_changes(&[], &[]).unwrap().is_empty());
+}
+
+// spec: CLI#parameter-changes
+#[test]
+fn a_parameter_changed_twice_or_a_set_without_a_value_is_refused() {
+    let strings = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    assert!(param_changes(&strings(&["bare"]), &[]).is_err());
+    assert!(param_changes(&strings(&["a=1", "a=2"]), &[]).is_err());
+    assert!(param_changes(&[], &strings(&["a", "a"])).is_err());
+    let err = param_changes(&strings(&["a=1"]), &strings(&["a"])).unwrap_err();
+    assert!(err.contains("\"a\""), "{err}");
 }
 
 // spec: CLI#definition-export

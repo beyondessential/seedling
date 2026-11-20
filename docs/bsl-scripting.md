@@ -1,6 +1,6 @@
 # Writing a BSL Script
 
-BSL (BES Seedling Language) is the scripting language used to define and manage applications on a Seedling node. It describes not just what to run, but how to upgrade it, how operators can interact with it, and what happens on first install.
+BSL (BES Seedling Language) is the scripting language used to define and manage applications on a Seedling node. It describes not just what to run, but the steps an upgrade needs, how operators can interact with it, and what has to hold before the app counts as set up.
 
 The full language specification is at [`.workhorse/specs/language/`](../.workhorse/specs/language/). This document is a practical guide to writing a script, with a reference summary and annotated examples. When this document and the spec disagree, the spec wins.
 
@@ -56,8 +56,7 @@ In the dynamic context, `app.resource_method(name)` returns a _reference_ to an 
 | `app.external_volume(name)` | `ExternalVolume` | Volume provided by the control plane |
 | `app.on_action(name, fn, opts?)` | `Action` | Operator-invokable action |
 | `app.on_shell(name, fn, opts?)` | `Action` | Interactive shell for operators |
-| `app.on_start(fn, opts?)` | `Action` | Startup lifecycle hook |
-| `app.on_install(fn, config?)` | `Action` | First-install hook with param schema |
+| `app.gate(name)` | Gate builder | A step the runtime keeps satisfied; see [Gates](#gates) |
 | `app.action(name)` | `Action` | Look up an action handle (dynamic context only) |
 | `action.invoke(params?)` | `()` | Run another action's closure inline (dynamic context only) |
 
@@ -136,6 +135,7 @@ app.deployment("worker")
     .scale(2)                         // fixed replicas (Deployment only)
     .scale(1..=8)                     // scalable range (Deployment only)
     .on_update(OnUpdate.Rolling)      // default; or OnUpdate.Replace
+    .after(db)                        // wait for a gate, Deployment or Job (or an array of them)
     .priority(Priority.Critical)      // claim on host resources (Deployment only)
     .on_exit(OnExit.Restart)          // default for Deployment; Terminate for Job
     .healthcheck(#{                   // see "Healthchecks" below — Deployment only
@@ -173,11 +173,6 @@ let version = app.param("version")
 version.value()             // "latest" when no operator value is stored
 version.is_set()            // false while only the default is in effect
 
-version.on_change(|rt, old| {
-    // old is the App state at the previous generation
-    // use it to stop old resources before starting new ones
-});
-
 version.validate(|value, all| {
     // throw to reject the proposed value; `all` maps every set param
     // to its proposed value
@@ -185,11 +180,28 @@ version.validate(|value, all| {
 });
 ```
 
-A validator decides whether a proposed value is acceptable. It runs before any definition update, param set, or param unset is stored, against the values the app would hold if the request went through, so it sees the new definition's rules alongside the new values. A rejection refuses the request with `validation_failed` and the thrown value as the reason; nothing changes. A validator runs only while its param is set (use `required` for presence), gets no `rt`, and may not define resources. Call `validate` at most once per param, at the top level.
+A validator decides whether a proposed value is acceptable. It runs before any definition update or parameter change is stored, against the values the app would hold if the request went through, so it sees the new definition's rules alongside the new values. A rejection refuses the request with `validation_failed` and the thrown value as the reason; nothing changes. A validator runs only while its param is set (use `required` for presence), gets no `rt`, and may not define resources. Call `validate` at most once per param, at the top level.
+
+### Gate
+
+```rhai
+app.gate("schema")
+    .key(version.value())                // the step reruns whenever this value changes
+    .exclusive(app.select(#{ names: ["api", "worker"] }))  // held stopped while the step runs
+    .after(db)                           // start order, as for a Deployment or Job
+    .check(check_job, #{ interval: 300 }) // optional: a Job that proves the step still holds
+    .run(|rt, last| {                    // the body; takes up to two parameters
+        rt.start(app.job().image(image.call()).command(["migrate"]))
+            .terminated()
+            .ensure_success();
+    });
+```
+
+See [Gates](#gates) for what each method does.
 
 ### Runtime (rt)
 
-Available inside action closures:
+Available inside action closures and gate bodies:
 
 ```rhai
 rt.start(resources)             // schedule resources, returns Started
@@ -290,25 +302,31 @@ web_svc.ingress("myapp.example.com", 443)
 let data = app.volume("data").exported(#{ description: "Application data" });
 
 // A deployment is a long-running container workload.
-app.deployment("api")
+let api = app.deployment("api")
     .image(image.call())
     .scale(1..=4)
     .mount("/data", data)
     .http(8080, web_svc.route("/api"))
     .http(8080, web_svc.route("/"));
 
-// on_start controls how the app is brought up.
-// Default (if omitted) is: rt.start(app);
-app.on_start(|rt, _param| {
-    rt.warm_certs(app).ready();  // pre-provision TLS before routing traffic
-    rt.start(app).ready();
-});
+// A gate is a step the runtime keeps satisfied. This one migrates the schema
+// whenever the version changes, with the API held stopped while it runs.
+app.gate("schema")
+    .key(version.value())
+    .exclusive(api)
+    .run(|rt, last| {
+        let job = app.job()
+            .image(image.call())
+            .command(["migrate", "--run"])
+            .mount("/data", data);
+        rt.start(job).terminated().ensure_success();
+    });
 
 // Actions are available to operators via the UI or CLI.
 // The closure runs when an operator invokes the action.
 // `params` declares a validated schema; extra keys are passed through as-is.
-// Every handler (`on_action`, `on_start`, `on_shell`, `on_install`,
-// `on_change`, `validate`) must be a closure: passing a function by name, as
+// Every handler (`on_action`, `on_shell`, a gate's `run`,
+// `validate`) must be a closure: passing a function by name, as
 // `handler` or `Fn("handler")`, throws. Wrap it instead: `|rt, param| handler(rt, param)`.
 app.on_action("migrate", |rt, param| {
     // Jobs defined inside actions are dynamic: created fresh per invocation.
@@ -352,43 +370,72 @@ app.on_shell("check", |rt, shell, _param| {
     shell.attach(app.job().image(image.call()).command("sh")).ensure_success();
     rt.start(app.job().image(image.call()).command(["cleanup"])).terminated().ensure_success();
 });
-
-// on_install only runs on first install, and can prompt for secrets. Param
-// keys follow the BSL name rules (lowercase alphanumeric and hyphens), so
-// access them via `param["admin-password"]` rather than `param.admin_password`.
-app.on_install(|rt, param| {
-    let seed_vol = app.volume();
-    seed_vol.write("/seed.json", `{"adminPassword":"${param["admin-password"]}"}`);
-    let seed_job = app.job()
-        .image(image.call())
-        .command(["seed-db"])
-        .mount("/seed", seed_vol)
-        .mount("/data", data);
-    rt.start(seed_job).terminated().ensure_success();
-    rt.start(app).ready();
-}, #{
-    params: #{
-        "admin-password": #{
-            kind: "password",
-            description: "Initial administrator password",
-        },
-    },
-});
-
-// on_change fires when a parameter value changes (not on first install).
-// The closure may take 0, 1 or 2 parameters: it is given as many of `rt` and `old` as it declares.
-version.on_change(|rt, old| {
-    // old is the app at the previous generation; use it to stop old resources.
-    rt.start(app.job()
-        .image(image.call())
-        .command(["migrate", "--run"])
-        .mount("/data", data)
-    ).terminated().ensure_success();
-
-    rt.stop(old.select(#{ types: [ResourceType.Deployment] }));
-    rt.start(app).ready();
-});
 ```
+
+## Gates
+
+An app comes up from its resource graph alone: the runtime starts every static resource and keeps it running. Some changes need a step the graph cannot express, such as migrating a database before a new version serves. A _gate_ is such a step. The runtime keeps each gate satisfied by running its body whenever the gate's _key_ moves from the key of its last success, and holds back the workloads that depend on it until it is.
+
+```rhai
+let db = app.deployment("db").image(db_image.call());
+let api = app.deployment("api").image(app_image.call()).after(db);
+
+let schema_check = app.job("schema-check")
+    .image(app_image.call())
+    .command(["migrate", "--check"])
+    .deadline(60);
+
+app.gate("schema")
+    .key(version.value())
+    .after(db)
+    .exclusive(api)
+    .check(schema_check)
+    .run(|rt, last| {
+        // `last` is the app as it stood at the gate's last success,
+        // or `()` when there has been none.
+        let from = if last == () { "none" } else { last.param("version").value() };
+        rt.start(app.job()
+            .image(app_image.call())
+            .command(["migrate", "--from", from])
+        ).terminated().ensure_success();
+    });
+```
+
+`app.gate(name)` declares a gate and returns its builder; calling it again with the same name returns the same gate. Gates are declared in the static context only, and a gate is not a resource: `rt.start(gate)` throws.
+
+- **`.key(value)`** sets the value that decides whether the gate is satisfied. The gate runs again whenever its key differs from the key of its last success. A key is a unit, boolean, integer, finite float, string, or an array or map of those, and two keys are the same when they are the same JSON value (map members compared in any order, and an integer never equal to a float). A gate with no `key` has the unit as its key, so it runs once and again only when its check fails.
+- **`.run(|rt, last| ...)`** sets the body, taking up to two parameters. It may be set once. A gate without a body goes straight to its check.
+- **`.check(job)` or `.check(job, #{ interval: seconds })`** sets a named Job with a `deadline` as the gate's check. A check passes when the Job's instance exits 0; a failure, or the deadline, makes the gate unsatisfied until a run succeeds. The runtime runs the check after each run, before it starts a dependant workload that has no running instance, and every `interval` seconds if one is given (at least 1), whatever the gate's state, while no run of it is in progress; the interval counts from the last check, across restarts of the daemon. A check is how a gate notices a change made outside Seedling, such as a database restored from an older backup. A Job can be the check of only one gate, and the runtime starts it for nothing else. A gate with a check and no body waits on a condition alone, such as an external database becoming reachable.
+- **`.exclusive(selection)`** names the Deployments and Jobs the runtime stops before the body runs, and keeps stopped until the gate is satisfied. A selection holding a dynamic resource throws.
+- **`.after(target)`** orders the gate after a gate, a named Deployment, a named Job, or an array of these. `after` is also a method of Deployments and Jobs. The runtime starts no instance of a dependant workload, and runs no dependant gate, until each target is ready: a gate is ready when satisfied, a Deployment when one instance is Ready, a Job when its latest instance exited 0. A running instance is never stopped because a target is not ready. The evaluation fails where `after` calls form a cycle, and where a gate's exclusive selection holds one of its own targets or the Job of its check.
+
+A workload ordered directly after a gate takes the gate's key as part of its configuration, so a running Deployment ordered after a gate is replaced by its update strategy once the gate is satisfied for a new key.
+
+### Keys use the effective value
+
+A key is evaluated with the app's definition and parameter values together, so `version.value()` is the version in effect: the stored value, the default, a value derived from another parameter, or one a new definition brought. A gate keyed on it moves whichever of those changed it, with no hook to write per way of changing. Parameters, definition updates and `apps update` initiate no operation: they write a generation, and each gate whose key moved is unsatisfied until it runs.
+
+A key can carry a secret, such as a password a gate rotates: the runtime stores only a digest of a key, computed under the host's secret key, never the key itself.
+
+### `last`
+
+`last` is the app as it stood at the generation of the gate's last success: that definition, evaluated with that generation's parameter values, read-only. Use it to see where the gate is coming from, for example to upgrade a database from the release it was last migrated to rather than from the previous generation. A version that moved twice while a migration kept failing is still migrated from the release the database holds.
+
+`last` is `()` when the runtime holds no success for the gate. That means the gate has not run, not that the data is new: volumes and external services kept across an uninstall still hold what they held. `last.file(...)` and `last.dir(...)` read that generation's bundle.
+
+### How gates run
+
+- A gate is _satisfied_ when its last success is for its current key and nothing has undone it since. A run starts by invalidating the last success, so a migration that fails part way leaves the gate unsatisfied and its exclusive selection stopped.
+- The runtime pulls the images a run needs, stops the exclusive selection, waits for it to terminate, and runs the body. A selection that has not stopped within ten minutes fails the run, which is retried with back-off. The body directs the gate's own exclusive selection and the workloads ordered after the gate; `rt.start` in a body does not wait for the gate.
+- The gate's check then runs. A run succeeds when the body returns and the check, if any, passes.
+- What a body throws is recorded as how its run ended, and shows in the `gate_failed` fault and under `apps show`. Only a digest of the key is stored, but a thrown message is stored as it is, so keep secrets such as a rotated password out of it.
+- A failed run is retried after a delay that starts at 30 seconds, doubles with each failure, and is capped at one hour. The runtime never gives up: it files a `gate_failed` fault and keeps retrying at the cap. A change of key makes the next run due at once, and a success resets the delay.
+- Cancelling a gate run pauses the gate for its key. It stays paused until an operator runs it or its key moves.
+- When the runtime cannot tell whether a gate is satisfied, because its record is unreadable or its check could not be run, the gate is neither satisfied nor unsatisfied: nothing runs, no dependant starts, and nothing is stopped.
+- An app is _set up_, and leaves the `installing` status, once every gate it declares has been satisfied at the same time. An app with no gates is set up as soon as it is installed.
+- Gates run one at a time with every other lifecycle operation on the host, in declaration order. A gate no longer declared keeps its record, so declaring it again under the same name resumes from it.
+
+Operators see each gate's state under `apps show` and can run one with `seedling-ctl apps gate run <app> <gate>`, whether or not it is satisfied, for example to repeat a migration after restoring a database the check cannot see. A new app has no stored `last`, so installing an app runs each of its gates once, as for the first time.
 
 ## Healthchecks
 
@@ -563,7 +610,7 @@ let banner = app.file("banner.txt").text();       // throws if the file is not U
 ```
 
 - `app.file(path)` returns a `File`; `app.dir(path)` returns a `Directory` of every file beneath `path`. Paths are relative to the bundle root and cannot escape it; a missing file, or a folder with nothing in it, throws.
-- Both read the bundle the app was evaluated from, in any context. Inside an `on_change` handler, `old.file(...)` and `old.dir(...)` read the previous generation's bundle.
+- Both read the bundle the app was evaluated from, in any context.
 - `volume.write` and `rt.write` accept a `File` as well as a string. `volume.write_dir(path, dir)` writes a whole directory, and may target the volume root.
 
 Bundles are limited to regular files and folders, 2 MiB in total. See [Deploying](deploying.md#app-definitions) for pushing a folder and publishing a bundle to a registry.
@@ -633,11 +680,11 @@ app.on_action("dump", |rt, param| {
 
 The operator picks the volume from the action invocation dialog (web UI) or via `seedling-ctl apps action invoke`. The binding lives only for the operation; nothing in the script needs a stable external_volume name.
 
-`kind: "volume"` is valid only on action and shell schemas. `app.param(...)` and `on_install` requirements reject it because their bindings outlive any single operation; for those, declare an `app.external_volume(name)` and have the operator wire it up via the UI's external volume mappings.
+`kind: "volume"` is valid only on action and shell schemas. `app.param(...)` rejects it because its binding outlives any single operation; for it, declare an `app.external_volume(name)` and have the operator wire it up via the UI's external volume mappings.
 
 ## Invoking other actions
 
-`Action.invoke(params?)` runs another action's closure inline, in the calling closure's runtime. Get the handle either by capturing the return of `app.on_action(...)` (or `app.on_start(...)`) or by looking it up by name with `app.action(name)`. Both produce the same `Action` value. `app.action(name)` is only valid in dynamic context — it throws when called from the static top-level.
+`Action.invoke(params?)` runs another action's closure inline, in the calling closure's runtime. Get the handle either by capturing the return of `app.on_action(...)` or by looking it up by name with `app.action(name)`. Both produce the same `Action` value. `app.action(name)` is only valid in dynamic context — it throws when called from the static top-level.
 
 `params` follows the called action's declared schema: required fields must be present, defaults are applied to absent optional fields, unknown or reserved-suffix keys (`*_volume`, `*_filename`) are rejected, and `kind: "volume"` references must resolve to a real site volume. Validation happens before the closure runs, and errors throw with the field name. Operator-invoked actions get the same validation, so a sub-action invocation behaves exactly like an operator dispatching the action manually.
 
@@ -660,11 +707,11 @@ app.on_action("seed", |rt, _p| {
     app.action("migrate").invoke(#{ "batch-size": "100" });
 });
 
-app.on_install(|rt, _p| {
+app.on_action("reseed", |rt, _p| {
     rt.start(app.job().image(seed_image).command(["seed-db"]))
         .terminated()
         .ensure_success();
-    app.action("start").invoke();
+    migrate.invoke();
 });
 ```
 
@@ -674,11 +721,10 @@ A few things invoke does *not* do:
 
 - It does not start a new operation. The called closure shares the caller's `rt`, operation id, and action log; nothing in `apps history` shows it as a separate top-level entry, but the runtime records a `SubActionInvoked` log entry with the action name and validated params so the nested chain is inspectable in the operation's history.
 - It does not allow recursion. Calling an action that is already on the active call stack — directly (`bar` invoking `bar`) or transitively (`foo` → `bar` → `foo`) — throws before the closure runs. The error names the chain.
-- It does not reach the install action. Install is not registered under a name in the action map; `app.action("install")` throws `no such action`.
 
 For code reuse that does *not* need a param schema or a history entry, extract a top-level Rhai closure and `.call(rt, ...)` it directly. The two patterns coexist: `Action.invoke()` for "a peer action's closure with its own validation surface", a plain Rhai closure for "shared steps that aren't actions in their own right".
 
-> **Note on `rt.start(app)`**: this schedules every static resource the App owns and (with `.ready()`) blocks until they're all up. It does *not* invoke any custom action closure. It is the install hook's implicit default — if you don't define `on_install`, the runtime behaves as if it called `rt.start(app)`.
+> **Note on `rt.start(app)`**: this schedules every static resource the App owns and (with `.ready()`) blocks until they're all up. It does *not* invoke any custom action closure. Outside a gate body it leaves out the resources a gate holds and the workloads ordered after a gate that is not yet satisfied; the runtime starts those itself once the gate is satisfied.
 
 ## Common patterns
 

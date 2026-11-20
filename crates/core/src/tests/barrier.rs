@@ -6,7 +6,9 @@ use crate::{
     runtime::{
         ActionLog, EphemeralInstanceRegistry, LifecycleState, ResourceInstance, TestWorldOracle,
         barrier::OperationId,
-        barrier::replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
+        barrier::replay::{
+            InMemoryActionLog, OperationContext, OperationResult, Subject, run_operation,
+        },
     },
 };
 
@@ -52,7 +54,7 @@ fn barrier_satisfied_on_first_pass() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("web")).ready();
         });
     "#,
@@ -69,24 +71,21 @@ fn barrier_satisfied_on_first_pass() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: oracle,
             registry: registry(),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -99,7 +98,7 @@ fn barrier_suspends_then_resumes() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("web")).ready();
         });
     "#,
@@ -118,24 +117,21 @@ fn barrier_suspends_then_resumes() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -151,24 +147,21 @@ fn barrier_suspends_then_resumes() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -182,7 +175,7 @@ fn sequential_barriers() {
         r#"
         let frontend = app.deployment("frontend").image("docker.io/library/nginx:latest");
         let backend = app.deployment("backend").image("docker.io/library/api:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("frontend")).scheduled();
             rt.start(app.deployment("backend")).ready();
         });
@@ -201,24 +194,21 @@ fn sequential_barriers() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -233,24 +223,21 @@ fn sequential_barriers() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -265,24 +252,21 @@ fn sequential_barriers() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -306,7 +290,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let bin = app.volume("bin");
-        app.on_install(|rt, _param| {
+        app.on_action("install", |rt, _param| {
             rt.start(app.job().image("docker.io/library/debian:bookworm-slim")
                 .mount("/app/bin", bin)
                 .command(["true"])
@@ -327,24 +311,21 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "install",
+            subject: Subject::Action("install"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -372,24 +353,21 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "install",
+            subject: Subject::Action("install"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -410,7 +388,7 @@ fn barrier_deadline_zero_uses_the_state_default() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("web")).ready(0);
         });
     "#,
@@ -428,24 +406,21 @@ fn barrier_deadline_zero_uses_the_state_default() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -458,24 +433,21 @@ fn barrier_deadline_zero_uses_the_state_default() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -494,7 +466,7 @@ fn replay_idempotency() {
         r#"
         let a = app.deployment("aaa").image("docker.io/library/img:latest");
         let b = app.deployment("bbb").image("docker.io/library/img:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("aaa"));
             rt.start(app.deployment("bbb")).ready();
         });
@@ -513,24 +485,21 @@ fn replay_idempotency() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -545,24 +514,21 @@ fn replay_idempotency() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -591,7 +557,7 @@ fn rt_stop_acts_as_barrier() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let old = app.deployment("old").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let dep = app.deployment("old");
             rt.start(dep);
             rt.stop(dep);
@@ -611,24 +577,21 @@ fn rt_stop_acts_as_barrier() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -643,24 +606,21 @@ fn rt_stop_acts_as_barrier() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -675,7 +635,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
         r#"
         let svc = app.service("public");
         let ingress = svc.ingress("warm.example.com", 443).tls(Terminate.Tls, Output.Tcp);
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let warm = rt.warm_certs(ingress);
             warm.ready();
         });
@@ -697,24 +657,21 @@ fn warm_certs_barrier_uses_cert_oracle() {
             script_ast: &ast,
             operation_id: OperationId::new(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: oracle,
             registry: registry(),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -731,7 +688,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
         r#"
         let svc = app.service("public");
         let ingress = svc.ingress("warm.example.com", 443).tls(Terminate.Tls, Output.Tcp);
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let warm = rt.warm_certs(ingress);
             warm.ready();
         });
@@ -748,24 +705,21 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
             script_ast: &ast,
             operation_id: OperationId::new(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: oracle,
             registry: registry(),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -781,7 +735,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
 fn warm_images_barrier_uses_image_oracle() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let warm = rt.warm_images(
                 app.job().image("ghcr.io/example/foo:1.2.3")
             );
@@ -802,24 +756,21 @@ fn warm_images_barrier_uses_image_oracle() {
             script_ast: &ast,
             operation_id: OperationId::new(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: oracle,
             registry: registry(),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -834,7 +785,7 @@ fn warm_images_barrier_uses_image_oracle() {
 fn warm_images_barrier_suspends_when_image_absent() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let warm = rt.warm_images(
                 app.job().image("ghcr.io/example/foo:1.2.3")
             );
@@ -852,24 +803,21 @@ fn warm_images_barrier_suspends_when_image_absent() {
             script_ast: &ast,
             operation_id: OperationId::new(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: oracle,
             registry: registry(),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -888,7 +836,7 @@ fn stub_runtime_still_passes_language_tests() {
     exercise(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("web")).ready();
         });
     "#,
@@ -904,7 +852,7 @@ fn terminated_eventually_never_times_out() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let j = app.job("worker").image("docker.io/library/busybox:latest").command(["sleep", "1"]);
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.job("worker")).terminated_eventually().ensure_success();
         });
     "#,
@@ -923,24 +871,21 @@ fn terminated_eventually_never_times_out() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -976,24 +921,21 @@ fn terminated_eventually_never_times_out() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -1009,7 +951,7 @@ fn cancel_aborts_with_cancelled_result() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let j = app.job("worker").image("docker.io/library/busybox:latest").command(["sleep", "1"]);
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.job("worker")).terminated_eventually().ensure_success();
         });
     "#,
@@ -1028,24 +970,21 @@ fn cancel_aborts_with_cancelled_result() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token,
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -1093,7 +1032,7 @@ fn rt_stop_deadline_is_enforced() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let old = app.deployment("old").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.stop(app.deployment("old"), 1);
         });
     "#,
@@ -1111,24 +1050,21 @@ fn rt_stop_deadline_is_enforced() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -1144,24 +1080,21 @@ fn rt_stop_deadline_is_enforced() {
             script_ast: &ast,
             operation_id: op,
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -1200,24 +1133,21 @@ fn run_pass_with_db(
             script_ast: ast,
             operation_id,
             app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log,
             world,
             registry,
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         scope,
     )
@@ -1270,7 +1200,7 @@ fn rt_stop_deadline_start_is_read_from_the_calls_own_record() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let runner = app.job("runner").image("docker.io/library/busybox:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             try {
                 rt.stop(app.job("runner"), 1);
             } catch (e) {}
@@ -1334,7 +1264,7 @@ fn terminated_barrier_does_not_short_circuit_against_an_earlier_stop() {
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let runner = app.job("runner").image("docker.io/library/busybox:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.stop(app.job("runner"));
             rt.start(app.deployment("web")).ready();
             rt.start(app.job("runner")).terminated();
@@ -1412,7 +1342,7 @@ fn a_barrier_that_passes_on_a_replay_pass_is_recorded_as_satisfied() {
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let api = app.deployment("api").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("web")).ready();
             rt.start(app.deployment("api")).ready();
         });
@@ -1497,7 +1427,7 @@ fn a_replayed_sub_action_call_recovers_its_recorded_params() {
                     throw "inner did not observe the recorded params";
                 }}
             }}, #{{ params: #{{ {inner_params} }} }});
-            app.on_start(|rt, _param| {{
+            app.on_action("start", |rt, _param| {{
                 app.action("inner").invoke(#{{ note: "hello" }});
                 rt.start(app.deployment("web")).ready();
             }});
@@ -1570,7 +1500,7 @@ fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
         let web = app.deployment("web")
             .image("docker.io/library/nginx:latest")
             .scale(2..=10);
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("web")).ready();
         });
     "#,
@@ -1627,7 +1557,7 @@ fn an_action_addresses_no_replica_of_a_deployment_scaled_to_zero() {
         let web = app.deployment("web")
             .image("docker.io/library/nginx:latest")
             .scale(0..=4);
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.stop(app.deployment("web"));
         });
     "#,
@@ -1677,7 +1607,7 @@ fn except_on_a_started_stops_waiting_for_the_excluded_resource() {
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let optional = app.deployment("optional").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app).except(app.deployment("optional")).ready();
         });
     "#,
@@ -1713,7 +1643,7 @@ fn only_and_select_narrow_a_started_to_the_resources_they_name() {
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let other = app.deployment("other").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let started = rt.start(app);
             started.only(app.deployment("web")).ready();
             started.select(#{ names: ["web"] }).ready();
@@ -1749,7 +1679,7 @@ fn one_on_a_started_yields_a_single_resource_and_null_when_empty() {
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let other = app.deployment("other").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let started = rt.start(app);
             if started.select(#{ names: ["web"] }).one() == () {
                 throw "one() returned null for a non-empty group";
@@ -1794,7 +1724,7 @@ fn a_second_barrier_on_one_started_does_not_rearm_its_wait_each_pass() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let started = rt.start(app.deployment("web"));
             started.running();
             started.ready();
@@ -1854,7 +1784,7 @@ fn stopping_an_already_stopped_deployment_does_not_mint_instances_to_wait_on() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.stop(app.deployment("web"));
         });
     "#,
@@ -1942,7 +1872,7 @@ fn the_second_barrier_on_one_started_still_times_out() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let started = rt.start(app.deployment("web"));
             started.running();
             started.ready(1);
@@ -2011,7 +1941,7 @@ fn a_narrowed_barrier_does_not_satisfy_the_broader_one_beside_it() {
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let api = app.deployment("api").image("docker.io/library/nginx:latest");
         let gate = app.deployment("gate").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let started = rt.start(app);
             started.only(app.deployment("web")).ready();
             rt.start(app.deployment("gate")).ready();
@@ -2069,7 +1999,7 @@ fn a_start_replayed_against_a_stop_entry_diverges() {
     // something else — taking over whatever barrier record it held.
     let stop_then_barrier = r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.stop(app.deployment("web"));
         });
     "#;
@@ -2098,7 +2028,7 @@ fn a_start_replayed_against_a_stop_entry_diverges() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("web")).ready();
         });
     "#,
@@ -2138,7 +2068,7 @@ fn a_barrier_on_a_narrowed_group_still_times_out() {
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let optional = app.deployment("optional").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app).except(app.deployment("optional")).ready(1);
         });
     "#,
@@ -2198,7 +2128,7 @@ fn a_stop_replayed_against_a_start_entry_diverges() {
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let gate = app.deployment("gate").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment("web")).ready();
             rt.start(app.deployment("gate")).ready();
         });
@@ -2237,7 +2167,7 @@ fn a_stop_replayed_against_a_start_entry_diverges() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.stop(app.deployment("web"));
         });
     "#,
@@ -2275,7 +2205,7 @@ fn each_barrier_on_one_call_keeps_its_own_record() {
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let api = app.deployment("api").image("docker.io/library/nginx:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let started = rt.start(app);
             started.only(app.deployment("web")).ready();
             started.running();
@@ -2338,7 +2268,7 @@ fn default_stop_deadline_of(declarations: &str, stopped: &str) -> Option<u64> {
     let (engine, mut scope, app, ast) = setup_with_script(&format!(
         r#"
         {declarations}
-        app.on_start(|rt, _param| {{ rt.start({stopped}); rt.stop({stopped}); }});
+        app.on_action("start", |rt, _param| {{ rt.start({stopped}); rt.stop({stopped}); }});
     "#
     ));
     let log = InMemoryActionLog::new();
@@ -2348,24 +2278,21 @@ fn default_stop_deadline_of(declarations: &str, stopped: &str) -> Option<u64> {
             script_ast: &ast,
             operation_id: OperationId::new(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::new(TestWorldOracle::new()),
             registry: registry(),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -2396,102 +2323,6 @@ fn rt_stops_default_deadline_follows_the_longest_stop_timeout() {
     assert_eq!(default_stop_deadline_of(declarations, "unset"), Some(120));
 }
 
-/// Run the `greeting` change handler of `script` at generation 2, with the
-/// app's history in `db` and `previous` as the generation before.
-fn run_change_handler(
-    previous: Option<&str>,
-    script: &str,
-    corrupt_history: bool,
-) -> OperationResult {
-    let (engine, mut scope, app, ast) = setup_with_script(script);
-    let name = seedling_protocol::names::AppName::new("test-app").unwrap();
-    app.def.rcu(|d| {
-        let mut d = (**d).clone();
-        d.name = name.clone();
-        d
-    });
-    let db =
-        crate::runtime::db::DbHandle::from_db(crate::runtime::db::Db::open_in_memory().unwrap());
-    if let Some(previous) = previous {
-        let (n, previous) = (name.clone(), previous.to_owned());
-        db.call(move |db| {
-            crate::runtime::generations::register_script(db, &n, &previous).unwrap();
-            crate::runtime::generations::update_script(db, &n, "").unwrap();
-        });
-    }
-    if corrupt_history {
-        db.call(|db| db.conn.execute_batch("DROP TABLE generations;").unwrap());
-    }
-    let oracle = Arc::new(TestWorldOracle::new());
-    run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: OperationId::new(),
-            app: &app,
-            action_name: "greeting",
-            log: &InMemoryActionLog::new(),
-            world: oracle,
-            registry: registry(),
-            active_progress: None,
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: Some(db),
-            source_generation: 1,
-            target_generation: 2,
-            script_limits: Some(crate::ScriptLimits::default()),
-            cipher: Some(Arc::new(crate::runtime::secrets::Cipher::for_tests())),
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
-        },
-        &mut scope,
-    )
-}
-
-const CHANGE_HANDLER_SCRIPT: &str = r#"
-    app.deployment("web").image("docker.io/library/nginx:latest");
-    app.param("greeting").on_change(|rt, old| {
-        old.deployment("legacy");
-    });
-"#;
-
-// spec: PARAM#change-handlers
-#[test]
-fn old_resolves_resources_from_the_previous_generation() {
-    // `legacy` exists only in the previous definition. Resource lookups on
-    // `old` were answered from the current generation, so this threw.
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        CHANGE_HANDLER_SCRIPT,
-        false,
-    );
-    assert!(
-        matches!(result, OperationResult::Completed),
-        "old did not reflect the previous generation: {result:?}"
-    );
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn a_change_handler_is_not_run_when_the_previous_generation_cannot_be_rebuilt() {
-    // The handler used to run with an empty `old`.
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        CHANGE_HANDLER_SCRIPT,
-        true,
-    );
-    match result {
-        OperationResult::Failed(e) => {
-            assert!(e.to_string().contains("cannot be rebuilt"), "{e}");
-        }
-        other => panic!("the handler ran without a faithful old: {other:?}"),
-    }
-}
-
 // spec: ACN#shells
 #[test]
 fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
@@ -2509,24 +2340,25 @@ fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
                 script_ast: &ast,
                 operation_id: OperationId::new(),
                 app: &app,
-                action_name: "tools",
+                subject: if is_shell {
+                    Subject::Shell("tools")
+                } else {
+                    Subject::Action("tools")
+                },
                 log: &InMemoryActionLog::new(),
                 world: Arc::new(TestWorldOracle::new()),
                 registry: registry(),
                 active_progress: None,
                 tick_notify: None,
                 params: serde_json::Map::new(),
-                is_shell,
                 db: None,
-                source_generation: 0,
-                target_generation: 0,
-                script_limits: None,
                 cipher: None,
                 operation_volume_bindings: std::collections::HashMap::new(),
                 cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
                 container_signaler: None,
                 volume_writer: None,
                 executor: None,
+                exclusions: Default::default(),
             },
             &mut scope,
         )
@@ -2537,56 +2369,4 @@ fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
     };
     assert!(thrown(run(true)).contains("the shell ran"));
     assert!(thrown(run(false)).contains("the action ran"));
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn a_change_handler_taking_one_parameter_is_called_with_one() {
-    // It registered but failed when it ran: it was always called with two.
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        r#"
-        app.deployment("web").image("docker.io/library/nginx:latest");
-        app.param("greeting").on_change(|rt| { });
-    "#,
-        false,
-    );
-    assert!(
-        matches!(result, OperationResult::Completed),
-        "a one-parameter handler must run: {result:?}"
-    );
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn a_change_handler_taking_no_parameters_is_called_with_none() {
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        r#"
-        app.deployment("web").image("docker.io/library/nginx:latest");
-        app.param("greeting").on_change(|| { });
-    "#,
-        false,
-    );
-    assert!(
-        matches!(result, OperationResult::Completed),
-        "a zero-parameter handler must run: {result:?}"
-    );
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn a_change_handler_taking_three_parameters_fails_when_called() {
-    let result = run_change_handler(
-        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
-        r#"
-        app.deployment("web").image("docker.io/library/nginx:latest");
-        app.param("greeting").on_change(|rt, old, extra| { });
-    "#,
-        false,
-    );
-    assert!(
-        matches!(&result, OperationResult::Failed(e) if !e.to_string().contains("cannot be rebuilt")),
-        "a three-parameter handler must fail when called: {result:?}"
-    );
 }

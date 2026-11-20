@@ -5,14 +5,16 @@ use serde_json::json;
 use tracing::{debug, error};
 
 use crate::{
-    defs::{enums::OnUpdate, resource::Resource},
+    defs::{app::AppDef, enums::OnUpdate, gate::GateKeyDigests, resource::Resource},
     runtime::{
         autonomous_ops,
         db::DbHandle,
         desired::{DesiredResource, DesiredState, undeclared_pod},
+        gates::GateView,
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
         priority::AppPriority,
+        secrets::{Cipher, Error as SecretsError},
     },
     system::{System, actuator::Actuator, observer::Observer, types::ObservationFact},
 };
@@ -140,9 +142,65 @@ struct PodInstanceResult {
     completed_job: Option<InstanceId>,
 }
 
+/// The digests of the keys of the gates of each definition an app's desired
+/// state resolves its workloads against.
+#[derive(Debug, Default)]
+pub(super) struct GateKeys {
+    current: GateKeyDigests,
+    placed: Vec<(Arc<AppDef>, GateKeyDigests)>,
+}
+
+impl GateKeys {
+    /// Digest the gate keys of `current`, the app's current definition, and of
+    /// each operation definition `desired` resolves a resource against.
+    pub(super) fn of(
+        current: &AppDef,
+        desired: &DesiredState,
+        cipher: &Cipher,
+    ) -> Result<Self, SecretsError> {
+        let mut placed: Vec<(Arc<AppDef>, GateKeyDigests)> = Vec::new();
+        for def in desired
+            .resources
+            .iter()
+            .filter_map(|dr| dr.declared_by.as_ref())
+        {
+            if !placed.iter().any(|(known, _)| Arc::ptr_eq(known, def)) {
+                placed.push((Arc::clone(def), GateKeyDigests::of(def, cipher)?));
+            }
+        }
+        Ok(Self {
+            current: GateKeyDigests::of(current, cipher)?,
+            placed,
+        })
+    }
+
+    /// The digests of the gates of the definition `dr` was resolved against,
+    /// or `None` for a definition these digests were not taken for.
+    // spec: OPS#changes-to-an-app
+    fn of_resource(&self, dr: &DesiredResource) -> Option<&GateKeyDigests> {
+        match &dr.declared_by {
+            None => Some(&self.current),
+            Some(def) => self
+                .placed
+                .iter()
+                .find(|(known, _)| Arc::ptr_eq(known, def))
+                .map(|(_, digests)| digests),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn current(&self) -> &GateKeyDigests {
+        &self.current
+    }
+}
+
 /// Per-instance observation collected before any actuation decisions are made.
 struct ObservedInstance<'a> {
     dr: &'a DesiredResource,
+    /// The digests of the keys of the gates of the definition `dr` was
+    /// resolved against, which its spec hash carries.
+    // spec: UPD#spec-hash
+    gate_keys: &'a GateKeyDigests,
     is_running: bool,
     spec_stale: bool,
     unit_failed: bool,
@@ -205,6 +263,7 @@ async fn observe_one_pod<'a>(
     observer: &Observer,
     actuator: &Actuator,
     driver: &Arc<System>,
+    gate_keys: &'a GateKeys,
     dr: &'a DesiredResource,
 ) -> PodObservation<'a> {
     let mut result = PodInstanceResult {
@@ -231,6 +290,22 @@ async fn observe_one_pod<'a>(
         completed_job: None,
     };
 
+    let Some(gate_keys) = gate_keys.of_resource(dr) else {
+        error!(
+            instance = %dr.instance.display_name,
+            "pods: the gate keys of the definition the instance was placed by were not digested, skipping instance"
+        );
+        result.observe_failure = Some((
+            dr.instance.clone(),
+            "the gate keys of the definition the instance was placed by were not digested"
+                .to_owned(),
+        ));
+        return PodObservation::Failed {
+            dr,
+            result: Box::new(result),
+        };
+    };
+
     let facts = match observer.observe(&dr.instance, &dr.definition).await {
         Ok(f) => f,
         Err(e) => {
@@ -251,6 +326,31 @@ async fn observe_one_pod<'a>(
         }
     };
 
+    let is_running = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
+
+    // spec: UPD#stale-instances
+    let desired_spec_hash = if is_running {
+        match actuator.desired_spec_hash(&dr.instance, &dr.definition, gate_keys) {
+            Ok(hash) => hash,
+            Err(e) => {
+                error!(
+                    instance = %dr.instance.display_name,
+                    error = %e,
+                    "pods: cannot work out the desired spec hash, skipping instance"
+                );
+                result.observe_failure = Some((dr.instance.clone(), e.to_string()));
+                return PodObservation::Failed {
+                    dr,
+                    result: Box::new(result),
+                };
+            }
+        }
+    } else {
+        None
+    };
+
     result.observed = Some(dr.instance.clone());
     for (fact, _ts) in &facts {
         for (kind, payload) in fact.to_obs_kinds() {
@@ -260,10 +360,6 @@ async fn observe_one_pod<'a>(
         }
     }
 
-    let is_running = facts
-        .iter()
-        .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
-
     // spec: UPD#stale-instances
     let observed_spec_hash = facts.iter().find_map(|(f, _)| {
         if let ObservationFact::ContainerSpecHash(h) = f {
@@ -272,12 +368,6 @@ async fn observe_one_pod<'a>(
             None
         }
     });
-
-    let desired_spec_hash = if is_running {
-        actuator.desired_spec_hash(&dr.instance, &dr.definition)
-    } else {
-        None
-    };
 
     // The spec is stale when the desired hash is known and either differs
     // from the observed hash or the observed hash is absent (container
@@ -398,6 +488,7 @@ async fn observe_one_pod<'a>(
 
     PodObservation::Observed(Box::new(ObservedInstance {
         dr,
+        gate_keys,
         is_running,
         spec_stale,
         unit_failed,
@@ -429,6 +520,7 @@ async fn actuate_one_pod(
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
     hold_start: bool,
+    wait_for_targets: bool,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -483,7 +575,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => "ok".to_owned(),
+                Ok(()) => autonomous_ops::OK.to_owned(),
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -571,7 +663,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => "ok".to_owned(),
+                Ok(()) => autonomous_ops::OK.to_owned(),
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -650,7 +742,7 @@ async fn actuate_one_pod(
                     return Some(obs.result);
                 };
                 let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                    Ok(()) => "ok".to_owned(),
+                    Ok(()) => autonomous_ops::OK.to_owned(),
                     Err(e) => {
                         error!(
                             instance = %dr.instance.display_name,
@@ -666,6 +758,17 @@ async fn actuate_one_pod(
                 if !restart_at_once || result.stop_failure.is_some() {
                     return Some(obs.result);
                 }
+            }
+
+            // spec: GATE#start-order
+            // A workload waiting on a target that is not ready starts no
+            // instance, whether it has none or is replacing a stale one.
+            if wait_for_targets {
+                tracing::debug!(
+                    instance = %dr.instance.display_name,
+                    "pods: holding a start until the workload's targets are ready"
+                );
+                return Some(obs.result);
             }
 
             // spec: UPD#replace-updates
@@ -687,7 +790,7 @@ async fn actuate_one_pod(
             // Repeated starts of one instance are spaced, so one that exits
             // as soon as it starts is not restarted at full speed.
             if !restart_at_once {
-                match autonomous_ops::back_off(db, &dr.instance, "start") {
+                match autonomous_ops::back_off(db, &dr.instance, autonomous_ops::START) {
                     Ok(None) => {}
                     Ok(Some(wait)) => {
                         tracing::debug!(
@@ -724,11 +827,12 @@ async fn actuate_one_pod(
                     return Some(obs.result);
                 }
             };
-            let Some(op) = autonomous_ops::record(db, &dr.instance, "start", rule) else {
+            let Some(op) = autonomous_ops::record(db, &dr.instance, autonomous_ops::START, rule)
+            else {
                 return Some(obs.result);
             };
             let outcome = match actuator
-                .start(&dr.instance, &dr.definition, app_priority)
+                .start(&dr.instance, &dr.definition, app_priority, obs.gate_keys)
                 .await
             {
                 Ok(Some(_)) | Ok(None) => {
@@ -742,7 +846,7 @@ async fn actuate_one_pod(
                     // whoever performs it. The unit's failure may not be
                     // recorded yet, so this tick's observation counts too.
                     result.replaced_failed_run = obs.unit_failed || prior_run_failed;
-                    "ok".to_owned()
+                    autonomous_ops::OK.to_owned()
                 }
                 Err(crate::system::actuator::ActuateError::ImageUnavailable {
                     ref reference,
@@ -828,7 +932,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => "ok".to_owned(),
+                Ok(()) => autonomous_ops::OK.to_owned(),
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -1002,6 +1106,8 @@ pub(super) async fn observe_and_actuate(
     db: &DbHandle,
     desired: &DesiredState,
     app_priority: AppPriority,
+    gate_keys: &GateKeys,
+    gates: &GateView,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -1018,6 +1124,7 @@ pub(super) async fn observe_and_actuate(
                 instance: instance.clone(),
                 desired: LifecycleState::Unscheduled,
                 definition: undeclared_pod(instance)?,
+                declared_by: None,
                 demoted: false,
             })
         })
@@ -1033,7 +1140,7 @@ pub(super) async fn observe_and_actuate(
 
     let observe_futures: Vec<_> = pod_resources
         .iter()
-        .map(|dr| observe_one_pod(observer, actuator, driver, dr))
+        .map(|dr| observe_one_pod(observer, actuator, driver, gate_keys, dr))
         .collect();
 
     // spec: OBS#failed-observation — instances whose observation
@@ -1082,9 +1189,18 @@ pub(super) async fn observe_and_actuate(
     let mut held_starts: HashSet<String> = HashSet::new();
     let mut rolling_deployments: HashSet<String> = HashSet::new();
 
+    let (waiting_instances, kept_running) = instances_waiting_on_targets(gates, &observed);
+    inhibited_instances.extend(kept_running);
+
     for (dep_name, indices) in &deployment_groups {
         let group_refs: Vec<&ObservedInstance<'_>> =
             indices.iter().map(|&i| &observed[i]).collect();
+        if group_refs
+            .iter()
+            .all(|o| waiting_instances.contains(&o.dr.instance.display_name))
+        {
+            continue;
+        }
 
         let on_update = match &group_refs[0].dr.definition {
             Resource::Deployment(dep) => dep.def.lock().on_update,
@@ -1106,6 +1222,7 @@ pub(super) async fn observe_and_actuate(
     for obs in observed {
         let inhibit = inhibited_instances.contains(&obs.dr.instance.display_name);
         let hold_start = held_starts.contains(&obs.dr.instance.display_name);
+        let wait_for_targets = waiting_instances.contains(&obs.dr.instance.display_name);
         actuate_futures.push(actuate_one_pod(
             actuator,
             db,
@@ -1113,6 +1230,7 @@ pub(super) async fn observe_and_actuate(
             obs,
             inhibit,
             hold_start,
+            wait_for_targets,
             written_obs,
             started_jobs,
             completed_jobs,
@@ -1221,6 +1339,30 @@ pub(super) async fn observe_and_actuate(
     update
 }
 
+/// The instances whose workload waits on a target that is not ready, and, of
+/// those, the stale ones that are running, which are not stopped.
+///
+/// A workload that waits starts no new instance. Its stale instances go on
+/// running whatever the update strategy, since a replacement could not start.
+// spec: GATE#start-order
+// spec: UPD#stale-instances
+fn instances_waiting_on_targets(
+    gates: &GateView,
+    observed: &[ObservedInstance<'_>],
+) -> (HashSet<String>, HashSet<String>) {
+    let mut waiting = HashSet::new();
+    let mut kept_running = HashSet::new();
+    for obs in observed {
+        if gates.waits_for(&obs.dr.instance.kind, obs.dr.instance.name.as_deref()) {
+            waiting.insert(obs.dr.instance.display_name.clone());
+            if obs.spec_stale && obs.is_running {
+                kept_running.insert(obs.dr.instance.display_name.clone());
+            }
+        }
+    }
+    (waiting, kept_running)
+}
+
 /// Whether the Job instance has been running for longer than its deadline,
 /// counted from the moment it last reached Running.
 // spec: JOB#deadline
@@ -1326,13 +1468,17 @@ mod update_tests {
                 frozen: false,
                 anon_id: None,
             }),
+            declared_by: None,
             demoted: false,
         }
     }
 
     fn observed(dr: &DesiredResource, stale: bool, running: bool) -> ObservedInstance<'_> {
+        static NO_GATE_KEYS: std::sync::LazyLock<GateKeyDigests> =
+            std::sync::LazyLock::new(GateKeyDigests::default);
         ObservedInstance {
             dr,
+            gate_keys: &NO_GATE_KEYS,
             is_running: running,
             spec_stale: stale,
             unit_failed: false,
@@ -1387,6 +1533,7 @@ mod update_tests {
             ),
             desired: LifecycleState::Ready,
             definition: Resource::Job(job),
+            declared_by: None,
             demoted: false,
         };
         let mut running = observed(&dr, true, true);
@@ -1403,6 +1550,7 @@ mod update_tests {
                     running,
                     false,
                     false,
+                    false,
                     &HashSet::from([(dr.instance.id, "container_running")]),
                     &none,
                     &none,
@@ -1417,6 +1565,107 @@ mod update_tests {
             result.started_instance.as_ref().map(|i| i.id),
             Some(dr.instance.id),
             "a stale Job is started again in the pass that stopped it"
+        );
+    }
+
+    fn waiting(names: &[&str]) -> GateView {
+        let mut view = GateView::default();
+        for name in names {
+            view.waiting.insert(
+                crate::defs::resource::ResourceId {
+                    kind: ResourceKind::Deployment,
+                    name: std::sync::Arc::new((*name).to_owned()),
+                },
+                Vec::new(),
+            );
+        }
+        view
+    }
+
+    // spec: GATE#start-order
+    #[test]
+    fn a_workload_waiting_on_a_target_keeps_its_stale_running_instances() {
+        let (a, b, c, d) = (desired("a"), desired("b"), desired("c"), desired("d"));
+        // `a` waits and is stale and running; `b` is stale and running but does
+        // not wait; `c` waits and is stale but stopped; `d` waits and is not stale.
+        let observed = [
+            observed(&a, true, true),
+            observed(&b, true, true),
+            observed(&c, true, false),
+            observed(&d, false, true),
+        ];
+        let (waiting, kept) = instances_waiting_on_targets(&waiting(&["a", "c", "d"]), &observed);
+        let names = |ids: &[&DesiredResource]| -> HashSet<String> {
+            ids.iter()
+                .map(|d| d.instance.display_name.clone())
+                .collect()
+        };
+        assert_eq!(waiting, names(&[&a, &c, &d]));
+        assert_eq!(
+            kept,
+            names(&[&a]),
+            "only a stale instance that is running is kept running"
+        );
+    }
+
+    // spec: GATE#start-order
+    #[test]
+    fn a_workload_waiting_on_a_target_starts_no_instance() {
+        use crate::system::reconcile::tests::test_reconciler;
+
+        const IMAGE: &str = "docker.io/library/nginx:1.29";
+        let oi = crate::oi::test_support::TestOi::new();
+        let reconciler = test_reconciler(&oi);
+        let job = crate::defs::job::Job {
+            name: std::sync::Arc::new("migrate".to_owned()),
+            def: Default::default(),
+            frozen: false,
+            anon_id: None,
+        };
+        job.def.lock().pod.lock().container.lock().image = Some(IMAGE.to_owned());
+        let dr = DesiredResource {
+            instance: ResourceInstance::new_singleton(
+                seedling_protocol::names::AppName::new("demo").unwrap(),
+                ResourceKind::Job,
+                "migrate",
+            ),
+            desired: LifecycleState::Ready,
+            definition: Resource::Job(job),
+            declared_by: None,
+            demoted: false,
+        };
+
+        let act = |wait: bool| {
+            oi.block_on(async {
+                oi.state.container_runtime.pull_image(IMAGE).await.unwrap();
+                let none = HashSet::new();
+                let no_observations = HashSet::new();
+                actuate_one_pod(
+                    &reconciler.actuator,
+                    &reconciler.db,
+                    AppPriority::default(),
+                    observed(&dr, false, false),
+                    false,
+                    false,
+                    wait,
+                    &no_observations,
+                    &none,
+                    &none,
+                    &none,
+                )
+                .await
+            })
+        };
+        let waiting = act(true).expect("the instance is acted on");
+        assert!(
+            waiting.started_instance.is_none(),
+            "a workload waiting on a target starts nothing"
+        );
+        let free = act(false).expect("the instance is acted on");
+        assert_eq!(
+            free.started_instance.as_ref().map(|i| i.id),
+            Some(dr.instance.id),
+            "the same instance starts once it waits on nothing"
         );
     }
 

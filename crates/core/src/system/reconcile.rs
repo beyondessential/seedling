@@ -25,12 +25,14 @@ use crate::{
         apps::{AppRegistry, transition_phase},
         db::DbHandle,
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling, merge_sessions},
+        gates::{GateRuntime, GateView},
         gc::InstanceGcConfig,
         health::InstanceHealth,
         identity::InstanceId,
         lifecycle::LifecycleState,
         priority::AppPriority,
         scaling,
+        secrets::Cipher,
         site_services::{resolve::ResolveCtx, resolver::SiteServiceResolver},
         stopped,
     },
@@ -385,7 +387,12 @@ struct AppSnapshot {
     /// operation, install or uninstall is steering it instead.
     // spec: GC#unscheduled-instances
     steady: bool,
-    app_def: AppDef,
+    app_def: Arc<AppDef>,
+    /// `app_def` with each resource an operation placed as the operation's
+    /// definition declares it: what the proxy routes, the tier slices and the
+    /// healthcheck pass read.
+    // spec: OPS#changes-to-an-app
+    declarations: Arc<AppDef>,
     phase: AppPhase,
     phase_handle: Arc<Mutex<AppPhase>>,
     /// Hostnames whose certs should be pre-warmed. Captured from the in-flight
@@ -396,6 +403,15 @@ struct AppSnapshot {
     /// effect without a redeploy.
     // spec: PRIO#priority-setting
     app_priority: AppPriority,
+    /// The digests of the keys of the gates of each definition `desired`
+    /// resolves its workloads against, which the spec hash of a workload
+    /// ordered after one of them carries.
+    // spec: UPD#spec-hash
+    gate_keys: pods::GateKeys,
+    /// What the app's gates hold, and which of its workloads wait on a target.
+    // spec: RCN#gate-holds
+    // spec: GATE#start-order
+    gates: GateView,
     /// Where the app's install stands in the order installs completed.
     // spec: ING#claims-across-apps
     install_seq: Option<i64>,
@@ -415,6 +431,11 @@ pub struct Reconciler {
     caddy_upgrade_rejected: bool,
     data_dir: PathBuf,
     db: DbHandle,
+    /// The host's secret key, under which gate keys are digested.
+    cipher: Arc<Cipher>,
+    /// What the runtime remembers of its gates' checks.
+    // spec: GRUN#checks
+    gate_runtime: Arc<GateRuntime>,
     registry: Arc<dyn InstanceRegistry>,
     app_registry: Arc<RwLock<AppRegistry>>,
     written_obs: HashSet<(InstanceId, &'static str)>,
@@ -465,7 +486,7 @@ pub struct Reconciler {
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
     /// What the reconciler knows of the jool translator instance on this host.
-    /// The reconciler sets it up when an app is installed or installing, and
+    /// The reconciler sets it up when an app is installed, and
     /// tears it down when none is.
     // spec: NAT64#translator-lifecycle
     nat64_translator: Nat64Translator,
@@ -765,6 +786,7 @@ impl Reconciler {
         data_dir: PathBuf,
         db: DbHandle,
         app_registry: Arc<RwLock<AppRegistry>>,
+        cipher: Arc<Cipher>,
         event_tx: EventSender,
         dns_servers: Vec<Ipv6Addr>,
         dns_upstreams: Vec<std::net::SocketAddr>,
@@ -775,6 +797,7 @@ impl Reconciler {
         tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
         site_resolver: Option<Arc<SiteServiceResolver>>,
         instance_gc: InstanceGcConfig,
+        gate_runtime: Arc<GateRuntime>,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let written_obs = seed_written_obs(&db);
@@ -796,6 +819,8 @@ impl Reconciler {
             caddy_upgrade_rejected: false,
             data_dir,
             db,
+            cipher,
+            gate_runtime,
             registry,
             app_registry,
             written_obs,
@@ -954,17 +979,12 @@ impl Reconciler {
                 continue;
             }
             // spec: RCN#desired-state
-            // Installing apps participate in reconciliation exactly like
-            // Installed apps: the install closure's rt.start() / rt.stop()
-            // calls populate active_progress and the reconciler actuates the
-            // resources placed into the desired state. Only NotInstalled
-            // apps — those that have neither been installed nor have an
-            // install currently in flight — are skipped, unless a shell
-            // session that has ended is still tearing down what it started:
+            // Only NotInstalled apps are skipped, unless a shell session or a
+            // gate check that has ended is still tearing down what it started:
             // nothing else stops those resources.
             match phase {
-                AppPhase::Installed | AppPhase::Installing | AppPhase::Uninstalling => {}
-                AppPhase::NotInstalled if entry.sessions.is_empty() => continue,
+                AppPhase::Installed | AppPhase::Uninstalling => {}
+                AppPhase::NotInstalled if !entry.has_dynamic_slots() => continue,
                 AppPhase::NotInstalled => {}
             }
             // Read before the progress is held, as it reads the progress
@@ -972,8 +992,7 @@ impl Reconciler {
             // the GC sweeps by it.
             let steady = entry.is_steady();
             let progress = entry.active_progress.read();
-            let app_def_arc = entry.app.def.load_full();
-            let app_def = (*app_def_arc).clone();
+            let app_def = entry.app.def.load_full();
             // spec: AUTO#scale
             let effective_scales =
                 self.compute_effective_scales(&name, &app_def, &scaling_decisions);
@@ -999,75 +1018,113 @@ impl Reconciler {
                     }
                 }
             };
+            // spec: GRUN#gate-state
+            // spec: RCN#gate-holds
+            let gates = match phase {
+                AppPhase::Installed => {
+                    let (app_name, def, cipher) =
+                        (name.clone(), Arc::clone(&app_def), Arc::clone(&self.cipher));
+                    let stopped = stopped_set.clone();
+                    let remembered = self.gate_runtime.remembered(&name);
+                    let definition_error = entry.script_error.as_ref().map(|(why, _)| why.clone());
+                    // spec: GATE#body
+                    let body = progress
+                        .as_ref()
+                        .and_then(crate::runtime::OperationProgress::body_starts);
+                    let driven = self.gate_runtime.take_snapshot(
+                        &name,
+                        &app_def,
+                        definition_error.as_deref(),
+                        &stopped,
+                    );
+                    match driven {
+                        Some(driven) => crate::runtime::gates::view_from(
+                            &app_name,
+                            &def,
+                            &driven.gates,
+                            &driven.readiness,
+                            &remembered,
+                            body.as_ref(),
+                        ),
+                        None => self.db.call(move |db| {
+                            let state = crate::runtime::gates::evaluate(
+                                db,
+                                &app_name,
+                                &def,
+                                &cipher,
+                                definition_error.as_deref(),
+                                &remembered,
+                            );
+                            crate::runtime::gates::view(
+                                db,
+                                &app_name,
+                                &def,
+                                &state,
+                                &stopped,
+                                &remembered,
+                                body.as_ref(),
+                            )
+                        }),
+                    }
+                }
+                _ => GateView::default(),
+            };
+            // A resource a gate holds is kept at `Unscheduled` as one an
+            // operator stopped is.
+            let down = gates.keep_down(&stopped_set);
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 // spec: OPS#shell-sessions
                 // An app that is not installed desires nothing of its own.
                 AppPhase::NotInstalled => Ok(DesiredState::default()),
-                // spec: RCN#desired-state
-                // While Installing, the install closure drives every
-                // resource into desired state explicitly via rt.start.
-                // If the closure hasn't pushed its first entry yet
-                // (active_progress is still None), the desired state
-                // must stay empty — falling back to the steady-state
-                // computation here would have the reconciler racing
-                // ahead and starting every static resource before
-                // on_install runs the prerequisite setup steps.
-                AppPhase::Installing => match (*progress).as_ref() {
-                    Some(_) => compute(
-                        &name,
-                        &app_def,
-                        (*progress).as_ref(),
-                        &*self.registry,
-                        &effective_scales,
-                        &stopped_set,
-                    ),
-                    None => Ok(DesiredState::default()),
-                },
-                // spec: RCN#desired-state
-                // From the moment the start action is initiated until it ends,
-                // including while it is queued, the desired state is held as
-                // for an operation in progress: only what the start action has
-                // started or stopped. Until it has put something there, that
-                // is nothing.
-                AppPhase::Installed
-                    if progress.is_none()
-                        && entry
-                            .start_pending
-                            .load(std::sync::atomic::Ordering::Acquire) =>
-                {
-                    Ok(DesiredState::default())
-                }
                 AppPhase::Installed => compute(
                     &name,
                     &app_def,
                     (*progress).as_ref(),
                     &*self.registry,
                     &effective_scales,
-                    &stopped_set,
+                    &down,
                 ),
             };
             // Read in place, as the operation's progress is, rather than
             // copied each tick.
-            let session_slots = entry.sessions.slots();
+            let session_slots: Vec<_> = entry
+                .sessions
+                .slots()
+                .into_iter()
+                .chain(entry.checks.slots())
+                .collect();
             let session_guards: Vec<_> = session_slots.iter().map(|slot| slot.read()).collect();
             let sessions: Vec<&crate::runtime::OperationProgress> =
                 session_guards.iter().filter_map(|g| g.as_ref()).collect();
-            let desired = match desired {
+            let (desired, gate_keys) = match desired {
                 Ok(mut d) => {
-                    self.clear_desired_state_fault(&name);
                     // spec: RCN#desired-state
-                    // Each open shell session's dynamic resources join the
-                    // desired state whatever phase the app is in and whatever
-                    // else it holds. Where the app is going or gone, they are
-                    // held stopped.
+                    // spec: RCN#gate-holds
+                    // Each open shell session's dynamic resources, and the Job
+                    // of each gate check being run, join the desired state
+                    // whatever phase the app is in and whatever else it holds.
+                    // Where the app is going or gone, they are held stopped.
                     merge_sessions(
                         &mut d,
-                        &app_def,
                         &sessions,
                         matches!(phase, AppPhase::Uninstalling | AppPhase::NotInstalled),
                     );
-                    d
+                    // spec: UPD#spec-hash
+                    let gate_keys = match pods::GateKeys::of(&app_def, &d, &self.cipher) {
+                        Ok(keys) => keys,
+                        Err(e) => {
+                            error!(app = %name, error = %e, "cannot digest the app's gate keys; skipping app this tick");
+                            self.file_desired_state_fault(
+                                &name,
+                                &format!("cannot digest the app's gate keys: {e}"),
+                            );
+                            skipped += 1;
+                            continue;
+                        }
+                    };
+                    self.clear_desired_state_fault(&name);
+                    (d, gate_keys)
                 }
                 Err(e) => {
                     error!(app = %name, error = %e, "failed to compute desired state; skipping app this tick");
@@ -1099,15 +1156,19 @@ impl Reconciler {
                 .and_then(|p| p.as_ref().ok())
                 .copied()
                 .unwrap_or_default();
+            let declarations = desired.declarations(&app_def);
             snapshots.push(AppSnapshot {
                 name,
                 desired,
                 steady,
                 app_def,
+                declarations,
                 phase,
                 phase_handle: Arc::clone(&entry.phase),
                 warm_cert_hostnames,
                 app_priority,
+                gate_keys,
+                gates,
                 install_seq: entry.install_seq,
             });
         }
@@ -1132,7 +1193,7 @@ enum Nat64Step {
 }
 
 /// What an iteration does about the translator. While NAT64 is active it is
-/// kept set up whenever an app is installed or installing, and torn down when
+/// kept set up whenever an app is installed, and torn down when
 /// none is; a translator known to be removed is not torn down again.
 // spec: NAT64#translator-lifecycle
 fn nat64_step(active: bool, translator: Nat64Translator, idle: bool) -> Option<Nat64Step> {
@@ -1201,7 +1262,7 @@ fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
         // running in the slice alone.
         let mut tiers: BTreeSet<Priority> = BTreeSet::new();
         tiers.insert(Priority::Normal);
-        for resource in app.app_def.resources.values() {
+        for resource in app.declarations.resources.values() {
             if let Resource::Deployment(deployment) = resource {
                 tiers.insert(deployment.def.lock().priority);
             }
@@ -2335,7 +2396,7 @@ impl Reconciler {
                 Some(p) => p.as_slice(),
                 None => continue,
             };
-            for (id, resource) in &app.app_def.resources {
+            for (id, resource) in &app.declarations.resources {
                 let crate::defs::resource::Resource::Deployment(dep) = resource else {
                     continue;
                 };
@@ -2778,6 +2839,27 @@ impl Reconciler {
             }
             self.bring_remaining_instances_to_unscheduled(app, apps)
                 .await;
+            // spec: GRUN#uninstall
+            // The gate records, their holds and the record that the app is set
+            // up go with the uninstall, so that installing again runs every
+            // gate as for the first time. While they cannot be deleted the app
+            // does not reach `NotInstalled`.
+            let gate_state_deleted = {
+                let app_name = app.name.clone();
+                match self
+                    .db
+                    .call(move |db| crate::runtime::gates::store::delete_app_state(db, &app_name))
+                {
+                    Ok(()) => true,
+                    Err(e) => {
+                        error!(
+                            app = %app.name,
+                            "uninstall: could not delete the app's gate state; trying again next tick: {e}"
+                        );
+                        false
+                    }
+                }
+            };
             // spec: TRD#uninstall-scope — match units against the
             // identities the registry recorded, not against a name prefix.
             // `seedling-{app}-` is not prefix-free: uninstalling `app` matched
@@ -2901,6 +2983,10 @@ impl Reconciler {
                     if !self.remove_recorded_anonymous_volumes(app).await {
                         continue;
                     }
+                    // spec: GRUN#uninstall
+                    if !gate_state_deleted {
+                        continue;
+                    }
                     let app_name_owned = app.name.clone();
                     let phase_handle = Arc::clone(&app.phase_handle);
                     let moved = self.db.call(move |db| {
@@ -2950,6 +3036,7 @@ impl Reconciler {
                         continue;
                     }
                     self.unidentifiable_units_filed.remove(&app.name);
+                    self.gate_runtime.forget_app(&app.name);
                     // spec: EVT#event-types
                     // Uninstall is reconciler-driven and therefore emits no
                     // OperationCompleted event; this phase change is the only
@@ -3381,7 +3468,10 @@ mod tests {
     }
     use std::collections::HashMap;
 
-    use crate::runtime::registry::{RegistryError, ScaledGroup};
+    use crate::{
+        defs::gate::GateKeyDigests,
+        runtime::registry::{RegistryError, ScaledGroup},
+    };
 
     use super::*;
 
@@ -3466,16 +3556,19 @@ mod tests {
             &crate::ScriptLimits::default(),
         );
         assert!(err.is_none(), "test script must evaluate: {err:?}");
-        let app_def = (*app.def.load_full()).clone();
+        let app_def = app.def.load_full();
         AppSnapshot {
             name: app_name,
             desired: DesiredState::default(),
             steady: true,
+            declarations: Arc::clone(&app_def),
             app_def,
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
             app_priority: AppPriority::default(),
+            gate_keys: Default::default(),
+            gates: Default::default(),
             install_seq: Some(1),
         }
     }
@@ -3493,50 +3586,21 @@ mod tests {
             &crate::ScriptLimits::default(),
         );
         assert!(err.is_none(), "test script must evaluate: {err:?}");
-        let app_def = (*app.def.load_full()).clone();
+        let app_def = app.def.load_full();
         AppSnapshot {
             name: app_name,
             desired: DesiredState::default(),
             steady: true,
+            declarations: Arc::clone(&app_def),
             app_def,
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
             app_priority,
+            gate_keys: Default::default(),
+            gates: Default::default(),
             install_seq: Some(1),
         }
-    }
-
-    // spec: RCN#desired-state
-    #[test]
-    fn a_pending_start_action_holds_the_apps_desired_state_until_it_ends() {
-        use std::sync::atomic::Ordering;
-
-        let oi = crate::oi::test_support::TestOi::with_app("demo");
-        let reconciler = test_reconciler(&oi);
-        let (pending, phase) = {
-            let reg = oi.state.registry.read();
-            let entry = reg.get("demo").unwrap();
-            (Arc::clone(&entry.start_pending), Arc::clone(&entry.phase))
-        };
-        *phase.lock() = AppPhase::Installed;
-        let desired_of = |reconciler: &Reconciler| {
-            let (snapshots, dropped) = reconciler.snapshot_all_apps();
-            assert_eq!(dropped, 0);
-            let app = snapshots
-                .into_iter()
-                .next()
-                .expect("the app is snapshotted");
-            (app.desired.resources.len(), app.steady)
-        };
-
-        pending.store(true, Ordering::Release);
-        assert_eq!(desired_of(&reconciler), (0, false));
-
-        pending.store(false, Ordering::Release);
-        let (resources, steady) = desired_of(&reconciler);
-        assert!(resources > 0, "the whole resource graph is desired again");
-        assert!(steady);
     }
 
     fn volume_instance(app: &str, name: &str) -> crate::runtime::identity::ResourceInstance {
@@ -4811,6 +4875,574 @@ mod tests {
         assert_eq!(stop_failed_faults(&oi, &job), 0);
     }
 
+    // spec: RCN#gate-holds
+    // spec: GRUN#gate-state
+    // What the gates say is read afresh for each iteration: a hold on record
+    // keeps its selection at `Unscheduled` whatever the scale, a hold that
+    // cannot be read starts none of the selection, and a gate that is
+    // satisfied no longer keeps its dependants waiting.
+    #[test]
+    fn each_iteration_reads_what_the_gates_hold_and_which_workloads_wait() {
+        use crate::runtime::{gates::store, secrets::Cipher};
+        use seedling_protocol::names::GateName;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": r#"
+                    let api = app.deployment("api").image("docker.io/library/nginx:1").scale(1..=3);
+                    let migrate = app.gate("migrate").key(1).exclusive(api);
+                    app.deployment("web").image("docker.io/library/nginx:1").after(migrate);
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let (app, gate) = (
+            AppName::new("app").unwrap(),
+            GateName::new("migrate").unwrap(),
+        );
+        let reconciler = test_reconciler(&oi);
+        let snapshot = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            let snapshot = apps.into_iter().find(|a| a.name.as_str() == "app").unwrap();
+            let desired = |name: &str| -> Vec<LifecycleState> {
+                snapshot
+                    .desired
+                    .resources
+                    .iter()
+                    .filter(|r| r.instance.name.as_deref() == Some(name))
+                    .map(|r| r.desired)
+                    .collect()
+            };
+            let (api, web) = (desired("api"), desired("web"));
+            (api, web, snapshot.gates)
+        };
+        let waits =
+            |gates: &GateView, name: &str| gates.waiting.keys().any(|id| id.name.as_str() == name);
+        let api_id = crate::defs::resource::ResourceId {
+            kind: crate::defs::resource::ResourceKind::Deployment,
+            name: Arc::new("api".to_owned()),
+        };
+
+        let (api, _, gates) = snapshot();
+        assert!(gates.held.is_empty(), "nothing holds the selection yet");
+        assert_eq!(api, vec![LifecycleState::Ready]);
+        assert!(waits(&gates, "web"), "web waits for the unsatisfied gate");
+
+        let (a, g, id) = (app.clone(), gate.clone(), api_id.clone());
+        oi.state.db.call(move |db| {
+            store::set_hold(db, &a, &g, &[id].into()).unwrap();
+        });
+        let (api, _, gates) = snapshot();
+        assert_eq!(
+            gates.held.keys().cloned().collect::<Vec<_>>(),
+            vec![api_id.clone()]
+        );
+        assert!(
+            !api.is_empty() && api.iter().all(|d| *d == LifecycleState::Unscheduled),
+            "a held selection stays down: {api:?}"
+        );
+
+        oi.state.db.call(|db| {
+            db.conn
+                .execute("ALTER TABLE gate_holds RENAME TO gate_holds_away", [])
+                .unwrap();
+        });
+        let (_, _, gates) = snapshot();
+        assert!(
+            gates.held.is_empty(),
+            "nothing is stopped for what cannot be read"
+        );
+        assert!(
+            waits(&gates, "api") && waits(&gates, "web"),
+            "nothing of the selection starts while its hold cannot be read"
+        );
+        oi.state.db.call(|db| {
+            db.conn
+                .execute("ALTER TABLE gate_holds_away RENAME TO gate_holds", [])
+                .unwrap();
+        });
+
+        let def = oi
+            .state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .app
+            .def
+            .load_full();
+        let digest = def.gates["migrate"]
+            .key
+            .digest(&Cipher::for_tests())
+            .unwrap();
+        let (a, g) = (app.clone(), gate.clone());
+        oi.state.db.call(move |db| {
+            store::record_success(db, &a, &g, &digest, 1).unwrap();
+        });
+        let (_, _, gates) = snapshot();
+        assert!(
+            !waits(&gates, "web"),
+            "web no longer waits once the gate is satisfied"
+        );
+    }
+
+    // spec: RCN#gate-holds
+    // The reconciler acts on the gate state the iteration's drive worked out,
+    // holds included as drive left them, without reading it again, and reads
+    // it afresh where no drive has worked it out since.
+    #[test]
+    fn an_iteration_reads_gate_state_once_and_acts_on_what_drive_left() {
+        use crate::runtime::{
+            gates::{self, store},
+            secrets::Cipher,
+        };
+        use seedling_protocol::names::GateName;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": r#"
+                    let api = app.deployment("api").image("docker.io/library/nginx:1");
+                    let migrate = app.gate("migrate").key(1).exclusive(api);
+                    app.deployment("web").image("docker.io/library/nginx:1").after(migrate);
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let (app, gate) = (
+            AppName::new("app").unwrap(),
+            GateName::new("migrate").unwrap(),
+        );
+        let api_id = crate::defs::resource::ResourceId {
+            kind: crate::defs::resource::ResourceKind::Deployment,
+            name: Arc::new("api".to_owned()),
+        };
+        let def = oi
+            .state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .app
+            .def
+            .load_full();
+        let digest = def.gates["migrate"]
+            .key
+            .digest(&Cipher::for_tests())
+            .unwrap();
+        let hold = || {
+            let (a, g, id) = (app.clone(), gate.clone(), api_id.clone());
+            oi.state.db.call(move |db| {
+                store::set_hold(db, &a, &g, &[id].into()).unwrap();
+            });
+        };
+        let (a, g) = (app.clone(), gate.clone());
+        oi.state.db.call(move |db| {
+            store::record_success(db, &a, &g, &digest, 1).unwrap();
+        });
+        hold();
+
+        let reconciler = test_reconciler(&oi);
+        let reads = || oi.state.db.call(|_| gates::reads());
+        let view = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            apps.into_iter()
+                .find(|a| a.name.as_str() == "app")
+                .unwrap()
+                .gates
+        };
+
+        let before = reads();
+        oi.block_on(gates::drive::drive(&oi.state));
+        let driven = view();
+        let after = reads();
+        assert_eq!(
+            (after.0 - before.0, after.1 - before.1),
+            (1, 1),
+            "gate state and readiness are read once in the iteration"
+        );
+        assert!(
+            driven.held.is_empty(),
+            "the hold drive released for the satisfied gate is not acted on"
+        );
+        assert!(driven.waiting.is_empty(), "{:?}", driven.waiting);
+
+        oi.block_on(gates::drive::drive(&oi.state));
+        hold();
+        let before = reads();
+        assert!(
+            view().held.is_empty(),
+            "the reconciler acts on the state drive worked out"
+        );
+        assert_eq!(reads(), before);
+
+        assert_eq!(
+            view().held.keys().cloned().collect::<Vec<_>>(),
+            vec![api_id],
+            "without a drive since, the gates are read afresh"
+        );
+        let after = reads();
+        assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1));
+    }
+
+    // spec: GATE#body
+    // spec: RCN#gate-holds
+    #[test]
+    fn a_gate_run_starts_what_its_body_started_without_waiting_for_the_gate() {
+        use crate::runtime::gates::store;
+        use seedling_protocol::names::GateName;
+
+        const IMAGE: &str = "docker.io/library/nginx:1.29";
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": format!(r#"
+                    let api = app.deployment("api").image("{IMAGE}");
+                    let migrate = app.gate("migrate").key(1).exclusive(api);
+                    api.after(migrate);
+                    app.deployment("web").image("{IMAGE}").after(migrate);
+                "#),
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let (app, gate) = (
+            AppName::new("app").unwrap(),
+            GateName::new("migrate").unwrap(),
+        );
+        let api_id = crate::defs::resource::ResourceId {
+            kind: crate::defs::resource::ResourceKind::Deployment,
+            name: Arc::new("api".to_owned()),
+        };
+        let reconciler = test_reconciler(&oi);
+        let snapshot = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            apps.into_iter().find(|a| a.name.as_str() == "app").unwrap()
+        };
+        let instance = |snapshot: &AppSnapshot, name: &str| {
+            snapshot
+                .desired
+                .resources
+                .iter()
+                .find(|r| r.instance.name.as_deref() == Some(name))
+                .map(|r| (r.instance.clone(), r.desired))
+                .unwrap()
+        };
+
+        // The instances exist before the gate holds them down.
+        let idle = snapshot();
+        assert!(idle.gates.waits_for(&api_id.kind, Some("api")));
+        let (a, g, id) = (app.clone(), gate.clone(), api_id.clone());
+        oi.state.db.call(move |db| {
+            store::set_hold(db, &a, &g, &[id].into()).unwrap();
+        });
+        let mut progress = crate::runtime::OperationProgress::new();
+        progress.gate_run = Some(gate);
+        progress.definition = Some(
+            oi.state
+                .registry
+                .read()
+                .get("app")
+                .unwrap()
+                .app
+                .def
+                .load_full(),
+        );
+        progress.started(instance(&idle, "api").0);
+        *oi.state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .active_progress
+            .write() = Some(progress);
+
+        let running = snapshot();
+        let (api, web) = (instance(&running, "api"), instance(&running, "web"));
+        assert_eq!(
+            api.1,
+            LifecycleState::Ready,
+            "the hold does not keep it down"
+        );
+        assert!(
+            !running.gates.waits_for(&api_id.kind, Some("api")),
+            "what the body started does not wait on the gate"
+        );
+        assert!(
+            running.gates.waits_for(&api_id.kind, Some("web")),
+            "what the body did not start still waits"
+        );
+
+        oi.block_on(oi.state.container_runtime.pull_image(IMAGE))
+            .unwrap();
+        let update = oi.block_on(pods::observe_and_actuate(
+            &reconciler.observer,
+            &reconciler.actuator,
+            &reconciler.driver,
+            &reconciler.db,
+            &running.desired,
+            running.app_priority,
+            &running.gate_keys,
+            &running.gates,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        ));
+        let started: Vec<_> = update.started_instances.iter().map(|i| i.id).collect();
+        assert!(started.contains(&api.0.id), "{started:?}");
+        assert!(!started.contains(&web.0.id), "{started:?}");
+    }
+
+    // spec: OPS#changes-to-an-app
+    // spec: UPD#spec-hash
+    #[test]
+    fn an_update_that_drops_a_gate_mid_operation_does_not_fail_a_start_the_operation_placed() {
+        const IMAGE: &str = "docker.io/library/nginx:1.29";
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": format!(r#"
+                    let migrate = app.gate("migrate").key(1);
+                    app.deployment("api").image("{IMAGE}").after(migrate);
+                "#),
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let reconciler = test_reconciler(&oi);
+        let snapshot = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            apps.into_iter().find(|a| a.name.as_str() == "app").unwrap()
+        };
+        let api = snapshot()
+            .desired
+            .resources
+            .iter()
+            .find(|r| r.instance.name.as_deref() == Some("api"))
+            .map(|r| r.instance.clone())
+            .unwrap();
+
+        let entry_app = oi.state.registry.read().get("app").unwrap().app.clone();
+        let mut progress = crate::runtime::OperationProgress::new();
+        progress.definition = Some(entry_app.def.load_full());
+        progress.started(api.clone());
+        *oi.state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .active_progress
+            .write() = Some(progress);
+
+        let (updated, err) = crate::runtime::apps::evaluate_script(
+            &AppName::new("app").unwrap(),
+            &format!(r#"app.deployment("api").image("{IMAGE}");"#),
+            &BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "{err:?}");
+        entry_app.def.store(updated.def.load_full());
+
+        let running = snapshot();
+        assert!(running.app_def.gates.is_empty());
+        oi.block_on(oi.state.container_runtime.pull_image(IMAGE))
+            .unwrap();
+        let update = oi.block_on(pods::observe_and_actuate(
+            &reconciler.observer,
+            &reconciler.actuator,
+            &reconciler.driver,
+            &reconciler.db,
+            &running.desired,
+            running.app_priority,
+            &running.gate_keys,
+            &running.gates,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        ));
+        assert!(
+            update.start_failures.is_empty(),
+            "{:?}",
+            update.start_failures
+        );
+        assert!(
+            update.observe_failures.is_empty(),
+            "{:?}",
+            update.observe_failures
+        );
+        let started: Vec<_> = update.started_instances.iter().map(|i| i.id).collect();
+        assert_eq!(started, vec![api.id]);
+    }
+
+    // spec: OPS#changes-to-an-app
+    // spec: RCN#desired-state
+    #[test]
+    fn an_ingress_an_operation_placed_is_routed_as_the_operation_declares_it_after_an_update_drops_it()
+     {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": r#"app.service("web").ingress("a.example.com", 2222);"#,
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let reconciler = test_reconciler(&oi);
+        let snapshot = || {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            apps.into_iter().find(|a| a.name.as_str() == "app").unwrap()
+        };
+        let ingress = snapshot()
+            .desired
+            .resources
+            .iter()
+            .find(|r| r.instance.kind == ResourceKind::Ingress)
+            .map(|r| r.instance.clone())
+            .unwrap();
+
+        let entry_app = oi.state.registry.read().get("app").unwrap().app.clone();
+        let mut progress = crate::runtime::OperationProgress::new();
+        progress.definition = Some(entry_app.def.load_full());
+        progress.started(ingress);
+        *oi.state
+            .registry
+            .read()
+            .get("app")
+            .unwrap()
+            .active_progress
+            .write() = Some(progress);
+
+        let (updated, err) = crate::runtime::apps::evaluate_script(
+            &AppName::new("app").unwrap(),
+            r#"app.service("web");"#,
+            &BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "{err:?}");
+        entry_app.def.store(updated.def.load_full());
+
+        let running = snapshot();
+        let routed = |def: &AppDef| {
+            proxy::collect(
+                def,
+                &running.desired,
+                &reconciler.node_prefix,
+                &*reconciler.registry,
+                &running.name,
+                &[],
+            )
+            .unwrap()
+            .ingresses
+            .into_iter()
+            .map(|(def, _)| def.hostname)
+            .collect::<Vec<_>>()
+        };
+        assert!(routed(&running.app_def).is_empty());
+        assert_eq!(routed(&running.declarations), ["a.example.com"]);
+    }
+
+    // spec: GRUN#uninstall
+    // The records of the app's gates, their holds and the record that it is
+    // set up go with the uninstall, so that installing again runs every gate
+    // as for the first time. While they cannot be deleted the app stays
+    // `Uninstalling`.
+    #[test]
+    fn an_uninstall_deletes_the_state_of_the_gates_and_waits_while_it_cannot() {
+        use seedling_protocol::names::GateName;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "app",
+                "script": r#"
+                    let api = app.deployment("api").image("docker.io/library/nginx:1");
+                    app.gate("migrate").key(1).exclusive(api);
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("app");
+        let app = AppName::new("app").unwrap();
+        let gate = GateName::new("migrate").unwrap();
+        {
+            let (app, gate) = (app.clone(), gate.clone());
+            oi.state.db.call(move |db| {
+                crate::runtime::gates::store::begin_run(db, &app, &gate).unwrap();
+                crate::runtime::gates::store::set_hold(
+                    db,
+                    &app,
+                    &gate,
+                    &[crate::defs::resource::ResourceId {
+                        kind: crate::defs::resource::ResourceKind::Deployment,
+                        name: Arc::new("api".to_owned()),
+                    }]
+                    .into(),
+                )
+                .unwrap();
+                crate::runtime::gates::store::mark_set_up(db, &app).unwrap();
+                db.conn
+                    .execute_batch(
+                        "CREATE TRIGGER keep_holds BEFORE DELETE ON gate_holds
+                         BEGIN SELECT RAISE(ABORT, 'locked'); END;",
+                    )
+                    .unwrap();
+            });
+        }
+        let state = |oi: &crate::oi::test_support::TestOi| {
+            let app = app.clone();
+            oi.state.db.call(move |db| {
+                (
+                    crate::runtime::gates::store::load_records(db, &app)
+                        .unwrap()
+                        .len(),
+                    crate::runtime::gates::store::load_holds(db, &app)
+                        .unwrap()
+                        .len(),
+                    crate::runtime::gates::store::is_set_up(db, &app).unwrap(),
+                )
+            })
+        };
+        assert_eq!(state(&oi), (1, 1, true));
+
+        oi.call("/apps/uninstall", serde_json::json!({ "app": "app" }))
+            .unwrap();
+        let mut reconciler = test_reconciler(&oi);
+        tear_down(&oi, &mut reconciler, "app");
+        assert_eq!(
+            phase_of(&oi, "app"),
+            AppPhase::Uninstalling,
+            "the app is not moved to NotInstalled while the gate state remains"
+        );
+        assert_eq!(
+            state(&oi),
+            (1, 1, true),
+            "a deletion that fails leaves all of it, not part"
+        );
+
+        oi.state.db.call(|db| {
+            db.conn.execute_batch("DROP TRIGGER keep_holds;").unwrap();
+        });
+        tear_down(&oi, &mut reconciler, "app");
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        assert_eq!(state(&oi), (0, 0, false));
+    }
+
     /// How many `stop_failed` faults are active for `instance`.
     fn stop_failed_faults(
         oi: &crate::oi::test_support::TestOi,
@@ -5047,7 +5679,7 @@ mod tests {
 
     // spec: RCN#desired-state
     // spec: OPS#shell-sessions
-    // A session's resources are desired while the app is installing, and held
+    // A session's resources are desired while the app is installed, and held
     // stopped while it uninstalls and once it is no longer installed: the
     // reconciler skipped an app that was not installed, so the teardown of a
     // session that outlasted its app's uninstall was never actuated.
@@ -5071,7 +5703,7 @@ mod tests {
         );
 
         for phase in [
-            AppPhase::Installing,
+            AppPhase::Installed,
             AppPhase::Uninstalling,
             AppPhase::NotInstalled,
         ] {
@@ -5087,7 +5719,7 @@ mod tests {
                 .iter()
                 .find(|resource| resource.instance.id == job.id)
                 .unwrap_or_else(|| panic!("the session's job is desired while {phase:?}"));
-            if phase != AppPhase::Installing {
+            if phase != AppPhase::Installed {
                 assert_eq!(
                     held.desired,
                     LifecycleState::Unscheduled,
@@ -5930,6 +6562,7 @@ mod tests {
             std::env::temp_dir(),
             oi.state.db.clone(),
             Arc::clone(&oi.state.registry),
+            Arc::clone(&oi.state.cipher),
             oi.state.event_tx.clone(),
             Vec::new(),
             Vec::new(),
@@ -5944,6 +6577,7 @@ mod tests {
                 retain: std::time::Duration::from_secs(3600),
                 retain_restart_records: 50,
             },
+            Arc::clone(&oi.state.gate_runtime),
         )
     }
 
@@ -6106,6 +6740,8 @@ mod tests {
                 &reconciler.db,
                 &app.desired,
                 app.app_priority,
+                &app.gate_keys,
+                &app.gates,
                 &HashSet::new(),
                 &HashSet::new(),
                 &HashSet::new(),
@@ -6138,6 +6774,147 @@ mod tests {
                 .is_none(),
             "and nothing started it again"
         );
+    }
+
+    // spec: UPD#stale-instances
+    #[test]
+    fn a_gate_key_that_cannot_be_found_is_an_error_rather_than_no_spec_hash() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"
+                    let migrate = app.gate("migrate").key("1.0.0");
+                    app.deployment("web").image("docker.io/library/nginx:1.30").after(migrate);
+                    app.deployment("plain").image("docker.io/library/nginx:1.30");
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let reconciler = test_reconciler(&oi);
+        let (apps, _) = reconciler.snapshot_all_apps();
+        let app = apps.iter().find(|a| a.name.as_str() == "demo").unwrap();
+        let hash = |name: &str| {
+            let dr = app
+                .desired
+                .resources
+                .iter()
+                .find(|r| r.instance.name.as_deref() == Some(name))
+                .unwrap();
+            reconciler.actuator.desired_spec_hash(
+                &dr.instance,
+                &dr.definition,
+                &GateKeyDigests::default(),
+            )
+        };
+        assert!(
+            matches!(
+                hash("web"),
+                Err(crate::system::actuator::SpecHashError::GateKey { .. })
+            ),
+            "web is ordered after a gate the digests hold nothing for"
+        );
+        assert!(
+            hash("plain").is_ok(),
+            "plain is ordered after no gate, so no key is missing"
+        );
+    }
+
+    // spec: UPD#spec-hash
+    #[test]
+    fn a_workloads_spec_hash_moves_with_the_key_of_a_gate_it_is_ordered_directly_after_only() {
+        use crate::system::{
+            ContainerRuntime, ProcessManager,
+            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+            volume_store::VolumeStore,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let volumes = dir.path().join("stub-volumes");
+        std::fs::create_dir_all(&volumes).unwrap();
+        let container = Arc::new(StubContainerRuntime::new(volumes));
+        let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+        let backends = crate::system::backends::Backends::working(
+            Arc::clone(&container) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&process) as Arc<dyn ProcessManager>,
+        );
+        let system = Arc::new(System {
+            container: backends.container(),
+            process: backends.process(),
+            proxy: Arc::new(StubNetworkProxy),
+            data_plane: Arc::new(StubDataPlane),
+            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+            backends,
+        });
+        let oi = crate::oi::test_support::TestOi::with_driver(system);
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"
+                    let migrate = app.gate("migrate").key("1.0.0");
+                    let web = app.deployment("web").image("docker.io/library/nginx:1.30").after(migrate);
+                    app.deployment("worker").image("docker.io/library/nginx:1.30").after(web);
+                    app.job("report").image("docker.io/library/nginx:1.30").after(migrate);
+                    app.deployment("plain").image("docker.io/library/nginx:1.30");
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let reconciler = test_reconciler(&oi);
+        let (apps, _) = reconciler.snapshot_all_apps();
+        let app = apps.iter().find(|a| a.name.as_str() == "demo").unwrap();
+        // Nothing is started while the gate is unsatisfied, so each workload's
+        // pod network is recorded here, as a start would record it.
+        for resource in &app.desired.resources {
+            reconciler
+                .actuator
+                .allocate_pod_prefix(&resource.instance)
+                .unwrap();
+        }
+
+        let moved = GateKeyDigests::of(
+            &{
+                let mut def = (*app.app_def).clone();
+                def.gates.get_mut("migrate").unwrap().key =
+                    crate::defs::gate::GateKey::from_script("2.0.0".into()).unwrap();
+                def
+            },
+            &oi.state.cipher,
+        )
+        .unwrap();
+        assert_ne!(&moved, app.gate_keys.current());
+
+        let hash = |name: &str, keys: &GateKeyDigests| {
+            let dr = app
+                .desired
+                .resources
+                .iter()
+                .find(|r| r.instance.name.as_deref() == Some(name))
+                .unwrap();
+            reconciler
+                .actuator
+                .desired_spec_hash(&dr.instance, &dr.definition, keys)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{name} has a spec hash"))
+        };
+        for directly_after in ["web", "report"] {
+            assert_ne!(
+                hash(directly_after, app.gate_keys.current()),
+                hash(directly_after, &moved),
+                "{directly_after} is ordered directly after the gate"
+            );
+        }
+        for not_directly_after in ["worker", "plain"] {
+            assert_eq!(
+                hash(not_directly_after, app.gate_keys.current()),
+                hash(not_directly_after, &moved),
+                "{not_directly_after} is not ordered directly after the gate"
+            );
+        }
     }
 
     // spec: APPS#resources

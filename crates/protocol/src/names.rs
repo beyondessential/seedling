@@ -210,8 +210,6 @@ bsl_name_newtype! {
 bsl_name_newtype! {
     /// Canonical name of a BSL action within an app.
     ///
-    /// The implicit `"start"` lifecycle action is valid by these rules.
-    ///
     /// [`ActionName::default`] yields an empty name, invalid by the name
     /// rules, that nothing reports: an action's name is only ever taken from
     /// the action itself.
@@ -232,9 +230,17 @@ bsl_name_newtype! {
     /// `app.param("...")` or an action's `params` block.
     ///
     /// Used as a `BTreeMap` key in [`AppDef::params`], in the
-    /// per-action `params` maps, and as the identifier in `ParamSet`/
-    /// `ParamUnset` events.
+    /// per-action `params` maps, and as the identifier of an entry in
+    /// `ParamsChanged` events.
     ParamName
+}
+
+bsl_name_newtype! {
+    /// Canonical name of a gate declared by a BSL app via `app.gate("...")`.
+    ///
+    /// Used as a `BTreeMap` key in [`AppDef::gates`] and identifies the gate
+    /// in its record and in the faults filed against it.
+    GateName
 }
 
 bsl_name_newtype! {

@@ -5,7 +5,6 @@ import {
   backupAction,
   baseFixtures,
   healthcheck,
-  installAction,
   makeDetail,
   makeFault,
   makeWebDeployment,
@@ -60,61 +59,48 @@ describe("AppDetail params", () => {
   });
 
   // spec: UI#operator-capabilities
-  it("sets a param from the edit row", async () => {
+  it("stages a param edit from the edit row and applies it", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("domain")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
     const input = screen.getByDisplayValue("example.com");
     fireEvent.change(input, { target: { value: "shop.example.com" } });
     fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("1 change is waiting to be applied.")).toBeTruthy();
+    expect(callsTo(request, "/apps/params/set")).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() =>
       expect(callsTo(request, "/apps/params/set")).toEqual([
-        ["/apps/params/set", { app: "myapp", name: "domain", value: "shop.example.com" }],
+        ["/apps/params/set", { app: "myapp", params: { domain: "shop.example.com" } }],
       ]),
     );
   });
 
   // spec: UI#operator-capabilities
-  // spec: UI#guarded-controls
-  it("unsets an optional param", async () => {
-    const { request } = mount(baseFixtures(makeDetail()), "dangerous");
-    expect(await screen.findByText("domain")).toBeTruthy();
-    fireEvent.click(iconButton("Unset"));
-    await waitFor(() =>
-      expect(callsTo(request, "/apps/params/unset")).toEqual([
-        ["/apps/params/unset", { app: "myapp", name: "domain" }],
-      ]),
-    );
+  it("does not stage a set secret left blank", async () => {
+    mount(baseFixtures(makeDetail()), "write");
+    expect(await screen.findByText("admin_password")).toBeTruthy();
+    const row = screen.getByText("admin_password").closest("tr") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    expect(iconButton("Stage this change").disabled).toBe(true);
+    fireEvent.keyDown(screen.getByDisplayValue(""), { key: "Enter" });
+    expect(screen.queryByText("1 change is waiting to be applied.")).toBeNull();
   });
 
   // spec: UI#operator-capabilities
-  it("plans a param change without applying it", async () => {
+  // spec: PRM#parameter-changes
+  it("applies several staged edits in one change", async () => {
     const { request } = mount(
-      {
-        ...baseFixtures(makeDetail()),
-        "/apps/plan": {
-          diff: [],
-          on_change_would_fire: ["domain"],
-          errors: [],
-          rejections: [{ name: "domain", reason: "must be a hostname" }],
-        },
-      },
-      "write",
+      { ...baseFixtures(makeDetail()), "/apps/params/set": { generation: 2 } },
+      "dangerous",
     );
     expect(await screen.findByText("domain")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
-    fireEvent.change(screen.getByDisplayValue("example.com"), { target: { value: "x" } });
-    fireEvent.click(screen.getByRole("button", { name: "Plan this change" }));
-    expect(await screen.findByText(/must be a hostname/)).toBeTruthy();
-    expect(callsTo(request, "/apps/plan")).toEqual([
-      ["/apps/plan", { app: "myapp", proposed_params: [{ name: "domain", value: "x" }] }],
-    ]);
-    expect(callsTo(request, "/apps/params/set")).toEqual([]);
-  });
+    fireEvent.change(screen.getByDisplayValue("example.com"), {
+      target: { value: "shop.example.com" },
+    });
+    fireEvent.click(iconButton("Stage this change"));
 
-  it("adds a new param through the add row", async () => {
-    const { request } = mount(baseFixtures(makeDetail()), "write");
-    expect(await screen.findByText("domain")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Set param" }));
     fireEvent.change(screen.getByPlaceholderText("param name"), {
       target: { value: "LOG_LEVEL" },
@@ -122,12 +108,113 @@ describe("AppDetail params", () => {
     fireEvent.change(screen.getByPlaceholderText("value"), {
       target: { value: "debug" },
     });
-    fireEvent.click(iconButton("Save"));
+    fireEvent.click(iconButton("Stage this change"));
+
+    expect(await screen.findByText("2 changes are waiting to be applied together.")).toBeTruthy();
+    expect(screen.getByText("LOG_LEVEL")).toBeTruthy();
+    expect(callsTo(request, "/apps/params/set")).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() =>
       expect(callsTo(request, "/apps/params/set")).toEqual([
-        ["/apps/params/set", { app: "myapp", name: "LOG_LEVEL", value: "debug" }],
+        [
+          "/apps/params/set",
+          { app: "myapp", params: { domain: "shop.example.com", LOG_LEVEL: "debug" } },
+        ],
       ]),
     );
+    await waitFor(() =>
+      expect(screen.queryByText(/waiting to be applied/)).toBeNull(),
+    );
+  });
+
+  // spec: UI#operator-capabilities
+  // spec: UI#guarded-controls
+  it("stages the unset of an optional param with the other edits", async () => {
+    const { request } = mount(baseFixtures(makeDetail()), "dangerous");
+    expect(await screen.findByText("domain")).toBeTruthy();
+    fireEvent.click(iconButton("Unset"));
+    expect(await screen.findByText("1 change is waiting to be applied.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(callsTo(request, "/apps/params/set")).toEqual([
+        ["/apps/params/set", { app: "myapp", params: { domain: null } }],
+      ]),
+    );
+  });
+
+  // spec: UI#operator-capabilities
+  it("discards staged edits without sending them", async () => {
+    const { request } = mount(baseFixtures(makeDetail()), "dangerous");
+    expect(await screen.findByText("domain")).toBeTruthy();
+    fireEvent.click(iconButton("Unset"));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+    expect(screen.queryByText(/waiting to be applied/)).toBeNull();
+    expect(callsTo(request, "/apps/params/set")).toEqual([]);
+  });
+
+  // spec: UI#operator-capabilities
+  it("never shows a staged secret value", async () => {
+    mount(baseFixtures(makeDetail()), "write");
+    expect(await screen.findByText("admin_password")).toBeTruthy();
+    const edit = screen.getAllByRole("button", { name: "Edit" });
+    fireEvent.click(edit[edit.length - 1]);
+    const field = document.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "correct-horse-battery" } });
+    fireEvent.click(iconButton("Stage this change"));
+    expect(await screen.findByText("pending")).toBeTruthy();
+    expect(screen.queryByText("correct-horse-battery")).toBeNull();
+  });
+
+  // spec: UI#operator-capabilities
+  it("plans the staged edits together with the one being drafted", async () => {
+    const { request } = mount(
+      {
+        ...baseFixtures(makeDetail()),
+        "/apps/plan": {
+          diff: [],
+          gates_would_run: ["domain"],
+          errors: [],
+          rejections: [{ name: "domain", reason: "must be a hostname" }],
+        },
+      },
+      "write",
+    );
+    expect(await screen.findByText("domain")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Set param" }));
+    fireEvent.change(screen.getByPlaceholderText("param name"), { target: { value: "LOG_LEVEL" } });
+    fireEvent.change(screen.getByPlaceholderText("value"), { target: { value: "debug" } });
+    fireEvent.click(iconButton("Stage this change"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.change(screen.getByDisplayValue("example.com"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Plan this change" }));
+    expect(await screen.findByText(/must be a hostname/)).toBeTruthy();
+    expect(screen.getByText("Gates that would run (1)")).toBeTruthy();
+    expect(callsTo(request, "/apps/plan")).toEqual([
+      ["/apps/plan", { app: "myapp", proposed_params: { LOG_LEVEL: "debug", domain: "x" } }],
+    ]);
+    expect(callsTo(request, "/apps/params/set")).toEqual([]);
+  });
+
+  // spec: UI#operator-capabilities
+  it("plans a single draft without applying it", async () => {
+    const { request } = mount(
+      {
+        ...baseFixtures(makeDetail()),
+        "/apps/plan": { diff: [], gates_would_run: [], errors: [], rejections: [] },
+      },
+      "write",
+    );
+    expect(await screen.findByText("domain")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.change(screen.getByDisplayValue("example.com"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Plan this change" }));
+    await waitFor(() =>
+      expect(callsTo(request, "/apps/plan")).toEqual([
+        ["/apps/plan", { app: "myapp", proposed_params: { domain: "x" } }],
+      ]),
+    );
+    expect(callsTo(request, "/apps/params/set")).toEqual([]);
   });
 });
 
@@ -347,6 +434,57 @@ describe("AppDetail resources", () => {
   });
 });
 
+describe("AppDetail gate markers", () => {
+  // spec: UI#operator-capabilities
+  it("marks a resource a gate holds and one waiting on a gate", async () => {
+    const [web, data] = makeDetail().resources;
+    mount(
+      baseFixtures(
+        makeDetail({
+          resources: [
+            { ...web, held_by: ["migrate", "warm"] },
+            {
+              ...data,
+              type: "job",
+              name: "report",
+              waiting_on: [
+                { kind: "gate", name: "migrate" },
+                { kind: "deployment", name: "web" },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    expect(await screen.findByText("held by migrate, warm")).toBeTruthy();
+    expect(
+      screen.getByText("waiting on migrate, deployment web"),
+    ).toBeTruthy();
+  });
+
+  // spec: UI#operator-capabilities
+  it("names a pending check as the gate's check, not the satisfied gate", async () => {
+    const [web] = makeDetail().resources;
+    mount(
+      baseFixtures(
+        makeDetail({
+          resources: [
+            { ...web, waiting_on: [{ kind: "check", name: "migrate" }] },
+          ],
+        }),
+      ),
+    );
+    expect(await screen.findByText("waiting on migrate check")).toBeTruthy();
+  });
+
+  it("marks nothing on a resource neither held nor waiting", async () => {
+    mount(baseFixtures(makeDetail()));
+    expect(await screen.findByText("gen 4")).toBeTruthy();
+    expect(screen.queryByText(/^held by/)).toBeNull();
+    expect(screen.queryByText(/^waiting on/)).toBeNull();
+  });
+});
+
 describe("AppDetail actions", () => {
   // spec: UI#operator-capabilities
   it("invokes a no-param action through the dialog", async () => {
@@ -392,7 +530,7 @@ describe("AppDetail actions", () => {
   // spec: UI#shells
   it("collects shell params in a dialog before opening the session", async () => {
     const detail = makeDetail({
-      actions: [installAction, backupAction, reindexAction, psqlShellAction],
+      actions: [backupAction, reindexAction, psqlShellAction],
     });
     const { openShell } = mount(baseFixtures(detail), "write");
     expect(await screen.findByText("psql")).toBeTruthy();

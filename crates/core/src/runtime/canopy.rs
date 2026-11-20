@@ -657,7 +657,9 @@ mod tests {
             app(
                 "d",
                 AppStatus::Operating {
-                    action_name: seedling_protocol::names::ActionName::new_unchecked("migrate"),
+                    operation: seedling_protocol::events::OperationTarget::Action(
+                        seedling_protocol::names::ActionName::new_unchecked("migrate"),
+                    ),
                 },
             ),
         ]);

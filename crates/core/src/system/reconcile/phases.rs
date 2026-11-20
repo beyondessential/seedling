@@ -46,6 +46,8 @@ pub(super) async fn run_pods_phase(
                 db,
                 &app.desired,
                 app.app_priority,
+                &app.gate_keys,
+                &app.gates,
                 written_obs,
                 started_jobs,
                 completed_jobs,
@@ -435,7 +437,7 @@ pub(super) fn compute_proxy_config(
             .map(Vec::as_slice)
             .unwrap_or(&empty);
         let build = match proxy::collect(
-            &app.app_def,
+            &app.declarations,
             &app.desired,
             node_prefix,
             registry,

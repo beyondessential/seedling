@@ -42,26 +42,27 @@ If a stored definition fails to evaluate when it is loaded, the runtime MUST fil
 ## Generations
 
 Every registered app has a current generation.
-The runtime MUST bump it on each successful `/apps/update`, and on each [parameter set](params.md#parameter-set) or [unset](params.md#parameter-unset) that is not a no-op.
-The runtime MUST keep each generation's definition and parameter change durably for as long as the app is registered, as [generation history](../runtime/generation.md#history-entries) specifies.
+The runtime MUST bump it on each successful `/apps/update`, and on each [parameter change](params.md#parameter-changes) that is not a no-op.
+The runtime MUST keep each generation's definition and parameter changes durably for as long as the app is registered, as [generation history](../runtime/generation.md#history-entries) specifies.
 
 ## Update
 
-`/apps/update` replaces an app's definition, and MAY change one parameter in the same step.
+`/apps/update` replaces an app's definition, and MAY change parameters in the same step.
 
 | parameter | type | required | meaning |
 | --- | --- | --- | --- |
 | `app` | string | yes | the app's name |
 | `script`, `bundle`, `reference`, `origin` | | | the new definition, as [definition sources](definitions.md#definition-sources) specifies |
-| `param` | object | no | `{ "name": <string>, "value": <string or null> }`, where a string sets the parameter and `null` unsets it |
+| `params` | object | no | parameter changes, in the form of `params` in [parameter changes](params.md#parameter-changes) |
 
-The result is `{ "schedule": "accepted" | "not_scheduled", "generation": <integer> }`, as for a [parameter set](params.md#parameter-set).
+The result is `{ "generation": <integer> }`, as for a [parameter change](params.md#parameter-changes).
 
-The server MUST refuse the request with `not_found` if the app is not registered.
-It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, an install of the app is in progress, or another change to the app is being applied.
+The server MUST refuse the request with `requirements_invalid` if it carries a `params` that a [parameter change](params.md#parameter-changes) would refuse with `requirements_invalid`.
+It MUST refuse it with `not_found` if the app is not registered.
+It MUST refuse it with `operation_in_progress` if another change to the app is being applied.
 
 The server MUST evaluate the new definition with the [proposed values](params.md#proposed-values), then validate those values against it.
-If `param` gives the parameter's stored value, the update changes no parameter.
+A member of `params` that gives a parameter's stored value, or `null` for a parameter with no stored value, changes nothing.
 
 If the definition cannot be fetched, breaks the bundle rules, does not support the running Seedling version, fails to parse or evaluate, or fails validation, the server MUST refuse the request with the matching error and MUST leave everything observable as it was.
 It MUST store no bundle and no parameter value, MUST NOT bump the generation, MUST NOT file or clear any fault, and the app MUST keep running its existing [resource graph](../overview.md#resource-graph).
@@ -70,12 +71,10 @@ Every piece of state derived from the definition MUST stay as it was, so that a 
 > [!NOTE]
 > State derived from the definition includes held volume data, clamped scaling decisions, port forwards to the app's services, and action schedules.
 
-On success the server MUST record the new definition and the parameter change together in a single generation bump, with a `script_update` history entry.
+On success the server MUST record the new definition and the parameter changes together in a single generation bump, with a `script_update` history entry.
 It MUST then emit an `AppUpdated` [event](events.md#app-events).
 
-If the update changes a parameter, the app is installed, and the new definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation).
-The handler MUST run under the new definition, with `old` being the previous generation.
-An update that changes no parameter MUST NOT schedule a handler.
+An update that moves the key of one of the app's [gates](../language/gate.md) leaves it unsatisfied, and the runtime runs it as [gate runs](../runtime/gates.md) specify.
 
 ## Uninstall
 
@@ -86,7 +85,7 @@ An update that changes no parameter MUST NOT schedule a handler.
 `/apps/remove` takes an `app` parameter and removes a registered app that is not installed.
 
 The server MUST refuse the request with `not_found` if the app is not registered.
-It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, an install of it is in progress, a change to it is being applied, or a [shell session](shells.md#shell-session) on it is open or its [dynamic resources](../runtime/operations.md#shell-sessions) are still being torn down.
+It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, a change to it is being applied, a [shell session](shells.md#shell-session) on it is open or its [dynamic resources](../runtime/operations.md#shell-sessions) are still being torn down, or a [check](../runtime/gates.md#checks) of one of its gates is running or its Job is still being torn down.
 It MUST refuse it with `requirements_invalid` if the app is installed or uninstalling, with a `message` saying which.
 
 On success the server MUST discard the app's state as [deregistration](../runtime/app-teardown.md#deregistration) requires, MUST remove the app, and MUST emit an `AppDeregistered` event.
@@ -100,7 +99,8 @@ The result is `{}`.
 | --- | --- | --- |
 | `name` | string | the app's name |
 | `status` | string | the app's [app status](#status-derivation) |
-| `action_name` | string | present only when `status` is `operating`: the name of the action the running operation runs |
+| `action_name` | string | present only when `status` is `operating` and the running operation is not a gate run: the name of the action it runs |
+| `gate` | string | present only when `status` is `operating` and the running operation is a [gate run](../runtime/gates.md): the gate's name |
 | `fault_count` | integer | the number of active faults filed against the app |
 | `priority` | string | the app's [app priority](app-control.md#app-priority) |
 | `has_stopped_resources` | boolean | whether any of the app's resources is [stopped](app-control.md#resource-stop) |
@@ -113,14 +113,15 @@ If the server cannot read the state any member reports, it MUST refuse the reque
 An app's status is the first of these that applies:
 
 1. `uninstalling`: the app is being torn down after an uninstall.
-2. `installing`: an install of the app is in progress.
-3. `operating`: the lifecycle operation running on the host is one of the app's; a queued operation does not count.
-4. `not_installed`: the app is not installed.
-5. `faulted`: at least one active [withholding fault](../runtime/faults.md#withholding-faults) is filed against the app.
+2. `operating`: the lifecycle operation running on the host is one of the app's; a queued operation does not count.
+3. `not_installed`: the app is not installed.
+4. `faulted`: at least one active [withholding fault](../runtime/faults.md#withholding-faults) is filed against the app.
+5. `installing`: the app is installed and not yet [set up](../runtime/gates.md#set-up).
 6. `degraded`: at least one active fault is filed against the app, or at least one of the app's resources is not at its desired [lifecycle state](../overview.md#lifecycle-state).
 7. `running`: none of the above.
 
-A resource's desired lifecycle state is `Ready`, except that a [stopped](app-control.md#resource-stop) resource, and a deployment whose effective scale is zero, are desired at `Unscheduled`.
+A resource's desired lifecycle state is `Ready`, except that a [stopped](app-control.md#resource-stop) resource, a resource a gate [holds](../runtime/reconciliation.md#gate-holds), and a deployment whose effective scale is zero, are desired at `Unscheduled`.
+The Job of a gate's [check](../language/gate.md#check) is always at its desired state.
 
 A resource desired at `Ready` is at its desired state when at least one of its instances is `Ready` and none is `Pending`, `Scheduled` or `Running`.
 A resource desired at `Unscheduled` is at its desired state when none of its instances is `Pending`, `Scheduled`, `Running` or `Ready`.
@@ -128,7 +129,7 @@ A job is at its desired state when none of its instances is `Pending`, `Schedule
 An instance that is `Terminating`, `Terminated` or `Unscheduled` otherwise counts neither for nor against its resource.
 A resource kind without a lifecycle state, such as an external service, is always at its desired state.
 
-If the server cannot read the faults, stops, scaling decisions or observations an app's status rests on, it MUST NOT report a status for the app.
+If the server cannot read the faults, stops, gate holds, setup record, scaling decisions or observations an app's status rests on, it MUST NOT report a status for the app.
 
 ## Description
 
@@ -150,6 +151,7 @@ The server MUST refuse it with `not_found` if the app is not registered.
 | `params` | array | the app's declared [parameters](#parameters) |
 | `unknown_params` | array | its [unknown parameters](params.md#unknown-parameter) |
 | `actions` | array | its [actions](#actions) |
+| `gates` | array | its [gates](#gates) |
 | `current_operation` | object | present only while an operation runs for the app, as [current operation](#current-operation) specifies |
 
 If the server cannot read the state a member reports, it MUST refuse the request with `internal`, rather than report the member empty, absent or `null`, except where a member's description gives it a value for that case.
@@ -166,9 +168,15 @@ Each entry of `resources` has these members.
 | `instances` | array | the resource's instances, below |
 | `faults` | array | the fault records of the active faults concerning the resource |
 | `stopped` | boolean | whether the resource is stopped |
+| `held_by` | array of strings | in ascending order, the names of the gates whose [holds](../runtime/reconciliation.md#gate-holds) keep the resource stopped |
+| `waiting_on` | array | for a Deployment or Job, what its starts wait on, as below |
 | `scale` | object | for a deployment only, as [scaling](app-control.md#scaling) specifies |
 | `priority` | string | for a deployment only, as [app priority](app-control.md#app-priority) specifies |
 | `export` | object | for an exported volume only: `{ "exported": true }`, with a `description` member where the export declares one |
+
+`waiting_on` lists each [target](../language/gate.md#start-order) the resource's starts wait on that is not ready, as `{ "kind": "gate" | "deployment" | "job", "name": <string> }`.
+It also lists each satisfied gate the resource is ordered directly after whose [check](../runtime/gates.md#checks) must pass before the resource starts, as `{ "kind": "check", "name": <the gate's name> }`.
+A satisfied gate is never listed with the kind `gate`.
 
 The server MUST report `instances` empty for an app whose status is `not_installed`.
 
@@ -316,29 +324,43 @@ Each entry of `actions` has these members.
 | --- | --- | --- |
 | `name` | string | the action's name |
 | `description` | string or null | its description |
-| `kind` | string | `action`, `lifecycle`, `shell` or `install` |
+| `kind` | string | `action` or `shell` |
 | `params` | object | for each parameter its schema declares, `{ "kind", "required", "description", "default_value", "secret" }` as in `params` above |
 | `schedules` | array | one `{ "cronexpr", "last_fired_at", "next_fire_at" }` for each [schedule](../language/action.md#scheduled-actions) attached to the action |
 
-The start action has the kind `lifecycle`, since the runtime drives it and an operator cannot invoke it.
-A definition's install action is reported with the name `install`, the kind `install`, a `null` description, and its install requirements as `params`.
-Shells and the install action have no schedules.
+Shells have no schedules.
 
 `last_fired_at` is the timestamp at which the runtime last fired the schedule, or `null` if it has never fired.
 `next_fire_at` is the timestamp at which the schedule is next due, computed from `last_fired_at` or, where that is `null`, from the current time.
 `next_fire_at` MUST be `null` only when the schedule's expression cannot be evaluated.
 
+### Gates
+
+Each entry of `gates` has these members, in the order the script declared the gates.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `name` | string | the gate's name |
+| `state` | string | `satisfied`, `unsatisfied`, `running`, `paused` or `undetermined`, as below |
+| `last_success_generation` | integer or null | the generation of the gate's [last success](../language/gate.md#last-success), or `null` where it has none |
+| `holds_exclusive` | boolean | whether the gate [holds](../runtime/reconciliation.md#gate-holds) its exclusive selection stopped |
+| `next_run_at` | string or null | for an unsatisfied gate whose last run failed, when the runtime next [runs it](../runtime/gates.md#retries); `null` otherwise |
+| `after` | array | its [targets](../language/gate.md#start-order), each `{ "kind": "gate" \| "deployment" \| "job", "name": <string> }` |
+
+A gate is `running` while a run of it is in progress, and `paused` while it is [paused](../runtime/gates.md#pauses).
+Otherwise its `state` is the [gate state](../runtime/gates.md#gate-state) the runtime last determined.
+
 ### Current operation
 
-`current_operation` MUST be present when the app's status is `operating` or `installing` and an operation is running for it, and absent otherwise.
+`current_operation` MUST be present when the app's status is `operating`, and absent otherwise.
 An app being uninstalled has no operation to report.
 
 | member | type | meaning |
 | --- | --- | --- |
-| `action_name` | string | the name of the action the operation runs |
+| `action_name` | string | for an operation other than a gate run, the name of the action it runs |
+| `gate` | string | for a gate run, the gate's name |
 | `barrier` | object or null | the barrier the operation is waiting on, or `null` while its closure runs |
-| `source_generation` | integer | the generation the operation started from |
-| `target_generation` | integer | the generation it moves the app to |
+| `generation` | integer | the operation's [operation generation](../runtime/operations.md#operation-generation) |
 
 `barrier` MUST describe the earliest unsatisfied barrier recorded in the operation's action log.
 It MUST be `null` while the closure runs between barriers.
@@ -384,15 +406,18 @@ The server MUST refuse the request with `not_found` if the app is not registered
 | --- | --- | --- |
 | `generation` | integer | the generation |
 | `timestamp` | string | the timestamp of the change |
-| `kind` | string | `register`, `script_update`, `param_set` or `param_unset` |
+| `kind` | string | `register`, `script_update` or `param_change` |
 | `definition` | object | present for `register` and `script_update`: the definition provenance of the definition the generation installed |
-| `param_name` | string | present for `param_set` and `param_unset`, and for a `script_update` that changed a parameter |
-| `previous_value` | string or null | present when `param_name` is and `redacted` is not: the value before the change, or `null` where the parameter was unset |
-| `new_value` | string or null | present when `param_name` is and `redacted` is not: the value after the change, or `null` where the change unset it |
-| `redacted` | boolean | present, and true, when the values are withheld |
+| `params` | array | present for `param_change`, and for a `script_update` that changed parameters: one entry per parameter whose stored value the change moved, in ascending order of name |
 | `script_changed` | boolean | true for `register` and `script_update`, false otherwise |
-| `operation_id` | string or null | the lifecycle operation the change triggered, if any |
-| `outcome` | string or null | `pending`, `succeeded`, `cancelled` or `failed` for a triggered operation, `null` where none was triggered |
-| `error` | string | present when `outcome` is `failed` and a cause was recorded: a short description of it |
+
+Each entry of `params` has these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `name` | string | the parameter's name |
+| `previous_value` | string or null | present when `redacted` is not: the value before the change, or `null` where the parameter was unset |
+| `new_value` | string or null | present when `redacted` is not: the value after the change, or `null` where the change unset it |
+| `redacted` | boolean | present, and true, when the values are withheld |
 
 The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was [protected](../runtime/secrets.md#storage) when the change was recorded.

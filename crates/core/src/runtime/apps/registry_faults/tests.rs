@@ -29,11 +29,11 @@ fn entry_with_script(name: &str, script: &str) -> AppEntry {
         phase: Arc::new(parking_lot::Mutex::new(AppPhase::NotInstalled)),
         active_progress: Arc::new(parking_lot::RwLock::new(None)),
         sessions: Default::default(),
+        checks: Default::default(),
         tick_notify: Arc::new(Notify::new()),
         script_error: None,
         current_generation: 0,
         install_seq: None,
-        start_pending: Default::default(),
     }
 }
 

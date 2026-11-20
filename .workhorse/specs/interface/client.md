@@ -86,17 +86,15 @@ For a TCP forward, it MUST count the connections opened and the connections acti
 For a UDP forward, it MUST count the datagrams relayed in each direction, and the datagrams dropped for exceeding the [maximum datagram size](port-forwards.md#borrowed-terms).
 When the forward ends, the CLI MUST print a summary of these counts to standard error.
 
-## Action, shell and install parameters
+## Action and shell parameters
 
 `apps action <app> <name> [key[=value]]...` invokes an action, and `apps shell <app> <name> [key[=value]]...` opens a shell, with the parameters given after the name.
 In both, a `key=value` argument MUST become the parameter `key` with the string value `value`, split at the first `=`.
 A bare `key` MUST become the parameter `key` with the value `true`.
 
-`apps install <app> [key=value]...` invokes the install action with the parameters given after the app.
-Install parameters carry values typed by the app's parameter schema, so each argument MUST be a `key=value` pair.
-If an argument holds no `=`, the CLI MUST report an error naming that argument and send no request.
-
 `apps cancel-action <app>` MUST [cancel](actions.md#cancellation) the app's lifecycle operation.
+
+`apps gate run <app> <gate>` MUST [run](app-control.md#gate-runs) the named gate.
 
 ## Definition sources
 
@@ -127,11 +125,14 @@ The CLI MUST report an error and send no request when the folder holds no files,
 When reading a folder, the CLI MUST leave out version-control metadata directories, such as `.git` and `.jj`, and anything a `.seedignore` file in the folder or one of its subfolders excludes, read as gitignore patterns.
 If a symlink or other non-regular file is not left out, the CLI MUST report an error naming it and send no request.
 
-## Parameter change on update
+## Parameter changes
 
-`apps update` MUST accept one parameter change alongside the definition, as `--set name=value` or `--unset name`, and MUST NOT accept both.
-The CLI MUST send the change as `param`, an object whose `name` is the parameter's name and whose `value` is the new value, or `null` for `--unset`.
-If `--set` is given an argument without `=`, the CLI MUST report an error and send no request.
+`apps params set <app> [name=value]... [--unset <name>]...` MUST send every change it is given in one [parameter change](params.md#parameter-changes) request.
+Each `name=value` argument MUST set the parameter `name` to the string `value`, split at the first `=`, and each `--unset name` MUST unset the parameter `name`.
+
+`apps update` MUST accept parameter changes alongside the definition, as `--set name=value` and `--unset name`, each of which MAY be repeated, and MUST send them as `params` in the one [update](apps.md#update) request.
+
+The CLI MUST report an error and send no request when an argument that sets a parameter has no `=`, when one command changes the same parameter more than once, or when `apps params set` is given no change.
 
 ## Definition export
 

@@ -34,11 +34,11 @@ The resolver address MUST NOT change while the host prefix does not.
 The runtime MUST run the resolver as an infrastructure container, providing DNS forwarding and caching to every workload container.
 The runtime MUST have the resolver running and healthy before it starts any workload container.
 
-While any app is installed or installing, the runtime MUST check the resolver's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration.
+While any app is installed, the runtime MUST check the resolver's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration.
 The resolver is healthy when its health endpoint answers successfully.
 The runtime MUST restart a resolver that is not running.
 The runtime SHOULD restart a running resolver only after its health check has failed on three consecutive iterations.
-The runtime MUST stop the resolver when no app is installed or installing.
+The runtime MUST stop the resolver when no app is installed.
 
 On an iteration that fails to bring the resolver up, or does not finish doing so, the runtime MUST file a [`resolver_failed`](faults.md#host-faults) fault, and MUST clear it as that fault's row specifies.
 

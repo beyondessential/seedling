@@ -1,5 +1,5 @@
 //! Handler probe — dry-run execution mode that enumerates container image
-//! references an app's action/shell/install/on_change handlers might pull.
+//! references an app's action and shell handlers and gate bodies might pull.
 //!
 //! See `spec: IMG#image-discovery` for semantics. The
 //! behaviour of individual `rt.*` calls under probe mode is implemented in
@@ -12,12 +12,12 @@ use std::{
 
 use parking_lot::Mutex;
 use rhai::{AST, Dynamic, Engine, FnPtr, Scope};
-use seedling_protocol::names::{ActionName, AppName, ParamName};
+use seedling_protocol::names::{ActionName, AppName, GateName, ParamName};
 
 use crate::{
     defs::{
-        app::{App, begin_closure_capture, end_closure_capture},
-        install::ParamDef,
+        app::{App, capture_closures},
+        param_def::ParamDef,
     },
     runtime::{
         InstanceRegistry,
@@ -30,25 +30,20 @@ use crate::{
 };
 
 /// Kind of handler being probed. Mirrors the shapes captured by
-/// [`crate::defs::app::ClosureCapture`] plus the `start` handler, which is
-/// captured as an action named `"start"` but surfaced specially.
+/// [`crate::defs::app::ClosureCapture`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandlerKind {
-    Install,
-    Start,
     Action,
     Shell,
-    ParamChange,
+    Gate,
 }
 
 impl HandlerKind {
     pub fn as_str(&self) -> &'static str {
         match self {
-            HandlerKind::Install => "install",
-            HandlerKind::Start => "start",
             HandlerKind::Action => "action",
             HandlerKind::Shell => "shell",
-            HandlerKind::ParamChange => "param_change",
+            HandlerKind::Gate => "gate",
         }
     }
 }
@@ -83,6 +78,66 @@ pub struct ProbeResponse {
     pub all_images: BTreeSet<String>,
 }
 
+/// The images the body of gate `gate` might pull in a run, as a probe of it
+/// reports them, with `last` as the run would give it.
+///
+/// Nothing in the host or the app's persisted state changes.
+// spec: IMG#image-discovery
+// spec: GRUN#preparation
+pub fn probe_gate_body(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+    registry: Arc<dyn InstanceRegistry>,
+    gate: &GateName,
+    last: Option<&App>,
+) -> Result<HandlerProbe, String> {
+    let captured = capture_closures(engine, script_ast, app)
+        .map_err(|e| format!("script evaluation failed: {e}"))?;
+    match captured.gates.get(gate) {
+        Some(Some(body)) => {
+            probe_gate_closure(engine, script_ast, app, &registry, gate, body.clone(), last)
+        }
+        Some(None) => Ok(HandlerProbe {
+            name: gate.as_str().to_owned(),
+            kind: HandlerKind::Gate,
+            images: BTreeSet::new(),
+            error: None,
+            skipped_reason: None,
+        }),
+        None => Err(format!("gate '{gate}' is not declared")),
+    }
+}
+
+/// Probe the body `body` of gate `gate`.
+fn probe_gate_closure(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+    registry: &Arc<dyn InstanceRegistry>,
+    gate: &GateName,
+    body: FnPtr,
+    last: Option<&App>,
+) -> Result<HandlerProbe, String> {
+    let arity = closure_arity(script_ast, &body)
+        .ok_or_else(|| format!("the body of gate '{gate}' cannot be called"))?;
+    Ok(run_probe(
+        engine,
+        app,
+        registry,
+        gate.as_str(),
+        HandlerKind::Gate,
+        body,
+        ProbeCall::Gate {
+            arity,
+            last: last.map_or(Dynamic::UNIT, |last| Dynamic::from(last.clone())),
+        },
+    ))
+}
+
+/// `last_of` gives the app as it was at a gate's last success, `None` for a
+/// gate with none, or why that could not be worked out, as a gate run would
+/// give it to the body.
 // spec: IMG#image-discovery
 pub fn probe_app(
     engine: &Engine,
@@ -90,57 +145,30 @@ pub fn probe_app(
     app: &App,
     registry: Arc<dyn InstanceRegistry>,
     request: &ProbeRequest,
+    last_of: &dyn Fn(&GateName) -> Result<Option<App>, String>,
 ) -> Result<ProbeResponse, String> {
     // Re-run the script to capture every registered closure. The script
     // itself must not fail; if it does, the caller can surface that as an
     // app-level script_error fault and there's nothing to probe.
-    let app_name = app.def.load().name.clone();
-    let captured = {
-        let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle))
-            .map_err(|e| format!("script evaluation failed: {e}"))?;
-        fresh_app.def.rcu(|d| {
-            let mut d = (**d).clone();
-            d.name = app_name.clone();
-            d
-        });
-        *fresh_app.stored.lock() = app.stored.lock().clone();
-        begin_closure_capture();
-        let run_result = engine.run_ast_with_scope(&mut scope, script_ast);
-        let captured = end_closure_capture();
-        run_result.map_err(|e| format!("script evaluation failed: {e}"))?;
-        captured
-    };
+    let captured = capture_closures(engine, script_ast, app)
+        .map_err(|e| format!("script evaluation failed: {e}"))?;
 
     // Build the per-handler probe list in declaration order from the def.
     let def = app.def.load_full();
     let mut handlers: Vec<(String, HandlerKind, FnPtr, BTreeMap<ParamName, ParamDef>)> = Vec::new();
 
-    if let Some(install_closure) = captured.install {
-        let params = def
-            .install
-            .as_ref()
-            .map(|i| i.requirements.clone())
-            .unwrap_or_default();
-        handlers.push((
-            "install".to_owned(),
-            HandlerKind::Install,
-            install_closure,
-            params,
-        ));
-    }
-
     for (name, closure) in &captured.actions {
-        let kind = if name.as_str() == "start" {
-            HandlerKind::Start
-        } else {
-            HandlerKind::Action
-        };
         let params = def
             .actions
             .get(name)
             .map(|a| a.params.clone())
             .unwrap_or_default();
-        handlers.push((name.as_str().to_owned(), kind, closure.clone(), params));
+        handlers.push((
+            name.as_str().to_owned(),
+            HandlerKind::Action,
+            closure.clone(),
+            params,
+        ));
     }
 
     for (name, closure) in &captured.shells {
@@ -157,16 +185,6 @@ pub fn probe_app(
         ));
     }
 
-    for (name, closure) in &captured.param_changes {
-        // on_change handlers take no params (they receive the old App).
-        handlers.push((
-            name.as_str().to_owned(),
-            HandlerKind::ParamChange,
-            closure.clone(),
-            BTreeMap::new(),
-        ));
-    }
-
     let mut results = Vec::with_capacity(handlers.len());
     for (name, kind, closure, param_schema) in handlers {
         let probe_result = probe_handler(
@@ -178,9 +196,31 @@ pub fn probe_app(
             closure,
             &param_schema,
             request,
-            script_ast,
         );
         results.push(probe_result);
+    }
+
+    // A gate without a body has nothing to probe.
+    for (name, body) in &captured.gates {
+        let Some(body) = body else { continue };
+        let probed = last_of(name).and_then(|last| {
+            probe_gate_closure(
+                engine,
+                script_ast,
+                app,
+                &registry,
+                name,
+                body.clone(),
+                last.as_ref(),
+            )
+        });
+        results.push(probed.unwrap_or_else(|error| HandlerProbe {
+            name: name.as_str().to_owned(),
+            kind: HandlerKind::Gate,
+            images: BTreeSet::new(),
+            error: Some(error),
+            skipped_reason: None,
+        }));
     }
 
     let mut all_images = BTreeSet::new();
@@ -196,7 +236,10 @@ pub fn probe_app(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are what one handler probe needs"
+)]
 fn probe_handler(
     engine: &Engine,
     app: &App,
@@ -206,7 +249,6 @@ fn probe_handler(
     closure: FnPtr,
     schema: &BTreeMap<ParamName, ParamDef>,
     request: &ProbeRequest,
-    script_ast: &AST,
 ) -> HandlerProbe {
     // spec: IMG#probe-parameters
     let supplied = request
@@ -231,6 +273,38 @@ fn probe_handler(
         };
     }
 
+    let param_map: rhai::Map = resolved_params
+        .iter()
+        .map(|(k, v)| (k.as_str().into(), Dynamic::from(v.clone())))
+        .collect();
+    let call = match kind {
+        HandlerKind::Shell => ProbeCall::Shell(param_map),
+        HandlerKind::Action | HandlerKind::Gate => ProbeCall::Action(param_map),
+    };
+    run_probe(engine, app, registry, handler_name, kind, closure, call)
+}
+
+/// How a closure is called under a probe.
+enum ProbeCall {
+    Action(rhai::Map),
+    Shell(rhai::Map),
+    /// A gate's body, given as many of its arguments as it declares.
+    Gate {
+        arity: usize,
+        last: Dynamic,
+    },
+}
+
+/// Call `closure` under probe mode and report the images it reached.
+fn run_probe(
+    engine: &Engine,
+    app: &App,
+    registry: &Arc<dyn InstanceRegistry>,
+    handler_name: &str,
+    kind: HandlerKind,
+    closure: FnPtr,
+    call: ProbeCall,
+) -> HandlerProbe {
     // Fresh probe buffer per handler. Shared across rt.* calls through the
     // ReplayContext and into Started's check_barrier.
     let images: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
@@ -258,30 +332,28 @@ fn probe_handler(
     // The script's top-level references `app`; recreate the variable.
     scope.push("app", app.clone());
     scope.push("__bsl_rt", rt);
-    let handler_arity = crate::runtime::barrier::replay::closure_arity(script_ast, &closure);
     scope.push("__bsl_closure", closure);
-    let param_map: rhai::Map = resolved_params
-        .iter()
-        .map(|(k, v)| (k.as_str().into(), Dynamic::from(v.clone())))
-        .collect();
-    scope.push("__bsl_param", param_map);
-
-    let call_script = match kind {
-        HandlerKind::Shell => {
+    let call_script = match call {
+        ProbeCall::Shell(params) => {
+            scope.push("__bsl_param", params);
             scope.push(
                 "__bsl_shell",
                 crate::runtime::barrier::shell::ShellControl::new(),
             );
             "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
         }
-        HandlerKind::ParamChange => {
-            // on_change receives an empty App in probe; dynamic refs that
-            // depend on the previous generation's state are a best-effort
-            // miss rather than a hard failure.
-            scope.push("__bsl_old_app", App::default());
-            crate::runtime::barrier::replay::change_handler_call_script(handler_arity)
+        ProbeCall::Action(params) => {
+            scope.push("__bsl_param", params);
+            "__bsl_closure.call(__bsl_rt, __bsl_param)"
         }
-        _ => "__bsl_closure.call(__bsl_rt, __bsl_param)",
+        ProbeCall::Gate { arity, last } => {
+            scope.push("__bsl_last", last);
+            match arity {
+                0 => "__bsl_closure.call()",
+                1 => "__bsl_closure.call(__bsl_rt)",
+                _ => "__bsl_closure.call(__bsl_rt, __bsl_last)",
+            }
+        }
     };
 
     clear_barrier_hit();
@@ -340,6 +412,14 @@ fn resolve_params(
     (resolved, missing)
 }
 
+/// How many parameters the closure `pointer` declares, or `None` where the
+/// function it points to is not in `ast`.
+pub(crate) fn closure_arity(ast: &AST, pointer: &FnPtr) -> Option<usize> {
+    ast.iter_functions()
+        .find(|function| function.name == pointer.fn_name())
+        .map(|function| function.params.len().saturating_sub(pointer.curry().len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,6 +443,17 @@ mod tests {
         (engine, ast, app)
     }
 
+    /// Probe `app` as it stands, where no gate has a last success.
+    fn probe(
+        engine: &Engine,
+        ast: &AST,
+        app: &App,
+        registry: Arc<dyn InstanceRegistry>,
+        request: &ProbeRequest,
+    ) -> Result<ProbeResponse, String> {
+        probe_app(engine, ast, app, registry, request, &|_| Ok(None))
+    }
+
     // spec: IMG#image-discovery
     #[test]
     fn probes_dynamic_job_images_in_action() {
@@ -377,7 +468,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         let preload = response
             .per_handler
@@ -394,6 +485,95 @@ mod tests {
         assert!(response.all_images.contains("ghcr.io/example/foo:1.2.3"));
     }
 
+    const GATED: &str = r#"
+        app.gate("bare").key(1);
+        app.gate("migrate").key(1).run(|rt, last| {
+            let image = if last == () { "ghcr.io/example/first:1" } else { "ghcr.io/example/again:1" };
+            rt.warm_images(app.job().image(image)).ready();
+        });
+    "#;
+
+    // spec: IMG#image-discovery
+    #[test]
+    fn probes_a_gate_body_with_last_as_a_run_would_give_it() {
+        let (engine, ast, app) = setup_engine_and_app(GATED);
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let probed = |last: Option<App>| {
+            probe_app(
+                &engine,
+                &ast,
+                &app,
+                Arc::clone(&registry),
+                &ProbeRequest::default(),
+                &move |_| Ok(last.clone()),
+            )
+            .expect("probe")
+        };
+
+        let first = probed(None);
+        let [migrate] = first.per_handler.as_slice() else {
+            panic!("only the gate with a body is probed: {first:?}");
+        };
+        assert_eq!(migrate.name, "migrate");
+        assert_eq!(migrate.kind, HandlerKind::Gate);
+        assert!(migrate.error.is_none(), "{migrate:?}");
+        assert_eq!(
+            migrate.images,
+            BTreeSet::from(["ghcr.io/example/first:1".to_owned()]),
+            "a gate with no last success is probed with the unit value"
+        );
+        assert!(first.all_images.contains("ghcr.io/example/first:1"));
+
+        let (_, _, earlier) = setup_engine_and_app(GATED);
+        let again = probed(Some(earlier));
+        assert_eq!(
+            again.per_handler[0].images,
+            BTreeSet::from(["ghcr.io/example/again:1".to_owned()]),
+            "a gate with a last success is probed with that app"
+        );
+    }
+
+    // spec: IMG#image-discovery
+    #[test]
+    fn a_gate_whose_last_cannot_be_worked_out_is_reported_as_an_error_and_not_as_having_none() {
+        let (engine, ast, app) = setup_engine_and_app(GATED);
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Err("generation 3 cannot be rebuilt".to_owned()),
+        )
+        .expect("probe");
+        let migrate = &response.per_handler[0];
+        assert_eq!(migrate.kind, HandlerKind::Gate);
+        assert_eq!(
+            migrate.error.as_deref(),
+            Some("generation 3 cannot be rebuilt")
+        );
+        assert!(migrate.images.is_empty());
+        assert!(response.all_images.is_empty(), "{response:?}");
+    }
+
+    // spec: IMG#image-discovery
+    // spec: GATE#body
+    #[test]
+    fn a_gate_body_may_declare_no_parameter_or_one_under_a_probe() {
+        for body in [
+            "|| { app.job().image(\"ghcr.io/example/x:1\"); }",
+            "|rt| { rt.warm_images(app.job().image(\"ghcr.io/example/x:1\")).ready(); }",
+        ] {
+            let (engine, ast, app) =
+                setup_engine_and_app(&format!("app.gate(\"gated\").key(1).run({body});"));
+            let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+            let response =
+                probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            assert!(response.per_handler[0].error.is_none(), "{response:?}");
+        }
+    }
+
     // spec: IMG#image-discovery
     #[test]
     fn probes_rt_start_dynamic_deployment_image() {
@@ -407,7 +587,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         assert!(
             response
@@ -430,7 +610,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         assert!(
             response
@@ -464,7 +644,7 @@ mod tests {
                 action.params.insert(
                     ParamName::new("version").unwrap(),
                     ParamDef {
-                        kind: crate::defs::install::ParamKind::Text,
+                        kind: crate::defs::param_def::ParamKind::Text,
                         required: true,
                         default_value: None,
                         description: None,
@@ -476,7 +656,7 @@ mod tests {
         });
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response = probe_app(
+        let response = probe(
             &engine,
             &ast,
             &app,
@@ -518,7 +698,7 @@ mod tests {
                 action.params.insert(
                     ParamName::new("version").unwrap(),
                     ParamDef {
-                        kind: crate::defs::install::ParamKind::Text,
+                        kind: crate::defs::param_def::ParamKind::Text,
                         required: true,
                         default_value: None,
                         description: None,
@@ -540,7 +720,7 @@ mod tests {
         };
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response = probe_app(
+        let response = probe(
             &engine,
             &ast,
             &app,
@@ -553,7 +733,7 @@ mod tests {
             "{response:?}"
         );
 
-        let response = probe_app(&engine, &ast, &app, registry, &supplied("shell")).expect("probe");
+        let response = probe(&engine, &ast, &app, registry, &supplied("shell")).expect("probe");
         let deploy = &response.per_handler[0];
         assert!(
             deploy.error.is_some(),
@@ -575,7 +755,7 @@ mod tests {
                 action.params.insert(
                     ParamName::new("xyz").unwrap(),
                     ParamDef {
-                        kind: crate::defs::install::ParamKind::Text,
+                        kind: crate::defs::param_def::ParamKind::Text,
                         required: true,
                         default_value: None,
                         description: None,
@@ -587,7 +767,7 @@ mod tests {
         });
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response = probe_app(
+        let response = probe(
             &engine,
             &ast,
             &app,
@@ -632,7 +812,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         let handler = response
             .per_handler
@@ -668,7 +848,7 @@ mod tests {
         );
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response = probe_app(
+        let response = probe(
             &engine,
             &ast,
             &app,
@@ -695,38 +875,6 @@ mod tests {
         assert!(!response.all_images.contains("ghcr.io/example/tool:0.21.0"));
     }
 
-    // spec: PARAM#change-handlers
-    #[test]
-    fn probes_change_handlers_declaring_zero_one_or_two_parameters() {
-        let (engine, ast, app) = setup_engine_and_app(
-            r#"
-            app.param("zero").on_change(|| {
-                app.job().image("ghcr.io/example/zero:1");
-            });
-            app.param("one").on_change(|rt| {
-                rt.start(app.job().image("ghcr.io/example/one:1"));
-            });
-            app.param("two").on_change(|rt, old| {
-                rt.start(app.job().image("ghcr.io/example/two:1"));
-            });
-        "#,
-        );
-        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
-        let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
-        assert_eq!(response.per_handler.len(), 3);
-        for handler in &response.per_handler {
-            assert!(
-                handler.error.is_none(),
-                "{}: {:?}",
-                handler.name,
-                handler.error
-            );
-        }
-        assert!(response.all_images.contains("ghcr.io/example/one:1"));
-        assert!(response.all_images.contains("ghcr.io/example/two:1"));
-    }
-
     // spec: IMG#image-discovery
     #[test]
     fn passes_through_termination_ensure_success() {
@@ -747,7 +895,7 @@ mod tests {
 
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let response =
-            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
 
         assert!(response.all_images.contains("ghcr.io/example/step1:latest"));
         assert!(response.all_images.contains("ghcr.io/example/step2:latest"));

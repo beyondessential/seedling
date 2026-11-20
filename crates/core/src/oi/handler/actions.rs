@@ -2,23 +2,22 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, ParamName, SiteVolumeName};
 use serde::Deserialize;
 use serde_json::json;
 
-use self::lifecycle::spawn_accepted_operation;
 use super::HandlerResult;
 use crate::{
-    defs::install::ParamDef,
+    defs::param_def::ParamDef,
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
         action_params::{self, ParamValidationError, VolumeLookup},
-        scheduler::{CancelOutcome, RejectReason, ScheduleResult},
+        scheduler::{CancelOutcome, RejectReason},
     },
 };
 
-pub(crate) mod install;
 pub mod lifecycle;
 
 #[derive(Deserialize)]
@@ -38,11 +37,7 @@ pub(crate) struct CancelActionParams {
 /// Request cancellation of the currently-active operation for `app`.
 // spec: OPS#cancellation
 // spec: ACI#cancellation
-pub(crate) fn cancel_action(
-    state: &Arc<OiState>,
-    params: CancelActionParams,
-    ctx: &RequestCtx,
-) -> HandlerResult {
+pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
     let app_name = &params.app;
     let outcome = state.scheduler.lock().request_cancel(app_name);
     match outcome {
@@ -68,40 +63,9 @@ pub(crate) fn cancel_action(
             tracing::info!(app = %app_name, operation_id = %op_id.0, "operation cancel requested");
             Ok(json!({ "cancelled": true }))
         }
-        CancelOutcome::NoActiveOp => {
-            // spec: OPS#stuck-install-recovery
-            // The scheduler has no live operation, but the app's persisted
-            // phase may be Installing from a prior run that crashed or whose
-            // post-cancel cleanup failed to revert the phase. Without a
-            // recovery path the operator can neither cancel nor uninstall
-            // such an app — both gates check phase. Treat cancel as "unstick
-            // the phase": drop into Uninstalling so the reconciler tears
-            // down any half-installed resources (the reconciler skips
-            // NotInstalled apps and would otherwise strand containers and
-            // units that the previous install had already created).
-            let stuck_phase = {
-                let reg = state.registry.read();
-                reg.get(app_name.as_str()).map(|e| e.phase.lock().clone())
-            };
-            match stuck_phase {
-                Some(AppPhase::Installing) => {
-                    lifecycle::set_phase_and_persist(
-                        state,
-                        app_name,
-                        AppPhase::Uninstalling,
-                        Some(Arc::clone(&ctx.events.actor)),
-                    );
-                    tracing::warn!(
-                        app = %app_name,
-                        "no active operation but phase was Installing; transitioning to Uninstalling for teardown"
-                    );
-                    Ok(json!({ "cancelled": true, "recovered_stuck_phase": "installing" }))
-                }
-                _ => Err(OiError::not_found(format!(
-                    "no active operation to cancel for app: {app_name}"
-                ))),
-            }
-        }
+        CancelOutcome::NoActiveOp => Err(OiError::not_found(format!(
+            "no active operation to cancel for app: {app_name}"
+        ))),
     }
 }
 
@@ -155,6 +119,34 @@ fn apply_action_param_schema(
     action_params::apply_schema(action_params_schema, params).map_err(validation_error_to_oi)
 }
 
+/// The refusal of a request the scheduler's admission rejected.
+// spec: ACI#invoking-an-action
+pub(crate) fn rejection_error(app_name: &AppName, reason: RejectReason) -> OiError {
+    match reason {
+        RejectReason::SameAppOperationInProgress => OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("operation in progress for app: {app_name}"),
+        ),
+        RejectReason::SameAppAlreadyQueued => OiError::new(
+            ErrorCode::AlreadyQueued,
+            format!("already queued for app: {app_name}"),
+        ),
+        RejectReason::ChangeBeingApplied => OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("a change to {app_name} is being applied; try again once it is applied"),
+        ),
+        // spec: TRD#uninstall-admission
+        RejectReason::AppUninstalling => OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is being uninstalled: {app_name}"),
+        ),
+        // spec: OPS#unreadable-operation-state
+        RejectReason::OperationStateUnreadable => OiError::internal(
+            "the persisted operation state cannot be read, so no operation can start",
+        ),
+    }
+}
+
 // spec: ACI#invoking-an-action
 pub(crate) fn invoke_action(
     state: &Arc<OiState>,
@@ -191,12 +183,6 @@ pub(crate) fn invoke_action(
         // Shells and actions have separate namespaces: a shell of the same
         // name does not stand in the way of the action.
         let def = entry.app.def.load();
-        // spec: ACN#start-action
-        if action_name == "start" {
-            return Err(OiError::not_found(
-                "'start' is a lifecycle action and cannot be manually invoked".to_string(),
-            ));
-        }
         let action_def = def
             .actions
             .get(action_name.as_str())
@@ -218,81 +204,33 @@ pub(crate) fn invoke_action(
             .map(|e| e.current_generation)
             .unwrap_or(0)
     };
-    let (result, op_id_str) = {
-        let mut sched = state.scheduler.lock();
-        // spec: TRD#uninstall-admission
-        // The phase read above was taken and released before this lock, so an
-        // uninstall could have landed in between. The scheduler reads the
-        // phase under its own lock and refuses an app being torn down, so the
-        // decision is made where every admission passes rather than here.
-        let result = sched.admit(
-            app_name,
-            action_name,
-            action_params.clone(),
-            current_generation,
-            current_generation,
-            "operator",
-            &phase_handle,
-            Some(Arc::clone(&ctx.events.actor)),
-        );
-        let op_id = match &result {
-            ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
-            ScheduleResult::Queued => sched
-                .queue_iter()
-                .find(|q| q.app == *app_name)
-                .map(|q| q.operation_id.clone()),
-            ScheduleResult::Rejected(_) => None,
-        };
-        (result, op_id.map(|id| id.0.clone()).unwrap_or_default())
-    };
-
-    match result {
-        ScheduleResult::Accepted => {
-            let op_id = crate::runtime::barrier::OperationId(op_id_str.clone());
-            spawn_accepted_operation(
-                Arc::clone(state),
-                app_name.clone(),
-                action_name.clone(),
-                op_id,
-                lifecycle::OperationParams::Requested(action_params),
-                current_generation,
-                current_generation,
-                "operator".to_owned(),
-                Some(Arc::clone(&ctx.events.actor)),
-            );
+    let target = OperationTarget::Action(action_name.clone());
+    // spec: TRD#uninstall-admission
+    // The phase read above was taken and released before the scheduler's
+    // lock, so an uninstall could have landed in between. The scheduler reads
+    // the phase under its own lock and refuses an app being torn down, so the
+    // decision is made where every admission passes rather than here.
+    let admission = lifecycle::admit_and_spawn(
+        state,
+        app_name,
+        target,
+        action_params,
+        current_generation,
+        "operator",
+        &phase_handle,
+        Some(Arc::clone(&ctx.events.actor)),
+    );
+    match admission {
+        lifecycle::Admission::Started(operation_id) => {
             tracing::info!(app = %app_name, action = %action_name, schedule = "accepted", "invoke_action");
-            Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))
+            Ok(json!({ "schedule": "accepted", "operation_id": operation_id.0 }))
         }
-        ScheduleResult::Queued => {
-            // spec: OPS#concurrency
-            lifecycle::persist_queued(
-                state,
-                &crate::runtime::barrier::OperationId(op_id_str.clone()),
-            )?;
+        lifecycle::Admission::Queued(operation_id) => {
             tracing::info!(app = %app_name, action = %action_name, schedule = "queued", "invoke_action");
-            Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))
+            Ok(json!({ "schedule": "queued", "operation_id": operation_id.0 }))
         }
-        ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress) => Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("operation in progress for app: {app_name}"),
-        )),
-        ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
-            ErrorCode::AlreadyQueued,
-            format!("already queued for app: {app_name}"),
-        )),
-        ScheduleResult::Rejected(RejectReason::ChangeBeingApplied) => Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("a change to {app_name} is being applied; try again once it is applied"),
-        )),
-        // spec: TRD#uninstall-admission
-        ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
-            ErrorCode::NotInstalled,
-            format!("app is being uninstalled: {app_name}"),
-        )),
-        // spec: OPS#unreadable-operation-state
-        ScheduleResult::Rejected(RejectReason::OperationStateUnreadable) => Err(OiError::internal(
-            "the persisted operation state cannot be read, so no operation can start",
-        )),
+        lifecycle::Admission::CannotPersist(e) => Err(e),
+        lifecycle::Admission::Rejected(reason) => Err(rejection_error(app_name, reason)),
     }
 }
 
@@ -369,21 +307,6 @@ mod tests {
             .unwrap_err();
         assert_eq!(code, "not_found");
         assert!(message.contains("action not found"), "message: {message}");
-    }
-
-    // spec: ACN#start-action
-    #[test]
-    fn invoke_start_is_rejected() {
-        let oi = TestOi::with_app("demo");
-        oi.install("demo");
-        let (code, message) = oi
-            .call(
-                "/apps/action/invoke",
-                json!({ "app": "demo", "name": "start" }),
-            )
-            .unwrap_err();
-        assert_eq!(code, "not_found");
-        assert!(message.contains("lifecycle action"), "message: {message}");
     }
 
     // spec: ACN#param-delivery

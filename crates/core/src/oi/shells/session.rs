@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
 use seedling_protocol::{
-    events::EventSenderWithActor,
+    events::{EventSenderWithActor, OperationTarget},
     names::{ActionName, AppName, SessionId, ShellName},
 };
 use tokio::{io::AsyncWriteExt, sync::Notify};
@@ -13,11 +13,11 @@ use crate::{
     oi::state::OiState,
     runtime::{
         AppPhase,
-        apps::{SessionSlot, SessionSlots},
+        apps::{DynamicSlot, SessionSlots},
         barrier::{
             OperationId,
             oracle::DbWorldOracle,
-            replay::{DbActionLog, OperationContext, OperationResult, run_operation},
+            replay::{DbActionLog, OperationContext, OperationResult, Subject, run_operation},
             shell::{
                 ShellAttachCtx, ShellExecTarget, ShellExit, ShellHost, ShellProgress,
                 clear_shell_attach_ctx, set_shell_attach_ctx,
@@ -27,7 +27,10 @@ use crate::{
         identity::{InstanceVariant, ResourceInstance},
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
-    system::{translate::container::job_spec, types::ExecHandle},
+    system::{
+        translate::container::{ConfigStamp, job_spec},
+        types::ExecHandle,
+    },
 };
 
 /// The three streams of a shell session: the session stream the handshake and
@@ -348,7 +351,7 @@ pub(super) struct SessionTeardown {
     pub(super) app_name: AppName,
     pub(super) session_id: SessionId,
     pub(super) sessions: Arc<SessionSlots>,
-    pub(super) slot: SessionSlot,
+    pub(super) slot: DynamicSlot,
     pub(super) tick_notify: Arc<Notify>,
 }
 
@@ -388,7 +391,7 @@ pub(super) async fn tear_down_session_resources(
     app_name: AppName,
     session_id: SessionId,
     sessions: Arc<SessionSlots>,
-    slot: SessionSlot,
+    slot: DynamicSlot,
     tick_notify: Arc<Notify>,
 ) {
     cleanup_dynamic_resources(
@@ -413,7 +416,7 @@ pub(super) fn validate_shell_params(
     state: &OiState,
     schema: &std::collections::BTreeMap<
         seedling_protocol::names::ParamName,
-        crate::defs::install::ParamDef,
+        crate::defs::param_def::ParamDef,
     >,
     submitted: &std::collections::BTreeMap<String, String>,
 ) -> Result<serde_json::Map<String, serde_json::Value>, seedling_protocol::error::OiError> {
@@ -563,7 +566,7 @@ pub(super) struct ShellRun {
 /// reconciler.
 pub(super) struct SessionProgress {
     pub(super) id: SessionId,
-    pub(super) slot: SessionSlot,
+    pub(super) slot: DynamicSlot,
     pub(super) tick_notify: Arc<Notify>,
 }
 
@@ -629,7 +632,7 @@ pub(super) async fn run_app_shell(
     shell_name: &ShellName,
     schema: &std::collections::BTreeMap<
         seedling_protocol::names::ParamName,
-        crate::defs::install::ParamDef,
+        crate::defs::param_def::ParamDef,
     >,
     validated_params: serde_json::Map<String, serde_json::Value>,
     stop: &StopSignal,
@@ -672,6 +675,8 @@ pub(super) async fn run_app_shell(
     let app_name_for_task = app_name.clone();
     let shell_name_for_task = shell_name.clone();
     let cancel = stop.cancel_token();
+    let gate_runtime = Arc::clone(&state.gate_runtime);
+    let apps = Arc::clone(&state.registry);
 
     let script = tokio::task::spawn_blocking(move || {
         let (engine, mut scope, _) =
@@ -712,7 +717,8 @@ pub(super) async fn run_app_shell(
             Arc::new(DbInstanceRegistry::new(db.clone()));
         // Shell names follow the same bsl.name rules as action names; reuse
         // ActionName as the identifier written into the action log.
-        let shell_as_action = ActionName::new_unchecked(shell_name_for_task.as_str());
+        let shell_as_action =
+            OperationTarget::Action(ActionName::new_unchecked(shell_name_for_task.as_str()));
         let log = DbActionLog::new(
             db.clone(),
             op_id_for_log.clone(),
@@ -720,7 +726,6 @@ pub(super) async fn run_app_shell(
             shell_as_action,
         );
         let world = Arc::new(DbWorldOracle::new(db.clone()));
-
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,
@@ -728,13 +733,38 @@ pub(super) async fn run_app_shell(
         });
 
         let end = loop {
+            // spec: RT#resources-a-gate-holds
+            // What gates keep from the closure is read for each pass, as an
+            // operation's is, so a pass that follows a wait sees the gates as
+            // they stand then.
+            let exclusions = {
+                let (name, def, cipher, remembered) = (
+                    app_name_for_task.clone(),
+                    app.def.load_full(),
+                    Arc::clone(&cipher),
+                    gate_runtime.remembered(&app_name_for_task),
+                );
+                let current =
+                    crate::runtime::gates::CurrentDefinition::of(&apps, &app_name_for_task);
+                db.call(move |db| {
+                    crate::runtime::gates::Exclusions::for_closure(
+                        db,
+                        &name,
+                        &def,
+                        current.as_ref(),
+                        &cipher,
+                        &remembered,
+                        None,
+                    )
+                })
+            };
             let result = run_operation(
                 OperationContext {
                     engine: &engine,
                     script_ast: &ast,
                     operation_id: op_id_for_log.clone(),
                     app: &app,
-                    action_name: shell_name_for_task.as_str(),
+                    subject: Subject::Shell(shell_name_for_task.as_str()),
                     log: &log,
                     world: Arc::clone(&world),
                     registry: Arc::clone(&registry),
@@ -742,14 +772,9 @@ pub(super) async fn run_app_shell(
                     tick_notify: Some(Arc::clone(&tick_notify)),
                     params: validated_params.clone(),
                     // spec: OPS#shell-sessions
-                    is_shell: true,
-                    // spec: OPS#shell-sessions
                     // The dynamic resources the closure starts are recorded
                     // against the session before they are started.
                     db: Some(db.clone()),
-                    source_generation: 0,
-                    target_generation: 0,
-                    script_limits: None,
                     cipher: Some(Arc::clone(&cipher)),
                     operation_volume_bindings: operation_volume_bindings.clone(),
                     // Shell sessions don't participate in operator-initiated
@@ -759,6 +784,7 @@ pub(super) async fn run_app_shell(
                     container_signaler: None,
                     volume_writer: None,
                     executor: None,
+                    exclusions,
                 },
                 &mut scope,
             );
@@ -947,7 +973,7 @@ impl AppShellHost {
             &state.dns_servers,
             Some(state.driver.volume_store.volumes_dir()),
             &external_volumes,
-            0,
+            &ConfigStamp::default(),
         );
         container_spec.health = None;
         container_spec.labels.insert(

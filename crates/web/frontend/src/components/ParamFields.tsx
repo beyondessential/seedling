@@ -17,7 +17,7 @@ import { useState } from "react";
 import { useOiQuery } from "../hooks/useOi";
 import { generateRandomHex, paramFieldType, type ParamEntries } from "../lib/params";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
-import type { InstallRequirement, SiteVolume } from "../lib/types";
+import type { ParamSchema, SiteVolume } from "../lib/types";
 import { OiErrorAlert } from "./OiErrorAlert";
 
 function VolumeParamField({
@@ -27,7 +27,7 @@ function VolumeParamField({
   onChange,
 }: {
   name: string;
-  def: InstallRequirement;
+  def: ParamSchema;
   value: string;
   onChange: (v: string) => void;
 }) {
@@ -56,7 +56,7 @@ function VolumeParamField({
   );
 }
 
-function helper(def: InstallRequirement, value: string): string | undefined {
+function helper(def: ParamSchema, value: string): string | undefined {
   if (def.kind === "password" && value.length > 0) {
     return isStrongPassword(value) ? (def.description || undefined) : "Password is too weak";
   }
@@ -66,7 +66,7 @@ function helper(def: InstallRequirement, value: string): string | undefined {
   return def.description || undefined;
 }
 
-/** One input per declared param of an action, shell or install action: each
+/** One input per declared param of an action or shell: each
  *  pre-filled by its owner with the param's `default_value`, required ones marked. */
 // spec: ACN#param-schemas
 // spec: ACN#param-kinds

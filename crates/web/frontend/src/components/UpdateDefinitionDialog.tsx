@@ -1,18 +1,24 @@
+import AddIcon from "@mui/icons-material/Add";
+import ClearIcon from "@mui/icons-material/Clear";
 import {
   Autocomplete,
   Box,
   Button,
+  Checkbox,
   CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
+  IconButton,
   Stack,
   TextField,
+  Tooltip,
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { useOiAction } from "../hooks/useOiAction";
-import type { PlanResponse } from "../lib/types";
+import type { ParamChanges, PlanResponse } from "../lib/types";
 import { OutlinedActionButton, SolidActionButton } from "./ActionButton";
 import { OiErrorAlert } from "./OiErrorAlert";
 import { PlanDiff } from "./PlanDiff";
@@ -37,6 +43,28 @@ export function referenceFor(input: string, repository: string | null): string |
   if (!trimmed) return null;
   if (trimmed.includes("/")) return trimmed;
   return repository ? `${repository}:${trimmed}` : null;
+}
+
+/** A parameter change being drafted: a value to set, or an unset. */
+interface ParamDraft {
+  name: string;
+  value: string;
+  unset: boolean;
+}
+
+/** The change the drafts make, or why they cannot be sent: rows with no name
+ *  are left out, and a name given twice would be one change made twice. */
+export function paramChangesOf(
+  drafts: ParamDraft[],
+): { changes: ParamChanges | null; duplicate: string | null } {
+  const changes: ParamChanges = {};
+  for (const d of drafts) {
+    const name = d.name.trim();
+    if (!name) continue;
+    if (name in changes) return { changes: null, duplicate: name };
+    changes[name] = d.unset ? null : d.value;
+  }
+  return { changes: Object.keys(changes).length > 0 ? changes : null, duplicate: null };
 }
 
 // spec: UI#app-definitions
@@ -64,8 +92,7 @@ export function UpdateDefinitionDialog({
   const [input, setInput] = useState(
     preselect ? (splitReference(preselect).tag ?? preselect) : "",
   );
-  const [paramName, setParamName] = useState("");
-  const [paramValue, setParamValue] = useState("");
+  const [drafts, setDrafts] = useState<ParamDraft[]>([]);
   const [plan, setPlan] = useState<PlanResponse | null>(null);
 
   useEffect(() => {
@@ -76,9 +103,7 @@ export function UpdateDefinitionDialog({
   }, [repository, tagsExec]);
 
   const reference = referenceFor(input, repository);
-  const param = paramName.trim()
-    ? { name: paramName.trim(), value: paramValue }
-    : null;
+  const { changes, duplicate } = paramChangesOf(drafts);
 
   // Any edit invalidates the review: what is applied must be what was planned.
   const edit = <T,>(set: (v: T) => void) => (v: T) => {
@@ -86,12 +111,15 @@ export function UpdateDefinitionDialog({
     setPlan(null);
   };
 
+  const changeDraft = (index: number, over: Partial<ParamDraft>) =>
+    edit(setDrafts)(drafts.map((d, i) => (i === index ? { ...d, ...over } : d)));
+
   const handleReview = async () => {
-    if (!reference) return;
+    if (!reference || duplicate) return;
     const result = await planExec("/apps/plan", {
       app: appName,
       proposed_reference: reference,
-      ...(param ? { proposed_params: [param] } : {}),
+      ...(changes ? { proposed_params: changes } : {}),
     });
     if (result) setPlan(result as PlanResponse);
   };
@@ -101,7 +129,7 @@ export function UpdateDefinitionDialog({
     const result = await saveExec("/apps/update", {
       app: appName,
       reference,
-      ...(param ? { param } : {}),
+      ...(changes ? { params: changes } : {}),
     });
     if (result !== null) onApplied();
   };
@@ -153,23 +181,65 @@ export function UpdateDefinitionDialog({
                 />
               )}
             />
-            <Box sx={{ flex: 1, display: "flex", gap: 1, alignItems: "flex-start" }}>
-              <TextField
-                label="Param"
-                size="small"
-                value={paramName}
-                onChange={(e) => edit(setParamName)(e.target.value)}
-                helperText="Optional. Applied with the new definition."
-              />
-              <TextField
-                label="Value"
-                size="small"
-                value={paramValue}
-                disabled={!paramName.trim()}
-                onChange={(e) => edit(setParamValue)(e.target.value)}
-              />
-            </Box>
           </Box>
+          <Stack spacing={1}>
+            {drafts.map((d, i) => (
+              <Box key={i} sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+                <TextField
+                  label="Param"
+                  size="small"
+                  value={d.name}
+                  onChange={(e) => changeDraft(i, { name: e.target.value })}
+                  error={duplicate !== null && d.name.trim() === duplicate}
+                  helperText={
+                    duplicate !== null && d.name.trim() === duplicate
+                      ? "Named more than once"
+                      : undefined
+                  }
+                />
+                <TextField
+                  label="Value"
+                  size="small"
+                  value={d.value}
+                  disabled={d.unset || !d.name.trim()}
+                  onChange={(e) => changeDraft(i, { value: e.target.value })}
+                />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={d.unset}
+                      onChange={(e) => changeDraft(i, { unset: e.target.checked })}
+                    />
+                  }
+                  label="Unset"
+                />
+                <Tooltip title="Remove this change">
+                  <IconButton
+                    size="small"
+                    aria-label="Remove this change"
+                    onClick={() => edit(setDrafts)(drafts.filter((_, j) => j !== i))}
+                  >
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            ))}
+            <Box>
+              <Button
+                size="small"
+                startIcon={<AddIcon fontSize="small" />}
+                onClick={() => edit(setDrafts)([...drafts, { name: "", value: "", unset: false }])}
+              >
+                Change a param
+              </Button>
+              {drafts.length === 0 && (
+                <Box component="span" sx={{ ml: 1, color: "text.secondary", fontSize: 12 }}>
+                  Optional. Changes are applied with the new definition.
+                </Box>
+              )}
+            </Box>
+          </Stack>
           {planError && <OiErrorAlert error={planError} />}
           {saveError && <OiErrorAlert error={saveError} />}
           {plan && <PlanDiff plan={plan} />}
@@ -182,7 +252,7 @@ export function UpdateDefinitionDialog({
         <OutlinedActionButton
           safety="read"
           onClick={handleReview}
-          disabled={!reference || planning || saving}
+          disabled={!reference || duplicate !== null || planning || saving}
         >
           {planning ? "Planning…" : "Review"}
         </OutlinedActionButton>

@@ -59,10 +59,10 @@ The runtime MUST ensure that IPv6 and IPv4 forwarding are enabled on the host.
 ## Translator lifecycle
 
 While NAT64 is active, the translator MUST be operational before any workload container starts.
-While NAT64 is active, the runtime MUST keep the translator set up whenever any app is installed or installing.
-While NAT64 is active, the runtime MUST set the translator up when it starts with an app installed or installing, and when an app begins installing after a period with none installed or installing.
-When it starts with no app installed or installing, the runtime MAY leave the translator torn down.
-The runtime MUST tear the translator down when no app is installed or installing.
+While NAT64 is active, the runtime MUST keep the translator set up whenever any app is installed.
+While NAT64 is active, the runtime MUST set the translator up when it starts with an app installed, and when an app is installed after a period with none installed.
+When it starts with no app installed, the runtime MAY leave the translator torn down.
+The runtime MUST tear the translator down when no app is installed.
 
 The runtime MUST NOT tear the translator down when it shuts down.
 
@@ -74,7 +74,7 @@ It MUST NOT start workload containers until set-up succeeds, and MUST retry set-
 
 A teardown that cannot establish whether the translator is installed has failed.
 The runtime MUST NOT report the translator removed while it remains installed.
-After a failed teardown, the runtime MUST file a [`nat64_teardown_failed`](faults.md#host-faults) fault, and MUST attempt the teardown again on each iteration while no app is installed or installing.
+After a failed teardown, the runtime MUST file a [`nat64_teardown_failed`](faults.md#host-faults) fault, and MUST attempt the teardown again on each iteration while no app is installed.
 
 ## IPv6 egress
 

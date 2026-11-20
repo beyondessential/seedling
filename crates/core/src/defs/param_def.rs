@@ -1,13 +1,3 @@
-use std::collections::BTreeMap;
-
-use seedling_protocol::names::ParamName;
-
-// spec: ACN#install-action
-#[derive(Debug, Clone)]
-pub struct InstallDef {
-    pub requirements: BTreeMap<ParamName, ParamDef>,
-}
-
 // spec: ACN#param-schemas
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamDef {
@@ -55,10 +45,10 @@ pub enum ParamKind {
 }
 
 impl ParamKind {
-    /// Whether this kind may appear in static param schemas (`app.param`,
-    /// `app.on_install`'s requirements). `Volume` is rejected there because
-    /// its bindings are operation-scoped — the only sensible static
-    /// equivalent is a declared external_volume mapping.
+    /// Whether this kind may appear in static param schemas (`app.param`).
+    /// `Volume` is rejected there because its bindings are operation-scoped —
+    /// the only sensible static equivalent is a declared external_volume
+    /// mapping.
     pub fn allowed_static(self) -> bool {
         !matches!(self, Self::Volume)
     }

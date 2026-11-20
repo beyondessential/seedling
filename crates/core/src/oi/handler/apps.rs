@@ -2,19 +2,17 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, ParamName};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    defs::{
-        install::ParamKind,
-        resource::{Resource, ResourceKind},
-    },
+    defs::resource::{Resource, ResourceKind},
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        apps::{AppRegistry, AppStatus, status as app_status},
+        apps::{AppEntry, AppRegistry, AppStatus, status as app_status},
         definition::{Bundle, Source, version},
         desired::{DynamicCreator, list_dynamic_resources_for_app},
         faults,
@@ -31,10 +29,12 @@ use crate::{
 use super::{
     HandlerResult,
     appdef_json::{
-        action_entry_json, install_entry_json, param_schema_entry_json, resource_static_json,
-        scale_bounds_of, shell_entry_json,
+        action_entry_json, param_schema_entry_json, resource_static_json, scale_bounds_of,
+        shell_entry_json,
     },
     definition::{self, DefinitionInput, Resolved},
+    gates as gate_surface,
+    params::ParamChanges,
 };
 
 #[derive(Deserialize)]
@@ -49,23 +49,15 @@ pub(crate) struct CreateParams {
     pub definition: DefinitionInput,
 }
 
-/// One parameter change made alongside a definition update.
-// spec: APPS#update
-#[derive(Deserialize)]
-pub(crate) struct ParamUpdate {
-    pub name: ParamName,
-    /// `None` unsets the parameter.
-    #[serde(default)]
-    pub value: Option<String>,
-}
-
 #[derive(Deserialize)]
 pub(crate) struct UpdateParams {
     pub app: AppName,
     #[serde(flatten)]
     pub definition: DefinitionInput,
+    /// Parameter changes made alongside the definition.
+    // spec: APPS#update
     #[serde(default)]
-    pub param: Option<ParamUpdate>,
+    pub params: Option<ParamChanges>,
 }
 
 #[derive(Deserialize)]
@@ -84,13 +76,6 @@ pub(crate) struct ListGenerationsParams {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ProposedParam {
-    pub name: String,
-    /// `Some(s)` to model setting; `None` to model unsetting.
-    pub value: Option<String>,
-}
-
-#[derive(Deserialize)]
 pub(crate) struct PlanParams {
     pub app: AppName,
     #[serde(default)]
@@ -99,8 +84,8 @@ pub(crate) struct PlanParams {
     pub proposed_bundle: Option<serde_json::Map<String, Value>>,
     #[serde(default)]
     pub proposed_reference: Option<String>,
-    #[serde(default)]
-    pub proposed_params: Option<Vec<ProposedParam>>,
+    #[serde(default, deserialize_with = "super::params::proposed_changes")]
+    pub proposed_params: Option<ParamChanges>,
 }
 
 #[derive(Deserialize)]
@@ -148,18 +133,16 @@ pub(crate) fn app_blocked(app: &str, doing: &str, blocker: &AppBlocker) -> OiErr
 /// Extract the fields needed to persist an app entry without holding `&AppEntry`.
 pub(crate) fn extract_persist_fields(
     entry: &crate::runtime::apps::AppEntry,
-) -> (AppName, u64, bool, bool, bool) {
+) -> (AppName, u64, bool, bool) {
     use crate::runtime::apps::AppPhase;
     let phase = entry.phase.lock();
     let installed = matches!(*phase, AppPhase::Installed | AppPhase::Uninstalling);
     let uninstalling = matches!(*phase, AppPhase::Uninstalling);
-    let installing = matches!(*phase, AppPhase::Installing);
     (
         entry.name.clone(),
         entry.current_generation,
         installed,
         uninstalling,
-        installing,
     )
 }
 
@@ -170,23 +153,20 @@ pub(crate) fn persist_app_fields(
     generation_n: u64,
     installed: bool,
     uninstalling: bool,
-    installing: bool,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
         // spec: INFRA#database
         "INSERT INTO registered_apps \
-             (name, installed, uninstalling, installing, current_generation) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
+             (name, installed, uninstalling, current_generation) \
+         VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT(name) DO UPDATE SET \
              installed = excluded.installed, \
              uninstalling = excluded.uninstalling, \
-             installing = excluded.installing, \
              current_generation = excluded.current_generation",
         rusqlite::params![
             name,
             installed as i64,
             uninstalling as i64,
-            installing as i64,
             generation_n as i64,
         ],
     )?;
@@ -440,14 +420,10 @@ pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
     }
 }
 
-pub(crate) fn install_requirement_kind_str(kind: ParamKind) -> &'static str {
-    kind.as_str()
-}
-
 pub(crate) fn serialize_param_schema(
     schema: &std::collections::BTreeMap<
         seedling_protocol::names::ParamName,
-        crate::defs::install::ParamDef,
+        crate::defs::param_def::ParamDef,
     >,
 ) -> serde_json::Map<String, Value> {
     schema
@@ -456,7 +432,7 @@ pub(crate) fn serialize_param_schema(
             (
                 k.as_str().to_owned(),
                 json!({
-                    "kind": install_requirement_kind_str(req.kind),
+                    "kind": req.kind.as_str(),
                     "required": req.required,
                     "description": req.description,
                     "default_value": req.default_value,
@@ -522,8 +498,11 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                     .as_str(),
                 "description": description,
             });
-            if let AppStatus::Operating { action_name } = &standing.status {
-                obj["action_name"] = json!(action_name);
+            if let AppStatus::Operating { operation } = &standing.status {
+                match operation {
+                    OperationTarget::Action(action) => obj["action_name"] = json!(action),
+                    OperationTarget::Gate(gate) => obj["gate"] = json!(gate),
+                }
             }
             obj
         })
@@ -617,6 +596,29 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     let def = entry.app.def.load();
 
+    // spec: APPS#gates
+    let gate_standing = gate_surface::read(
+        state,
+        &params.app,
+        &entry.app.def.load_full(),
+        entry.script_error.as_ref().map(|(why, _)| why.clone()),
+        *entry.phase.lock() == AppPhase::Installed,
+        stopped_set.clone(),
+        entry
+            .active_progress
+            .read()
+            .as_ref()
+            .and_then(crate::runtime::OperationProgress::body_starts),
+    )?;
+    let running_gate = active
+        .as_ref()
+        .filter(|a| a.app == params.app)
+        .and_then(|a| match &a.target {
+            OperationTarget::Gate(gate) => Some(gate.clone()),
+            OperationTarget::Action(_) => None,
+        });
+    let gates_json = gate_surface::gates_json(&def, &gate_standing, running_gate.as_ref());
+
     // spec: APPS#description
     // spec: APPS#parameters
     let params_json: Vec<Value> = def
@@ -658,9 +660,6 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     for s in def.shells.values() {
         actions_json.push(shell_entry_json(s));
     }
-    if let Some(inst) = &def.install {
-        actions_json.push(install_entry_json(inst));
-    }
 
     // spec: APPS#description — overlay live schedule timing onto each action's
     // `schedules` array. The bare entries from `action_entry_json` carry
@@ -686,6 +685,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // def. The DB closure below only needs plain data (no locks) to augment
     // with instance state, faults, stopped flag, and current scale.
     struct ResourceInfo {
+        held_by: Vec<String>,
+        waiting_on: Option<Vec<Value>>,
         kind: ResourceKind,
         name_str: String,
         base_json: Value,
@@ -696,6 +697,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .resources
         .iter()
         .map(|(id, resource)| ResourceInfo {
+            held_by: gate_surface::held_by(&gate_standing, id),
+            waiting_on: gate_surface::waiting_on(&gate_standing, id),
             kind: id.kind,
             name_str: id.name.as_str().to_owned(),
             base_json: resource_static_json(id.kind, id.name.as_str(), resource, &def),
@@ -774,6 +777,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     resource_obj["instances"] = json!(instances_json);
                     resource_obj["faults"] = json!(resource_faults);
                     resource_obj["stopped"] = json!(is_stopped);
+                    // spec: APPS#resources
+                    resource_obj["held_by"] = json!(info.held_by);
+                    if let Some(waiting_on) = info.waiting_on {
+                        resource_obj["waiting_on"] = json!(waiting_on);
+                    }
 
                     // spec: CTL#scaling
                     if let Some((low, high)) = info.scale_bounds {
@@ -850,6 +858,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 let dyn_records = list_dynamic_resources_for_app(db, &name_owned)?;
                 let mut out = Vec::new();
                 for rec in dyn_records {
+                    // spec: APPS#dynamic-resources
+                    // A gate check's Job is the runtime's, not a closure's.
+                    let (operation_id, session_id) = match rec.creator {
+                        DynamicCreator::Operation => (Some(rec.operation_id.clone()), None),
+                        DynamicCreator::ShellSession => (None, Some(rec.operation_id.clone())),
+                        DynamicCreator::GateCheck => continue,
+                    };
                     let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
                         continue;
                     };
@@ -895,14 +910,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         "type": kind_str,
                         "anonymous": rec.resource_name.is_none(),
                         // spec: APPS#dynamic-resources
-                        "operation_id": match rec.creator {
-                            DynamicCreator::Operation => Value::String(rec.operation_id.clone()),
-                            DynamicCreator::ShellSession => Value::Null,
-                        },
-                        "session_id": match rec.creator {
-                            DynamicCreator::Operation => Value::Null,
-                            DynamicCreator::ShellSession => Value::String(rec.operation_id.clone()),
-                        },
+                        "operation_id": operation_id,
+                        "session_id": session_id,
                         // spec: BSL#descriptions
                         "description": rec.description,
                         "instances": [{
@@ -965,19 +974,17 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         "params": params_json,
         "unknown_params": unknown_params_json,
         "actions": actions_json,
+        "gates": gates_json,
     });
 
     // spec: APPS#current-operation
     // Surface the in-flight operation (action name, generation transition,
-    // currently-blocking barrier) when the app is Operating or Installing,
-    // from the same scheduler snapshot the status was derived from. An
-    // install runs an action closure and is reported like any other
-    // operation. An uninstall is driven by the reconciler and has no
-    // operation to report.
-    let reported_operation = active.as_ref().filter(|a| {
-        a.app == params.app
-            && matches!(&status, AppStatus::Operating { .. } | AppStatus::Installing)
-    });
+    // currently-blocking barrier) when the app is Operating, from the same
+    // scheduler snapshot the status was derived from. An uninstall is driven
+    // by the reconciler and has no operation to report.
+    let reported_operation = active
+        .as_ref()
+        .filter(|a| a.app == params.app && matches!(&status, AppStatus::Operating { .. }));
     if let Some(op) = reported_operation {
         let op_id = &op.operation_id;
         // spec: APPS#current-operation
@@ -1027,12 +1034,15 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 .unwrap_or(Value::Null)
         };
 
-        desc["current_operation"] = json!({
-            "action_name": op.action,
+        let mut current = json!({
             "barrier": barrier_json,
-            "source_generation": op.source_generation,
-            "target_generation": op.target_generation,
+            "generation": op.generation,
         });
+        match &op.target {
+            OperationTarget::Action(action) => current["action_name"] = json!(action),
+            OperationTarget::Gate(gate) => current["gate"] = json!(gate),
+        }
+        desc["current_operation"] = current;
     }
 
     Ok(desc)
@@ -1175,31 +1185,34 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
             if let Some(definition) = definitions.get(&e.generation) {
                 obj.insert("definition".into(), definition.clone());
             }
-            if let Some(name) = &e.param_name {
-                obj.insert("param_name".into(), json!(name));
-            }
-            if e.param_name.is_some() {
+            if !e.params.is_empty() {
                 // spec: APPS#generation-history
                 // spec: SEC#redaction
-                let is_secret = e
-                    .param_name
-                    .as_deref()
-                    .and_then(|n| live_params_schema.get(n))
-                    .map(|d| d.is_secret())
-                    .unwrap_or(false);
-                let redacted = is_secret || e.previous_value_redacted || e.new_value_redacted;
-                if redacted {
-                    obj.insert("redacted".into(), json!(true));
-                } else {
-                    obj.insert(
-                        "previous_value".into(),
-                        e.previous_value.map_or(Value::Null, Value::String),
-                    );
-                    obj.insert(
-                        "new_value".into(),
-                        e.new_value.map_or(Value::Null, Value::String),
-                    );
-                }
+                let params: Vec<Value> = e
+                    .params
+                    .into_iter()
+                    .map(|p| {
+                        let is_secret = live_params_schema
+                            .get(p.name.as_str())
+                            .is_some_and(|d| d.is_secret());
+                        let mut entry = serde_json::Map::new();
+                        entry.insert("name".into(), json!(p.name));
+                        if is_secret || p.previous_value_redacted || p.new_value_redacted {
+                            entry.insert("redacted".into(), json!(true));
+                        } else {
+                            entry.insert(
+                                "previous_value".into(),
+                                p.previous_value.map_or(Value::Null, Value::String),
+                            );
+                            entry.insert(
+                                "new_value".into(),
+                                p.new_value.map_or(Value::Null, Value::String),
+                            );
+                        }
+                        Value::Object(entry)
+                    })
+                    .collect();
+                obj.insert("params".into(), Value::Array(params));
             }
             obj.insert(
                 "script_changed".into(),
@@ -1210,23 +1223,6 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                         .unwrap_or(false)
                 ),
             );
-            obj.insert(
-                "operation_id".into(),
-                e.operation_id.map_or(Value::Null, Value::String),
-            );
-            obj.insert(
-                "outcome".into(),
-                e.outcome
-                    .as_ref()
-                    .map_or(Value::Null, |o| json!(o.as_str())),
-            );
-            if matches!(
-                e.outcome,
-                Some(crate::runtime::generations::Outcome::Failed)
-            ) && let Some(err) = e.outcome_error
-            {
-                obj.insert("error".into(), json!(err));
-            }
             Value::Object(obj)
         })
         .collect();
@@ -1254,9 +1250,29 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     // Empty input → empty diff.
     // spec: PRM#change-planning
     if proposed_definition.is_empty() && params.proposed_params.is_none() {
+        // spec: PRM#change-planning
+        // The evaluated definition is the current one, which fails to
+        // evaluate while the app has a script error.
+        let (current, script_error, installed) = {
+            let reg = state.registry.read();
+            let entry = reg.get(name).expect("confirmed registered");
+            (
+                entry.app.def.load_full(),
+                entry.script_error.as_ref().map(|(why, _)| why.clone()),
+                *entry.phase.lock() == AppPhase::Installed,
+            )
+        };
+        if let Some(why) = script_error {
+            return Ok(json!({ "errors": [why] }));
+        }
+        let gates_would_run = if installed {
+            gate_surface::would_run(state, &params.app, &current, None)?
+        } else {
+            Vec::new()
+        };
         return Ok(json!({
             "diff": Vec::<Value>::new(),
-            "on_change_would_fire": Vec::<String>::new(),
+            "gates_would_run": gates_would_run,
             "rejections": Vec::<Value>::new(),
             "errors": Vec::<String>::new(),
         }));
@@ -1281,19 +1297,10 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         .map_err(|e| OiError::internal(format!("db params: {e}")))?;
 
     // Build the proposed param map from current with the proposals overlaid.
-    let mut proposed_param_map = current_params.clone();
-    if let Some(props) = &params.proposed_params {
-        for p in props {
-            match &p.value {
-                Some(v) => {
-                    proposed_param_map.insert(p.name.clone(), v.clone());
-                }
-                None => {
-                    proposed_param_map.remove(&p.name);
-                }
-            }
-        }
-    }
+    let proposed_param_map = match &params.proposed_params {
+        Some(changes) => changes.applied_to(&current_params),
+        None => current_params.clone(),
+    };
 
     let (proposed_app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
@@ -1317,6 +1324,18 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
 
     let cur_def = current_app.def.load();
     let prop_def = proposed_app.def.load();
+
+    // spec: PRM#change-planning
+    let installed = state
+        .registry
+        .read()
+        .get(name)
+        .is_some_and(|entry| *entry.phase.lock() == AppPhase::Installed);
+    let gates_would_run = if installed {
+        gate_surface::would_run(state, &params.app, &proposed_app.def.load_full(), None)?
+    } else {
+        Vec::new()
+    };
 
     let mut diff: Vec<Value> = Vec::new();
     for id in prop_def.resources.keys() {
@@ -1352,27 +1371,6 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         }
     }
 
-    // spec: PRM#change-planning
-    // The handlers the change would schedule if committed: the new definition
-    // registers one for a parameter whose stored value would change, and only
-    // while the app is installed.
-    let installed = {
-        let reg = state.registry.read();
-        let entry = reg.get(name).expect("confirmed registered");
-        matches!(*entry.phase.lock(), AppPhase::Installed)
-    };
-    let mut on_change_would_fire: Vec<String> = Vec::new();
-    if installed {
-        for handler_param in prop_def.param_changes.iter() {
-            let cur = current_params.get(handler_param.as_str());
-            let prop = proposed_param_map.get(handler_param.as_str());
-            if cur != prop {
-                on_change_would_fire.push(handler_param.as_str().to_owned());
-            }
-        }
-    }
-    on_change_would_fire.sort();
-
     // spec: PRM#validation
     let rejections: Vec<Value> = rejections
         .into_iter()
@@ -1381,7 +1379,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
 
     Ok(json!({
         "diff": diff,
-        "on_change_would_fire": on_change_would_fire,
+        "gates_would_run": gates_would_run,
         "errors": Vec::<String>::new(),
         "rejections": rejections,
     }))
@@ -1455,7 +1453,7 @@ pub(crate) fn register_resolved(
         .call(move |db| -> rusqlite::Result<u64> {
             let tx = db.conn.unchecked_transaction()?;
             // The app row first, so the generation rows can FK against it.
-            persist_app_fields(db, &name_owned, 0, false, false, false)?;
+            persist_app_fields(db, &name_owned, 0, false, false)?;
             // spec: GEN#generation-numbers — initial registration creates
             // generation 1.
             let generation = crate::runtime::generations::bump_register(
@@ -1464,7 +1462,7 @@ pub(crate) fn register_resolved(
                 &bundle_owned,
                 &source_owned,
             )?;
-            persist_app_fields(db, &name_owned, generation, false, false, false)?;
+            persist_app_fields(db, &name_owned, generation, false, false)?;
             tx.commit()?;
             Ok(generation)
         })
@@ -1516,19 +1514,20 @@ pub(crate) fn deregister_app(
     }
 
     // spec: APPS#removal
-    // A session's teardown is driven through the app's entry, and the records
-    // it has yet to tear down are spared only while the entry holds its slot.
+    // The teardown of a session or a gate check is driven through the app's
+    // entry, and the records it has yet to tear down are spared only while the
+    // entry holds its slot.
     if state
         .registry
         .read()
         .get(name)
-        .is_some_and(|entry| !entry.sessions.is_empty())
+        .is_some_and(AppEntry::has_dynamic_slots)
     {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!(
-                "a shell session is open on the app or still tearing down what it started; \
-                 wait for it to finish: {name}"
+                "a shell session or gate check is running on the app or still tearing down \
+                 what it started; wait for it to finish: {name}"
             ),
         ));
     }
@@ -1543,12 +1542,6 @@ pub(crate) fn deregister_app(
             let phase = entry.phase.lock();
             match *phase {
                 AppPhase::NotInstalled => {}
-                AppPhase::Installing => {
-                    return Err(OiError::new(
-                        ErrorCode::OperationInProgress,
-                        format!("an install is in progress; wait for it to finish: {name}"),
-                    ));
-                }
                 AppPhase::Uninstalling => {
                     return Err(OiError::new(
                         ErrorCode::RequirementsInvalid,
@@ -1612,6 +1605,95 @@ pub(crate) fn deregister_app(
     Ok(json!({}))
 }
 
+// spec: ACI#install
+pub(crate) fn install_app(state: &OiState, params: AppParams, ctx: &RequestCtx) -> HandlerResult {
+    let name = params.app.as_str();
+
+    let phase_arc = {
+        let reg = state.registry.read();
+        let entry = reg
+            .get(name)
+            .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
+        if !matches!(*entry.phase.lock(), AppPhase::NotInstalled) {
+            return Err(already_installed(name));
+        }
+        if entry.script_error.is_some() {
+            return Err(OiError::script_error(format!(
+                "app has a script error: {name}"
+            )));
+        }
+        Arc::clone(&entry.phase)
+    };
+
+    let hold = super::params::hold_for_change(state, &params.app)?;
+    // The phase and the script error were read before the hold, so another
+    // install, or a change that failed to evaluate, can have landed in between.
+    if !matches!(*phase_arc.lock(), AppPhase::NotInstalled) {
+        return Err(already_installed(name));
+    }
+    // spec: ACI#install
+    if state
+        .registry
+        .read()
+        .get(name)
+        .is_some_and(|entry| entry.script_error.is_some())
+    {
+        return Err(OiError::script_error(format!(
+            "app has a script error: {name}"
+        )));
+    }
+
+    // spec: ING#claims-across-apps
+    // The install takes its place after every install before it, the app
+    // becomes `Installed`, and an app with no gates is set up, in one durable
+    // step: none is observable without the others.
+    let name_owned = params.app.clone();
+    // spec: GRUN#app-setup
+    // An app that declares no gates is set up once it is installed.
+    let declares_no_gates = state
+        .registry
+        .read()
+        .get(name)
+        .is_some_and(|entry| entry.app.def.load().gates.is_empty());
+    let install_seq = state
+        .db
+        .call(move |db| {
+            let seq = db.atomically(|db| {
+                let seq = AppRegistry::record_install_completed(db, &name_owned)?;
+                crate::runtime::apps::write_phase(db, &name_owned, &AppPhase::Installed)?;
+                if declares_no_gates {
+                    crate::runtime::gates::store::mark_set_up(db, &name_owned)?;
+                }
+                Ok(seq)
+            })?;
+            *phase_arc.lock() = AppPhase::Installed;
+            Ok::<_, rusqlite::Error>(seq)
+        })
+        .map_err(|e| OiError::internal(format!("recording the install: {e}")))?;
+    if let Some(entry) = state.registry.write().get_mut(name) {
+        entry.install_seq = Some(install_seq);
+    }
+    drop(hold);
+
+    // spec: EVT#event-types
+    state.event_tx.app_phase_changed(
+        &params.app,
+        "installed",
+        Some(Arc::clone(&ctx.events.actor)),
+    );
+    state.tick_notify.notify_one();
+
+    tracing::info!(app = %name, "install accepted; app is now installed");
+    Ok(json!({}))
+}
+
+fn already_installed(name: &str) -> OiError {
+    OiError::new(
+        ErrorCode::AlreadyInstalled,
+        format!("app is already installed: {name}"),
+    )
+}
+
 pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult {
     let name = params.app.as_str();
 
@@ -1622,12 +1704,6 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
             .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
         match *entry.phase.lock() {
             AppPhase::Installed => {}
-            AppPhase::Installing => {
-                return Err(OiError::new(
-                    ErrorCode::OperationInProgress,
-                    format!("install is in progress; cannot uninstall yet: {name}"),
-                ));
-            }
             AppPhase::NotInstalled | AppPhase::Uninstalling => {
                 return Err(OiError::new(
                     ErrorCode::NotInstalled,
@@ -1757,9 +1833,9 @@ pub(crate) fn update_app(
         }
     }
 
-    // Reject if an operation is active or queued for this app, and hold it
-    // until the handler for a changed param is admitted.
-    let hold = super::params::hold_for_change(state, &params.app)?;
+    // Hold the app against other changes and operation admission until this
+    // change is applied.
+    let _hold = super::params::hold_for_change(state, &params.app)?;
 
     // spec: APPS#update — everything up to the commit below is a check:
     // fetching, bundle rules, evaluation and validation all happen before
@@ -1777,40 +1853,18 @@ pub(crate) fn update_app(
         )
     };
 
-    let name_owned = params.app.clone();
-    let cipher = Arc::clone(&state.cipher);
-    // spec: SEC#generation-history — whether the value being replaced is held in
-    // secret storage is read before anything is written, since this update
-    // may be what stops the definition marking it secret.
-    let changing = params.param.as_ref().map(|p| p.name.clone());
-    let (current_params, previous_is_secret) = state
-        .db
-        .call(move |db| -> rusqlite::Result<_> {
-            let values = crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)?;
-            let stored_secret = match &changing {
-                Some(name) => {
-                    crate::runtime::apps::secret_params::is_stored_secret(db, &name_owned, name)?
-                }
-                None => false,
-            };
-            Ok((values, stored_secret))
-        })
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db params: {e}")))?;
+    let current_params = super::params::load_current_values(state, &params.app)?;
 
-    // spec: OPS#parameter-changes — at most one parameter,
-    // carried in the same step as the definition.
-    let mut proposed = current_params.clone();
-    let change = params.param.and_then(|p| {
-        let previous = current_params.get(p.name.as_str()).cloned();
-        if previous == p.value {
-            return None;
-        }
-        match &p.value {
-            Some(v) => proposed.insert(p.name.as_str().to_owned(), v.clone()),
-            None => proposed.remove(p.name.as_str()),
-        };
-        Some((p.name, previous, p.value))
-    });
+    // spec: APPS#update — the parameter changes are carried in the same step
+    // as the definition.
+    let proposed = match &params.params {
+        Some(changes) => changes.applied_to(&current_params),
+        None => current_params.clone(),
+    };
+    let edits = match &params.params {
+        Some(changes) => changes.edits(&current_params),
+        None => Vec::new(),
+    };
 
     // spec: PRM#validation — the validators are those of the new
     // definition, evaluated with the values the request would produce.
@@ -1826,21 +1880,25 @@ pub(crate) fn update_app(
         return Err(validation_error(&rejections));
     }
 
-    // The new definition decides whether the changed parameter is secret.
-    let is_secret = change.as_ref().is_some_and(|(pname, _, _)| {
-        app.def
-            .load()
-            .params
-            .get(pname)
-            .is_some_and(|d| d.is_secret())
-    });
+    // The new definition decides which changed parameters are secret.
+    let secret: std::collections::BTreeMap<ParamName, bool> = {
+        let def = app.def.load();
+        edits
+            .iter()
+            .map(|e| {
+                (
+                    e.name.clone(),
+                    def.params.get(&e.name).is_some_and(|d| d.is_secret()),
+                )
+            })
+            .collect()
+    };
 
     // spec: GEN#generation-numbers — the definition, the parameter change, and
     // the generation bump commit together or not at all.
     let name_owned = params.app.clone();
     let bundle_owned = Arc::clone(&bundle);
     let source_owned = source.clone();
-    let change_owned = change.clone();
     let cipher = Arc::clone(&state.cipher);
     let app_for_migration = app.clone();
     let declared: stopped::StoppedSet = app
@@ -1850,37 +1908,29 @@ pub(crate) fn update_app(
         .keys()
         .map(|id| (id.kind, id.name.as_str().to_owned()))
         .collect();
-    let generation = state
+    let (generation, stored) = state
         .db
-        .call(move |db| -> rusqlite::Result<u64> {
+        .call(move |db| -> rusqlite::Result<_> {
             let tx = db.conn.unchecked_transaction()?;
-            let recorded = match &change_owned {
-                Some((pname, previous, new_value)) => {
-                    crate::runtime::apps::store_param_value(
-                        db,
-                        &cipher,
-                        &name_owned,
-                        pname,
-                        new_value.as_deref(),
-                        is_secret,
-                    )?;
-                    Some(crate::runtime::generations::ParamChange {
-                        name: pname,
-                        previous: previous.as_deref(),
-                        new_value: new_value.as_deref(),
-                        is_secret,
-                        previous_is_secret,
-                    })
-                }
-                None => None,
+            // spec: SEC#generation-history — whether each value being replaced
+            // is held in secret storage is read before anything is written,
+            // since this update may be what stops the definition marking it
+            // secret.
+            let stored =
+                super::params::store_edits(db, &cipher, &name_owned, edits, |name| secret[name])?;
+            let generation = {
+                let records: Vec<_> = stored
+                    .iter()
+                    .map(super::params::StoredEdit::record)
+                    .collect();
+                crate::runtime::generations::bump_script_update(
+                    db,
+                    &name_owned,
+                    &bundle_owned,
+                    &source_owned,
+                    (!records.is_empty()).then_some((records.as_slice(), cipher.as_ref())),
+                )?
             };
-            let generation = crate::runtime::generations::bump_script_update(
-                db,
-                &name_owned,
-                &bundle_owned,
-                &source_owned,
-                recorded.as_ref().map(|c| (c, cipher.as_ref())),
-            )?;
             // spec: SEC#migration
             crate::runtime::apps::migrate_param_storage(
                 db,
@@ -1892,7 +1942,7 @@ pub(crate) fn update_app(
             // spec: CTL#resource-stop
             stopped::discard_undeclared(db, &name_owned, &declared)?;
             tx.commit()?;
-            Ok(generation)
+            Ok((generation, stored))
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("db generation: {e}")))?;
 
@@ -1969,43 +2019,20 @@ pub(crate) fn update_app(
     // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, &params.app);
 
-    // spec: APPS#update — a handler for the changed parameter, registered
-    // by the new definition, runs under it with `old` the previous
-    // generation. A definition replaced without a parameter change
-    // schedules nothing.
-    let schedule = match &change {
-        Some((pname, _, _)) => super::params::schedule_on_change(
-            state,
-            hold,
-            &params.app,
-            pname,
-            generation,
-            &ctx.events.actor,
-        )?,
-        None => "not_scheduled",
-    };
-
-    tracing::info!(app = %name, generation, schedule, "updated app");
-    // spec: EVT#event-types
-    // spec: SEC#generation-history — each value is withheld on the same terms as
-    // it is recorded, so dropping the `secret` flag does not announce the
-    // value the flag was protecting.
-    let param_event = change.as_ref().map(|(pname, previous, new_value)| {
-        let keep = |secret: bool, v: &Option<String>| if secret { None } else { v.clone() };
-        seedling_protocol::events::AppUpdatedParam {
-            name: pname.clone(),
-            previous_value: keep(previous_is_secret, previous),
-            new_value: keep(is_secret, new_value),
-        }
-    });
+    tracing::info!(app = %name, generation, "updated app");
+    // spec: EVT#app-events
+    // spec: SEC#generation-history
     ctx.events.app_updated(
         &params.app,
         generation,
         (previous_generation != 0).then_some(previous_generation),
         source.to_json(&bundle),
-        param_event,
+        stored
+            .iter()
+            .map(super::params::StoredEdit::event_entry)
+            .collect(),
     );
-    Ok(json!({ "schedule": schedule, "generation": generation }))
+    Ok(json!({ "generation": generation }))
 }
 
 // spec: ACTU#held-volumes
@@ -2118,6 +2145,27 @@ pub(crate) fn restart_deployment(
         return Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is not installed: {name}"),
+        ));
+    }
+
+    // spec: CTL#deployment-restart
+    let holders = gate_surface::holders_of(
+        state,
+        &params.app,
+        &entry.app.def.load(),
+        &crate::defs::resource::ResourceId {
+            kind: ResourceKind::Deployment,
+            name: Arc::new(deployment_name.to_owned()),
+        },
+    )?;
+    if !holders.is_empty() {
+        let holders: Vec<&str> = holders.iter().map(|g| g.as_str()).collect();
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "deployment {deployment_name} cannot be restarted while a gate holds it: {}",
+                holders.join(", ")
+            ),
         ));
     }
 

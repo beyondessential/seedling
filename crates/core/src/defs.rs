@@ -98,10 +98,11 @@ pub mod deployment;
 pub mod enums;
 pub mod export;
 pub mod file;
+pub mod gate;
 pub mod ingress;
-pub mod install;
 pub mod job;
 pub mod param;
+pub mod param_def;
 pub mod pod;
 pub mod resource;
 pub mod service;
@@ -124,6 +125,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<action::Action>();
     engine.build_type::<deployment::Deployment>();
     engine.build_type::<job::Job>();
+    engine.build_type::<gate::Gate>();
     engine.build_type::<volume::Volume>();
     engine.build_type::<volume::ExternalVolume>();
     engine.build_type::<runtime::RuntimeInstance>();
@@ -140,15 +142,19 @@ pub fn register(engine: &mut Engine) {
 
 // spec: BSL#evaluation
 // spec: BSL#enums
-/// Check the rules a definition is held to once it has evaluated in full,
-/// which no single call could check because a later call can change what an
-/// earlier one depends on.
+/// Check a definition once its script has evaluated in full: resolve what the
+/// script left to the end of its evaluation, then check the rules it is held
+/// to, which no single call could check because a later call can change what
+/// an earlier one depends on.
 // spec: BSL#evaluation
-pub fn check_evaluated(def: &app::AppDef) -> Result<(), String> {
-    ingress::check_redirect_terminations(def)?;
-    ingress::check_claim_conflicts(def)?;
-    container::check_images_declared(def)?;
-    service::check_route_balances(def)
+pub fn finish_evaluation(app: &app::App) -> Result<(), String> {
+    gate::resolve_exclusive_selections(app)?;
+    let def = app.def.load();
+    ingress::check_redirect_terminations(&def)?;
+    ingress::check_claim_conflicts(&def)?;
+    container::check_images_declared(&def)?;
+    service::check_route_balances(&def)?;
+    gate::check_gates(&def)
 }
 
 /// The scope a script is evaluated in, holding the constants for the host

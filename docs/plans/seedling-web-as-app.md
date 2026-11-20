@@ -61,10 +61,10 @@ document.
    simply don't instantiate it.
 5. **There is no bespoke bootstrap CLI.** The operator-facing flow is just
    the standard surfaces: `templates/instantiate` to create the
-   `seedling-web` app from the built-in template, then `apps/install/invoke`
+   `seedling-web` app from the built-in template, then `apps/install`
    when ready, then `ingresses site attach` to give the web UI a hostname.
    Everything else — keypair generation, key authorisation, OI mapping
-   creation, client-key delivery into the install action — is performed
+   creation, client-key delivery into the app's secret parameter — is performed
    by the daemon as a side effect of instantiating a built-in template
    that declares `external_service("oi")`.
 6. **Container image is the published seedling image at
@@ -232,10 +232,10 @@ registration, in addition to the standard registration:
 2. Authorises the public fingerprint in `authorized_keys`, with a label
    like `<app> (built-in)`. The row is tagged so deregister can remove
    it.
-3. Stores the encrypted private key under the operation's secret-param
-   storage, keyed by the synthetic install-param name `client-key`.
-   When `apps/install/invoke` later runs, the daemon merges this key
-   into the operator-supplied params before validation. The key never
+3. Stores the encrypted private key as the app's secret parameter
+   `client-key`, as if an operator had set it, in the same step as the
+   registration. A gate keyed on that parameter writes it into the state
+   volume, and the deployment is ordered after the gate. The key never
    passes through the OI on the wire.
 4. For each `external_service` slot the AppDef declares whose name is
    `"oi"`, inserts an `external_service_mappings` row with
@@ -243,7 +243,7 @@ registration, in addition to the standard registration:
 
 On `apps/remove` of an app whose `builtin_source` is non-NULL, the
 daemon's deregister hook performs the matching teardown: revoke the
-authorized-key entry, delete the synthetic client-key secret, delete the
+authorized-key entry, delete the app's parameters with it, delete the
 oi mapping(s).
 
 Re-instantiation under the same name (after a previous deregister)
@@ -279,7 +279,21 @@ let svc = app.service("web")
     .description("Plain HTTP + WebTransport ports for the seedling web UI")
     .exported(#{ description: "Seedling web UI" });
 
+// The daemon sets this parameter when it instantiates the built-in
+// template, and authorises the public half then; an operator never does.
+let client_key = app.param("client-key")
+    .kind("password")
+    .required(true)
+    .description("PEM-encoded ed25519 client key, set by the daemon");
+
+// The key gate writes the private half into the state volume, and runs again
+// whenever the key changes. Only a digest of the key is recorded.
+let key_gate = app.gate("client-key")
+    .key(client_key.value())
+    .run(|rt| { rt.write(state, "/web.key", client_key.value()); });
+
 app.deployment("web")
+    .after(key_gate)
     .description("Seedling web UI / WebTransport gateway")
     .image(SEEDLING_IMAGE)
     .mount("/var/lib/seedling-web", state)
@@ -303,18 +317,6 @@ app.deployment("web")
         interval: 10, retries: 3, start_period: 10, on_failure: "replace",
     });
 
-app.on_install(|rt, param| {
-    // The daemon synthesised the `client-key` install param at template-
-    // instantiation time and authorised the public half then. Write the
-    // private half into the state volume and start the deployment.
-    state.write("/web.key", param["client-key"]);
-    rt.start(app).ready(60);
-}, #{
-    requirements: #{
-        "client-key": #{ kind: "password", required: true,
-            description: "PEM-encoded ed25519 client key (synthesised by the daemon at template-instantiation time; never operator-supplied)" },
-    },
-});
 ```
 
 Notes on this sketch:
@@ -348,9 +350,9 @@ A typical bring-up sequence:
    password-hash <argon2id-hash>`. The argon2id-hashing step is operator-
    side; we either ship a small `seedling-ctl util hash-password` helper
    (out of scope for this plan) or document the openssl/argon2 cli path.
-4. `seedling-ctl apps install seedling-web`. The daemon attaches the
-   synthesised `client-key` install param transparently before invoking
-   the install action. Deployment comes up.
+4. `seedling-ctl apps install seedling-web`. The key gate writes the
+   client key the daemon stored at instantiation, and the deployment comes
+   up once the gate is satisfied.
 5. `seedling-ctl ingresses site attach <site-ingress> --port 443
    --protocol https --to seedling-web/web`. For example, attaching the
    discovered Tailscale site ingress (per the site-ingresses plan)
@@ -455,7 +457,7 @@ still applies to the seedling-web binary's own infrequent calls to
   - Add `r[template.builtin]`: built-in templates are owned by the
     daemon binary, refreshed at startup, immutable through the OI;
     instantiation triggers the side-effect set described above
-    (keypair, authorisation, oi mapping, synthesised install param).
+    (keypair, authorisation, oi mapping, the `client-key` parameter).
     Constrain `instantiate` so a built-in template must be instantiated
     under the template's own name.
   - Reserve the `seedling-web` app name (`r[app.name.reserved]`).
@@ -497,7 +499,7 @@ still applies to the seedling-web binary's own infrequent calls to
    `seedling-web` app name. Add the `apps.builtin_source` column. Wire
    the side-effect set into the templates/instantiate handler:
    keypair generation, authorized-key insert, oi mapping insert,
-   synthesised install-param storage. Wire the matching teardown into
+   storage of the `client-key` parameter. Wire the matching teardown into
    `apps/remove`. Confirm (and amend if needed) the runtime spec rule
    that `apps/update` bumps the generation when re-evaluation diverges
    even if the script content is byte-identical.
@@ -522,12 +524,13 @@ still applies to the seedling-web binary's own infrequent calls to
   constants produces a new generation when the AppDef diverges. The
   runtime spec is silent on this case — needs clarification or a small
   amendment in phase 4.
-- **Synthesised install-param delivery shape.** The plan stores the
-  daemon-generated client key as a synthetic install param the daemon
-  merges in at `apps/install/invoke` time. Alternative shapes: a runtime-
-  scoped param-binding analogous to operation-scoped volume bindings, or
-  a `rt.*` builder that exposes the key directly to the install closure
-  without it being a param at all. Choose during phase 4.
+- **Client-key delivery shape.** The plan stores the daemon-generated
+  client key as an ordinary secret parameter that a gate writes out. The
+  parameter is visible (redacted) in `apps/show` and could be changed by
+  an operator, which would break the key authorisation. Alternatives: a
+  parameter kind the OI refuses to set, or a `rt.*` builder that exposes
+  the key directly to the gate's body without it being a parameter at
+  all. Choose during phase 4.
 - **Operator UX for setting the password hash.** The operator needs to
   produce an Argon2id hash with the same parameters seedling-web uses.
   Options: ship a `seedling-ctl util hash-password` helper, document the
@@ -570,7 +573,7 @@ still applies to the seedling-web binary's own infrequent calls to
 - `crates/core/src/runtime/templates.rs` — `is_builtin` column +
   migration; reject mutate/remove on built-in rows; constrain
   `instantiate` for built-in templates; instantiate side-effects
-  (keypair, key authorisation, oi mapping, synthesised install param).
+  (keypair, key authorisation, oi mapping, the `client-key` parameter).
 - `crates/core/src/runtime/apps.rs` — `builtin_source` column;
   deregister hook that runs the matching teardown for built-in-derived
   apps; bump the generation when re-evaluation diverges with

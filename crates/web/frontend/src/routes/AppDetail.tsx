@@ -79,6 +79,7 @@ import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import {
   appPriorityColor,
   deploymentPriorityColor,
+  gateStateColor,
   statusColor,
   statusLabel,
 } from "../lib/status";
@@ -86,6 +87,7 @@ import type {
   ActionSchedule,
   AppAction,
   AppDetail,
+  AppGate,
   AppParam,
   AppPriority,
   AppResource,
@@ -94,16 +96,19 @@ import type {
   DiscoverResponse,
   ExternalMapping,
   FaultRecord,
+  GateTarget,
   HandlerProbe,
   HeaderOpsSummary,
   HeadersSummary,
   HealthcheckSummary,
   ImagePin,
   ImageSummary,
+  ParamChanges,
   ResourceDef,
   ResourceInstance,
   RestartSummary,
   SeedlingEvent,
+  WaitTarget,
 } from "../lib/types";
 
 /** Restart count for an instance, linking through to its full history. The
@@ -750,6 +755,36 @@ function ResourcesSection({
                 }}
               />
             )}
+            {(r.held_by ?? []).length > 0 && (
+              <Tooltip title="A gate keeps this resource stopped until it succeeds">
+                <Chip
+                  label={`held by ${(r.held_by ?? []).join(", ")}`}
+                  size="small"
+                  color="warning"
+                  variant="outlined"
+                  sx={{
+                    fontSize: "0.65rem",
+                    height: 18,
+                    "& .MuiChip-label": { px: 0.75 },
+                  }}
+                />
+              </Tooltip>
+            )}
+            {(r.waiting_on ?? []).length > 0 && (
+              <Tooltip title="Will not start until these are ready, or these checks pass">
+                <Chip
+                  label={`waiting on ${(r.waiting_on ?? []).map(waitLabel).join(", ")}`}
+                  size="small"
+                  color="info"
+                  variant="outlined"
+                  sx={{
+                    fontSize: "0.65rem",
+                    height: 18,
+                    "& .MuiChip-label": { px: 0.75 },
+                  }}
+                />
+              </Tooltip>
+            )}
             {r.dynamic && (
               <Chip
                 label={r.anonymous ? "dynamic · anonymous" : "dynamic"}
@@ -1002,22 +1037,18 @@ function ResourcesSection({
   );
 }
 
+/** The edits an operator has made to an app's params, held until they are
+ *  applied together as one change. */
+// spec: UI#operator-capabilities
 function ParamsSection({
   appName,
   params,
-  status,
   onRefresh,
 }: {
   appName: string;
   params: AppParam[];
-  status: AppStatus;
   onRefresh: () => void;
 }) {
-  // Params cannot be mutated while the app has an operation in flight; the
-  // backend rejects with operation_in_progress. Disable the edit/add
-  // affordances and explain why, rather than letting users hit a server error.
-  const operationInFlight = status === "installing" || status === "operating";
-  const editsDisabled = operationInFlight;
   const { execute, loading, error, clearError } = useOiAction();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -1025,7 +1056,22 @@ function ParamsSection({
   const [adding, setAdding] = useState(false);
   const [addName, setAddName] = useState("");
   const [addValue, setAddValue] = useState("");
-  const [planning, setPlanning] = useState<{ name: string; value: string } | null>(null);
+  const [staged, setStaged] = useState<ParamChanges>({});
+  const [planning, setPlanning] = useState<ParamChanges | null>(null);
+  const stagedNames = Object.keys(staged).sort();
+  const declared = new Set(params.map((p) => p.name));
+  const undeclaredStaged = stagedNames.filter((n) => !declared.has(n));
+
+  const stage = (name: string, value: string | null) => {
+    setStaged((s) => ({ ...s, [name]: value }));
+  };
+
+  const unstage = (name: string) => {
+    setStaged((s) => {
+      const { [name]: _dropped, ...rest } = s;
+      return rest;
+    });
+  };
 
   const startEdit = (p: AppParam) => {
     setEditing(p.name);
@@ -1053,34 +1099,34 @@ function ParamsSection({
     setAddValue("");
   };
 
-  const saveAdd = async () => {
+  const saveAdd = () => {
     if (!addName.trim()) return;
-    const result = await execute("/apps/params/set", {
-      app: appName,
-      name: addName.trim(),
-      value: addValue,
-    });
-    if (result === null) return;
+    stage(addName.trim(), addValue);
     setAdding(false);
     setAddName("");
     setAddValue("");
-    onRefresh();
   };
 
-  const save = async () => {
+  // A secret's value is never sent to the console, so an empty draft of a
+  // set secret is one nobody typed, not a value to store.
+  const blankSecret = (p: AppParam) => p.secret && p.is_set && draft === "";
+
+  const save = () => {
     if (!editing) return;
-    const result = await execute("/apps/params/set", {
-      app: appName,
-      name: editing,
-      value: draft,
-    });
-    if (result === null) return;
+    const p = params.find((q) => q.name === editing);
+    if (p && blankSecret(p)) return;
+    stage(editing, draft);
     setEditing(null);
-    onRefresh();
   };
 
-  const unset = async (paramName: string) => {
-    if ((await execute("/apps/params/unset", { app: appName, name: paramName })) === null) return;
+  const unset = (paramName: string) => {
+    stage(paramName, null);
+    if (editing === paramName) setEditing(null);
+  };
+
+  const apply = async () => {
+    if ((await execute("/apps/params/set", { app: appName, params: staged })) === null) return;
+    setStaged({});
     onRefresh();
   };
 
@@ -1093,7 +1139,7 @@ function ParamsSection({
           value={addName}
           onChange={(e) => setAddName(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void saveAdd();
+            if (e.key === "Enter") saveAdd();
             if (e.key === "Escape") cancelAdd();
           }}
           autoFocus
@@ -1110,7 +1156,7 @@ function ParamsSection({
           value={addValue}
           onChange={(e) => setAddValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void saveAdd();
+            if (e.key === "Enter") saveAdd();
             if (e.key === "Escape") cancelAdd();
           }}
           fullWidth
@@ -1123,15 +1169,15 @@ function ParamsSection({
         <IconActionButton
           safety="read"
           tooltip="Plan this change"
-          onClick={() => setPlanning({ name: addName.trim(), value: addValue })}
+          onClick={() => setPlanning({ ...staged, [addName.trim()]: addValue })}
           disabled={!addName.trim()}
         >
           <ArticleIcon fontSize="small" />
         </IconActionButton>
         <IconActionButton
           safety="write"
-          tooltip="Save"
-          onClick={() => void saveAdd()}
+          tooltip="Stage this change"
+          onClick={saveAdd}
           disabled={loading || !addName.trim()}
         >
           <CheckIcon fontSize="small" />
@@ -1143,16 +1189,71 @@ function ParamsSection({
     </TableRow>
   ) : null;
 
-  const disabledBanner = operationInFlight ? (
-    <Alert severity="info" sx={{ mb: 1 }}>
-      Params are read-only while an operation is in progress for this app.
-    </Alert>
-  ) : null;
+  const pendingBanner =
+    stagedNames.length > 0 ? (
+      <Alert
+        severity="info"
+        action={
+          <Box sx={{ display: "flex", gap: 1 }}>
+            <OutlinedActionButton
+              safety="read"
+              size="small"
+              onClick={() => setPlanning(staged)}
+            >
+              Plan
+            </OutlinedActionButton>
+            <SolidActionButton
+              safety="write"
+              size="small"
+              onClick={() => void apply()}
+              disabled={loading}
+            >
+              Apply
+            </SolidActionButton>
+            <Button size="small" onClick={() => setStaged({})} disabled={loading}>
+              Discard
+            </Button>
+          </Box>
+        }
+      >
+        {stagedNames.length === 1
+          ? "1 change is waiting to be applied."
+          : `${stagedNames.length} changes are waiting to be applied together.`}
+      </Alert>
+    ) : null;
 
-  if (params.length === 0 && !adding) {
+  const stagedValue = (name: string) => {
+    const value = staged[name];
+    return value === null ? (
+      <Box component="span" sx={{ color: "warning.main" }}>
+        unset
+      </Box>
+    ) : (
+      value
+    );
+  };
+
+  const stagedRows = undeclaredStaged.map((name) => (
+    <TableRow key={`staged-${name}`}>
+      <TableCell sx={{ fontFamily: "monospace" }}>{name}</TableCell>
+      <TableCell>
+        <Chip label="not declared" size="small" variant="outlined" />
+      </TableCell>
+      <TableCell sx={{ fontFamily: "monospace" }}>
+        {stagedValue(name)}
+        <Chip label="pending" size="small" color="info" sx={{ ml: 1 }} />
+      </TableCell>
+      <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+        <IconActionButton safety="read" tooltip="Discard this change" onClick={() => unstage(name)}>
+          <ClearIcon fontSize="small" />
+        </IconActionButton>
+      </TableCell>
+    </TableRow>
+  ));
+
+  if (params.length === 0 && !adding && stagedNames.length === 0) {
     return (
       <Stack spacing={1}>
-        {disabledBanner}
         {error && <OiErrorAlert error={error} />}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Typography
@@ -1167,7 +1268,6 @@ function ParamsSection({
             size="small"
             startIcon={<AddIcon fontSize="small" />}
             onClick={startAdd}
-            disabled={editsDisabled}
           >
             Set param
           </OutlinedActionButton>
@@ -1178,7 +1278,7 @@ function ParamsSection({
 
   return (
     <Stack spacing={1}>
-      {disabledBanner}
+      {pendingBanner}
       {error && <OiErrorAlert error={error} />}
       <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
         {!adding && (
@@ -1187,7 +1287,6 @@ function ParamsSection({
             size="small"
             startIcon={<AddIcon fontSize="small" />}
             onClick={startAdd}
-            disabled={editsDisabled}
           >
             Set param
           </OutlinedActionButton>
@@ -1221,7 +1320,7 @@ function ParamsSection({
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && p.kind !== "multiline")
-                          void save();
+                          save();
                         if (e.key === "Escape") cancel();
                       }}
                       autoFocus
@@ -1285,19 +1384,21 @@ function ParamsSection({
                                 <IconButton
                                   size="small"
                                   aria-label="Plan this change"
+                                  disabled={blankSecret(p)}
                                   onClick={() =>
-                                    setPlanning({ name: p.name, value: draft })
+                                    setPlanning({ ...staged, [p.name]: draft })
                                   }
                                 >
                                   <ArticleIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
-                              <Tooltip title="Save">
+                              <Tooltip title="Stage this change">
                                 <span>
                                   <IconButton
                                     size="small"
-                                    onClick={() => void save()}
-                                    disabled={loading}
+                                    aria-label="Stage this change"
+                                    onClick={save}
+                                    disabled={loading || blankSecret(p)}
                                   >
                                     <CheckIcon fontSize="small" />
                                   </IconButton>
@@ -1352,6 +1453,15 @@ function ParamsSection({
                         p.secret ||
                         p.kind === "password" ||
                         p.kind === "weak-password";
+                      if (p.name in staged) {
+                        const value = staged[p.name];
+                        return (
+                          <>
+                            {value === null || !isMasked ? stagedValue(p.name) : "••••••••"}
+                            <Chip label="pending" size="small" color="info" sx={{ ml: 1 }} />
+                          </>
+                        );
+                      }
                       if (p.secret && p.is_set) {
                         return "••••••••";
                       }
@@ -1384,7 +1494,7 @@ function ParamsSection({
                       safety="write"
                       tooltip={p.value == null && !p.is_set ? "Set" : "Edit"}
                       onClick={() => startEdit(p)}
-                      disabled={loading || editsDisabled}
+                      disabled={loading}
                     >
                       <EditIcon fontSize="small" />
                     </IconActionButton>
@@ -1392,8 +1502,8 @@ function ParamsSection({
                       <IconActionButton
                         safety="dangerous"
                         tooltip="Unset"
-                        onClick={() => void unset(p.name)}
-                        disabled={loading || editsDisabled}
+                        onClick={() => unset(p.name)}
+                        disabled={loading}
                       >
                         <DeleteOutlineIcon fontSize="small" />
                       </IconActionButton>
@@ -1404,16 +1514,26 @@ function ParamsSection({
                         <IconActionButton
                           safety="write"
                           tooltip="Reset to default"
-                          onClick={() => void unset(p.name)}
-                          disabled={loading || editsDisabled}
+                          onClick={() => unset(p.name)}
+                          disabled={loading}
                         >
                           <RestoreIcon fontSize="small" />
                         </IconActionButton>
                       )}
+                    {p.name in staged && (
+                      <IconActionButton
+                        safety="read"
+                        tooltip="Discard this change"
+                        onClick={() => unstage(p.name)}
+                      >
+                        <ClearIcon fontSize="small" />
+                      </IconActionButton>
+                    )}
                   </TableCell>
                 </TableRow>
               ),
             )}
+            {stagedRows}
             {addRow}
           </TableBody>
         </Table>
@@ -1421,8 +1541,7 @@ function ParamsSection({
       {planning && (
         <PlanParamDialog
           appName={appName}
-          name={planning.name}
-          value={planning.value}
+          changes={planning}
           onClose={() => setPlanning(null)}
         />
       )}
@@ -1455,15 +1574,8 @@ function ActionInvokeDialog({
   };
 
   const handleSubmit = async () => {
-    const method =
-      action.kind === "install"
-        ? "/apps/install/invoke"
-        : "/apps/action/invoke";
-    const params =
-      action.kind === "install"
-        ? { app: appName, params: values }
-        : { app: appName, name: action.name, params: values };
-    if ((await execute(method, params)) === null) return;
+    const request = { app: appName, name: action.name, params: values };
+    if ((await execute("/apps/action/invoke", request)) === null) return;
     onSuccess();
     handleClose();
   };
@@ -1471,7 +1583,7 @@ function ActionInvokeDialog({
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontFamily: "monospace", pb: 1 }}>
-        {action.kind === "install" ? "Install" : `Run: ${action.name}`}
+        {`Run: ${action.name}`}
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
@@ -1503,7 +1615,7 @@ function ActionInvokeDialog({
           onClick={handleSubmit}
           disabled={loading || paramsBlocker(paramEntries, values) !== null}
         >
-          {loading ? "Running…" : action.kind === "install" ? "Install" : "Run"}
+          {loading ? "Running…" : "Run"}
         </SolidActionButton>
       </DialogActions>
     </Dialog>
@@ -1512,111 +1624,54 @@ function ActionInvokeDialog({
 
 function InstallSection({
   appName,
-  installAction,
   hasScriptError,
-  faults,
   onRefresh,
 }: {
   appName: string;
-  installAction: AppAction | undefined;
   hasScriptError: boolean;
-  faults: FaultRecord[];
   onRefresh: () => void;
 }) {
   const { execute, loading } = useOiAction();
-  const [dialogOpen, setDialogOpen] = useState(false);
-
-  const hasParams =
-    installAction && Object.keys(installAction.params).length > 0;
-  // Surface the most-recent operation_failed fault so operators who land here
-  // after a failed install (or just after uninstall) can see what went wrong
-  // and jump straight to the logs, without having to hunt for the Logs button.
-  const operationFailures = faults.filter((f) => f.kind === "operation_failed");
 
   const handleInstall = async () => {
-    if (hasParams) {
-      setDialogOpen(true);
-    } else {
-      if ((await execute("/apps/install/invoke", { app: appName, params: {} })) === null) return;
-      onRefresh();
-    }
+    if ((await execute("/apps/install", { app: appName })) === null) return;
+    onRefresh();
   };
 
   return (
-    <>
-      <Box
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 2,
+        py: 6,
+      }}
+    >
+      <Typography
         sx={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 2,
-          py: 6,
+          color: "text.secondary",
         }}
       >
-        <Typography
-          sx={{
-            color: "text.secondary",
-          }}
-        >
-          This app has not been installed yet.
-        </Typography>
-        <SolidActionButton
-          safety="write"
-          size="large"
-          onClick={() => void handleInstall()}
-          disabled={loading || hasScriptError}
-        >
-          {loading ? "Installing…" : "Install"}
-        </SolidActionButton>
-        {installAction && (
-          <Typography
-            variant="caption"
-            sx={{ color: "text.secondary", textAlign: "center", maxWidth: 480 }}
-          >
-            Runs the app's{" "}
-            <Box component="code" sx={{ fontFamily: "monospace" }}>
-              on_install
-            </Box>{" "}
-            action
-            {installAction.description ? ` — ${installAction.description}` : ""}
-            .
-          </Typography>
-        )}
-        {operationFailures.length > 0 && (
-          <Alert severity="error" sx={{ width: "100%", mt: 2 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              The last install attempt failed:
-            </Typography>
-            {operationFailures.map((f) => (
-              <Typography
-                key={f.id}
-                variant="body2"
-                sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }}
-              >
-                {f.description}
-              </Typography>
-            ))}
-          </Alert>
-        )}
-        <Button
-          size="small"
-          startIcon={<ArticleIcon />}
-          component={Link}
-          to={`/apps/${appName}/logs`}
-        >
-          View logs from previous runs
-        </Button>
-      </Box>
-      {installAction && (
-        <ActionInvokeDialog
-          appName={appName}
-          action={installAction}
-          open={dialogOpen}
-          onClose={() => setDialogOpen(false)}
-          onSuccess={onRefresh}
-        />
-      )}
-    </>
+        This app has not been installed yet.
+      </Typography>
+      <SolidActionButton
+        safety="write"
+        size="large"
+        onClick={() => void handleInstall()}
+        disabled={loading || hasScriptError}
+      >
+        {loading ? "Installing…" : "Install"}
+      </SolidActionButton>
+      <Button
+        size="small"
+        startIcon={<ArticleIcon />}
+        component={Link}
+        to={`/apps/${appName}/logs`}
+      >
+        View logs from previous runs
+      </Button>
+    </Box>
   );
 }
 
@@ -1675,6 +1730,127 @@ function SchedulesSection({ actions }: { actions: AppAction[] }) {
   );
 }
 
+function targetLabel(t: GateTarget): string {
+  return t.kind === "gate" ? t.name : `${t.kind} ${t.name}`;
+}
+
+function waitLabel(t: WaitTarget): string {
+  return t.kind === "check" ? `${t.name} check` : targetLabel(t);
+}
+
+function GatesSection({
+  appName,
+  gates,
+  status,
+  hasScriptError,
+  onRefresh,
+}: {
+  appName: string;
+  gates: AppGate[];
+  status: AppStatus;
+  hasScriptError: boolean;
+  onRefresh: () => void;
+}) {
+  const { execute, loading, error, clearError } = useOiAction();
+  const canRun =
+    !hasScriptError &&
+    status !== "not_installed" &&
+    status !== "uninstalling" &&
+    status !== "operating";
+
+  const run = async (gate: string) => {
+    if ((await execute("/apps/gates/run", { app: appName, gate })) === null)
+      return;
+    onRefresh();
+  };
+
+  return (
+    <>
+      {error && (
+        <Alert severity="error" onClose={clearError} sx={{ mb: 1 }}>
+          {error.message}
+        </Alert>
+      )}
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Name</TableCell>
+              <TableCell>State</TableCell>
+              <TableCell>Last success</TableCell>
+              <TableCell>After</TableCell>
+              <TableCell />
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {gates.map((g) => (
+              <TableRow key={g.name}>
+                <TableCell sx={{ fontFamily: "monospace" }}>{g.name}</TableCell>
+                <TableCell>
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                    <Chip
+                      label={g.state}
+                      size="small"
+                      color={gateStateColor(g.state)}
+                    />
+                    {g.holds_exclusive && (
+                      <Chip
+                        label="holding"
+                        size="small"
+                        color="warning"
+                        variant="outlined"
+                      />
+                    )}
+                    {g.next_run_at && (
+                      <Typography
+                        variant="caption"
+                        sx={{ color: "text.secondary" }}
+                      >
+                        retries {new Date(g.next_run_at).toLocaleString()}
+                      </Typography>
+                    )}
+                  </Box>
+                </TableCell>
+                <TableCell sx={{ color: "text.secondary" }}>
+                  {g.last_success_generation === null
+                    ? "never"
+                    : `gen ${g.last_success_generation}`}
+                </TableCell>
+                <TableCell sx={{ fontFamily: "monospace" }}>
+                  {g.after.length === 0
+                    ? "–"
+                    : g.after.map(targetLabel).join(", ")}
+                </TableCell>
+                <TableCell align="right">
+                  {g.state === "running" ? (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled
+                      startIcon={<CircularProgress size={12} />}
+                    >
+                      Running…
+                    </Button>
+                  ) : (
+                    <OutlinedActionButton
+                      safety="write"
+                      size="small"
+                      onClick={() => void run(g.name)}
+                      disabled={!canRun || loading}
+                    >
+                      Run
+                    </OutlinedActionButton>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </>
+  );
+}
+
 function ActionsSection({
   appName,
   actions,
@@ -1725,16 +1901,9 @@ function ActionsSection({
             </TableRow>
           </TableHead>
           <TableBody>
-            {/* The install action is invoked from the dedicated Install
-                button in InstallSection, and the App detail Actions
-                section only renders for already-installed apps anyway —
-                so hide the install row, which would otherwise sit there
-                permanently un-invokable. */}
             {actions
-              .filter((a) => a.kind !== "install")
               .map((a) => {
-                const isInvokable =
-                  a.kind !== "shell" && a.kind !== "lifecycle";
+                const isInvokable = a.kind !== "shell";
                 const isRunning = a.name === operatingAction;
                 const canRun = isInvokable && canInvoke;
                 return (
@@ -2494,8 +2663,8 @@ const APP_DETAIL_EVENTS: Set<string> = new Set([
   "OperationCompleted",
   "OperationFailed",
   "OperationCancelled",
-  "ParamSet",
-  "ParamUnset",
+  "GateStateChanged",
+  "ParamsChanged",
   "ResourceStateChanged",
   "InstanceHealthChanged",
   "FaultFiled",
@@ -2621,6 +2790,7 @@ export default function AppDetail() {
                 label={statusLabel(
                   data.status,
                   data.current_operation?.action_name,
+                  data.current_operation?.gate,
                 )}
                 color={statusColor(data.status)}
                 size="small"
@@ -2668,9 +2838,13 @@ export default function AppDetail() {
               }
             >
               Operation in progress:{" "}
-              <strong>{data.current_operation.action_name}</strong> (gen{" "}
-              {data.current_operation.source_generation} →{" "}
-              {data.current_operation.target_generation})
+              <strong>
+                {data.current_operation.gate
+                  ? `gate ${data.current_operation.gate}`
+                  : data.current_operation.action_name}
+              </strong>{" "}
+              (gen{" "}
+              {data.current_operation.generation})
               {data.current_operation.barrier && (
                 <>
                   {" "}
@@ -2741,7 +2915,6 @@ export default function AppDetail() {
             <ParamsSection
               appName={name!}
               params={data.params}
-              status={data.status}
               onRefresh={refetch}
             />
           </Section>
@@ -2849,11 +3022,9 @@ export default function AppDetail() {
           {data.status === "not_installed" ? (
             <InstallSection
               appName={name!}
-              installAction={data.actions.find((a) => a.kind === "install")}
               hasScriptError={data.faults.some(
                 (f) => f.kind === "script_error",
               )}
-              faults={data.faults}
               onRefresh={refetch}
             />
           ) : (
@@ -2872,6 +3043,23 @@ export default function AppDetail() {
                   transition: "opacity 0.15s",
                 }}
               >
+                {data.gates.length > 0 && (
+                  <>
+                    <Section title="Gates">
+                      <GatesSection
+                        appName={name!}
+                        gates={data.gates}
+                        status={data.status}
+                        hasScriptError={data.faults.some(
+                          (f) => f.kind === "script_error",
+                        )}
+                        onRefresh={refetch}
+                      />
+                    </Section>
+                    <Divider sx={{ my: 3 }} />
+                  </>
+                )}
+
                 <Section title="Actions">
                   <ActionsSection
                     appName={name!}

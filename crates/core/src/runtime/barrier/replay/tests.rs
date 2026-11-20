@@ -39,7 +39,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             &mut scope,
             r#"
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
-            app.on_start(|rt, _param| {
+            app.on_action("start", |rt, _param| {
                 rt.start(app.deployment("web")).ready();
             });
             "#,
@@ -58,7 +58,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             DbHandle::open_in_memory().expect("in-memory DB"),
             op.clone(),
             app_name(),
-            action_name("start"),
+            action_name("start").into(),
         )
     };
 
@@ -70,24 +70,21 @@ fn db_action_log_barrier_suspends_then_resumes() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -107,24 +104,21 @@ fn db_action_log_barrier_suspends_then_resumes() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -152,7 +146,7 @@ fn db_action_log_sequential_barriers() {
             r#"
             let fe = app.deployment("frontend").image("docker.io/library/nginx:latest");
             let be = app.deployment("backend").image("docker.io/library/api:latest");
-            app.on_start(|rt, _param| {
+            app.on_action("start", |rt, _param| {
                 rt.start(app.deployment("frontend")).scheduled();
                 rt.start(app.deployment("backend")).ready();
             });
@@ -170,7 +164,7 @@ fn db_action_log_sequential_barriers() {
         DbHandle::open_in_memory().expect("in-memory DB"),
         op.clone(),
         app_name(),
-        action_name("start"),
+        action_name("start").into(),
     );
 
     // Pass 1: frontend not Scheduled -> suspend
@@ -180,24 +174,21 @@ fn db_action_log_sequential_barriers() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -212,24 +203,21 @@ fn db_action_log_sequential_barriers() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -244,24 +232,21 @@ fn db_action_log_sequential_barriers() {
             script_ast: &ast,
             operation_id: op.clone(),
             app: &app,
-            action_name: "start",
+            subject: Subject::Action("start"),
             log: &log,
             world: Arc::clone(&oracle),
             registry: Arc::clone(&reg),
             active_progress: None,
             tick_notify: None,
             params: serde_json::Map::new(),
-            is_shell: false,
             db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
             cipher: None,
             operation_volume_bindings: std::collections::HashMap::new(),
             cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            exclusions: Default::default(),
         },
         &mut scope,
     );
@@ -425,4 +410,61 @@ mod positional {
         assert!(message.contains("SIGTERM"), "{message}");
         assert!(!message.contains("None"), "{message}");
     }
+}
+
+// spec: OPS#changes-to-an-app
+// spec: RCN#desired-state
+#[test]
+fn an_operations_progress_resolves_against_the_definition_it_ran_against() {
+    let progress = Arc::new(RwLock::new(None));
+    let (result, app) = crate::tests::run_action_on(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:1");
+        app.on_action("work", |rt, _param| {
+            rt.start(web);
+        });
+        "#,
+        &[],
+        "work",
+        None,
+        crate::tests::ActionHooks {
+            active_progress: Some(Arc::clone(&progress)),
+            ..Default::default()
+        },
+    );
+    assert!(matches!(result, OperationResult::Completed), "{result:?}");
+    let (changed, error) = crate::runtime::apps::evaluate_script(
+        &app.def.load().name,
+        r#"app.deployment("web").image("docker.io/library/nginx:2");"#,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    );
+    assert!(error.is_none(), "{error:?}");
+    let changed = changed.def.load_full();
+
+    let progress = progress.read();
+    let state = crate::runtime::desired::compute(
+        &changed.name,
+        &changed,
+        progress.as_ref(),
+        &crate::runtime::EphemeralInstanceRegistry::new(),
+        &Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+
+    let images: Vec<_> = state
+        .resources
+        .iter()
+        .map(|resource| {
+            let crate::defs::resource::Resource::Deployment(deployment) = &resource.definition
+            else {
+                panic!("{resource:?}")
+            };
+            let def = deployment.def.lock();
+            let pod = def.pod.lock();
+            pod.container.lock().image.clone()
+        })
+        .collect();
+    assert_eq!(images, [Some("docker.io/library/nginx:1".to_owned())]);
 }

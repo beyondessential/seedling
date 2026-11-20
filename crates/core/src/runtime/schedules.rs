@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use jiff::{SignedDuration, Timestamp};
 use parking_lot::Mutex;
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, ParamName};
 
 use crate::defs::action::parse_cron_expr;
-use crate::defs::install::ParamDef;
+use crate::defs::param_def::ParamDef;
 use crate::runtime::apps::AppPhase;
 use crate::runtime::barrier::OperationId;
 use crate::runtime::db::{self, Db};
@@ -39,12 +40,11 @@ pub struct FiredSchedule {
 // spec: SCHED#firing
 // spec: SCHED#fire-times
 ///
-/// `app_generations` returns `Some(generation)` for apps in the `Installed`
-/// phase and `None` for any other state (NotInstalled, Installing,
-/// Uninstalling, or unknown app). This is the gate for
-/// `SCHED#firing`: a schedule is only fired when the
-/// callback returns a generation, so that stuck install attempts and
-/// in-progress uninstalls don't keep monopolising the scheduler slot.
+/// `installed_app` returns `Some` for apps in the `Installed` phase and `None`
+/// for any other state (NotInstalled, Uninstalling, or unknown app). This is
+/// the gate for `SCHED#firing`: a schedule is only fired when the callback
+/// returns the app, so that in-progress uninstalls don't keep monopolising the
+/// scheduler slot.
 pub fn check_due_schedules(
     db: &Db,
     scheduler: &mut Scheduler,
@@ -202,9 +202,8 @@ pub fn check_due_schedules(
             // scheduler reads it again under its own lock.
             let result = scheduler.admit(
                 &row.app,
-                &row.action,
+                &OperationTarget::Action(row.action.clone()),
                 serde_json::Map::new(),
-                generation,
                 generation,
                 "schedule",
                 &phase,
@@ -364,7 +363,7 @@ mod tests {
         BTreeMap::from([(
             ParamName::new("target").unwrap(),
             ParamDef {
-                kind: crate::defs::install::ParamKind::Text,
+                kind: crate::defs::param_def::ParamKind::Text,
                 required: true,
                 default_value: None,
                 description: None,
@@ -675,29 +674,6 @@ mod tests {
         assert_eq!(
             (left[0].kind.as_str(), left[0].subject.as_str()),
             ("schedule_params_invalid", "report")
-        );
-    }
-
-    // spec: ACN#start-action
-    #[test]
-    fn on_schedule_rejects_start_action() {
-        use crate::defs::action::Action;
-        use rhai::{CustomType, Engine};
-
-        let mut engine = Engine::new();
-        engine.build_type::<Action>();
-
-        let action = Action::new(action_name("start"), app_name("testapp"));
-        let mut scope = rhai::Scope::new();
-        scope.push("action", action);
-
-        let result = engine
-            .eval_with_scope::<rhai::Dynamic>(&mut scope, r#"action.on_schedule("* * * * *")"#);
-        assert!(result.is_err());
-        let err_str = result.unwrap_err().to_string();
-        assert!(
-            err_str.contains("start"),
-            "error should mention start: {err_str}"
         );
     }
 }

@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use seedling_protocol::names::AppName;
+use seedling_protocol::names::{AppName, GateName};
 
 use crate::defs::app::AppDef;
 use crate::defs::deployment::Deployment;
@@ -9,6 +9,7 @@ use crate::defs::job::Job;
 use crate::defs::resource::{Resource, ResourceId, ResourceKind};
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::db::Db;
+use crate::runtime::gates::BodyStarts;
 use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 use crate::runtime::lifecycle::LifecycleState;
 use crate::runtime::stopped::StoppedSet;
@@ -27,6 +28,11 @@ pub struct DesiredResource {
     pub instance: ResourceInstance,
     pub desired: LifecycleState,
     pub definition: Resource,
+    /// The definition of the operation that placed the instance, which
+    /// `definition` was resolved against; `None` for an instance the app's
+    /// current definition declares.
+    // spec: OPS#changes-to-an-app
+    pub declared_by: Option<Arc<AppDef>>,
     /// The instance has been demoted out of its scaled group: an excess
     /// replica, a singleton left behind by a deployment that has since become
     /// scaled, or a replica an operation stopped. Only a demoted instance may
@@ -52,6 +58,32 @@ impl DesiredState {
     pub fn is_empty(&self) -> bool {
         self.resources.is_empty() && self.undeclared.is_empty()
     }
+
+    /// `current`, the app's current definition, with each declared resource
+    /// this desired state resolved against an operation's definition as that
+    /// definition declares it.
+    // spec: OPS#changes-to-an-app
+    pub fn declarations(&self, current: &Arc<AppDef>) -> Arc<AppDef> {
+        let mut resolved: Option<AppDef> = None;
+        for resource in &self.resources {
+            let (Some(_), true, Some(name)) = (
+                &resource.declared_by,
+                resource.instance.is_declared(),
+                &resource.instance.name,
+            ) else {
+                continue;
+            };
+            let id = ResourceId {
+                kind: resource.instance.kind,
+                name: Arc::new(name.clone()),
+            };
+            resolved
+                .get_or_insert_with(|| (**current).clone())
+                .resources
+                .insert(id, resource.definition.clone());
+        }
+        resolved.map_or_else(|| Arc::clone(current), Arc::new)
+    }
 }
 
 /// Records the resources an in-progress lifecycle operation has placed into
@@ -70,6 +102,19 @@ pub struct OperationProgress {
     /// state. Stored by ingress resource name.
     // spec: RT#certificate-warming
     pub warm_cert_hostnames: BTreeSet<String>,
+    /// The gate whose run this progress is, if it is a gate run's: its desired
+    /// state is the steady state with the resources the body placed in it laid
+    /// over.
+    // spec: RCN#desired-state
+    pub gate_run: Option<GateName>,
+    /// The definition the operation runs against, that of its operation
+    /// generation, which the declared resources it places are resolved
+    /// against whatever the app's current definition has since become.
+    /// `None` for progress that places only dynamic resources, which carry
+    /// their own definitions.
+    // spec: OPS#initiating-events
+    // spec: OPS#changes-to-an-app
+    pub definition: Option<Arc<AppDef>>,
 }
 
 impl OperationProgress {
@@ -78,7 +123,20 @@ impl OperationProgress {
             resources: HashMap::new(),
             dynamic_defs: HashMap::new(),
             warm_cert_hostnames: BTreeSet::new(),
+            gate_run: None,
+            definition: None,
         }
+    }
+
+    /// The definition of a resource this progress has placed: the declaration
+    /// in the operation's own definition, or the definition a dynamic
+    /// resource was started with.
+    // spec: OPS#initiating-events
+    fn definition_of(&self, instance: &ResourceInstance) -> Option<Resource> {
+        self.definition
+            .as_deref()
+            .and_then(|def| lookup_definition(def, instance))
+            .or_else(|| self.dynamic_defs.get(instance).cloned())
     }
 
     /// Mark a resource as explicitly started (desired state: `Ready`).
@@ -102,6 +160,24 @@ impl OperationProgress {
         self.resources.is_empty()
     }
 
+    /// For a gate run's progress, the gate and the declared resources its body
+    /// has started.
+    pub fn body_starts(&self) -> Option<BodyStarts> {
+        let gate = self.gate_run.clone()?;
+        let started = self
+            .resources
+            .iter()
+            .filter(|(_, state)| **state == LifecycleState::Ready)
+            .filter_map(|(instance, _)| {
+                instance.name.as_ref().map(|name| ResourceId {
+                    kind: instance.kind,
+                    name: Arc::new(name.clone()),
+                })
+            })
+            .collect();
+        Some(BodyStarts { gate, started })
+    }
+
     /// Drop every resource that is not dynamic.
     // spec: RT#starting-resources
     pub fn retain_dynamic(&mut self) {
@@ -116,11 +192,7 @@ impl OperationProgress {
     ///
     /// Later entries for the same resource override earlier ones.
     pub fn from_log(entries: &[ActionLogEntry]) -> Self {
-        let mut this = Self {
-            resources: HashMap::new(),
-            dynamic_defs: HashMap::new(),
-            warm_cert_hostnames: BTreeSet::new(),
-        };
+        let mut this = Self::new();
         for entry in entries {
             match entry.call_kind {
                 CallKind::Start => {
@@ -186,7 +258,12 @@ impl OperationProgress {
 /// resources at desired state `Ready` (steady-state maintenance).
 ///
 /// When an operation is in progress, only resources the action closure has
-/// explicitly placed into the desired state are included.
+/// explicitly placed into the desired state are included, each as the
+/// operation's own definition declares it. A gate run holds the steady state
+/// of `app_def` besides, with what its body has placed in it laid over.
+///
+/// `stopped` holds the resources kept at `Unscheduled` whatever their scale:
+/// the ones an operator stopped, and the ones a gate holds.
 // spec: RCN#desired-state
 pub fn compute(
     app_name: &AppName,
@@ -198,7 +275,32 @@ pub fn compute(
 ) -> Result<DesiredState, RegistryError> {
     match operation_progress {
         None => compute_steady(app_name, app_def, registry, effective_scales, stopped),
-        Some(progress) => Ok(compute_during_operation(app_def, progress)),
+        Some(progress) if progress.gate_run.is_some() => {
+            let mut state = compute_steady(app_name, app_def, registry, effective_scales, stopped)?;
+            overlay(&mut state, compute_during_operation(progress));
+            Ok(state)
+        }
+        Some(progress) => Ok(compute_during_operation(progress)),
+    }
+}
+
+/// Lay what an operation has placed in the desired state over `state`: each
+/// instance it names takes the state the operation put it in, and an instance
+/// `state` does not hold is added.
+// spec: RCN#desired-state
+fn overlay(state: &mut DesiredState, placed: DesiredState) {
+    let mut held: HashMap<InstanceId, usize> = HashMap::with_capacity(state.resources.len());
+    for (at, resource) in state.resources.iter().enumerate() {
+        held.entry(resource.instance.id).or_insert(at);
+    }
+    for resource in placed.resources {
+        match held.get(&resource.instance.id) {
+            Some(&at) => state.resources[at] = resource,
+            None => {
+                held.insert(resource.instance.id, state.resources.len());
+                state.resources.push(resource);
+            }
+        }
     }
 }
 
@@ -223,6 +325,7 @@ pub fn compute_uninstalling(
                 desired: LifecycleState::Unscheduled,
                 definition,
                 // Uninstall tears the whole app down through its own phase.
+                declared_by: None,
                 demoted: false,
             }),
             None => state.undeclared.push(instance),
@@ -266,8 +369,14 @@ fn compute_steady(
     stopped: &StoppedSet,
 ) -> Result<DesiredState, RegistryError> {
     let mut resources = Vec::new();
+    // spec: RCN#gate-holds
+    // The Job of a gate's check is run to check the gate and at no other time.
+    let check_jobs = crate::runtime::gates::check_jobs(app_def);
 
     for (id, resource) in &app_def.resources {
+        if check_jobs.contains(id) {
+            continue;
+        }
         let is_stopped = stopped.contains(&(id.kind, id.name.as_str().to_owned()));
 
         if id.kind == ResourceKind::Deployment
@@ -275,6 +384,7 @@ fn compute_steady(
         {
             // spec: CTL#resource-stop
             // spec: AUTO#scale
+            // spec: RCN#gate-holds
             let scale = if is_stopped { 0 } else { effective };
             // Steady-state desired state keeps an instance whatever its
             // containers have done: re-identifying it would lose the restart
@@ -291,6 +401,7 @@ fn compute_steady(
                     instance: inst,
                     desired: LifecycleState::Ready,
                     definition: resource.clone(),
+                    declared_by: None,
                     demoted: false,
                 });
             }
@@ -299,6 +410,7 @@ fn compute_steady(
                     instance: inst,
                     desired: LifecycleState::Unscheduled,
                     definition: resource.clone(),
+                    declared_by: None,
                     demoted: true,
                 });
             }
@@ -308,6 +420,7 @@ fn compute_steady(
         // Non-deployment resources: singleton.
         let inst = registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
         // spec: CTL#resource-stop
+        // spec: RCN#gate-holds
         let desired = if is_stopped {
             LifecycleState::Unscheduled
         } else {
@@ -317,6 +430,7 @@ fn compute_steady(
             instance: inst,
             desired,
             definition: resource.clone(),
+            declared_by: None,
             demoted: false,
         });
     }
@@ -328,17 +442,18 @@ fn compute_steady(
 }
 
 // spec: RCN#desired-state
-fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> DesiredState {
+fn compute_during_operation(progress: &OperationProgress) -> DesiredState {
     let resources = progress
         .resources
         .iter()
         .filter_map(|(instance, &desired)| {
-            let definition = lookup_definition(app_def, instance)
-                .or_else(|| progress.dynamic_defs.get(instance).cloned())?;
+            // spec: OPS#changes-to-an-app
+            let definition = progress.definition_of(instance)?;
             Some(DesiredResource {
                 instance: instance.clone(),
                 desired,
                 definition,
+                declared_by: progress.definition.clone(),
                 demoted: instance.variant == InstanceVariant::Scaled
                     && desired == LifecycleState::Unscheduled,
             })
@@ -360,7 +475,6 @@ fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> D
 // spec: RCN#desired-state
 pub fn merge_sessions(
     state: &mut DesiredState,
-    app_def: &AppDef,
     sessions: &[&OperationProgress],
     hold_stopped: bool,
 ) {
@@ -374,7 +488,7 @@ pub fn merge_sessions(
         .chain(state.undeclared.iter().map(|instance| instance.id))
         .collect();
     for progress in sessions {
-        for mut resource in compute_during_operation(app_def, progress).resources {
+        for mut resource in compute_during_operation(progress).resources {
             if !held.insert(resource.instance.id) {
                 continue;
             }
@@ -404,14 +518,35 @@ pub enum DynamicCreator {
     Operation,
     /// A shell session; the record holds the session's id.
     ShellSession,
+    /// A check of a gate, whose Job is the resource; the record holds the
+    /// check's id.
+    // spec: GRUN#checks
+    GateCheck,
+}
+
+impl DynamicCreator {
+    /// How a record names its creator.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Operation => "operation",
+            Self::ShellSession => "shell_session",
+            Self::GateCheck => "gate_check",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        [Self::Operation, Self::ShellSession, Self::GateCheck]
+            .into_iter()
+            .find(|creator| creator.as_str() == text)
+    }
 }
 
 /// A persisted dynamic resource record.
 pub struct DynamicResourceRecord {
     pub instance_id: String,
     pub app: AppName,
-    /// The id of the operation or shell session that created the resource, as
-    /// `creator` says.
+    /// The id of the operation, shell session or gate check that created the
+    /// resource, as `creator` says.
     pub operation_id: String,
     pub creator: DynamicCreator,
     pub kind: String,
@@ -434,13 +569,13 @@ pub fn insert_dynamic_resource(
     db.conn.execute(
         // spec: INFRA#database
         "INSERT INTO dynamic_resources
-             (instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+             (instance_id, app, operation_id, creator, kind, display_name, resource_name,
               description)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(instance_id) DO UPDATE SET
              app = excluded.app,
              operation_id = excluded.operation_id,
-             shell_session = excluded.shell_session,
+             creator = excluded.creator,
              kind = excluded.kind,
              display_name = excluded.display_name,
              resource_name = excluded.resource_name,
@@ -449,7 +584,7 @@ pub fn insert_dynamic_resource(
             instance.id.to_hex(),
             instance.app,
             operation_id,
-            creator == DynamicCreator::ShellSession,
+            creator.as_str(),
             format!("{:?}", instance.kind),
             instance.display_name,
             instance.name,
@@ -471,7 +606,7 @@ pub fn delete_dynamic_resource(db: &Db, instance_id: &str) -> rusqlite::Result<(
 /// Load all dynamic resource records (e.g., for startup orphan cleanup).
 pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+        "SELECT instance_id, app, operation_id, creator, kind, display_name, resource_name,
                 description
          FROM dynamic_resources ORDER BY app, instance_id",
     )?;
@@ -484,7 +619,7 @@ pub fn list_dynamic_resources_for_app(
     app: &AppName,
 ) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+        "SELECT instance_id, app, operation_id, creator, kind, display_name, resource_name,
                 description
          FROM dynamic_resources WHERE app = ?1 ORDER BY instance_id",
     )?;
@@ -498,7 +633,7 @@ pub fn list_dynamic_resources_for_operation(
     operation_id: &str,
 ) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(
-        "SELECT instance_id, app, operation_id, shell_session, kind, display_name, resource_name,
+        "SELECT instance_id, app, operation_id, creator, kind, display_name, resource_name,
                 description
          FROM dynamic_resources WHERE operation_id = ?1 ORDER BY instance_id",
     )?;
@@ -510,10 +645,15 @@ fn parse_dynamic_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourc
         instance_id: row.get(0)?,
         app: row.get::<_, AppName>(1)?,
         operation_id: row.get(2)?,
-        creator: if row.get::<_, bool>(3)? {
-            DynamicCreator::ShellSession
-        } else {
-            DynamicCreator::Operation
+        creator: {
+            let text: String = row.get(3)?;
+            DynamicCreator::parse(&text).ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    format!("unknown dynamic resource creator {text:?}").into(),
+                )
+            })?
         },
         kind: row.get(4)?,
         display_name: row.get(5)?,

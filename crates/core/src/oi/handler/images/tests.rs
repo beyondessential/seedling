@@ -248,3 +248,57 @@ fn an_unreadable_pin_table_is_an_error_not_no_pins() {
     let (code, _) = oi.call("/images/list", json!({})).unwrap_err();
     assert_eq!(code, "internal");
 }
+
+// spec: IMGM#image-discovery
+// spec: IMG#image-discovery
+#[test]
+fn discover_probes_a_gate_body_with_last_from_the_gates_record() {
+    use seedling_protocol::names::{AppName, GateName};
+
+    let script = r#"
+        app.gate("migrate").key(1).run(|rt, last| {
+            let image = if last == () { "ghcr.io/example/first:1" } else { "ghcr.io/example/again:1" };
+            rt.warm_images(app.job().image(image)).ready();
+        });
+    "#;
+    let oi = TestOi::new();
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let discover = || {
+        let result = oi
+            .call("/apps/images/discover", json!({ "app": "demo" }))
+            .unwrap();
+        let handlers = result["per_handler"].as_array().unwrap().clone();
+        assert_eq!(handlers.len(), 1, "{result}");
+        assert_eq!(handlers[0]["kind"], "gate");
+        assert_eq!(handlers[0]["name"], "migrate");
+        assert!(handlers[0]["error"].is_null(), "{result}");
+        handlers[0]["images"].clone()
+    };
+    assert_eq!(discover(), json!(["ghcr.io/example/first:1"]));
+
+    let name = AppName::new("demo").unwrap();
+    let digest = {
+        let registry = oi.state.registry.read();
+        let def = registry.get("demo").unwrap().app.def.load_full();
+        def.gates["migrate"]
+            .key
+            .digest(&crate::runtime::secrets::Cipher::for_tests())
+            .unwrap()
+    };
+    oi.state.db.call(move |db| {
+        let generation = crate::runtime::generations::current(db, &name)
+            .unwrap()
+            .unwrap_or(1);
+        crate::runtime::gates::store::record_success(
+            db,
+            &name,
+            &GateName::new("migrate").unwrap(),
+            &digest,
+            generation,
+        )
+        .unwrap();
+    });
+    assert_eq!(discover(), json!(["ghcr.io/example/again:1"]));
+}

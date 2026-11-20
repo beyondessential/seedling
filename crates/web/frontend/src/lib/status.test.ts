@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { statusColor, statusLabel } from "./status";
+import { gateStateColor, statusColor, statusLabel } from "./status";
 
 describe("statusColor", () => {
   it("maps running to success", () => {
@@ -25,7 +25,23 @@ describe("statusColor", () => {
   });
 });
 
+describe("gateStateColor", () => {
+  it("reads a satisfied gate as settled and a held one as needing attention", () => {
+    expect(gateStateColor("satisfied")).toBe("success");
+    expect(gateStateColor("running")).toBe("info");
+    expect(gateStateColor("unsatisfied")).toBe("warning");
+    expect(gateStateColor("paused")).toBe("warning");
+    expect(gateStateColor("undetermined")).toBe("default");
+  });
+});
+
 describe("statusLabel", () => {
+  it("names a gate run by its gate", () => {
+    expect(statusLabel("operating", undefined, "migrate")).toBe(
+      "operating: gate migrate",
+    );
+  });
+
   it("renders installing with an ellipsis", () => {
     expect(statusLabel("installing")).toBe("installing…");
   });

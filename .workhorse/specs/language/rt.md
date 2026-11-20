@@ -22,7 +22,7 @@ A call in an action closure that waits for resources to reach a [lifecycle state
 
 ## Handle availability
 
-The runtime MUST pass a runtime handle as the first argument of every action closure, except a [change handler](parameter.md#change-handlers) that takes no arguments.
+The runtime MUST pass a runtime handle as the first argument of every action closure, except a [gate's body](gate.md#body) that takes no arguments.
 Scripts conventionally name it `rt`.
 The runtime MUST NOT expose any way for a script to construct a `RuntimeInstance`.
 
@@ -52,7 +52,7 @@ Every other resource MUST resolve to its one instance.
 `rt.start(selection)` MUST place every resource of the selection in the app's [desired state](../overview.md#desired-state), and returns a [`Started`](#started) over those resources.
 
 In a [shell](action.md#shells)'s closure, `rt.start` MUST place in the desired state only the [dynamic resources](app.md#dynamic-resource-lifetime) of the selection, and MUST NOT change the desired state of its [static resources](app.md#static-resource).
-The `Started` it returns MUST still hold every resource of the selection.
+The `Started` it returns MUST still hold every resource of the selection, other than those [a gate holds](#resources-a-gate-holds).
 
 > [!NOTE]
 > A shell is not a lifecycle operation, so it leaves the app's declared resources to the steady state or to the operation in progress, and can still wait on them.
@@ -69,6 +69,23 @@ In a shell's closure, `rt.stop` MUST throw, without changing the desired state, 
 ### Querying resources
 
 `rt.query(selection)` returns a `Started` over the selection's resources, and MUST NOT change the desired state.
+
+### Resources a gate holds
+
+`rt.start` and `rt.stop` MUST leave these resources out of the resources they act on, out of the `Started` they return, and out of every barrier they wait on:
+
+- each resource in the [exclusive selection](gate.md#exclusive-selection) of a gate while the gate [holds](../runtime/reconciliation.md#gate-holds) it;
+- each workload [ordered after](gate.md#start-order) a gate that is not satisfied, whether directly or through other targets;
+- the Job of each gate's [check](gate.md#check), which the runtime starts only to check the gate.
+
+The runtime MUST read these both against the definition the closure runs against and against the app's current definition, and MUST leave out every resource that either leaves out.
+
+In the [body](gate.md#body) of a gate, the runtime MUST NOT leave out a resource of that gate's own exclusive selection, nor a workload ordered after that gate, on account of that gate.
+`rt.restart` of a deployment that `rt.start` would leave out MUST throw.
+
+> [!NOTE]
+> An action written to start the whole app leaves a failed migration's selection stopped, and starts no release the database has not been migrated to.
+> A gate's body directs what the gate holds, since it runs to bring those resources to the state the gate's dependants need.
 
 ### Deployment restart
 
@@ -91,7 +108,7 @@ Such a `Started` holding no ingress MUST satisfy them at once.
 Its other barriers MUST throw.
 
 > [!NOTE]
-> In a [change handler](parameter.md#change-handlers), `app` is the app at the new generation, so `rt.warm_certs(app)` warms the ingresses of the new generation and none that only the previous one declared.
+> In a [gate's body](gate.md#body), `app` is the app at the run's generation, so `rt.warm_certs(app)` warms the ingresses of that generation and none that only `last` declared.
 
 ### Image warming
 

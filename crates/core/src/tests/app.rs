@@ -24,9 +24,7 @@ fn app_methods_are_defined() {
         app.external_volume("evol");
         app.param("par");
         app.on_action("act", |rt, _param| {});
-        app.on_start(|rt, _param| {});
         app.on_shell("shl", |rt, shell, _param| { shell.attach(app.job("shl").command("sh")); });
-        app.on_install(|rt, reqs| {});
     "#,
     );
 }
@@ -74,7 +72,7 @@ fn closures_create_dynamic_resources() {
             .image("docker.io/library/tools:1")
             .command("run");
 
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             let j = make_job.call();
             rt.start(j).terminated();
         });
@@ -113,16 +111,13 @@ fn param_declared_in_script_appears_in_params() {
 // spec: APP#action-context
 // spec: ACN#action-declaration
 // spec: ACN#shells
-// spec: ACN#install-action
 // spec: APP#app-description
 // spec: PARAM#schema
 #[test]
 fn declarations_throw_inside_an_action_closure() {
     let cases = [
         (r#"app.on_action("later", |rt, p| {});"#, "on_action"),
-        (r#"app.on_start(|rt, p| {});"#, "on_start"),
         (r#"app.on_shell("shell", |rt, sh, p| {});"#, "on_shell"),
-        (r#"app.on_install(|rt, p| {});"#, "on_install"),
         (r#"app.description("x");"#, "description"),
         (r#"p.kind("text");"#, "kind"),
         (r#"p.required(true);"#, "required"),
@@ -149,7 +144,6 @@ fn declarations_throw_inside_an_action_closure() {
             after.actions.len() + after.shells.len(),
             "{call} declared something before throwing"
         );
-        assert_eq!(before.install.is_some(), after.install.is_some(), "{call}");
         assert_eq!(before.description, after.description, "{call}");
     }
 }

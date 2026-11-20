@@ -76,7 +76,7 @@ It MUST throw if `path` is invalid or the bundle holds no file beneath it.
 
 A script MAY call `app.file` and `app.dir` in any context.
 They MUST read the bundle the app was evaluated from.
-Within a [parameter change handler](parameter.md#change-handlers), `old.file` and `old.dir` MUST read the bundle of the previous generation.
+Within a [gate's body](gate.md#body), `last.file` and `last.dir` MUST read the bundle of the gate's last success.
 
 A `File` is an immutable sequence of bytes.
 `file.text()` MUST return the file's contents as a string, and MUST throw if they are not valid UTF-8.

@@ -8,13 +8,9 @@ Applies to the [lifecycle operations](../overview.md#lifecycle-operation) throug
 
 ## Terminology
 
-### Source generation
+### Operation generation
 
-The [generation](../overview.md#generation) current immediately before the change that initiated an operation.
-
-### Target generation
-
-The generation whose definition and parameter values an operation runs against.
+The [generation](../overview.md#generation) whose definition and parameter values an operation runs against.
 
 ### Operation-scoped volume binding
 
@@ -22,8 +18,8 @@ A volume name the runtime binds to a host path for the duration of one operation
 
 ## Operation
 
-A lifecycle operation is one run of one action closure, together with every [replay](suspension.md#replay) of that closure after an interruption.
-An operation ends when its action closure returns, throws, or is [cancelled](#cancellation).
+A lifecycle operation is one run of one action closure, or one [gate run](gates.md), together with every [replay](suspension.md#replay) of it after an interruption.
+An operation ends when its action closure returns, throws, or is [cancelled](#cancellation), and a gate run ends as [its outcome](gates.md#outcome) specifies.
 
 ## Concurrency
 
@@ -35,7 +31,7 @@ If an operation is requested for an app while another app's operation is in prog
 The runtime MUST NOT hold more than one queued operation for an app, and MUST reject a request for an app that already has one queued.
 The runtime MUST start queued operations in the order they were requested, each once the operation in progress ends.
 
-The runtime MUST persist a queued request durably, with its app, action, trigger, source and target generations, and parameters, before it accepts the request.
+The runtime MUST persist a queued request durably, with its app, its action or gate, its trigger, its operation generation, and its parameters, before it accepts the request.
 The runtime MUST protect a queued request's persisted parameters as it protects a persisted operation's, as [persistence](#persistence) specifies.
 If the runtime cannot persist the request, it MUST reject it.
 When the runtime starts, it MUST restore its queue from the persisted requests, in the order they were requested, after deciding whether to replay an interrupted operation.
@@ -46,44 +42,34 @@ Admission for an app that is being uninstalled is governed by [app teardown](app
 
 ## Initiating events
 
-| event | operation | trigger | source generation | target generation |
-| --- | --- | --- | --- | --- |
-| the runtime starts | the [start action](../language/action.md#start-action), for each installed app with no interrupted operation | `boot` | current | current |
-| an install operation completes successfully, or the app moves to `Installed` without an install operation | the start action | `install` | current | current |
-| the runtime starts with an interrupted operation | the interrupted operation, [replayed](#interrupted-operations) | `replay` | as persisted | as persisted |
-| a parameter change | the changed parameter's `on_change` handler | `param_change` | before the change | produced by the change |
-| an operator request | the named action, or `install` | `operator` | current | current |
-| a schedule falls due | the [scheduled action](scheduled-actions.md) | `schedule` | current | current |
+| event | operation | trigger | operation generation |
+| --- | --- | --- | --- |
+| the runtime starts with an interrupted operation | the interrupted operation, [replayed](#interrupted-operations) | `replay` | as persisted |
+| a [gate](../language/gate.md) is due to run, as [initiating runs](gates.md#initiating-runs) specifies | the gate's run | `gate` | current at dispatch |
+| an operator request | the named action, or the named gate's run | `operator` | current at dispatch |
+| a schedule falls due | the [scheduled action](scheduled-actions.md) | `schedule` | current at dispatch |
 
-Until an app's start action ends, its desired state is held as [desired state](reconciliation.md#desired-state) specifies.
+The runtime MUST record the operation generation of every operation as the generation current when the operation is dispatched, whether it starts at once or leaves the queue.
 
-The runtime MUST initiate an operation for a parameter change only when the app is installed, a handler is registered for the parameter, and the change matches one of the handler's [transitions](../language/parameter.md#change-handlers).
-A parameter changed alongside a definition update is a parameter change.
-
-The runtime MUST record the source and target generations of every operation.
-For an operation that a [generation bump](generation.md#generation-numbers) initiated, the runtime MUST record as the source generation the generation current immediately before the bump, and as the target generation the generation the bump produced.
-For any other operation, the runtime MUST record the generation current when the operation is dispatched as both.
-
-The runtime MUST run an operation against the definition and parameter values of its target generation, and MUST pass an `on_change` handler `old` reconstructed from the source generation.
+The runtime MUST run an operation against the definition and parameter values of its operation generation, and MUST pass a gate's body [`last`](../language/gate.md#body) reconstructed from the generation of the gate's last success.
 The runtime MUST do so on every replay, including where later generations have been committed since the operation was dispatched.
 If the runtime cannot reconstruct a generation the operation needs, it MUST fail the operation.
 The runtime MUST NOT run the operation against another generation's state.
 
-## Parameter changes
+## Changes to an app
 
-The runtime MUST refuse a parameter change for an app that has an operation in progress or queued, or another change being applied.
-The runtime MUST accept a change only if it sets or unsets exactly one parameter, including a change made alongside a definition update.
+A change to an app's definition or parameter values initiates no operation.
+A change that moves the key of one of the app's gates leaves the gate unsatisfied, and the runtime runs it as [gate runs](gates.md) specify.
 
-The runtime MUST make checking that nothing holds the app and admitting the change's handler one decision with respect to admitting any other operation for the app.
-The runtime MUST NOT admit another operation for the app after the change is committed and before its handler is admitted.
+The runtime MUST apply changes to an app one at a time, and MUST refuse a change to an app while another change to it is being applied.
+An operation in progress for the app goes on against its operation generation.
 
 ## Completion
 
-When an operation ends, the runtime MUST return the app's [desired state](reconciliation.md#desired-state) to the whole resource graph at the app's current generation, and maintain it without direction.
+When an operation ends, the runtime MUST return the app to its steady-state [desired state](reconciliation.md#desired-state) at the app's current generation, and maintain it without direction.
 
-Where a generation bump initiated the operation, the runtime MUST record the operation's outcome on that generation's [history entry](generation.md#history-entries).
-
-When an operation fails, the runtime MUST file an [`operation_failed`](faults.md#app-faults) fault.
+When an operation other than a gate run fails, the runtime MUST file an [`operation_failed`](faults.md#app-faults) fault.
+A gate run that fails or is cancelled files a `gate_failed` fault instead, as [retries](gates.md#retries) specify.
 
 The runtime MUST keep tearing down an ended operation's [dynamic resources](../language/app.md#dynamic-resource-lifetime), retrying with a growing delay, until every one of them is gone.
 It MUST forget a dynamic resource's record only once that resource is torn down.
@@ -91,8 +77,8 @@ While they are not all gone a minute after the operation ends, or while their re
 
 ## Persistence
 
-Before an operation's action closure first runs, the runtime MUST persist durably the operation's identifier, app, action, source and target generations, and parameters.
-If the runtime cannot persist them, it MUST NOT run the closure.
+Before an operation first does anything, the runtime MUST persist durably the operation's identifier, app, action or gate, operation generation, and parameters.
+If the runtime cannot persist them, it MUST NOT start the operation.
 
 The runtime MUST encrypt the persisted parameters with the cipher it uses for [stored secret parameters](secrets.md#storage).
 On replay, the runtime MUST pass the action closure the persisted parameters.
@@ -103,13 +89,11 @@ The runtime MUST clear the persisted operation when the operation ends.
 
 When the runtime starts, it MUST read the persisted operation, if any, and decide whether to replay it before the reconciliation loop first starts an operation.
 
-The runtime MUST replay an interrupted install only if the app is registered, the persisted parameters can be read, and the app is `Installing` or `NotInstalled`.
-The runtime MUST replay any other interrupted operation only if the app is registered, the persisted parameters can be read, and the app is `Installed`.
+The runtime MUST replay an interrupted operation only if the app is registered, the persisted parameters can be read, and the app is `Installed`.
 
 Where the runtime does not replay an interrupted operation, it MUST clear the persisted operation and tear down the resources it [spared for the replay](suspension.md#abandoned-replay).
-Where the operation not replayed was an install of an app in `Installing`, the runtime MUST file an [`install_interrupted`](faults.md#app-faults) fault and recover the app as a [stuck install](#stuck-install-recovery).
 
-If the runtime cannot read whether an interrupted operation exists, it MUST NOT perform stuck-install recovery or [startup cleanup](suspension.md#abandoned-replay).
+If the runtime cannot read whether an interrupted operation exists, it MUST NOT perform [leftover resource recovery](#leftover-resource-recovery) or [startup cleanup](suspension.md#abandoned-replay).
 
 > [!NOTE]
 > Both act on the interrupted operation's absence.
@@ -120,17 +104,12 @@ If the runtime cannot read the persisted operation, whether a cancel was persist
 Until the read succeeds, the runtime MUST NOT start any lifecycle operation, and MUST retry the read on each reconciliation iteration.
 Once the read succeeds, the runtime MUST decide replay and restore its queue as on starting.
 
-## Stuck-install recovery
+## Leftover resource recovery
 
-The runtime MUST always give an operator a path out of an `Installing` phase that no operation holds.
-
-When it starts, after deciding whether to replay, the runtime MUST move to `Uninstalling` every app that is `Installing` with no operation being replayed for it.
-It MUST likewise move to `Uninstalling` every app that is `NotInstalled` while resource instances are still recorded for it.
-
-The runtime MUST answer a cancel request for an app that is `Installing` with no operation in progress by moving the app to `Uninstalling`, and the request MUST succeed.
+When it starts, after deciding whether to replay, the runtime MUST move to `Uninstalling` every app that is `NotInstalled` while resource instances are still recorded for it.
 
 > [!NOTE]
-> A partly installed app can already have running resources, and reconciliation leaves the resources of a `NotInstalled` app alone.
+> Reconciliation leaves the resources of a `NotInstalled` app alone.
 > Moving the app to `Uninstalling` tears those resources down, and the app reaches `NotInstalled` once teardown completes.
 
 ## Cancellation
@@ -138,11 +117,11 @@ The runtime MUST answer a cancel request for an app that is `Installing` with no
 The runtime MUST let an operator [cancel](../interface/actions.md#cancellation) the operation in progress for an app.
 
 When a cancel is requested, the runtime MUST wake the operation if it is suspended on a [barrier](suspension.md#barriers), including a barrier with no deadline, so the cancel takes effect without waiting for the barrier's next re-evaluation or deadline.
-The runtime MUST stop a cancelled operation at the next barrier or `rt.*` call it reaches.
+The runtime MUST stop a cancelled operation at the next barrier or `rt.*` call it reaches, or at once in the parts of a gate run that [gate cancellation](gates.md#cancellation) names.
 
 The runtime MUST end a cancelled operation in an outcome distinct from success and from failure.
 The runtime MUST clean up after a cancelled operation as after a failed one, tearing down its [dynamic resources](../language/app.md#dynamic-resource-lifetime) and clearing its persisted record.
-The runtime MUST file an [`operation_cancelled`](faults.md#app-faults) fault, not an `operation_failed` one.
+For an operation other than a gate run, the runtime MUST file an [`operation_cancelled`](faults.md#app-faults) fault, not an `operation_failed` one.
 
 ### Cancel persistence
 
@@ -175,7 +154,7 @@ A script handed `<key>_filename` MUST use that file name.
 
 ## Action composition
 
-A script MAY run another action from within an action closure by calling [`Action.invoke(params?)`](../language/action.md#action-invocation) on a handle from [`app.action(name)`](../language/action.md#action-handles), `app.on_action()` or `app.on_start()`.
+A script MAY run another action from within an action closure by calling [`Action.invoke(params?)`](../language/action.md#action-invocation) on a handle from [`app.action(name)`](../language/action.md#action-handles) or `app.on_action()`.
 
 The runtime MUST run the invoked action's closure inline, within the calling operation, sharing its `rt`, its operation identifier and its action log.
 A barrier in the invoked closure is a barrier of the calling operation.

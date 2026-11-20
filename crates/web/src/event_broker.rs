@@ -305,7 +305,7 @@ mod tests {
                     "type": "OperationStarted",
                     "timestamp": jiff::Timestamp::now().to_string(),
                     "app": "demo",
-                    "action_name": "install",
+                    "action_name": "backup",
                     "actor": { "kind": "web", "id": "felix" },
                 })
                 .to_string(),
@@ -314,6 +314,6 @@ mod tests {
         let entries = registry.list_recent();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["actor_kind"], "web");
-        assert_eq!(entries[0]["last_action"], "started install on demo");
+        assert_eq!(entries[0]["last_action"], "started backup on demo");
     }
 }

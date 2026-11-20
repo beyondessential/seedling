@@ -5,7 +5,8 @@ use std::{
 
 use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
-use seedling_protocol::names::{ActionName, AppName, ParamName, SessionId};
+use seedling_protocol::events::OperationTarget;
+use seedling_protocol::names::{AppName, ParamName, SessionId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
@@ -75,19 +76,20 @@ impl ReloadOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppPhase {
     NotInstalled,
-    Installing,
     Installed,
     Uninstalling,
 }
 
 // spec: APPS#status-derivation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum AppStatus {
     NotInstalled,
     Installing,
     Uninstalling,
-    Operating { action_name: ActionName },
+    /// An operation of the app's is running: an action, or a gate's run.
+    Operating {
+        operation: OperationTarget,
+    },
     Running,
     Degraded,
     Faulted,
@@ -107,42 +109,72 @@ impl AppStatus {
     }
 }
 
-/// Where a shell session's dynamic resources stand in the desired state, as
-/// an operation's stand in [`AppEntry::active_progress`].
-pub type SessionSlot = Arc<RwLock<Option<OperationProgress>>>;
+/// Where the dynamic resources of a shell session or a gate check stand in the
+/// desired state, as an operation's stand in [`AppEntry::active_progress`].
+pub type DynamicSlot = Arc<RwLock<Option<OperationProgress>>>;
 
-/// The slot of each shell session that is open on an app, or that has ended
-/// and is still tearing its dynamic resources down.
-///
-/// Unlike operations, of which one runs per host, any number of sessions run
-/// beside an operation and each other, so each has a slot of its own.
-// spec: RCN#desired-state
-#[derive(Default)]
-pub struct SessionSlots {
-    slots: RwLock<BTreeMap<SessionId, SessionSlot>>,
+/// Identifies one check of a gate, and so the record of its Job.
+// spec: GRUN#checks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CheckId(uuid::Uuid);
+
+impl CheckId {
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
 }
 
-impl SessionSlots {
-    /// Give `session` an empty slot, which stands until it is [closed](Self::close).
-    pub fn open(&self, session: SessionId) -> SessionSlot {
-        Arc::clone(self.slots.write().entry(session).or_default())
+impl std::fmt::Display for CheckId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// The slot of each owner of dynamic resources of one kind that is running on
+/// an app, or that has ended and is still tearing its dynamic resources down.
+///
+/// Unlike operations, of which one runs per host, any number of these run
+/// beside an operation and each other, so each has a slot of its own.
+// spec: RCN#desired-state
+pub struct Slots<K> {
+    slots: RwLock<BTreeMap<K, DynamicSlot>>,
+}
+
+/// The slots of an app's shell sessions.
+pub type SessionSlots = Slots<SessionId>;
+
+/// The slots of the checks of an app's gates.
+pub type CheckSlots = Slots<CheckId>;
+
+impl<K> Default for Slots<K> {
+    fn default() -> Self {
+        Self {
+            slots: RwLock::default(),
+        }
+    }
+}
+
+impl<K: Ord + Copy + std::fmt::Display> Slots<K> {
+    /// Give `owner` an empty slot, which stands until it is [closed](Self::close).
+    pub fn open(&self, owner: K) -> DynamicSlot {
+        Arc::clone(self.slots.write().entry(owner).or_default())
     }
 
-    pub fn close(&self, session: &SessionId) {
-        self.slots.write().remove(session);
+    pub fn close(&self, owner: &K) {
+        self.slots.write().remove(owner);
     }
 
     pub fn is_empty(&self) -> bool {
         self.slots.read().is_empty()
     }
 
-    /// The sessions that have a slot.
-    pub fn sessions(&self) -> Vec<SessionId> {
+    /// The owners that have a slot.
+    pub fn owners(&self) -> Vec<K> {
         self.slots.read().keys().copied().collect()
     }
 
-    /// Every session's slot, to be read in place.
-    pub fn slots(&self) -> Vec<SessionSlot> {
+    /// Every owner's slot, to be read in place.
+    pub fn slots(&self) -> Vec<DynamicSlot> {
         self.slots.read().values().map(Arc::clone).collect()
     }
 }
@@ -166,6 +198,9 @@ pub struct AppEntry {
     /// Shared with the reconciler and the shell sessions to track theirs.
     // spec: RCN#desired-state
     pub sessions: Arc<SessionSlots>,
+    /// Shared with the reconciler and the gate checks to track their Jobs.
+    // spec: RCN#gate-holds
+    pub checks: Arc<CheckSlots>,
     /// Wakes the reconciler for an immediate tick.
     pub tick_notify: Arc<Notify>,
     /// Active script-evaluation fault, if the last reload failed.
@@ -178,26 +213,27 @@ pub struct AppEntry {
     /// completed, lower first; `None` before any install has completed.
     // spec: ING#claims-across-apps
     pub install_seq: Option<i64>,
-    /// The app's start action has been initiated and has not yet ended,
-    /// including while it is queued. Until it ends, the app's desired state is
-    /// held as for an app with an operation in progress.
-    // spec: RCN#desired-state
-    pub start_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppEntry {
     /// Whether the app's desired state is its whole resource graph, which
-    /// nothing in flight can change: it is installed, and no operation, start
-    /// action or shell session is placing resources of its own.
+    /// nothing in flight can change: it is installed, and no operation or shell
+    /// session is placing resources of its own.
+    ///
+    /// A running gate check leaves the app steady: its Job is anonymous and
+    /// joins the desired state beside the resource graph without changing it.
     // spec: RCN#desired-state
     // spec: GC#unscheduled-instances
     pub fn is_steady(&self) -> bool {
         *self.phase.lock() == AppPhase::Installed
             && self.active_progress.read().is_none()
             && self.sessions.is_empty()
-            && !self
-                .start_pending
-                .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Whether a shell session or a gate check has a slot on the app, so that
+    /// the reconciler still has dynamic resources of the app to drive.
+    pub fn has_dynamic_slots(&self) -> bool {
+        !self.sessions.is_empty() || !self.checks.is_empty()
     }
 }
 
@@ -273,23 +309,28 @@ impl AppRegistry {
                 phase: Arc::new(Mutex::new(AppPhase::NotInstalled)),
                 active_progress: Arc::new(RwLock::new(None)),
                 sessions: Arc::default(),
+                checks: Arc::default(),
                 tick_notify,
                 script_error,
                 current_generation: generation,
                 install_seq: None,
-                start_pending: Arc::default(),
             },
         );
     }
 
-    /// The id of every shell session that has a slot on any app: those open,
-    /// and those ended whose dynamic resources are still being torn down.
+    /// The id of every shell session and gate check that has a slot on any
+    /// app: those running, and those ended whose dynamic resources are still
+    /// being torn down.
     // spec: OPS#shell-sessions
-    pub fn live_sessions(&self) -> std::collections::HashSet<String> {
+    // spec: GRUN#checks
+    pub fn live_slot_owners(&self) -> std::collections::HashSet<String> {
         self.entries
             .values()
-            .flat_map(|entry| entry.sessions.sessions())
-            .map(|session| session.to_string())
+            .flat_map(|entry| {
+                let sessions = entry.sessions.owners().into_iter().map(|s| s.to_string());
+                let checks = entry.checks.owners().into_iter().map(|c| c.to_string());
+                sessions.chain(checks).collect::<Vec<_>>()
+            })
             .collect()
     }
 
@@ -298,8 +339,7 @@ impl AppRegistry {
     }
 
     // spec: APPS#update
-    // spec: PRM#parameter-set
-    // spec: PRM#parameter-unset
+    // spec: PRM#parameter-changes
     /// Re-evaluate the app's current definition with updated stored params.
     ///
     /// On success the entry's app is updated and any active script-error
@@ -403,25 +443,24 @@ impl AppRegistry {
     ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
-            "SELECT name, installed, uninstalling, installing, current_generation, install_seq \
+            "SELECT name, installed, uninstalling, current_generation, install_seq \
              FROM registered_apps ORDER BY name",
         )?;
-        type Row = (AppName, bool, bool, bool, i64, Option<i64>);
+        type Row = (AppName, bool, bool, i64, Option<i64>);
         let rows: Vec<Row> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, AppName>(0)?,
                     row.get::<_, bool>(1)?,
                     row.get::<_, bool>(2)?,
-                    row.get::<_, bool>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, installed, uninstalling, installing, current_gen, install_seq) in rows {
-            let phase = decode_phase(name.as_str(), installed, uninstalling, installing);
+        for (name, installed, uninstalling, current_gen, install_seq) in rows {
+            let phase = decode_phase(installed, uninstalling);
             if current_gen <= 0 {
                 tracing::warn!(app = %name, "skipping app with no current generation");
                 continue;
@@ -477,11 +516,11 @@ impl AppRegistry {
                     phase: Arc::new(Mutex::new(phase)),
                     active_progress: Arc::new(RwLock::new(None)),
                     sessions: Arc::default(),
+                    checks: Arc::default(),
                     tick_notify: Arc::clone(&tick_notify),
                     script_error,
                     current_generation,
                     install_seq,
-                    start_pending: Arc::default(),
                 },
             );
         }
@@ -505,22 +544,20 @@ impl AppRegistry {
 
     // spec: APPS#persistence
     pub fn persist_app(db: &Db, entry: &AppEntry) -> rusqlite::Result<()> {
-        let (installed, uninstalling, installing) = encode_phase(&entry.phase.lock());
+        let (installed, uninstalling) = encode_phase(&entry.phase.lock());
         db.conn.execute(
             // spec: INFRA#database
             "INSERT INTO registered_apps \
-                 (name, installed, uninstalling, installing, current_generation) \
-             VALUES (?1, ?2, ?3, ?4, ?5) \
+                 (name, installed, uninstalling, current_generation) \
+             VALUES (?1, ?2, ?3, ?4) \
              ON CONFLICT(name) DO UPDATE SET \
                  installed = excluded.installed, \
                  uninstalling = excluded.uninstalling, \
-                 installing = excluded.installing, \
                  current_generation = excluded.current_generation",
             rusqlite::params![
                 entry.name,
                 installed as i64,
                 uninstalling as i64,
-                installing as i64,
                 entry.current_generation as i64,
             ],
         )?;
@@ -556,39 +593,23 @@ pub fn definition_at_generation(
     Ok(Some((generations::load_bundle(db, &hash)?, source)))
 }
 
-/// Encode a phase as the `(installed, uninstalling, installing)` triple stored
-/// in `registered_apps`. Exactly one of the three is ever set, except that
-/// `Uninstalling` sets `installed` alongside `uninstalling` so that a halted
-/// migration or manual intervention reading only `installed` still sees the app
-/// as "has been installed".
-fn encode_phase(phase: &AppPhase) -> (bool, bool, bool) {
+/// Encode a phase as the `(installed, uninstalling)` pair stored in
+/// `registered_apps`. `Uninstalling` sets `installed` alongside `uninstalling`
+/// so that a halted migration or manual intervention reading only `installed`
+/// still sees the app as "has been installed".
+fn encode_phase(phase: &AppPhase) -> (bool, bool) {
     match phase {
-        AppPhase::NotInstalled => (false, false, false),
-        AppPhase::Installing => (false, false, true),
-        AppPhase::Installed => (true, false, false),
-        AppPhase::Uninstalling => (true, true, false),
+        AppPhase::NotInstalled => (false, false),
+        AppPhase::Installed => (true, false),
+        AppPhase::Uninstalling => (true, true),
     }
 }
 
-/// Inverse of [`encode_phase`]. Tolerates inconsistent triples (e.g. both
-/// `installed` and `installing` set) by preferring the earliest-in-state-
-/// -machine interpretation and logging a warning — a defensive arm that
-/// should not trigger under the invariant that the encoder is the only
-/// writer.
-fn decode_phase(app: &str, installed: bool, uninstalling: bool, installing: bool) -> AppPhase {
+/// Inverse of [`encode_phase`].
+fn decode_phase(installed: bool, uninstalling: bool) -> AppPhase {
     if uninstalling {
-        return AppPhase::Uninstalling;
-    }
-    if installing {
-        if installed {
-            tracing::warn!(
-                app,
-                "registered_apps row has both installed=1 and installing=1; treating as Installing"
-            );
-        }
-        return AppPhase::Installing;
-    }
-    if installed {
+        AppPhase::Uninstalling
+    } else if installed {
         AppPhase::Installed
     } else {
         AppPhase::NotInstalled
@@ -606,17 +627,19 @@ pub fn transition_phase(
     db: &Db,
     app_name: &AppName,
 ) -> rusqlite::Result<()> {
-    let (installed, uninstalling, installing) = encode_phase(&new_phase);
-    db.conn.execute(
-        "UPDATE registered_apps SET installed = ?1, uninstalling = ?2, installing = ?3 WHERE name = ?4",
-        rusqlite::params![
-            installed as i64,
-            uninstalling as i64,
-            installing as i64,
-            app_name,
-        ],
-    )?;
+    write_phase(db, app_name, &new_phase)?;
     *phase_arc.lock() = new_phase;
+    Ok(())
+}
+
+/// Persist the phase alone, for a caller that makes it observable once the
+/// writes it belongs with are durable.
+pub fn write_phase(db: &Db, app_name: &AppName, phase: &AppPhase) -> rusqlite::Result<()> {
+    let (installed, uninstalling) = encode_phase(phase);
+    db.conn.execute(
+        "UPDATE registered_apps SET installed = ?1, uninstalling = ?2 WHERE name = ?3",
+        rusqlite::params![installed as i64, uninstalling as i64, app_name],
+    )?;
     Ok(())
 }
 
@@ -816,6 +839,7 @@ fn run_definition(
             return (App::with_bundle(Arc::clone(bundle)), Err(ScriptError(e)));
         }
     };
+    let _evaluation = app.guard_evaluation();
     let script = match bundle.script() {
         Ok(s) => s,
         // A stored definition that no longer reads as one (only possible
@@ -858,7 +882,7 @@ fn run_definition(
         Err(e) => return (app, Err(e)),
     };
     // spec: BSL#evaluation
-    if let Err(e) = crate::defs::check_evaluated(&app.def.load()) {
+    if let Err(e) = crate::defs::finish_evaluation(&app) {
         return (app, Err(ScriptError(e)));
     }
     let (Some(proposed), Some(validators)) = (validate, validators) else {

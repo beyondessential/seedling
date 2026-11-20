@@ -23,6 +23,99 @@ fn dep(app: &str, name: &str) -> ResourceInstance {
 // Current operation
 // -----------------------------------------------------------------------
 
+// spec: OPS#persistence
+// spec: OPS#interrupted-operations
+#[test]
+fn a_gate_run_is_persisted_and_read_back_as_a_gate_run() {
+    use crate::runtime::secrets::Cipher;
+    use seedling_protocol::{events::OperationTarget, names::GateName};
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("gate-run".into()),
+        app: app_name("myapp"),
+        target: OperationTarget::Gate(GateName::new("migrate").unwrap()),
+        generation: 7,
+    };
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
+    let loaded = load_current_operation(&db).unwrap().unwrap();
+    assert_eq!(loaded.target, op.target);
+    assert_eq!(loaded.generation, 7);
+
+    save_current_operation(
+        &db,
+        &cipher,
+        &CurrentOperation {
+            target: action_name("start").into(),
+            ..op
+        },
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        load_current_operation(&db).unwrap().unwrap().target,
+        action_name("start").into(),
+        "a later action's record replaces the gate run's, leaving no gate behind"
+    );
+}
+
+// spec: OPS#concurrency
+#[test]
+fn a_queued_gate_run_is_restored_as_a_gate_run_in_order() {
+    use crate::runtime::{scheduler::QueuedOperation, secrets::Cipher};
+    use seedling_protocol::{events::OperationTarget, names::GateName};
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let queued = |app: &str, id: &str, target: OperationTarget| QueuedOperation {
+        app: app_name(app),
+        target,
+        operation_id: OperationId(id.into()),
+        params: serde_json::Map::new(),
+        generation: 3,
+        trigger: "gate".into(),
+        actor: None,
+    };
+    let gate = OperationTarget::Gate(GateName::new("migrate").unwrap());
+    save_queued_operation(&db, &cipher, &queued("one", "a", gate.clone())).unwrap();
+    save_queued_operation(
+        &db,
+        &cipher,
+        &queued("two", "b", action_name("backup").into()),
+    )
+    .unwrap();
+
+    let restored = load_queued_operations(&db, &cipher).unwrap();
+    assert_eq!(
+        restored.iter().map(|q| &q.target).collect::<Vec<_>>(),
+        vec![&gate, &action_name("backup").into()]
+    );
+}
+
+// spec: OPS#persistence
+#[test]
+fn a_row_naming_both_an_action_and_a_gate_is_refused() {
+    let db = Db::open_in_memory().unwrap();
+    let both = db.conn.execute(
+        "INSERT INTO current_operation (singleton, operation_id, app, action_name, gate)
+         VALUES (1, 'x', 'myapp', 'backup', 'migrate')",
+        [],
+    );
+    assert!(
+        both.is_err(),
+        "an operation runs an action or a gate, not both"
+    );
+}
+
 // spec: HIST#durability
 // spec: OPS#initiating-events
 #[test]
@@ -34,9 +127,8 @@ fn save_and_load_current_operation() {
     let op = CurrentOperation {
         operation_id: OperationId("test-op-id".into()),
         app: app_name("myapp"),
-        action_name: action_name("start"),
-        source_generation: 3,
-        target_generation: 4,
+        target: action_name("start").into(),
+        generation: 4,
     };
     save_current_operation(
         &db,
@@ -49,9 +141,8 @@ fn save_and_load_current_operation() {
     let loaded = load_current_operation(&db).unwrap().unwrap();
     assert_eq!(loaded.operation_id.0, "test-op-id");
     assert_eq!(loaded.app, "myapp");
-    assert_eq!(loaded.action_name, "start");
-    assert_eq!(loaded.source_generation, 3);
-    assert_eq!(loaded.target_generation, 4);
+    assert_eq!(loaded.target, action_name("start").into());
+    assert_eq!(loaded.generation, 4);
 }
 
 #[test]
@@ -69,9 +160,8 @@ fn clear_current_operation_removes_record() {
     let op = CurrentOperation {
         operation_id: OperationId("op-1".into()),
         app: app_name("app"),
-        action_name: action_name("start"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("start").into(),
+        generation: 1,
     };
     save_current_operation(
         &db,
@@ -95,9 +185,8 @@ fn cancel_requested_round_trips_through_db() {
     let op = CurrentOperation {
         operation_id: OperationId("op-c1".into()),
         app: app_name("app"),
-        action_name: action_name("reindex"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("reindex").into(),
+        generation: 1,
     };
     save_current_operation(
         &db,
@@ -152,9 +241,8 @@ fn volume_bindings_persist_with_the_current_operation() {
     let op = CurrentOperation {
         operation_id: OperationId("backup-op".into()),
         app: app_name("myapp"),
-        action_name: action_name("backup"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("backup").into(),
+        generation: 1,
     };
     let mut params = serde_json::Map::new();
     params.insert(
@@ -194,19 +282,18 @@ fn volume_bindings_persist_with_the_current_operation() {
     );
 }
 
-// spec: OPS#persistence, ACI#install-parameters
+// spec: OPS#persistence
 #[test]
-fn install_params_round_trip_through_cipher() {
+fn operation_params_round_trip_through_cipher() {
     use crate::runtime::secrets::Cipher;
 
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
     let op = CurrentOperation {
-        operation_id: OperationId("install-op".into()),
+        operation_id: OperationId("restore-op".into()),
         app: app_name("myapp"),
-        action_name: action_name("install"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("restore").into(),
+        generation: 1,
     };
     let mut params = serde_json::Map::new();
     params.insert("passphrase".into(), serde_json::json!("hunter2"));
@@ -216,7 +303,7 @@ fn install_params_round_trip_through_cipher() {
 
     // Metadata loads via the normal path.
     let meta = load_current_operation(&db).unwrap().unwrap();
-    assert_eq!(meta.action_name, "install");
+    assert_eq!(meta.target, action_name("restore").into());
 
     // Params decrypt back to the original map.
     let restored = load_current_operation_params(&db, &cipher)
@@ -235,34 +322,6 @@ fn install_params_round_trip_through_cipher() {
 
 // spec: OPS#persistence
 #[test]
-fn non_install_operation_params_round_trip() {
-    use crate::runtime::secrets::Cipher;
-
-    let db = Db::open_in_memory().unwrap();
-    let cipher = Cipher::for_tests();
-    let op = CurrentOperation {
-        operation_id: OperationId("invoke-op".into()),
-        app: app_name("myapp"),
-        action_name: ActionName::new_unchecked("rotate_secret"),
-        source_generation: 5,
-        target_generation: 5,
-    };
-    // Operator-invoked actions may pass params that include secret-ish
-    // values. On replay those params must be restored.
-    let mut params = serde_json::Map::new();
-    params.insert("target_host".into(), serde_json::json!("db-1.internal"));
-    params.insert("auth_token".into(), serde_json::json!("s3cr3t"));
-
-    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
-
-    let restored = load_current_operation_params(&db, &cipher)
-        .unwrap()
-        .unwrap();
-    assert_eq!(restored, params);
-}
-
-// spec: OPS#persistence
-#[test]
 fn empty_params_round_trip() {
     use crate::runtime::secrets::Cipher;
 
@@ -271,9 +330,8 @@ fn empty_params_round_trip() {
     let op = CurrentOperation {
         operation_id: OperationId("start-op".into()),
         app: app_name("myapp"),
-        action_name: action_name("start"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("start").into(),
+        generation: 1,
     };
     save_current_operation(
         &db,
@@ -301,16 +359,14 @@ fn save_overwrites_previous_current_operation() {
     let op1 = CurrentOperation {
         operation_id: OperationId("op-1".into()),
         app: app_name("app"),
-        action_name: action_name("start"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("start").into(),
+        generation: 1,
     };
     let op2 = CurrentOperation {
         operation_id: OperationId("op-2".into()),
         app: app_name("app"),
-        action_name: action_name("stop"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("stop").into(),
+        generation: 1,
     };
     save_current_operation(
         &db,
@@ -330,7 +386,7 @@ fn save_overwrites_previous_current_operation() {
     .unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
     assert_eq!(loaded.operation_id.0, "op-2");
-    assert_eq!(loaded.action_name, "stop");
+    assert_eq!(loaded.target, action_name("stop").into());
 }
 
 // -----------------------------------------------------------------------
@@ -904,9 +960,8 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
     let op = CurrentOperation {
         operation_id: OperationId("op-cancel".into()),
         app: app_name("app"),
-        action_name: action_name("migrate"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("migrate").into(),
+        generation: 1,
     };
 
     save_current_operation(
@@ -1056,9 +1111,8 @@ fn the_persisted_operation_state_carries_a_persisted_cancel() {
     let op = CurrentOperation {
         operation_id: OperationId("op-cancelled".into()),
         app: app_name("myapp"),
-        action_name: action_name("start"),
-        source_generation: 1,
-        target_generation: 1,
+        target: action_name("start").into(),
+        generation: 1,
     };
     save_current_operation(
         &db,

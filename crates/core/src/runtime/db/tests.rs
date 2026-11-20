@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 81);
+    assert_eq!(version, 82);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 81);
+    assert_eq!(version, 82);
 }
 
 // spec: APPS#persistence
@@ -486,4 +486,419 @@ fn a_cached_canopy_server_id_with_no_recorded_key_is_dropped() {
         )
         .expect("row");
     assert_eq!((id, key), (None, None));
+}
+
+// spec: GEN#history-entries
+// spec: SEC#generation-history
+#[test]
+fn single_parameter_history_rows_move_to_the_per_parameter_table() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO registered_apps (name, installed, uninstalling, current_generation)
+                 VALUES ('web', 0, 0, 5);
+             INSERT INTO generations (app, generation, created_at, kind, bundle_hash)
+                 VALUES ('web', 1, 't', 'register', 'h');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, previous_value, new_value, bundle_hash)
+                 VALUES ('web', 2, 't', 'param_set', 'mode', NULL, 'x', 'h');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, previous_value, new_value, bundle_hash)
+                 VALUES ('web', 3, 't', 'script_update', 'mode', 'x', 'y', 'h');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, previous_value, new_value, bundle_hash)
+                 VALUES ('web', 4, 't', 'param_unset', 'mode', 'y', NULL, 'h');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, new_value_ciphertext, bundle_hash)
+                 VALUES ('web', 5, 't', 'param_set', 'key', x'0102', 'h');",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let kinds: Vec<String> = db
+        .conn
+        .prepare("SELECT kind FROM generations WHERE app = 'web' ORDER BY generation")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        kinds,
+        [
+            "register",
+            "param_change",
+            "script_update",
+            "param_change",
+            "param_change"
+        ]
+    );
+
+    type Row = (i64, String, Option<String>, Option<String>, Option<Vec<u8>>);
+    let rows: Vec<Row> = db
+        .conn
+        .prepare(
+            "SELECT generation, param_name, previous_value, new_value, new_value_ciphertext
+             FROM generation_params WHERE app = 'web' ORDER BY generation",
+        )
+        .unwrap()
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (2, "mode".into(), None, Some("x".into()), None),
+            (3, "mode".into(), Some("x".into()), Some("y".into()), None),
+            (4, "mode".into(), Some("y".into()), None, None),
+            (5, "key".into(), None, None, Some(vec![1, 2])),
+        ]
+    );
+
+    let dropped: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('generations')
+             WHERE name IN ('param_name', 'previous_value', 'new_value',
+                            'previous_value_ciphertext', 'new_value_ciphertext')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dropped, 0, "the old per-generation columns are gone");
+}
+
+// spec: ACI#install
+#[test]
+fn an_app_part_way_through_an_install_is_installed_and_the_removed_actions_leave_the_queue() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO registered_apps (name, installed, uninstalling, installing, current_generation)
+                 VALUES ('half', 0, 0, 1, 1), ('fresh', 0, 0, 0, 1), ('live', 1, 0, 0, 1);
+             INSERT INTO queued_operations
+                 (operation_id, app, action, trigger, source_generation, target_generation, params_ciphertext)
+                 VALUES ('boot', 'live', 'start', 'boot', 1, 1, x'00'),
+                        ('after-install', 'live', 'start', 'install', 1, 1, x'00'),
+                        ('install', 'fresh', 'install', 'operator', 1, 1, x'00'),
+                        ('action', 'live', 'backup', 'operator', 1, 1, x'00');",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let phases: Vec<(String, bool)> = db
+        .conn
+        .prepare("SELECT name, installed FROM registered_apps ORDER BY name")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        phases,
+        [
+            ("fresh".to_owned(), false),
+            ("half".to_owned(), true),
+            ("live".to_owned(), true),
+        ]
+    );
+    let has_column: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('registered_apps') WHERE name = 'installing'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_column, 0, "the installing column is gone");
+
+    let queued: Vec<String> = db
+        .conn
+        .prepare("SELECT operation_id FROM queued_operations ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(queued, ["action"]);
+}
+
+// spec: OPS#changes-to-an-app
+#[test]
+fn requests_queued_for_a_parameter_change_leave_the_queue() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO queued_operations
+                 (operation_id, app, action, trigger, source_generation, target_generation, params_ciphertext)
+                 VALUES ('action', 'live', 'backup', 'operator', 1, 1, x'00'),
+                        ('change', 'live', 'mode', 'param_change', 1, 2, x'00');",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let queued: Vec<String> = db
+        .conn
+        .prepare("SELECT operation_id FROM queued_operations ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(queued, ["action"]);
+}
+
+// spec: OPS#interrupted-operations
+#[test]
+fn an_interrupted_install_or_start_is_not_kept_to_be_replayed() {
+    for action in ["install", "start"] {
+        let db = Db::open_in_memory_through(81).expect("open at v81");
+        db.conn
+            .execute(
+                "INSERT INTO current_operation
+                     (singleton, operation_id, app, action_name, source_generation, target_generation)
+                     VALUES (1, 'running', 'live', ?1, 1, 1)",
+                [action],
+            )
+            .expect("seed v81 data");
+
+        db.finish_migrations().expect("migrate to the latest");
+
+        let kept: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM current_operation", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, 0, "{action}");
+    }
+}
+
+// spec: OPS#interrupted-operations
+#[test]
+fn an_interrupted_change_handler_is_not_kept_to_be_replayed() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO params (app_name, param_name, value) VALUES ('live', 'mode', 'fast');
+             INSERT INTO current_operation
+                 (singleton, operation_id, app, action_name, source_generation, target_generation)
+                 VALUES (1, 'running', 'live', 'mode', 1, 2);",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let kept: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM current_operation", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kept, 0);
+}
+
+// spec: OPS#initiating-events
+#[test]
+fn a_persisted_operation_keeps_its_target_generation_as_its_generation() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO current_operation
+                 (singleton, operation_id, app, action_name, source_generation, target_generation)
+                 VALUES (1, 'running', 'live', 'backup', 2, 3);
+             INSERT INTO queued_operations
+                 (operation_id, app, action, trigger, source_generation, target_generation, params_ciphertext)
+                 VALUES ('waiting', 'live', 'backup', 'operator', 4, 5, x'00');",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let current: i64 = db
+        .conn
+        .query_row(
+            "SELECT generation FROM current_operation WHERE operation_id = 'running'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let queued: i64 = db
+        .conn
+        .query_row(
+            "SELECT generation FROM queued_operations WHERE operation_id = 'waiting'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!((current, queued), (3, 5));
+    let dropped: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('current_operation')
+             WHERE name IN ('source_generation', 'target_generation')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dropped, 0);
+}
+
+// spec: GEN#history-entries
+#[test]
+fn a_generation_keeps_its_history_and_loses_the_operation_outcome() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO generations
+                 (app, generation, created_at, kind, bundle_hash, operation_id, outcome, outcome_error)
+                 VALUES ('live', 1, 't', 'register', 'h', NULL, NULL, NULL),
+                        ('live', 2, 't', 'param_change', 'h', 'op', 'failed', 'boom');",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let kept: Vec<(i64, String)> = db
+        .conn
+        .prepare("SELECT generation, kind FROM generations ORDER BY generation")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        kept,
+        [(1, "register".to_owned()), (2, "param_change".to_owned())]
+    );
+    let dropped: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('generations')
+             WHERE name IN ('operation_id', 'outcome', 'outcome_error')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(dropped, 0);
+}
+
+// spec: GRUN#gate-state
+// spec: GRUN#app-setup
+#[test]
+fn gate_storage_exists_and_an_installed_app_is_already_set_up() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO registered_apps (name, installed) VALUES ('live', 1), ('fresh', 0);",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let set_up: Vec<(String, bool)> = db
+        .conn
+        .prepare("SELECT name, set_up FROM registered_apps ORDER BY name")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        set_up,
+        [("fresh".to_owned(), false), ("live".to_owned(), true)]
+    );
+
+    db.conn
+        .execute_batch(
+            "INSERT INTO gate_records (app, gate, key_digest, success_generation, valid)
+                 VALUES ('live', 'migrate', x'00', 3, 1);
+             INSERT INTO gate_holds (app, gate, kind, name)
+                 VALUES ('live', 'migrate', 'deployment', 'api');",
+        )
+        .expect("gate rows insert");
+    let failures: i64 = db
+        .conn
+        .query_row(
+            "SELECT consecutive_failures FROM gate_records WHERE app = 'live'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(failures, 0, "a record starts with no failures");
+    assert!(
+        db.conn
+            .execute(
+                "INSERT INTO gate_records (app, gate, valid) VALUES ('live', 'migrate', 0)",
+                [],
+            )
+            .is_err(),
+        "a gate has one record per app"
+    );
+}
+
+// spec: GRUN#checks
+// spec: APP#dynamic-resource-lifetime
+#[test]
+fn dynamic_resource_records_name_their_creator_and_refuse_an_unknown_one() {
+    let db = Db::open_in_memory_through(81).expect("open at v81");
+    db.conn
+        .execute_batch(
+            "INSERT INTO dynamic_resources
+                 (instance_id, app, operation_id, kind, display_name, shell_session)
+                 VALUES ('a', 'web', 'op-1', 'Job', 'web-a', 0),
+                        ('b', 'web', 'sess-1', 'Job', 'web-b', 1);",
+        )
+        .expect("seed v81 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let creators: Vec<(String, String)> = db
+        .conn
+        .prepare("SELECT instance_id, creator FROM dynamic_resources ORDER BY instance_id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        creators,
+        [
+            ("a".to_owned(), "operation".to_owned()),
+            ("b".to_owned(), "shell_session".to_owned())
+        ]
+    );
+    let refused = db.conn.execute(
+        "INSERT INTO dynamic_resources (instance_id, app, operation_id, kind, display_name, creator)
+             VALUES ('c', 'web', 'x', 'Job', 'web-c', 'gate')",
+        [],
+    );
+    assert!(refused.is_err(), "an unknown creator was stored");
+}
+
+// spec: GEN#reconstruction
+#[test]
+fn reconstruction_reads_each_parameters_latest_change_through_an_index() {
+    let db = Db::open_in_memory().unwrap();
+    let plan: Vec<String> = db
+        .conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT param_name, new_value, new_value_ciphertext
+             FROM generation_params INDEXED BY generation_params_by_name
+             WHERE app = ?1 AND generation <= ?2
+             ORDER BY param_name ASC, generation DESC",
+        )
+        .unwrap()
+        .query_map(rusqlite::params!["demo", 5], |r| r.get(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("generation_params_by_name")),
+        "{plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|step| step.contains("TEMP B-TREE")),
+        "{plan:?}"
+    );
 }

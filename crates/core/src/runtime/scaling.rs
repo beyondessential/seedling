@@ -147,6 +147,21 @@ pub fn load_all_scaling_decisions(db: &Db) -> rusqlite::Result<ScalingDecisions>
 }
 
 // spec: AUTO#scale
+/// Load every stored scaling decision of `app`, keyed by deployment.
+pub fn load_scaling_decisions_for_app(
+    db: &Db,
+    app: &AppName,
+) -> rusqlite::Result<HashMap<String, u16>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT deployment, scale FROM scaling_decisions WHERE app = ?1")?;
+    let rows = stmt.query_map(params![app], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, u16>(1)?))
+    })?;
+    rows.collect()
+}
+
+// spec: AUTO#scale
 /// Compute the effective scale for a deployment: the stored decision
 /// clamped to bounds, or the lower bound if no decision exists.
 pub fn effective_scale(

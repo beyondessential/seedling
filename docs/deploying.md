@@ -147,8 +147,10 @@ downloaded by `seedling-ctl` itself (set `GITHUB_TOKEN` for private
 repositories), so the host needs no GitHub access; the URL and commit are
 recorded as the reported origin.
 
-Replace a definition and change one parameter in the same generation, so an
-upgrade runs under the definition written for it:
+Replace a definition and change parameters in the same generation, so an
+upgrade runs under the definition written for it. Repeat `--set name=value`
+and `--unset name` to change several parameters at once; `apps plan` takes the
+same changes as `--param name=value` and `--unset name`:
 
 ```bash
 seedling-ctl apps plan tamanu --ref ghcr.io/<org>/tamanu-definition:2.13.0 --param version=2.13.0
@@ -159,6 +161,26 @@ An update that fails to fetch, breaks the bundle rules, fails to evaluate, or
 is rejected by a parameter validator is refused, and the app keeps running
 what it had. `seedling-ctl apps export tamanu ./out [--generation N]` writes
 any generation's bundle back out as a folder.
+
+Parameters that belong together change in one generation, with or without a
+new definition, and each validator sees them together:
+
+```bash
+seedling-ctl apps params set tamanu host=tamanu.example.org port=8443 --unset legacy-url
+```
+
+Neither a parameter change nor an update runs anything by itself. A change that
+moves the key of one of the app's gates leaves the gate unsatisfied, and the
+daemon runs it; `apps plan` lists those gates as `gates_would_run`. To run a
+gate now, whether or not it is satisfied, for example to repeat a migration
+after restoring a database from a backup:
+
+```bash
+seedling-ctl apps gate run tamanu migrate
+```
+
+`apps install tamanu` takes no parameters: set them first with `apps params
+set`, or in the same generation as a definition with `apps update --set`.
 
 ### Publishing a definition to a registry
 

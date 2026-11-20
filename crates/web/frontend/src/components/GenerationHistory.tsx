@@ -1,7 +1,6 @@
 import {
   Box,
   Button,
-  Chip,
   CircularProgress,
   Paper,
   Table,
@@ -25,32 +24,14 @@ const mono = { fontFamily: "monospace" } as const;
 const GENERATION_EVENTS: Set<string> = new Set([
   "AppRegistered",
   "AppUpdated",
-  "ParamSet",
-  "ParamUnset",
-  "OperationCompleted",
-  "OperationFailed",
-  "OperationCancelled",
+  "ParamsChanged",
 ]);
 
 const KIND_LABEL: Record<GenerationEntry["kind"], string> = {
   register: "registered",
   script_update: "script updated",
-  param_set: "param set",
-  param_unset: "param unset",
+  param_change: "params changed",
 };
-
-function outcomeColor(outcome: NonNullable<GenerationEntry["outcome"]>): "success" | "error" | "warning" | "info" {
-  switch (outcome) {
-    case "succeeded":
-      return "success";
-    case "failed":
-      return "error";
-    case "cancelled":
-      return "warning";
-    case "pending":
-      return "info";
-  }
-}
 
 function provenanceLabel(def: DefinitionProvenance): string {
   return def.kind === "fetched"
@@ -70,27 +51,26 @@ function Detail({ entry }: { entry: GenerationEntry }) {
           {provenanceLabel(entry.definition)}
         </Box>
       )}
-      {entry.param_name !== undefined && (
-        <Box component="div" sx={mono}>
-          {entry.param_name}
-          {entry.redacted ? (
+      {entry.params?.map((p) => (
+        <Box component="div" sx={mono} key={p.name}>
+          {p.name}
+          {p.redacted ? (
             <Typography component="span" variant="caption" sx={{ color: "text.secondary", ml: 1 }}>
               values withheld
             </Typography>
           ) : (
             <>
               {": "}
-              {shown(entry.previous_value)} → {shown(entry.new_value)}
+              {shown(p.previous_value)} → {shown(p.new_value)}
             </>
           )}
         </Box>
-      )}
+      ))}
     </>
   );
 }
 
-/** The changes made to an app, newest first, each with the outcome of the
- *  operation it triggered. */
+/** The changes made to an app, newest first. */
 // spec: UI#operator-capabilities
 export function GenerationHistory({ appName }: { appName: string }) {
   const first = useOiQuery<GenerationEntry[]>("/apps/generations", { app: appName, limit: PAGE });
@@ -142,7 +122,6 @@ export function GenerationHistory({ appName }: { appName: string }) {
               <TableCell width={80}>Generation</TableCell>
               <TableCell>When</TableCell>
               <TableCell>Change</TableCell>
-              <TableCell>Outcome</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -155,16 +134,6 @@ export function GenerationHistory({ appName }: { appName: string }) {
                 <TableCell>
                   <Box>{KIND_LABEL[e.kind]}</Box>
                   <Detail entry={e} />
-                </TableCell>
-                <TableCell>
-                  {e.outcome !== null && (
-                    <Chip label={e.outcome} size="small" color={outcomeColor(e.outcome)} variant="outlined" />
-                  )}
-                  {e.error && (
-                    <Typography variant="caption" component="div" sx={{ color: "error.main" }}>
-                      {e.error}
-                    </Typography>
-                  )}
                 </TableCell>
               </TableRow>
             ))}

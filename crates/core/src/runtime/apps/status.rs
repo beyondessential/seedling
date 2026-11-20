@@ -9,7 +9,7 @@ use crate::{
     runtime::{
         barrier::oracle::{container_run_succeeded, derive_lifecycle_state, has_lifecycle},
         db::{Db, DbHandle},
-        faults,
+        faults, gates,
         history::{find_instances_for_group, query_observations_for, read_lifecycle},
         identity::ResourceInstance,
         lifecycle::LifecycleState,
@@ -116,6 +116,8 @@ struct Snapshot {
     name: AppName,
     phase: AppPhase,
     resources: Vec<Declared>,
+    /// The definition, which says what each gate's hold covers.
+    def: Arc<crate::defs::app::AppDef>,
 }
 
 impl Snapshot {
@@ -131,6 +133,7 @@ impl Snapshot {
             name: entry.name.clone(),
             phase,
             resources,
+            def: entry.app.def.load_full(),
         }
     }
 }
@@ -158,15 +161,13 @@ fn snapshot_all<T>(
 /// The status the phase or the scheduler settles without the database, or
 /// `None` for an installed app with no operation, whose status is its health.
 fn settled(snapshot: &Snapshot, active: Option<&ActiveOperation>) -> Option<AppStatus> {
-    match snapshot.phase {
-        AppPhase::Uninstalling => return Some(AppStatus::Uninstalling),
-        AppPhase::Installing => return Some(AppStatus::Installing),
-        AppPhase::NotInstalled | AppPhase::Installed => {}
+    if snapshot.phase == AppPhase::Uninstalling {
+        return Some(AppStatus::Uninstalling);
     }
     // An operation outranks the app not being installed.
     if let Some(op) = active.filter(|a| a.app == snapshot.name) {
         return Some(AppStatus::Operating {
-            action_name: op.action.clone(),
+            operation: op.target.clone(),
         });
     }
     match snapshot.phase {
@@ -198,9 +199,13 @@ struct Declared {
 
 fn declared(entry: &AppEntry) -> Vec<Declared> {
     let def = entry.app.def.load();
+    // spec: APPS#status-derivation
+    // The Job of a gate's check is always at its desired state.
+    let check_jobs = crate::runtime::gates::check_jobs(&def);
     def.resources
         .iter()
         .filter(|(id, _)| has_lifecycle(id.kind))
+        .filter(|(id, _)| !check_jobs.contains(id))
         .map(|(id, resource)| {
             let scale_bounds = match resource {
                 Resource::Deployment(d) => {
@@ -231,10 +236,18 @@ fn steady(
     if faults.withholding {
         return Ok(AppStatus::Faulted);
     }
+    // spec: APPS#status-derivation
+    // An installed app is installing until every gate it declares has been
+    // satisfied at once.
+    if !gates::store::is_set_up(db, &snapshot.name)? {
+        return Ok(AppStatus::Installing);
+    }
     if faults.active > 0 {
         return Ok(AppStatus::Degraded);
     }
     let app_name = &snapshot.name;
+    // spec: RCN#gate-holds
+    let held = gates::held_resources(&snapshot.def, &gates::store::load_holds(db, app_name)?);
     for Declared {
         kind,
         name,
@@ -244,7 +257,8 @@ fn steady(
         // spec: CTL#resource-stop
         // As the steady desired state has it: a stopped resource, or a
         // deployment scaled to zero, is meant to have nothing Ready.
-        let desired = if stopped.contains(&(*kind, name.as_str().to_owned())) {
+        let is_held = held.keys().any(|id| id.kind == *kind && id.name == *name);
+        let desired = if is_held || stopped.contains(&(*kind, name.as_str().to_owned())) {
             Desired::Unscheduled
         } else if let Some((low, high)) = scale_bounds {
             if scaling::effective_scale(db, app_name, name, *low, *high)? > 0 {

@@ -24,15 +24,13 @@ In [steady state](reconciliation.md#steady-state), the [runtime](../overview.md#
 The runtime MUST increment an app's generation by exactly one on each of these changes:
 
 - the app's registration, which creates generation 1;
-- a successful definition update, together with the parameter change made alongside it, if any;
-- a successful parameter set or unset.
+- a successful definition update, together with the parameter changes made alongside it, if any;
+- a successful [parameter change](../interface/params.md#parameter-changes).
 
 The runtime MUST commit the new generation atomically with the change that caused it.
-If the change triggers a [lifecycle operation](../overview.md#lifecycle-operation), such as an `on_change` handler, the runtime MUST dispatch the operation only after committing the generation.
 
 An app's generations MUST be strictly increasing from its registration until its deregistration.
-A failed lifecycle operation MUST NOT roll back the generation that triggered it.
-The runtime records the failure as [completion](operations.md#completion) specifies.
+A failed [gate run](gates.md) MUST NOT roll back the generation that made the gate unsatisfied.
 
 ## History entries
 
@@ -42,14 +40,10 @@ The runtime MUST keep a generation history for each app, holding one entry for e
 | --- | --- | --- |
 | generation | every entry | the generation number |
 | created | every entry | when the generation was created |
-| kind | every entry | `register`, `script_update`, `param_set` or `param_unset` |
+| kind | every entry | `register`, `script_update` or `param_change` |
 | bundle | every entry | the [content hash](../interface/definitions.md#content-hash-computation) of the definition bundle current at this generation |
 | provenance | `register` and `script_update` | the [definition provenance](../interface/definitions.md#provenance-reporting) of the definition it installed |
-| parameter | `param_set`, `param_unset`, and a `script_update` that changed a parameter alongside its definition | the name of the parameter changed |
-| previous value | every entry with a parameter | the parameter's value before the change, or none if it was unset |
-| new value | every entry with a parameter | the parameter's value after the change, or none if the change unset it |
-| operation | an entry whose change triggered a lifecycle operation | the operation's identity |
-| outcome | an entry with an operation | `pending` while the operation runs or waits, then `succeeded`, `cancelled`, or `failed` with details |
+| parameters | `param_change`, and a `script_update` that changed parameters alongside its definition | for each parameter whose stored value the change moved: its name, its value before the change or none if it was unset, and its value after the change or none if the change unset it |
 
 Values of a secret parameter are protected in history entries as [secret history](secrets.md#generation-history) specifies.
 
@@ -64,7 +58,7 @@ The runtime MUST NOT use a stored bundle whose contents do not hash to the hash 
 The runtime MUST be able to reconstruct an app's resource graph as it was at any generation N in the app's generation history, by these steps:
 
 1. Load the bundle referenced by the most recent `register` or `script_update` entry at or before N.
-2. Build the parameter values at N, taking each parameter's value from the most recent entry at or before N that changed it, whether a `param_set`, a `param_unset`, or a `script_update` that changed it alongside its definition.
+2. Build the parameter values at N, taking each parameter's value from the most recent entry at or before N that changed it, whether a `param_change` or a `script_update` that changed it alongside its definition.
    A parameter that was unset by that entry, or that no entry at or before N changed, has no value.
 3. Evaluate the bundle with those parameter values.
 

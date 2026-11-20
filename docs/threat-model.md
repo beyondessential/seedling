@@ -149,7 +149,7 @@ can:
   and a bind mount of `/`, then install it.
 - Open a normal app shell into any installed container and run arbitrary
   commands as the workload's user.
-- Use `seedling-ctl` to push a script with a malicious install action.
+- Use `seedling-ctl` to push a script with a malicious action.
 
 Operator authorisation is the trust boundary. Seedling provides
 *audit-after-the-fact* (every action attributable to an actor in the audit

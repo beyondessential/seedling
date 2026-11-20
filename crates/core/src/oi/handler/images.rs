@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use crate::{
     oi::state::OiState,
     runtime::{
-        DbInstanceRegistry, InstanceRegistry, images,
+        DbInstanceRegistry, InstanceRegistry,
+        gates::run::LastSuccesses,
+        images,
         probe::{ProbeRequest, probe_app},
     },
 };
@@ -373,8 +375,7 @@ pub(crate) struct DiscoverParams {
     /// proposed script would introduce.
     #[serde(default)]
     pub proposed_script: Option<String>,
-    /// Per-handler supplied param values: handler kind (`"install"`,
-    /// `"start"`, `"action"`, `"shell"` or `"param_change"`), then handler
+    /// Per-handler supplied param values: handler kind (`"action"` or `"shell"`), then handler
     /// name, then param name to string.
     // spec: IMGM#image-discovery
     #[serde(default)]
@@ -420,7 +421,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         }
         proposed_app
     } else {
-        stored_app
+        stored_app.clone()
     };
 
     let script = bundle.script()?;
@@ -444,8 +445,19 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         action_params: params.action_params,
         lenient: params.lenient,
     };
-    let response = probe_app(&engine, &ast, &app, registry, &request)
-        .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
+    // A gate's body is probed with `last` as a run of it would give it, which
+    // is the app as stored, not as a proposed script would make it.
+    let last = LastSuccesses::new(
+        &state.db,
+        &name,
+        &stored_app,
+        &state.script_limits,
+        &state.cipher,
+    );
+    let response = probe_app(&engine, &ast, &app, registry, &request, &|gate| {
+        last.of(gate)
+    })
+    .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
 
     let per_handler: Vec<Value> = response
         .per_handler
@@ -470,7 +482,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
 
 /// Reconcile `app`'s pins against the current AppDef and a lenient probe
 /// of the app's script. Called after operator-driven AppDef changes
-/// (`/apps/update`, `/apps/params/set`, `/apps/params/unset`).
+/// (`/apps/update`, `/apps/params/set`).
 ///
 /// - Clean probe → orphan pins are deleted.
 /// - Dirty probe (any handler reported an error or skipped_reason) →
@@ -541,6 +553,13 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
     let registry: std::sync::Arc<dyn InstanceRegistry> =
         std::sync::Arc::new(DbInstanceRegistry::new(state.db.clone()));
 
+    let last = LastSuccesses::new(
+        &state.db,
+        app_name,
+        &app,
+        &state.script_limits,
+        &state.cipher,
+    );
     let probe_response = match crate::runtime::probe::probe_app(
         &engine,
         &ast,
@@ -550,6 +569,7 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
             lenient: true,
             ..Default::default()
         },
+        &|gate| last.of(gate),
     ) {
         Ok(r) => r,
         Err(e) => {

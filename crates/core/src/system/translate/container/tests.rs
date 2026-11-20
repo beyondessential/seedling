@@ -486,7 +486,7 @@ fn a_volume_declared_read_only_is_mounted_read_only() {
         &[],
         None,
         &std::collections::HashMap::new(),
-        0,
+        &ConfigStamp::default(),
     );
     let flagged = |target: &str| {
         spec.mounts
@@ -538,7 +538,7 @@ fn volume_mount_uses_app_prefixed_display_name() {
         &[],
         None,
         &std::collections::HashMap::new(),
-        0,
+        &ConfigStamp::default(),
     );
 
     // The volume mount source must be the canonical Volume-resource display
@@ -731,6 +731,25 @@ fn spec_for_deployment(
     external_volumes: &HashMap<ExternalVolumeName, ResolvedExternalMount>,
     restart_gen: u64,
 ) -> ContainerSpec {
+    spec_for_deployment_stamped(
+        def,
+        mounts,
+        volumes_dir,
+        external_volumes,
+        &ConfigStamp {
+            restart_gen,
+            gate_keys: Vec::new(),
+        },
+    )
+}
+
+fn spec_for_deployment_stamped(
+    def: &crate::defs::deployment::DeploymentDef,
+    mounts: &[(u16, Ipv6Addr, u16)],
+    volumes_dir: Option<&Path>,
+    external_volumes: &HashMap<ExternalVolumeName, ResolvedExternalMount>,
+    stamp: &ConfigStamp,
+) -> ContainerSpec {
     deployment_spec(
         def,
         &make_instance("myapp", "web"),
@@ -740,7 +759,7 @@ fn spec_for_deployment(
         &[],
         volumes_dir,
         external_volumes,
-        restart_gen,
+        stamp,
     )
 }
 
@@ -892,6 +911,94 @@ fn restart_gen_label_is_set_only_when_positive() {
 
     let spec = spec_for_deployment(&def, &[], None, &HashMap::new(), 0);
     assert!(!spec.labels.contains_key("seedling.restart-gen"));
+}
+
+// spec: UPD#stale-instances
+#[test]
+fn the_stamped_spec_hash_is_the_hash_of_the_spec_the_reconciler_derives() {
+    use crate::defs::deployment::DeploymentDef;
+    use crate::runtime::secrets::Cipher;
+
+    let def = DeploymentDef::default();
+    def.pod.lock().container.lock().image = Some("img".to_string());
+    let cipher = Cipher::for_tests();
+    let stamp = ConfigStamp {
+        restart_gen: 2,
+        gate_keys: vec![(
+            "migrate".parse().unwrap(),
+            cipher.key_digest(b"\"1.2.3\"").unwrap(),
+        )],
+    };
+
+    let spec = spec_for_deployment_stamped(&def, &[], None, &HashMap::new(), &stamp);
+    assert_eq!(
+        spec.labels.get(SPEC_HASH_LABEL),
+        Some(&spec_hash(&spec)),
+        "what a container is started with is what the reconciler compares it to"
+    );
+}
+
+// spec: UPD#spec-hash
+#[test]
+fn the_spec_hash_moves_with_the_key_of_a_gate_the_workload_is_ordered_after() {
+    use crate::defs::deployment::DeploymentDef;
+    use crate::runtime::secrets::Cipher;
+
+    let def = DeploymentDef::default();
+    def.pod.lock().container.lock().image = Some("img".to_string());
+    let cipher = Cipher::for_tests();
+    let digest = |key: &[u8]| cipher.key_digest(key).unwrap();
+    let instance = make_instance("myapp", "web");
+    let hash = |gate_keys: Vec<(seedling_protocol::names::GateName, _)>| {
+        let spec = deployment_spec(
+            &def,
+            &instance,
+            &BTreeMap::new(),
+            &network(),
+            &[],
+            &[],
+            None,
+            &HashMap::new(),
+            &ConfigStamp {
+                restart_gen: 0,
+                gate_keys,
+            },
+        );
+        spec_hash(&spec)
+    };
+    let migrate = || {
+        "migrate"
+            .parse::<seedling_protocol::names::GateName>()
+            .unwrap()
+    };
+    let seed = || {
+        "seed"
+            .parse::<seedling_protocol::names::GateName>()
+            .unwrap()
+    };
+
+    let none = hash(vec![]);
+    let one = hash(vec![(migrate(), digest(b"1"))]);
+    assert_ne!(
+        none, one,
+        "ordering a workload after a gate changes its hash"
+    );
+    assert_eq!(one, hash(vec![(migrate(), digest(b"1"))]), "and is stable");
+    assert_ne!(
+        one,
+        hash(vec![(migrate(), digest(b"2"))]),
+        "a moved key moves it"
+    );
+    assert_ne!(
+        one,
+        hash(vec![(seed(), digest(b"1"))]),
+        "the same key under another gate is another configuration"
+    );
+    assert_ne!(
+        one,
+        hash(vec![(migrate(), digest(b"1")), (seed(), digest(b"1"))]),
+        "as is another gate"
+    );
 }
 
 // spec: DEP#health-checks

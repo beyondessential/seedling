@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
+use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName};
 
 use crate::runtime::apps::AppPhase;
@@ -19,17 +20,12 @@ use crate::runtime::identity::InstanceId;
 #[derive(Debug, Clone)]
 pub struct ActiveOperation {
     pub app: AppName,
-    pub action: ActionName,
+    /// The action it runs, or the gate whose run it is.
+    pub target: OperationTarget,
     pub operation_id: OperationId,
-    /// Generation that was current immediately before the change that
-    /// triggered this operation. Equal to target for operations not
-    /// triggered by a generation bump.
+    /// The generation current when the operation was dispatched.
     // spec: OPS#initiating-events
-    pub source_generation: u64,
-    /// Generation produced by the change that triggered this operation, or
-    /// the current generation at dispatch for operator-invoked actions.
-    // spec: OPS#initiating-events
-    pub target_generation: u64,
+    pub generation: u64,
     /// Cooperative cancellation signal. Flipped by the cancel-action
     /// endpoint; observed by the action runtime at barrier entry and by the
     /// lifecycle loop's interruptible sleep.
@@ -41,16 +37,14 @@ pub struct ActiveOperation {
 #[derive(Debug, Clone)]
 pub struct QueuedOperation {
     pub app: AppName,
-    pub action: ActionName,
+    pub target: OperationTarget,
     pub operation_id: OperationId,
-    /// Action params passed by the invoker. For install actions, contains the
-    /// validated requirements. Empty map for actions with no params.
+    /// Action params passed by the invoker. Empty map for actions with no
+    /// params, and for a gate run.
     // spec: OPS#persistence
     pub params: serde_json::Map<String, serde_json::Value>,
     // spec: OPS#initiating-events
-    pub source_generation: u64,
-    // spec: OPS#initiating-events
-    pub target_generation: u64,
+    pub generation: u64,
     // spec: EVT#event-types
     pub trigger: String,
     /// Who asked for the operation, where a person or client did; its events
@@ -97,8 +91,7 @@ pub enum RejectReason {
     /// The application is being torn down, so nothing further may run
     /// against it.
     AppUninstalling,
-    /// A change to the application is being committed, and its `on_change`
-    /// handler is admitted in the hold's place; see [`AppHold`].
+    /// A change to the application is being applied; see [`AppHold`].
     ChangeBeingApplied,
     // spec: OPS#unreadable-operation-state
     /// The persisted operation, its cancel or the persisted queue cannot be
@@ -109,19 +102,27 @@ pub enum RejectReason {
 /// What keeps an operation from being admitted for an app.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppBlocker {
-    /// The named action is the scheduler's active operation.
-    Active(ActionName),
-    /// The named action is queued behind another app's operation.
-    Queued(ActionName),
-    /// A change to the app is being committed; see [`AppHold`].
+    /// The action or gate run is the scheduler's active operation.
+    Active(OperationTarget),
+    /// The action or gate run is queued behind another app's operation.
+    Queued(OperationTarget),
+    /// A change to the app is being applied; see [`AppHold`].
     Change,
 }
 
 impl std::fmt::Display for AppBlocker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Active(action) => write!(f, "'{action}' is in progress"),
-            Self::Queued(action) => write!(f, "'{action}' is queued"),
+            Self::Active(OperationTarget::Action(action)) => {
+                write!(f, "'{action}' is in progress")
+            }
+            Self::Active(OperationTarget::Gate(gate)) => {
+                write!(f, "a run of gate '{gate}' is in progress")
+            }
+            Self::Queued(OperationTarget::Action(action)) => write!(f, "'{action}' is queued"),
+            Self::Queued(OperationTarget::Gate(gate)) => {
+                write!(f, "a run of gate '{gate}' is queued")
+            }
             Self::Change => f.write_str("a change to it is being applied"),
         }
     }
@@ -202,43 +203,39 @@ impl Scheduler {
     /// queued operation, or a change to it that holds it.
     pub fn blocker_for(&self, app: &AppName) -> Option<AppBlocker> {
         if let Some(active) = self.active.as_ref().filter(|a| a.app == *app) {
-            return Some(AppBlocker::Active(active.action.clone()));
+            return Some(AppBlocker::Active(active.target.clone()));
         }
         if let Some(queued) = self.queue.iter().find(|q| q.app == *app) {
-            return Some(AppBlocker::Queued(queued.action.clone()));
+            return Some(AppBlocker::Queued(queued.target.clone()));
         }
         self.held.contains(app).then_some(AppBlocker::Change)
     }
 
-    // spec: OPS#parameter-changes
-    /// Hold `app` against every admission while a change to it is committed.
+    // spec: OPS#changes-to-an-app
+    /// Hold `app` against operation admission while a change to it is
+    /// applied.
     ///
-    /// A parameter or definition change checks that nothing runs for the app,
-    /// commits, and only then admits its `on_change` handler. An operation
-    /// admitted in between would have the handler refused after the change
-    /// was committed, so the hold stands in for an operation from the check
-    /// until the handler is admitted in its place. Refused with whatever
-    /// holds the app already.
+    /// Changes to an app apply one at a time, so a change is refused while
+    /// another holds the app. An operation already running or queued for the
+    /// app does not refuse it: that operation goes on against its own
+    /// generation.
     fn hold(&mut self, app: &AppName) -> Result<(), AppBlocker> {
-        match self.blocker_for(app) {
-            Some(blocker) => Err(blocker),
-            None => {
-                self.held.insert(app.clone());
-                Ok(())
-            }
+        if self.held.insert(app.clone()) {
+            Ok(())
+        } else {
+            Err(AppBlocker::Change)
         }
     }
 
     // spec: TRD#uninstall-admission
-    /// Admit a lifecycle operation for `app` / `action`, subject to its phase.
+    /// Admit a lifecycle operation for `app` / `target`, subject to its phase.
     ///
     /// The only way in from outside this module. [`Self::request`] is the queue
     /// mechanic underneath and stays private, so the phase gate cannot be
     /// skipped by a caller that does not know to make it: a caller that has not
-    /// said what phase the app is in has not said enough to be admitted. Four
-    /// call sites admit operations — an operator action, a param change's
-    /// handler, a scheduled firing and an install — and a rule each applies for
-    /// itself holds only for the ones that know it.
+    /// said what phase the app is in has not said enough to be admitted. Each
+    /// call site that admits an operation — an operator action and a scheduled
+    /// firing — would otherwise have to apply a rule for itself.
     ///
     /// `phase` is read under the scheduler's own lock, so an uninstall that
     /// transitions the app while holding that lock falls wholly before or
@@ -250,10 +247,9 @@ impl Scheduler {
     pub fn admit(
         &mut self,
         app: &AppName,
-        action: &ActionName,
+        target: &OperationTarget,
         params: serde_json::Map<String, serde_json::Value>,
-        source_generation: u64,
-        target_generation: u64,
+        generation: u64,
         trigger: &str,
         phase: &Mutex<AppPhase>,
         actor: Option<Arc<seedling_protocol::actor::Actor>>,
@@ -261,18 +257,10 @@ impl Scheduler {
         if matches!(*phase.lock(), AppPhase::Uninstalling) {
             return ScheduleResult::Rejected(RejectReason::AppUninstalling);
         }
-        self.request(
-            app,
-            action,
-            params,
-            source_generation,
-            target_generation,
-            trigger,
-            actor,
-        )
+        self.request(app, target, params, generation, trigger, actor)
     }
 
-    /// Request a lifecycle operation for `app` / `action`.
+    /// Request a lifecycle operation for `app` / `target`.
     ///
     /// - If no operation is active: the operation starts immediately.
     /// - If a different app is active and this app is not yet queued: queued.
@@ -280,27 +268,21 @@ impl Scheduler {
     ///
     /// The queue mechanic alone, with no view of the app's phase: reach it
     /// through [`Self::admit`], which decides whether the app may have one.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the operation's request, as admit() takes it"
-    )]
     // spec: OPS#concurrency
     fn request(
         &mut self,
         app: &AppName,
-        action: &ActionName,
+        target: &OperationTarget,
         params: serde_json::Map<String, serde_json::Value>,
-        source_generation: u64,
-        target_generation: u64,
+        generation: u64,
         trigger: &str,
         actor: Option<Arc<seedling_protocol::actor::Actor>>,
     ) -> ScheduleResult {
         self.request_with_id(
             app,
-            action,
+            target,
             params,
-            source_generation,
-            target_generation,
+            generation,
             trigger,
             OperationId::new(),
             actor,
@@ -317,10 +299,9 @@ impl Scheduler {
     pub fn request_with_id(
         &mut self,
         app: &AppName,
-        action: &ActionName,
+        target: &OperationTarget,
         params: serde_json::Map<String, serde_json::Value>,
-        source_generation: u64,
-        target_generation: u64,
+        generation: u64,
         trigger: &str,
         operation_id: OperationId,
         actor: Option<Arc<seedling_protocol::actor::Actor>>,
@@ -338,10 +319,9 @@ impl Scheduler {
                 self.call_stack.clear();
                 self.active = Some(ActiveOperation {
                     app: app.clone(),
-                    action: action.clone(),
+                    target: target.clone(),
                     operation_id,
-                    source_generation,
-                    target_generation,
+                    generation,
                     cancel_token: Arc::new(CancelToken::new()),
                 });
                 ScheduleResult::Accepted
@@ -357,11 +337,10 @@ impl Scheduler {
                 }
                 self.queue.push_back(QueuedOperation {
                     app: app.clone(),
-                    action: action.clone(),
+                    target: target.clone(),
                     operation_id,
                     params,
-                    source_generation,
-                    target_generation,
+                    generation,
                     trigger: trigger.to_owned(),
                     actor,
                 });
@@ -387,19 +366,27 @@ impl Scheduler {
 
     /// Mark the current operation as complete and dequeue the next one, if any.
     ///
-    /// Returns the newly-started operation so the caller knows what to run.
+    /// Returns the newly-started operation so the caller knows what to run,
+    /// carrying the generation it runs against: the one `current_generation`
+    /// gives for its app, or the one it was requested at where that gives none.
     // spec: OPS#completion
-    pub fn complete_current(&mut self) -> Option<QueuedOperation> {
+    pub fn complete_current(
+        &mut self,
+        current_generation: impl FnOnce(&AppName) -> Option<u64>,
+    ) -> Option<QueuedOperation> {
         self.active = None;
         self.call_stack.clear();
 
-        let next = self.queue.pop_front()?;
+        let mut next = self.queue.pop_front()?;
+        // spec: OPS#initiating-events
+        if let Some(current) = current_generation(&next.app) {
+            next.generation = current;
+        }
         self.active = Some(ActiveOperation {
             app: next.app.clone(),
-            action: next.action.clone(),
+            target: next.target.clone(),
             operation_id: next.operation_id.clone(),
-            source_generation: next.source_generation,
-            target_generation: next.target_generation,
+            generation: next.generation,
             cancel_token: Arc::new(CancelToken::new()),
         });
         Some(next)
@@ -458,9 +445,6 @@ impl Scheduler {
 pub struct AppHold {
     scheduler: Arc<Mutex<Scheduler>>,
     app: AppName,
-    /// Set once [`Self::admit`] has given the hold up, so dropping it does
-    /// not release a hold some later change has taken on the same app.
-    released: bool,
 }
 
 impl AppHold {
@@ -470,52 +454,13 @@ impl AppHold {
         Ok(Self {
             scheduler: Arc::clone(scheduler),
             app: app.clone(),
-            released: false,
         })
-    }
-
-    /// Admit an operation for the held app in the hold's place, under one
-    /// lock so nothing else is admitted between the two. Returns the
-    /// operation's id when it was accepted or queued.
-    pub fn admit(
-        mut self,
-        action: &ActionName,
-        source_generation: u64,
-        target_generation: u64,
-        trigger: &str,
-        phase: &Mutex<AppPhase>,
-        actor: Option<Arc<seedling_protocol::actor::Actor>>,
-    ) -> (ScheduleResult, Option<OperationId>) {
-        self.released = true;
-        let mut scheduler = self.scheduler.lock();
-        scheduler.held.remove(&self.app);
-        let result = scheduler.admit(
-            &self.app,
-            action,
-            serde_json::Map::new(),
-            source_generation,
-            target_generation,
-            trigger,
-            phase,
-            actor,
-        );
-        let operation_id = match result {
-            ScheduleResult::Accepted => scheduler.active().map(|a| a.operation_id.clone()),
-            ScheduleResult::Queued => scheduler
-                .queue_iter()
-                .find(|q| q.app == self.app)
-                .map(|q| q.operation_id.clone()),
-            ScheduleResult::Rejected(_) => None,
-        };
-        (result, operation_id)
     }
 }
 
 impl Drop for AppHold {
     fn drop(&mut self) {
-        if !self.released {
-            self.scheduler.lock().held.remove(&self.app);
-        }
+        self.scheduler.lock().held.remove(&self.app);
     }
 }
 

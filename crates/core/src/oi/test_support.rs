@@ -88,6 +88,14 @@ impl TestOi {
         )
     }
 
+    /// A harness whose OI reaches containers through `container_runtime`
+    /// rather than the stub system's.
+    pub fn with_container_runtime(
+        container_runtime: Arc<dyn crate::system::ContainerRuntime>,
+    ) -> Self {
+        Self::build(None, Some(container_runtime), None)
+    }
+
     fn build(
         driver: Option<Arc<System>>,
         container_runtime: Option<Arc<dyn crate::system::ContainerRuntime>>,
@@ -135,6 +143,7 @@ impl TestOi {
             tailscale_provider,
             site_resolver: None,
             definition_registry: Arc::clone(&registry) as _,
+            gate_runtime: Arc::new(crate::runtime::gates::GateRuntime::new()),
         });
 
         // As the daemon does once its state exists: without it the coordinator
@@ -174,24 +183,10 @@ impl TestOi {
         oi
     }
 
-    /// Mark `name` installed through the immediate (no `on_install`) path.
-    ///
-    /// Installing starts the app's start action, which holds the scheduler
-    /// until it ends; this waits for that, so the app is left installed and
-    /// nothing is in progress.
+    /// Install `name`, leaving it `Installed`.
     pub fn install(&self, name: &str) {
-        self.call("/apps/install/invoke", json!({ "app": name }))
+        self.call("/apps/install", json!({ "app": name }))
             .expect("install app");
-        self.block_on(async {
-            let idle = async {
-                while self.state.scheduler.lock().active().is_some() {
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-            };
-            tokio::time::timeout(std::time::Duration::from_secs(10), idle)
-                .await
-                .expect("the start action ends");
-        });
     }
 
     /// Drive a future on the harness's own runtime.
@@ -257,6 +252,7 @@ mod tests {
     // scheduler is what distinguishes a derived count from a constant.
     #[test]
     fn status_counts_an_operation_in_progress() {
+        use seedling_protocol::events::OperationTarget;
         use seedling_protocol::names::{ActionName, AppName};
 
         let oi = TestOi::new();
@@ -267,9 +263,8 @@ mod tests {
         let action = ActionName::new("install").expect("action name");
         oi.state.scheduler.lock().admit(
             &app,
-            &action,
+            &OperationTarget::Action(action),
             serde_json::Map::new(),
-            1,
             1,
             "test",
             &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -290,6 +285,7 @@ mod tests {
     /// Register `app`, installed, with an action, and hold the scheduler with
     /// an operation of another app so that a request for `app` queues.
     fn oi_with_a_busy_scheduler(app: &str) -> TestOi {
+        use seedling_protocol::events::OperationTarget;
         use seedling_protocol::names::{ActionName, AppName};
         let oi = TestOi::new();
         oi.call(
@@ -301,9 +297,8 @@ mod tests {
             crate::runtime::apps::AppPhase::Installed;
         oi.state.scheduler.lock().admit(
             &AppName::new("blocker").unwrap(),
-            &ActionName::new("install").unwrap(),
+            &OperationTarget::Action(ActionName::new("install").unwrap()),
             serde_json::Map::new(),
-            1,
             1,
             "test",
             &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -421,9 +416,10 @@ mod tests {
                 .execute_batch(
                     "CREATE TABLE queued_operations (
                         seq INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE,
-                        app TEXT NOT NULL, action TEXT NOT NULL, trigger TEXT NOT NULL,
-                        source_generation INTEGER NOT NULL, target_generation INTEGER NOT NULL,
-                        params_ciphertext BLOB NOT NULL, actor TEXT);",
+                        app TEXT NOT NULL, action TEXT, gate TEXT, trigger TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        params_ciphertext BLOB NOT NULL, actor TEXT,
+                        CHECK ((action IS NULL) != (gate IS NULL)));",
                 )
                 .unwrap()
         });
@@ -462,11 +458,12 @@ mod tests {
         let oi = oi_with_a_busy_scheduler("demo");
         let queued = |app: &str, id: &str| crate::runtime::scheduler::QueuedOperation {
             app: seedling_protocol::names::AppName::new(app).unwrap(),
-            action: seedling_protocol::names::ActionName::new("refresh").unwrap(),
+            target: seedling_protocol::events::OperationTarget::Action(
+                seedling_protocol::names::ActionName::new("refresh").unwrap(),
+            ),
             operation_id: crate::runtime::barrier::OperationId(id.to_owned()),
             params: serde_json::Map::new(),
-            source_generation: 1,
-            target_generation: 1,
+            generation: 1,
             trigger: "operator".to_owned(),
             actor: None,
         };
@@ -498,65 +495,6 @@ mod tests {
         assert_eq!(rows, 1, "the discarded request's record is gone");
     }
 
-    // spec: OPS#interrupted-operations
-    // spec: OPS#stuck-install-recovery
-    #[test]
-    fn an_install_that_cannot_be_replayed_is_recovered_as_a_stuck_install() {
-        let oi = TestOi::with_app("demo");
-        *oi.state.registry.read().get("demo").unwrap().phase.lock() =
-            crate::runtime::apps::AppPhase::Installing;
-        let name = seedling_protocol::names::AppName::new("demo").unwrap();
-
-        crate::oi::handler::actions::lifecycle::recover_unreplayable_install(&oi.state, &name);
-
-        assert_eq!(
-            *oi.state.registry.read().get("demo").unwrap().phase.lock(),
-            crate::runtime::apps::AppPhase::Uninstalling,
-            "teardown, not NotInstalled, is the way out"
-        );
-        let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
-        assert!(
-            faults
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|f| f["kind"] == "install_interrupted")
-        );
-    }
-
-    // spec: FLT#app-faults
-    #[test]
-    fn a_completed_install_clears_an_interrupted_install_fault() {
-        let oi = TestOi::with_app("demo");
-        let name = seedling_protocol::names::AppName::new("demo").unwrap();
-        oi.state.db.call(move |db| {
-            crate::runtime::faults::file_fault(
-                db,
-                &name,
-                None,
-                None,
-                None,
-                "install_interrupted",
-                "interrupted",
-            )
-            .unwrap();
-        });
-        let active = |oi: &TestOi| {
-            oi.call("/faults/list", json!({ "app": "demo" }))
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|f| f["kind"] == "install_interrupted")
-                .count()
-        };
-        assert_eq!(active(&oi), 1);
-
-        oi.install("demo");
-
-        assert_eq!(active(&oi), 0);
-    }
-
     // spec: OPS#unreadable-operation-state
     #[test]
     fn nothing_starts_while_the_persisted_operation_state_is_unreadable() {
@@ -580,7 +518,7 @@ mod tests {
                 .scheduler
                 .lock()
                 .active()
-                .is_none_or(|a| a.action != "refresh"),
+                .is_none_or(|a| a.target.name() != "refresh"),
             "the refused request did not start"
         );
         oi.state.scheduler.lock().set_state_unreadable(false);

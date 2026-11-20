@@ -23,7 +23,7 @@ use seedling_protocol::names::{ActionName, ParamName, SiteVolumeName};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::defs::app::{SubActionFrame, action_call_lookup, action_call_stack};
-use crate::defs::install::ParamDef;
+use crate::defs::param_def::ParamDef;
 use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
 use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn journal_shows_secret_params_redacted() {
         let def = |secret| ParamDef {
-            kind: crate::defs::install::ParamKind::Text,
+            kind: crate::defs::param_def::ParamKind::Text,
             required: false,
             default_value: None,
             description: None,

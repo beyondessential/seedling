@@ -141,7 +141,7 @@ fn is_barrier_hit_pending() -> bool {
 
 // ---------------------------------------------------------------------------
 // Thread-local flag: set while an action closure is executing so that
-// top-level-only registrations (e.g. param.on_change) can detect misuse.
+// top-level-only registrations (e.g. param.validate) can detect misuse.
 // ---------------------------------------------------------------------------
 
 thread_local! {
@@ -968,6 +968,13 @@ impl RuntimeInstance {
             return Ok(out);
         }
 
+        // spec: GATE#declaration
+        if resources.is::<crate::defs::gate::Gate>() {
+            return Err(RegistryError::message(
+                "a gate is not a resource, so it is not a selection".to_owned(),
+            ));
+        }
+
         // spec: RT#selections
         // The other resource handles — volumes, external volumes and
         // external services — are selections whose resources a runtime
@@ -984,6 +991,44 @@ impl RuntimeInstance {
              array of these",
             resources.type_name()
         )))
+    }
+
+    /// `selected` less the named workloads a gate keeps from a closure and the
+    /// Jobs of the gates' checks, which is what `rt.start` and `rt.stop` act
+    /// on.
+    ///
+    /// A call that would act on a workload while what the gates hold cannot
+    /// be read fails, since the workload may be held.
+    // spec: RT#resources-a-gate-holds
+    fn without_held(
+        &self,
+        selected: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
+    ) -> Result<Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>, Box<EvalAltResult>>
+    {
+        use crate::defs::resource::ResourceKind;
+        let Some(ctx) = &self.ctx else {
+            return Ok(selected);
+        };
+        let exclusions = ctx.lock().gate_exclusions.clone();
+        let mut kept = Vec::with_capacity(selected.len());
+        for (instance, def) in selected {
+            let held = match instance.name.as_deref() {
+                Some(name)
+                    if matches!(instance.kind, ResourceKind::Deployment | ResourceKind::Job) =>
+                {
+                    exclusions.leaves_out(instance.kind, name).map_err(
+                        |why| -> Box<EvalAltResult> {
+                            format!("cannot tell whether a gate holds {name}: {why}").into()
+                        },
+                    )?
+                }
+                _ => false,
+            };
+            if !held {
+                kept.push((instance, def));
+            }
+        }
+        Ok(kept)
     }
 
     // spec: RCN#desired-state
@@ -2017,6 +2062,23 @@ impl CustomType for RuntimeInstance {
                         return Ok(());
                     }
                     this.stop_if_cancelled()?;
+                    // spec: RT#resources-a-gate-holds
+                    if let Some(ctx) = &this.ctx {
+                        let held = ctx
+                            .lock()
+                            .gate_exclusions
+                            .leaves_out(crate::defs::resource::ResourceKind::Deployment, &dep_name)
+                            .map_err(|why| -> Box<EvalAltResult> {
+                                format!("cannot tell whether a gate holds {dep_name}: {why}").into()
+                            })?;
+                        if held {
+                            return Err(format!(
+                                "rt.restart cannot restart {dep_name}: a gate holds it or it \
+                                 waits on a gate that is not satisfied"
+                            )
+                            .into());
+                        }
+                    }
                     // spec: RT#deployment-restart
                     // Each call restarts the deployment at most once, replays
                     // included: the call is on record before it is made, so a
@@ -2082,6 +2144,8 @@ impl CustomType for RuntimeInstance {
                                 rhai::Position::NONE,
                             ))
                         })?;
+                    // spec: RT#resources-a-gate-holds
+                    let resources_with_defs = this.without_held(resources_with_defs)?;
                     this.do_start(resources_with_defs)
                 },
             )
@@ -2097,6 +2161,8 @@ impl CustomType for RuntimeInstance {
                                 rhai::Position::NONE,
                             ))
                         })?;
+                    // spec: RT#resources-a-gate-holds
+                    let extracted = this.without_held(extracted)?;
                     let deadline = default_stop_deadline(&extracted);
                     let instances = extracted.into_iter().map(|(r, _)| r).collect();
                     this.do_stop(instances, Some(deadline))
@@ -2116,6 +2182,8 @@ impl CustomType for RuntimeInstance {
                                 rhai::Position::NONE,
                             ))
                         })?;
+                    // spec: RT#resources-a-gate-holds
+                    let extracted = this.without_held(extracted)?;
                     let deadline = resolve_deadline(deadline, default_stop_deadline(&extracted))?;
                     let instances = extracted.into_iter().map(|(r, _)| r).collect();
                     this.do_stop(instances, Some(deadline))

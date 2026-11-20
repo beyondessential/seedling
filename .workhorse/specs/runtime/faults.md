@@ -94,7 +94,7 @@ A `health_check_replace_failed` fault MUST identify the failed replacement and t
 
 ### Withholding faults
 
-A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)) and `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)).
+A withholding fault is one under which the runtime keeps back something the app needs until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)), `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)), and `gate_failed`, `gate_check_unavailable` and `gate_state_unreadable` (the gate's dependants [wait](../language/gate.md#start-order)).
 An app holding one is [`faulted`](../interface/apps.md#status-derivation) rather than `degraded`.
 
 ## Volume faults
@@ -118,8 +118,10 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | `desired_state_unreadable` | none | the runtime cannot compute the app's [desired state](reconciliation.md#desired-state) from its stored records | the runtime next computes it | condition |
 | `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes successfully | event |
 | `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes successfully | event |
-| `operation_cleanup_stalled` | the operation or [shell session](../interface/shells.md#shell-session) | the [dynamic resources](../language/app.md#dynamic-resource-lifetime) of an ended operation or shell session are not all torn down within a minute of its end, or the runtime cannot read their records | every dynamic resource of the operation or session is torn down | condition |
-| `install_interrupted` | none | at startup, an interrupted install cannot be resumed because its parameter values are missing or cannot be decrypted | a later install of the app completes, or an operator clears it | latched |
+| `operation_cleanup_stalled` | the operation, [shell session](../interface/shells.md#shell-session) or [gate check](gates.md#checks) | the [dynamic resources](../language/app.md#dynamic-resource-lifetime) of an ended operation or shell session, or the Job instance of a gate check that has an outcome, are not all torn down within a minute of its end, or the runtime cannot read their records | every dynamic resource of the operation or session, or the check's Job instance, is torn down | condition |
+| `gate_failed` | the gate | the gate is unsatisfied and its most recent [run](gates.md#retries) failed or was cancelled | the gate is satisfied or its next run starts, or the definition no longer declares the gate | condition |
+| `gate_check_unavailable` | the gate | the gate's most recent [check](gates.md#checks) could not be run | a check of the gate next runs to an outcome, or the definition no longer declares a check for the gate or the gate itself | condition |
+| `gate_state_unreadable` | the gate | the runtime cannot read the gate's [record](gates.md#gate-state) | the runtime next reads it, or the definition no longer declares the gate | condition |
 | `teardown_identities_unreadable` | none | the runtime cannot read the app's recorded identities during its [teardown](app-teardown.md#uninstall-scope) | the runtime next reads them | condition |
 | `uninstall_unidentifiable_units` | none | an uninstall of an app with no recorded identities finds resources on the host that may belong to it, as [uninstall scope](app-teardown.md#uninstall-scope) specifies | the app's teardown completes, or an operator clears it | latched |
 | `definition_unsupported` | none | the running Seedling does not satisfy the app's [Seedling version requirement](../language/bundle.md#seedling-version-requirement) | the definition is replaced by one the running Seedling satisfies, or the runtime starts as a version that satisfies it | condition |
@@ -129,7 +131,7 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | `schedule_unreadable` | the action | the runtime cannot read the [record](scheduled-actions.md#schedule-records) of a schedule of the action, or cannot parse its last fire time | the runtime reads the record and parses its last fire time, or the definition no longer schedules the action | condition |
 | `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers), Canopy access is enabled, and no offer has been live for the period [missing offers](canopy-reporting.md#missing-offers) specifies | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | latched |
 
-An `operation_failed` fault MUST carry the failure.
+An `operation_failed` fault MUST carry the failure, and so MUST a `gate_failed` fault.
 A `disallowed_registry` fault MUST name each disallowed registry.
 A `canopy_offer_absent` fault MUST say when an offer was last live, or that none ever has been.
 
@@ -193,8 +195,8 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `schedules_unreadable` | the runtime cannot read the [schedule records](scheduled-actions.md#schedule-records) at all | the runtime next reads them | condition |
 | `operation_state_unreadable` | the runtime cannot read the [persisted operation, its cancel, or the persisted queue](operations.md#unreadable-operation-state) | the read succeeds | condition |
 | `dynamic_resources_unreadable` | the runtime cannot read the records of the [dynamic resources](suspension.md#abandoned-replay) that previous runs left to tear down | the runtime next reads them | condition |
-| `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running, or the resolver is stopped because no app is installed or installing | condition |
-| `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | for a failed bring-up, an iteration finds the proxy healthy; for a rejected upgrade, an upgrade succeeds; in either case, the proxy is stopped because no app is installed or installing | condition |
+| `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running, or the resolver is stopped because no app is installed | condition |
+| `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | for a failed bring-up, an iteration finds the proxy healthy; for a rejected upgrade, an upgrade succeeds; in either case, the proxy is stopped because no app is installed | condition |
 | `routes_failed` | applying the host's routes fails | the routes are next applied | condition |
 | `nftables_failed` | applying the host's packet-filtering rules fails | the rules are next applied | condition |
 | `proxy_failed` | applying the proxy configuration fails | a proxy configuration is next applied | condition |

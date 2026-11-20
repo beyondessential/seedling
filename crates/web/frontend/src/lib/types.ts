@@ -17,6 +17,8 @@ export interface AppSummary {
   name: string;
   status: AppStatus;
   action_name?: string;
+  /** Present while the running operation is a gate run. */
+  gate?: string;
   has_stopped_resources?: boolean;
   fault_count?: number;
   priority?: AppPriority;
@@ -202,6 +204,11 @@ export interface AppResource {
   priority?: DeploymentPriority;
   def?: ResourceDef;
   stopped?: boolean;
+  /** Names of the gates whose holds keep the resource stopped, ascending. */
+  held_by?: string[];
+  /** Deployments and Jobs only: the targets its starts wait on that are not
+   *  ready, and the satisfied gates whose check must pass before it starts. */
+  waiting_on?: WaitTarget[];
   /** True for entries returned via `dynamic_resources` (jobs / volumes etc.
    * created inside an action closure). Anonymous dynamic resources have a
    * generated `name` (the display_name) and no BSL-level identifier. */
@@ -243,15 +250,44 @@ export interface ActionSchedule {
 export interface AppAction {
   name: string;
   description: string | null;
-  kind: "action" | "shell" | "install" | "lifecycle";
-  params: Record<string, InstallRequirement>;
+  kind: "action" | "shell";
+  params: Record<string, ParamSchema>;
   schedules: ActionSchedule[];
 }
 
+export type GateState =
+  | "satisfied"
+  | "unsatisfied"
+  | "running"
+  | "paused"
+  | "undetermined";
+
+/** What a gate or a workload is ordered after. */
+export interface GateTarget {
+  kind: "gate" | "deployment" | "job";
+  name: string;
+}
+
+/** What a workload's starts wait on: a target, or a satisfied gate's check,
+ *  named by the gate. */
+export type WaitTarget = GateTarget | { kind: "check"; name: string };
+
+export interface AppGate {
+  name: string;
+  state: GateState;
+  last_success_generation: number | null;
+  holds_exclusive: boolean;
+  /** When the runtime next runs an unsatisfied gate whose last run failed. */
+  next_run_at: string | null;
+  after: GateTarget[];
+}
+
 export interface CurrentOperation {
-  action_name: string;
-  source_generation: number;
-  target_generation: number;
+  /** The action an operation runs; absent for a gate run. */
+  action_name?: string;
+  /** The gate a gate run runs; absent for any other operation. */
+  gate?: string;
+  generation: number;
   barrier: {
     resources: string[];
     required_state: string;
@@ -261,7 +297,7 @@ export interface CurrentOperation {
   } | null;
 }
 
-export interface InstallRequirement {
+export interface ParamSchema {
   kind: string;
   required: boolean;
   description: string;
@@ -291,21 +327,25 @@ export type DefinitionProvenance = (
   seedling_versions: string | null;
 };
 
-export type GenerationKind = "register" | "script_update" | "param_set" | "param_unset";
+export type GenerationKind = "register" | "script_update" | "param_change";
+
+/** What a generation did to one parameter. Both values are absent when
+ *  `redacted`. */
+export interface GenerationParam {
+  name: string;
+  previous_value?: string | null;
+  new_value?: string | null;
+  redacted?: boolean;
+}
 
 export interface GenerationEntry {
   generation: number;
   timestamp: string;
   kind: GenerationKind;
   definition?: DefinitionProvenance;
-  param_name?: string;
-  previous_value?: string | null;
-  new_value?: string | null;
-  redacted?: boolean;
+  /** The parameters the generation changed, in ascending order of name. */
+  params?: GenerationParam[];
   script_changed: boolean;
-  operation_id: string | null;
-  outcome: "pending" | "succeeded" | "cancelled" | "failed" | null;
-  error?: string;
 }
 
 export interface AppDetail {
@@ -329,6 +369,7 @@ export interface AppDetail {
   params: AppParam[];
   unknown_params: AppParam[];
   actions: AppAction[];
+  gates: AppGate[];
   current_operation?: CurrentOperation;
 }
 
@@ -353,6 +394,19 @@ export interface LogStreamParams {
   tail?: number;
 }
 
+/** One parameter a `ParamsChanged` or `AppUpdated` event reports as moved. An
+ *  absent value is an unset one; both are absent when `redacted`. */
+export interface ParamChangeEntry {
+  name: string;
+  previous_value?: string;
+  new_value?: string;
+  redacted?: boolean;
+}
+
+/** The parameters a request changes: a string sets the parameter, `null`
+ *  unsets it. */
+export type ParamChanges = Record<string, string | null>;
+
 export interface SeedlingEvent {
   type: string;
   timestamp: string;
@@ -364,13 +418,15 @@ export interface SeedlingEvent {
   previous_generation?: number;
   // AppPhaseChanged
   phase?: string;
-  // ParamSet / ParamUnset
+  // ParamsChanged / AppUpdated
+  changes?: ParamChangeEntry[];
+  // ResourceStopped / ResourceUnstopped
   name?: string;
   // OperationStarted / OperationCompleted / OperationFailed / OperationCancelled
   action_name?: string;
+  gate?: string;
   operation_id?: string;
-  source_generation?: number;
-  target_generation?: number;
+  operation_generation?: number;
   trigger?: string;
   error?: string;
   // FaultFiled / FaultCleared
@@ -380,8 +436,9 @@ export interface SeedlingEvent {
   resource_name?: string;
   instance_id?: string;
   description?: string;
-  // ResourceStateChanged
+  // ResourceStateChanged / GateStateChanged
   state?: string;
+  previous_state?: string;
   // ScaleChanged
   deployment?: string;
   scale?: number;
@@ -675,7 +732,7 @@ export interface PlanRejection {
 
 export interface PlanResponse {
   diff?: PlanDiffEntry[];
-  on_change_would_fire?: string[];
+  gates_would_run?: string[];
   errors?: string[];
   /** Parameters whose validators reject the proposed values. */
   rejections?: PlanRejection[];
@@ -757,12 +814,7 @@ export interface ImagePin {
   expires_at: string | null;
 }
 
-export type HandlerKind =
-  | "install"
-  | "start"
-  | "action"
-  | "shell"
-  | "param_change";
+export type HandlerKind = "action" | "shell" | "gate";
 
 export interface HandlerProbe {
   name: string;

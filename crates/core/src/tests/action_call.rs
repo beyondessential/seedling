@@ -69,7 +69,7 @@ fn invoke_action(
     // schema lookup finds the registered actions; using AppDef::default()
     // would leave validation oblivious to declared params.
     let action_def_arc = Arc::clone(&app_def_holder.def);
-    let result = defs::app::with_action_call_table(captured.actions.clone(), outer, || {
+    let result = defs::app::with_action_call_table(captured.actions.clone(), Some(outer), || {
         let _guard = ActionClosureGuard::new(action_def_arc, String::new(), HashMap::new())
             .with_active_rt(rt);
         let call_ast = engine
@@ -169,49 +169,6 @@ fn app_action_unknown_name_throws() {
         msg.contains("no such action") && msg.contains("missing"),
         "expected no-such-action error naming missing, got: {msg}"
     );
-}
-
-// spec: ACN#action-handles
-#[test]
-fn install_is_not_reachable_via_app_action() {
-    let err = invoke_action(
-        r#"
-            app.on_install(|rt, _p| {});
-            app.on_action("outer", |rt, _p| {
-                app.action("install");
-            });
-        "#,
-        "outer",
-        rhai::Map::new(),
-    )
-    .expect_err("install must not be reachable");
-    let msg = err_string(err);
-    assert!(
-        msg.contains("no such action") && msg.contains("install"),
-        "expected install to be hidden, got: {msg}"
-    );
-}
-
-// spec: ACN#action-handles
-#[test]
-fn start_is_callable_by_name() {
-    invoke_action(
-        r#"
-            let counter = #{ ran: false };
-            app.on_start(|rt, _p| {
-                counter.ran = true;
-            });
-            app.on_action("outer", |rt, _p| {
-                app.action("start").invoke();
-                if !counter.ran {
-                    throw "start was not invoked";
-                }
-            });
-        "#,
-        "outer",
-        rhai::Map::new(),
-    )
-    .expect("start must be callable");
 }
 
 // spec: ACN#action-invocation
@@ -387,7 +344,7 @@ fn indirect_cycle_detection_walks_the_full_stack() {
 
     with_action_call_table(
         Default::default(),
-        ActionName::new_unchecked("alpha"),
+        Some(ActionName::new_unchecked("alpha")),
         || {
             let _outer = SubActionFrame::enter(ActionName::new_unchecked("bravo"));
             let stack = action_call_stack().expect("table active");
@@ -462,18 +419,19 @@ fn run_outer_in_replay_context(
 
     let outer_name = ActionName::new_unchecked("outer");
     let action_def_arc = Arc::clone(&app_def_holder.def);
-    let result = defs::app::with_action_call_table(captured.actions.clone(), outer_name, || {
-        let _guard = ActionClosureGuard::new(action_def_arc, String::new(), HashMap::new())
-            .with_active_rt(rt);
-        let call_ast = engine
-            .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
-            .expect("call ast must compile");
-        // The script's functions only: its statements already ran, as in replay.
-        let merged = ast.clone_functions_only().merge(&call_ast);
-        engine
-            .eval_ast_with_scope::<Dynamic>(&mut scope, &merged)
-            .map(|_| ())
-    });
+    let result =
+        defs::app::with_action_call_table(captured.actions.clone(), Some(outer_name), || {
+            let _guard = ActionClosureGuard::new(action_def_arc, String::new(), HashMap::new())
+                .with_active_rt(rt);
+            let call_ast = engine
+                .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
+                .expect("call ast must compile");
+            // The script's functions only: its statements already ran, as in replay.
+            let merged = ast.clone_functions_only().merge(&call_ast);
+            engine
+                .eval_ast_with_scope::<Dynamic>(&mut scope, &merged)
+                .map(|_| ())
+        });
     let pending = ctx.lock().take_pending();
     (result, pending)
 }

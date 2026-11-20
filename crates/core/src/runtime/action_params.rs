@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use seedling_protocol::names::{ParamName, SiteVolumeName};
 
-use crate::defs::install::{ParamDef, ParamKind};
+use crate::defs::param_def::{ParamDef, ParamKind};
 
 /// Validation outcome carrying enough structure for the caller to
 /// either reject the call or surface a precise error message.
@@ -256,7 +256,7 @@ pub fn run_requirements(
     }
 }
 
-// spec: ACI#install-parameters
+// spec: ACN#param-kinds
 pub(crate) fn is_valid_email(email: &str) -> bool {
     let mut parts = email.splitn(2, '@');
     let local = parts.next().unwrap_or("");
@@ -268,7 +268,7 @@ pub(crate) fn is_valid_email(email: &str) -> bool {
         && !domain.ends_with('.')
 }
 
-// spec: ACI#install-parameters
+// spec: ACN#param-kinds
 pub(crate) fn is_strong_password(password: &str) -> bool {
     zxcvbn::zxcvbn(password, &[]).score() >= zxcvbn::Score::Three
 }
@@ -280,7 +280,7 @@ mod tests {
     use seedling_protocol::names::ParamName;
 
     use super::{ParamValidationError, VolumeLookup, apply_schema, validate_volume_params};
-    use crate::defs::install::{ParamDef, ParamKind};
+    use crate::defs::param_def::{ParamDef, ParamKind};
 
     struct NoVolumes;
 

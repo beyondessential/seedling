@@ -6,11 +6,11 @@ use serde_json::{Value, json, to_value};
 
 use crate::defs::{
     action::{ActionDef, ShellDef},
-    install::{InstallDef, ParamDef},
+    param_def::ParamDef,
     resource::{Resource, ResourceKind},
 };
 
-use super::apps::{install_requirement_kind_str, serialize_param_schema};
+use super::apps::serialize_param_schema;
 
 /// JSON entries for an action's declared schedules with no live timing data.
 /// Used directly by template previews (no associated app means no DB rows to
@@ -106,7 +106,7 @@ pub(crate) fn resource_static_json(
 pub(crate) fn param_schema_entry_json(name: &str, schema: &ParamDef) -> Value {
     json!({
         "name": name,
-        "kind": install_requirement_kind_str(schema.kind),
+        "kind": schema.kind.as_str(),
         "required": schema.required,
         "description": schema.description,
         "default_value": schema.default_value,
@@ -114,19 +114,12 @@ pub(crate) fn param_schema_entry_json(name: &str, schema: &ParamDef) -> Value {
     })
 }
 
-/// JSON for a lifecycle / scheduled action. The Start action is tagged as
-/// `lifecycle` (not `action`) per `ACN#start-action`.
+/// JSON for an action.
 pub(crate) fn action_entry_json(a: &ActionDef) -> Value {
-    // spec: ACN#start-action
-    let kind = if a.name == "start" {
-        "lifecycle"
-    } else {
-        "action"
-    };
     json!({
         "name": a.name,
         "description": a.description,
-        "kind": kind,
+        "kind": "action",
         "params": serialize_param_schema(&a.params),
         "schedules": schedule_entries_json(&a.schedules),
     })
@@ -138,16 +131,6 @@ pub(crate) fn shell_entry_json(s: &ShellDef) -> Value {
         "description": s.description,
         "kind": "shell",
         "params": serialize_param_schema(&s.params),
-        "schedules": Value::Array(Vec::new()),
-    })
-}
-
-pub(crate) fn install_entry_json(install: &InstallDef) -> Value {
-    json!({
-        "name": "install",
-        "description": null,
-        "kind": "install",
-        "params": serialize_param_schema(&install.requirements),
         "schedules": Value::Array(Vec::new()),
     })
 }

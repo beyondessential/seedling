@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    runtime::{
-        LifecycleState, TestWorldOracle,
-        barrier::replay::{InMemoryActionLog, OperationResult, run_operation},
-    },
+    runtime::barrier::replay::{InMemoryActionLog, OperationResult, run_operation},
     tests::{ActionHooks, run_test_script, run_test_script_app, run_test_script_err},
 };
 
@@ -43,103 +40,12 @@ fn unset_param_is_not_set() {
     );
 }
 
-// -----------------------------------------------------------------------
-// param.on-change — registration
-// -----------------------------------------------------------------------
-
-// spec: PARAM#change-handlers
-#[test]
-fn on_change_registers_handler_in_app_def() {
-    let app = run_test_script_app(
-        r#"
-        let p = app.param("version");
-        p.on_change(|rt| {});
-        "#,
-    );
-    let def = app.def.load();
-    assert!(
-        def.param_changes.contains("version"),
-        "on_change should register handler in AppDef.param_changes",
-    );
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn on_change_two_arg_closure_registers() {
-    let app = run_test_script_app(
-        r#"
-        let p = app.param("domain");
-        p.on_change(|rt, old| {});
-        "#,
-    );
-    let def = app.def.load();
-    assert!(def.param_changes.contains("domain"));
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn on_change_zero_arg_closure_registers() {
-    let app = run_test_script_app(r#"app.param("domain").on_change(|| {});"#);
-    assert!(app.def.load().param_changes.contains("domain"));
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn on_change_without_a_closure_throws() {
-    let err = run_test_script_err(r#"app.param("domain").on_change(42);"#);
-    assert!(err.to_string().contains("on_change"), "{err}");
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn on_change_with_a_named_function_throws() {
-    crate::tests::assert_named_handler_rejected(
-        "on_change",
-        r#"app.param("domain").on_change(HANDLER);"#,
-    );
-}
-
 // spec: PARAM#validators
 #[test]
 fn validate_with_a_named_function_throws() {
     crate::tests::assert_named_handler_rejected(
         "validate",
         r#"app.param("domain").validate(HANDLER);"#,
-    );
-}
-
-// spec: PARAM#change-handlers
-#[test]
-fn on_change_different_params_each_register() {
-    let app = run_test_script_app(
-        r#"
-        app.param("version").on_change(|rt| {});
-        app.param("domain").on_change(|rt| {});
-        "#,
-    );
-    let def = app.def.load();
-    assert!(def.param_changes.contains("version"));
-    assert!(def.param_changes.contains("domain"));
-}
-
-// -----------------------------------------------------------------------
-// param.on-change — error cases
-// -----------------------------------------------------------------------
-
-// spec: PARAM#change-handlers
-#[test]
-fn on_change_twice_on_same_param_throws() {
-    let err = run_test_script_err(
-        r#"
-        let p = app.param("version");
-        p.on_change(|rt| {});
-        p.on_change(|rt| {});
-        "#,
-    );
-    let msg = err.to_string();
-    assert!(
-        msg.contains("on_change") && msg.contains("version"),
-        "error should mention on_change and the param name, got: {msg}",
     );
 }
 
@@ -303,7 +209,7 @@ fn param_used_in_closure_captures_injected_value() {
         r#"
         let ver = app.param("version");
         let dep = app.deployment("web").image("docker.io/library/placeholder:latest");
-        app.on_start(|rt, _param| {
+        app.on_action("start", |rt, _param| {
             rt.start(app.deployment().image(`docker.io/library/myapp:${ver.value()}`));
         });
         "#,
@@ -341,45 +247,6 @@ fn param_used_in_closure_captures_injected_value() {
     );
 }
 
-// spec: PARAM#change-handlers
-#[test]
-fn on_change_inside_action_closure_throws() {
-    let (engine, mut scope, app, ast) = run_test_script(
-        r#"
-        let p = app.param("version");
-        app.on_start(|rt, _param| {
-            p.on_change(|rt| {});
-        });
-        "#,
-    );
-    let oracle = Arc::new(TestWorldOracle::new());
-    oracle.set(
-        crate::runtime::ResourceInstance::new_singleton(
-            seedling_protocol::names::AppName::new("test").unwrap(),
-            crate::defs::resource::ResourceKind::Deployment,
-            "x",
-        ),
-        LifecycleState::Ready,
-    );
-    let log = InMemoryActionLog::new();
-    let result = run_operation(
-        super::action_context(
-            &engine,
-            &ast,
-            &app,
-            "start",
-            &log,
-            oracle,
-            ActionHooks::default(),
-        ),
-        &mut scope,
-    );
-    assert!(
-        matches!(result, OperationResult::Failed(_)),
-        "on_change inside action closure should cause the operation to fail",
-    );
-}
-
 // -----------------------------------------------------------------------
 // param.schema — builder methods
 // -----------------------------------------------------------------------
@@ -403,7 +270,7 @@ fn param_schema_builder_methods_set_fields() {
         .expect("param should be declared");
     assert!(matches!(
         schema.kind,
-        crate::defs::install::ParamKind::Email
+        crate::defs::param_def::ParamKind::Email
     ));
     assert!(schema.required);
     assert_eq!(schema.default_value.as_deref(), Some("admin@example.com"));
@@ -416,7 +283,10 @@ fn param_schema_defaults_when_no_builder_methods() {
     let app = run_test_script_app(r#"app.param("host");"#);
     let def = app.def.load();
     let schema = def.params.get("host").expect("param should be declared");
-    assert!(matches!(schema.kind, crate::defs::install::ParamKind::Text));
+    assert!(matches!(
+        schema.kind,
+        crate::defs::param_def::ParamKind::Text
+    ));
     assert!(!schema.required);
     assert!(schema.default_value.is_none());
     assert!(schema.description.is_none());
@@ -430,7 +300,7 @@ fn param_schema_kind_password() {
     let schema = def.params.get("secret").unwrap();
     assert!(matches!(
         schema.kind,
-        crate::defs::install::ParamKind::Password
+        crate::defs::param_def::ParamKind::Password
     ));
 }
 
@@ -442,7 +312,7 @@ fn param_schema_kind_multiline() {
     let schema = def.params.get("motd").unwrap();
     assert!(matches!(
         schema.kind,
-        crate::defs::install::ParamKind::Multiline
+        crate::defs::param_def::ParamKind::Multiline
     ));
 }
 
@@ -457,20 +327,6 @@ fn param_schema_kind_unknown_throws() {
 #[test]
 fn param_schema_kind_volume_rejected_on_static_param() {
     let _ = run_test_script_err(r#"app.param("dst").kind("volume");"#);
-}
-
-// spec: ACN#volume-params
-#[test]
-fn install_param_kind_volume_rejected() {
-    let _ = run_test_script_err(
-        r#"
-        app.on_install(|rt, _param| {}, #{
-            params: #{
-                target: #{ kind: "volume" }
-            }
-        });
-    "#,
-    );
 }
 
 // spec: ACN#volume-params
@@ -493,7 +349,7 @@ fn action_param_kind_volume_accepted() {
             "output".to_owned(),
         ))
         .expect("output param");
-    assert_eq!(param.kind, crate::defs::install::ParamKind::Volume);
+    assert_eq!(param.kind, crate::defs::param_def::ParamKind::Volume);
 }
 
 // spec: ACN#volume-params
@@ -516,7 +372,7 @@ fn shell_param_kind_volume_accepted() {
             "target".to_owned(),
         ))
         .expect("target param");
-    assert_eq!(param.kind, crate::defs::install::ParamKind::Volume);
+    assert_eq!(param.kind, crate::defs::param_def::ParamKind::Volume);
 }
 
 // spec: PARAM#schema
@@ -622,7 +478,7 @@ fn param_schema_kind_random() {
     let schema = def.params.get("nonce").expect("param declared");
     assert!(matches!(
         schema.kind,
-        crate::defs::install::ParamKind::Random
+        crate::defs::param_def::ParamKind::Random
     ));
 }
 
@@ -682,9 +538,7 @@ fn a_validator_cannot_change_the_app_or_its_resources() {
         r#"app.description("changed")"#,
         r#"app.canopy_type("tamanu-central")"#,
         r#"app.on_action("other", |rt, p| {})"#,
-        r#"app.on_start(|rt, p| {})"#,
         r#"app.on_shell("other", |s, p| {})"#,
-        r#"app.on_install(|rt, p| {})"#,
         r#"dep.image("registry.example/api:1")"#,
         r#"dep.scale(2)"#,
         r#"dep.env("KEY", "value")"#,
@@ -711,7 +565,6 @@ fn a_validator_cannot_change_the_app_or_its_resources() {
         r#"declared.default_value("x")"#,
         r#"declared.secret(true)"#,
         r#"declared.kind("text")"#,
-        r#"declared.on_change(|rt, old, now| {})"#,
         r#"declared.validate(|v, all| {})"#,
         r#"act.on_schedule("0 0 * * *")"#,
     ] {

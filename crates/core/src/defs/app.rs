@@ -1,16 +1,21 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
-use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
+use rhai::{AST, CustomType, Dynamic, Engine, EvalAltResult, FnPtr, Map, Position, TypeBuilder};
+use seedling_protocol::names::{ActionName, AppName, GateName, ParamName, ShellName};
 
 use crate::runtime::definition::Bundle;
 
 use super::{
     Holder,
     action::{ActionDef, ShellDef},
-    install::{InstallDef, ParamDef},
+    collection::Collection,
+    gate::GateDef,
+    param_def::ParamDef,
     resource::{Resource, ResourceId, ResourceKind},
 };
 
@@ -18,7 +23,7 @@ mod action;
 mod collection;
 mod deployment;
 mod file;
-mod install;
+mod gate;
 mod job;
 mod param;
 mod service;
@@ -36,8 +41,8 @@ mod volume;
 pub(crate) struct ClosureCapture {
     pub actions: BTreeMap<ActionName, FnPtr>,
     pub shells: BTreeMap<ShellName, FnPtr>,
-    pub install: Option<FnPtr>,
-    pub param_changes: BTreeMap<ParamName, FnPtr>,
+    /// Each declared gate's body, or `None` for a gate declared with none.
+    pub gates: BTreeMap<GateName, Option<FnPtr>>,
 }
 
 thread_local! {
@@ -45,8 +50,7 @@ thread_local! {
 }
 
 /// Activate the closure capture buffer on this thread. While active, every
-/// `on_start`, `on_action`, `on_shell`, `on_install`, and `param.on_change`
-/// call will push its `FnPtr` into the buffer in addition to writing metadata
+/// `on_action` and `on_shell` call will push its `FnPtr` into the buffer in addition to writing metadata
 /// into `AppDef`. Has no effect (and causes no allocation) when not active.
 pub(crate) fn begin_closure_capture() {
     CLOSURE_CAPTURE.with(|c| *c.borrow_mut() = Some(ClosureCapture::default()));
@@ -58,14 +62,69 @@ pub(crate) fn end_closure_capture() -> ClosureCapture {
     CLOSURE_CAPTURE.with(|c| c.borrow_mut().take().unwrap_or_default())
 }
 
-/// Called by `param.on_change` — writes the FnPtr into the active buffer if
-/// one exists, otherwise silently discards it.
-pub(crate) fn capture_param_change(name: ParamName, fnptr: FnPtr) {
-    CLOSURE_CAPTURE.with(|c| {
-        if let Some(ref mut store) = *c.borrow_mut() {
-            store.param_changes.insert(name, fnptr);
-        }
+/// Evaluate `app`'s script again to recover the closures it registered, which
+/// the definition does not keep.
+///
+/// The evaluation sees `app`'s name and stored parameter values, and is
+/// discarded once the closures are taken from it.
+pub(crate) fn capture_closures(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+) -> Result<ClosureCapture, Box<EvalAltResult>> {
+    let (mut scope, fresh_app) = super::scope(Arc::clone(&app.bundle))
+        // spec: CONST#host-constants
+        .map_err(|e| Box::new(EvalAltResult::ErrorRuntime(e.into(), Position::NONE)))?;
+    let _evaluation = fresh_app.guard_evaluation();
+    let app_name = app.def.load().name.clone();
+    fresh_app.def.rcu(|d| {
+        let mut d = (**d).clone();
+        d.name = app_name.clone();
+        d
     });
+    // spec: PRM#parameter-storage
+    *fresh_app.stored.lock() = app.stored.lock().clone();
+    begin_closure_capture();
+    let run_result = engine.run_ast_with_scope(&mut scope, script_ast);
+    let captured = end_closure_capture();
+    run_result?;
+    super::gate::resolve_exclusive_selections(&fresh_app)
+        .map_err(|e| Box::new(EvalAltResult::ErrorRuntime(e.into(), Position::NONE)))?;
+    check_idempotent(&fresh_app.def.load(), &app.def.load());
+    Ok(captured)
+}
+
+/// Compare a freshly-evaluated AppDef against the stored one and warn if they
+/// differ. A mismatch means the BSL script produces different structure on
+/// re-run, which indicates a non-idempotent script and may cause the closure's
+/// captured variables to be inconsistent with the stored resource state.
+// spec: SUSP#replay
+fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
+    let mut diffs: Vec<&str> = Vec::new();
+
+    if fresh.actions.keys().ne(stored.actions.keys()) {
+        diffs.push("actions");
+    }
+    if fresh.shells.keys().ne(stored.shells.keys()) {
+        diffs.push("shells");
+    }
+    if fresh.resources.keys().ne(stored.resources.keys()) {
+        diffs.push("resources");
+    }
+    if fresh.params != stored.params {
+        diffs.push("params");
+    }
+    if fresh.gates != stored.gates {
+        diffs.push("gates");
+    }
+
+    if !diffs.is_empty() {
+        tracing::warn!(
+            fields = diffs.join(", "),
+            "BSL script produced a different AppDef on re-run; \
+             script may not be idempotent"
+        );
+    }
 }
 
 fn capture_action(name: ActionName, fnptr: FnPtr) {
@@ -76,18 +135,25 @@ fn capture_action(name: ActionName, fnptr: FnPtr) {
     });
 }
 
-fn capture_shell(name: ShellName, fnptr: FnPtr) {
+pub(crate) fn capture_gate(name: GateName, body: Option<FnPtr>) {
     CLOSURE_CAPTURE.with(|c| {
         if let Some(ref mut store) = *c.borrow_mut() {
-            store.shells.insert(name, fnptr);
+            match body {
+                Some(body) => {
+                    store.gates.insert(name, Some(body));
+                }
+                None => {
+                    store.gates.entry(name).or_insert(None);
+                }
+            }
         }
     });
 }
 
-fn capture_install(fnptr: FnPtr) {
+fn capture_shell(name: ShellName, fnptr: FnPtr) {
     CLOSURE_CAPTURE.with(|c| {
         if let Some(ref mut store) = *c.borrow_mut() {
-            store.install = Some(fnptr);
+            store.shells.insert(name, fnptr);
         }
     });
 }
@@ -188,10 +254,10 @@ pub(crate) trait StaticResource: Clone {
 /// Every named-resource method resolves the same way in the action context, so
 /// the lookup lives here rather than in each of them: one diagnosis for a name
 /// that is not there, and nothing for the next resource type to copy. It reads
-/// the definition of the `App` it was called on, so `old` in a change handler
-/// answers from the previous generation rather than the current one.
+/// the definition of the `App` it was called on, so an `App` rebuilt from
+/// another generation answers from that generation rather than the current
+/// one.
 // spec: APP#named-resources
-// spec: PARAM#change-handlers
 pub(crate) fn static_ref<T: StaticResource>(
     app: &App,
     name: &str,
@@ -283,16 +349,17 @@ thread_local! {
 }
 
 /// Install an `ActionCallTable` for the duration of the closure passed to
-/// `f`. The outer action's name seeds the call stack so `.call(<self>)`
-/// inside it is rejected as recursion.
+/// `f`. An outer action's name seeds the call stack so `.call(<self>)`
+/// inside it is rejected as recursion; a gate's body, which no action can
+/// call, seeds none.
 pub(crate) fn with_action_call_table<R>(
     actions: BTreeMap<ActionName, FnPtr>,
-    outer: ActionName,
+    outer: Option<ActionName>,
     f: impl FnOnce() -> R,
 ) -> R {
     let table = ActionCallTable {
         actions,
-        stack: vec![outer],
+        stack: outer.into_iter().collect(),
     };
     ACTION_CALL_TABLE.with(|t| *t.borrow_mut() = Some(table));
     let result = f();
@@ -398,12 +465,13 @@ pub struct AppDef {
     /// recovered on demand via the thread-local capture buffer.
     pub actions: BTreeMap<ActionName, ActionDef>,
     pub shells: BTreeMap<ShellName, ShellDef>,
-    pub install: Option<InstallDef>,
-    /// Names of parameters that have an `on_change` handler registered.
-    pub param_changes: BTreeSet<ParamName>,
     /// Names of parameters that have a validator attached.
     // spec: PARAM#validators
     pub validators: BTreeSet<ParamName>,
+    /// Gates declared by the BSL script via `app.gate()`, with what they
+    /// declare. Their bodies are recovered from the capture buffer.
+    // spec: GATE#declaration
+    pub gates: BTreeMap<GateName, GateDef>,
 }
 
 fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAltResult>> {
@@ -425,6 +493,51 @@ fn is_valid_canopy_type(value: &str) -> bool {
     }) && value.starts_with(|c: char| c.is_ascii_lowercase())
 }
 
+thread_local! {
+    static GATE_SELECTIONS: RefCell<BTreeMap<(EvaluationId, GateName), Collection>> =
+        const { RefCell::new(BTreeMap::new()) };
+}
+
+/// One evaluation of a script, never shared with another, so that what an
+/// evaluation leaves on its thread cannot be taken up by a later one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct EvaluationId(u64);
+
+impl EvaluationId {
+    fn fresh() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Releases the gate selections an evaluation holds when it is dropped,
+/// whether the evaluation completed, failed, or unwound.
+#[must_use = "the selections are released when the guard is dropped"]
+pub(crate) struct EvaluationGuard {
+    evaluation: EvaluationId,
+    _thread: PhantomData<Rc<()>>,
+}
+
+impl Drop for EvaluationGuard {
+    fn drop(&mut self) {
+        drop(take_gate_selections(self.evaluation));
+    }
+}
+
+fn take_gate_selections(evaluation: EvaluationId) -> BTreeMap<GateName, Collection> {
+    GATE_SELECTIONS.with(|s| {
+        let mut held = s.borrow_mut();
+        let mine: Vec<_> = held
+            .keys()
+            .filter(|(e, _)| *e == evaluation)
+            .cloned()
+            .collect();
+        mine.into_iter()
+            .filter_map(|key| held.remove(&key).map(|c| (key.1, c)))
+            .collect()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // App — the BSL-facing handle; !Send (Rc inside), stays on the BSL thread
 // ---------------------------------------------------------------------------
@@ -440,6 +553,9 @@ pub struct App {
     /// `app.file` and `app.dir`.
     // spec: BND#bundle-files
     pub bundle: Arc<Bundle>,
+    /// The evaluation this app is declared by, which holds the selections
+    /// its script gives its gates.
+    evaluation: EvaluationId,
 }
 
 impl App {
@@ -448,6 +564,33 @@ impl App {
             def: Arc::new(arc_swap::ArcSwap::new(Arc::new(AppDef::default()))),
             stored: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
             bundle,
+            evaluation: EvaluationId::fresh(),
+        }
+    }
+
+    /// Hold the selection the script gave gate `name`, to be resolved once its
+    /// evaluation completes, replacing any it gave before.
+    ///
+    /// A selection is not `Send`, so it stays on the evaluating thread rather
+    /// than in the definition, until it is taken or the evaluation's
+    /// [`EvaluationGuard`] is dropped.
+    // spec: GATE#exclusive-selection
+    pub(crate) fn hold_gate_selection(&self, name: GateName, selection: Collection) {
+        let key = (self.evaluation, name);
+        GATE_SELECTIONS.with(|s| s.borrow_mut().insert(key, selection));
+    }
+
+    /// Take the selections the script gave this app's gates, leaving none.
+    pub(crate) fn take_gate_selections(&self) -> BTreeMap<GateName, Collection> {
+        take_gate_selections(self.evaluation)
+    }
+
+    /// Guard the evaluation this app is declared by, releasing the
+    /// selections it holds when the guard is dropped.
+    pub(crate) fn guard_evaluation(&self) -> EvaluationGuard {
+        EvaluationGuard {
+            evaluation: self.evaluation,
+            _thread: PhantomData,
         }
     }
 }
@@ -523,6 +666,6 @@ impl CustomType for App {
         collection::on_app(&mut builder);
         action::on_app(&mut builder);
         shell::on_app(&mut builder);
-        install::on_app(&mut builder);
+        gate::on_app(&mut builder);
     }
 }

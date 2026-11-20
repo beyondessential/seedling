@@ -2,6 +2,7 @@
 import type {
   AppAction,
   AppDetail,
+  AppGate,
   AppParam,
   AppResource,
   ContainerSummary,
@@ -116,14 +117,6 @@ export const params: AppParam[] = [
   },
 ];
 
-export const installAction: AppAction = {
-  name: "on_install",
-  description: "Set up the database",
-  kind: "install",
-  params: {},
-  schedules: [],
-};
-
 export const backupAction: AppAction = {
   name: "backup",
   description: "Back up the data volume",
@@ -176,6 +169,18 @@ export const psqlShellAction: AppAction = {
   schedules: [],
 };
 
+export function makeGate(overrides: Partial<AppGate> = {}): AppGate {
+  return {
+    name: "migrate",
+    state: "satisfied",
+    last_success_generation: 3,
+    holds_exclusive: false,
+    next_run_at: null,
+    after: [],
+    ...overrides,
+  };
+}
+
 export function makeFault(overrides: Partial<FaultRecord> = {}): FaultRecord {
   return {
     id: "fault-1",
@@ -209,7 +214,8 @@ export function makeDetail(overrides: Partial<AppDetail> = {}): AppDetail {
     stopped_resources: [],
     params,
     unknown_params: [],
-    actions: [installAction, backupAction, reindexAction, dbShellAction],
+    actions: [backupAction, reindexAction, dbShellAction],
+    gates: [],
     ...overrides,
   };
 }

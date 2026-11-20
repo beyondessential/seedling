@@ -16,19 +16,12 @@ fn declare_action(
     action_name: ActionName,
     closure: FnPtr,
     description: Option<String>,
-    params: BTreeMap<ParamName, super::super::install::ParamDef>,
+    params: BTreeMap<ParamName, super::super::param_def::ParamDef>,
 ) -> Result<Action, Box<EvalAltResult>> {
     // spec: BSL#arguments
     let closure = take_closure(method, "fn", closure)?;
     super::ensure_not_validating()?;
     super::ensure_not_in_action_closure(method)?;
-    if action_name == "install" {
-        return Err(
-            "the action name \"install\" is reserved for the install action; declare it with \
-             app.on_install"
-                .into(),
-        );
-    }
     if this.def.load().actions.contains_key(&action_name) {
         return Err(format!(
             "an action named {:?} is already declared",
@@ -83,10 +76,6 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
                 // spec: ACN#action-declaration
                 reject_unknown_keys("on_action options", &options, &["description", "params"])?;
-                // spec: ACN#start-action
-                if action_name == "start" && options.contains_key("params") {
-                    return Err("the start action takes no params".into());
-                }
                 let desc = super::extract_description(&options)?;
                 // spec: ACN#param-schemas
                 let params = parse_action_params(&options)?;
@@ -114,34 +103,14 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             Ok(Action::new(action_name, def.name.clone()))
         },
     );
-
-    // spec: ACN#start-action
-    builder
-        .with_fn(
-            "on_start",
-            |this: &mut App, closure: FnPtr| -> Result<Action, Box<EvalAltResult>> {
-                let start_name = ActionName::new_unchecked("start");
-                declare_action(this, "on_start", start_name, closure, None, BTreeMap::new())
-            },
-        )
-        .with_fn(
-            "on_start",
-            |this: &mut App, closure: FnPtr, options: Map| -> Result<Action, Box<EvalAltResult>> {
-                // spec: ACN#start-action
-                reject_unknown_keys("on_start options", &options, &["description"])?;
-                let desc = super::extract_description(&options)?;
-                let start_name = ActionName::new_unchecked("start");
-                declare_action(this, "on_start", start_name, closure, desc, BTreeMap::new())
-            },
-        );
 }
 
 // spec: ACN#param-schemas
 pub(super) fn parse_action_params(
     options: &Map,
-) -> Result<BTreeMap<ParamName, super::super::install::ParamDef>, Box<rhai::EvalAltResult>> {
+) -> Result<BTreeMap<ParamName, super::super::param_def::ParamDef>, Box<rhai::EvalAltResult>> {
     match options.get("params").cloned() {
-        Some(params) => super::install::parse_param_defs(&take_map("params", params)?, true),
+        Some(params) => super::param::parse_param_defs(&take_map("params", params)?),
         None => Ok(BTreeMap::new()),
     }
 }

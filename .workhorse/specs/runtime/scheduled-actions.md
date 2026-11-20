@@ -25,10 +25,7 @@ If the runtime cannot read a schedule's record, or cannot parse its last fire ti
 While it cannot, the runtime MUST hold a [`schedule_unreadable`](faults.md#app-faults) fault against the schedule's action.
 While the runtime cannot read the schedule records at all, it MUST NOT fire any schedule, and MUST hold a [`schedules_unreadable`](faults.md#host-faults) fault.
 
-The runtime MUST fire a due schedule only for an app in the `Installed` [install phase](../overview.md#install-phase), and MUST skip it for an app that is `NotInstalled`, `Installing` or `Uninstalling`.
-
-> [!NOTE]
-> A schedule that fired for an app whose install keeps failing would hold the app's one operation slot and keep a corrected definition from ever being applied.
+The runtime MUST fire a due schedule only for an app in the `Installed` [install phase](../overview.md#install-phase), and MUST skip it for an app that is `NotInstalled` or `Uninstalling`.
 
 The runtime MUST fire a due schedule by requesting its action as a [lifecycle operation](../overview.md#lifecycle-operation) with no supplied params and the trigger `schedule`, subject to the [concurrency rules](operations.md#concurrency).
 A request that is rejected leaves the schedule due, and a later check requests it again.

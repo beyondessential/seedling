@@ -8,19 +8,97 @@ use crate::{
     actor::Actor,
     names::{
         ActionName, AppName, AppServiceName, ExternalServiceName, ExternalVolumeName, ForwardId,
-        HeldVolumeId, OfferId, ParamName, ServiceRef, SessionId, ShellName, SiteIngressName,
-        TemplateName, VolumeRef,
+        GateName, HeldVolumeId, OfferId, ParamName, ServiceRef, SessionId, ShellName,
+        SiteIngressName, TemplateName, VolumeRef,
     },
 };
 
-/// A parameter changed in the same step as a definition update. Values are
-/// `None` for an unset, and for a secret parameter.
-// spec: EVT#event-types
-#[derive(Debug, Clone, Serialize)]
-pub struct AppUpdatedParam {
+/// One parameter whose stored value a change moved. An absent value is an
+/// unset one; an entry for a secret parameter carries neither value and sets
+/// `redacted`.
+// spec: EVT#app-events
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ParamChangeEntry {
     pub name: ParamName,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub new_value: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub redacted: bool,
+}
+
+impl ParamChangeEntry {
+    pub fn new(name: ParamName, previous_value: Option<String>, new_value: Option<String>) -> Self {
+        Self {
+            name,
+            previous_value,
+            new_value,
+            redacted: false,
+        }
+    }
+
+    pub fn redacted(name: ParamName) -> Self {
+        Self {
+            name,
+            previous_value: None,
+            new_value: None,
+            redacted: true,
+        }
+    }
+}
+
+/// What a lifecycle operation runs: an action's closure, or a gate run.
+// spec: EVT#operation-events
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperationTarget {
+    Action(ActionName),
+    Gate(GateName),
+}
+
+impl OperationTarget {
+    pub fn action(&self) -> Option<&ActionName> {
+        match self {
+            Self::Action(action) => Some(action),
+            Self::Gate(_) => None,
+        }
+    }
+
+    pub fn gate(&self) -> Option<&GateName> {
+        match self {
+            Self::Action(_) => None,
+            Self::Gate(gate) => Some(gate),
+        }
+    }
+
+    /// The action's or gate's name, for a log line or a label.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Action(action) => action.as_str(),
+            Self::Gate(gate) => gate.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for OperationTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Action(action) => write!(f, "{action}"),
+            Self::Gate(gate) => write!(f, "gate {gate}"),
+        }
+    }
+}
+
+impl From<ActionName> for OperationTarget {
+    fn from(action: ActionName) -> Self {
+        Self::Action(action)
+    }
+}
+
+impl From<GateName> for OperationTarget {
+    fn from(gate: GateName) -> Self {
+        Self::Gate(gate)
+    }
 }
 
 // spec: EVT#event-types
@@ -49,15 +127,16 @@ pub enum OiEvent {
         previous_generation: Option<u64>,
         /// The new definition's provenance.
         definition: serde_json::Value,
-        /// The parameter changed alongside the definition, if any.
-        #[serde(flatten, skip_serializing_if = "Option::is_none")]
-        param: Option<AppUpdatedParam>,
+        /// The parameters changed alongside the definition, in ascending
+        /// order of name; absent when none changed.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        changes: Vec<ParamChangeEntry>,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
     // spec: EVT#event-types
     /// Emitted on every transition of `AppPhase`. Phase is one of
-    /// `"not_installed"`, `"installing"`, `"installed"`, `"uninstalling"`.
+    /// `"not_installed"`, `"installed"`, `"uninstalling"`.
     /// The WebUI relies on this to refresh after uninstall completes,
     /// because uninstall is not driven by a BSL operation and therefore
     /// does not emit OperationStarted/OperationCompleted.
@@ -68,33 +147,11 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // spec: EVT#event-types
-    // spec: PRM#parameter-storage
-    ParamSet {
+    // spec: EVT#app-events
+    ParamsChanged {
         timestamp: Timestamp,
         app: AppName,
-        name: ParamName,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        previous_value: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        new_value: Option<String>,
-        #[serde(skip_serializing_if = "is_false")]
-        redacted: bool,
-        generation: u64,
-        previous_generation: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        actor: Option<Arc<Actor>>,
-    },
-    // spec: EVT#event-types
-    // spec: PRM#parameter-storage
-    ParamUnset {
-        timestamp: Timestamp,
-        app: AppName,
-        name: ParamName,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        previous_value: Option<String>,
-        #[serde(skip_serializing_if = "is_false")]
-        redacted: bool,
+        changes: Vec<ParamChangeEntry>,
         generation: u64,
         previous_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,10 +162,12 @@ pub enum OiEvent {
     OperationStarted {
         timestamp: Timestamp,
         app: AppName,
-        action_name: ActionName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action_name: Option<ActionName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateName>,
         operation_id: String,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         trigger: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -117,10 +176,12 @@ pub enum OiEvent {
     OperationCompleted {
         timestamp: Timestamp,
         app: AppName,
-        action_name: ActionName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action_name: Option<ActionName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateName>,
         operation_id: String,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -128,10 +189,12 @@ pub enum OiEvent {
     OperationFailed {
         timestamp: Timestamp,
         app: AppName,
-        action_name: ActionName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action_name: Option<ActionName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateName>,
         operation_id: String,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         error: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
@@ -140,10 +203,12 @@ pub enum OiEvent {
     OperationCancelled {
         timestamp: Timestamp,
         app: AppName,
-        action_name: ActionName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action_name: Option<ActionName>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate: Option<GateName>,
         operation_id: String,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -286,6 +351,16 @@ pub enum OiEvent {
         app: AppName,
         kind: String,
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // spec: EVT#app-events
+    GateStateChanged {
+        timestamp: Timestamp,
+        app: AppName,
+        gate: GateName,
+        state: String,
+        previous_state: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -702,7 +777,7 @@ impl EventSender {
         generation: u64,
         previous_generation: Option<u64>,
         definition: serde_json::Value,
-        param: Option<AppUpdatedParam>,
+        changes: Vec<ParamChangeEntry>,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::AppUpdated {
@@ -711,7 +786,26 @@ impl EventSender {
             generation,
             previous_generation,
             definition,
-            param,
+            changes,
+            actor,
+        });
+    }
+
+    // spec: PRM#parameter-changes
+    pub fn params_changed(
+        &self,
+        app: &AppName,
+        changes: Vec<ParamChangeEntry>,
+        generation: u64,
+        previous_generation: u64,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::ParamsChanged {
+            timestamp: now(),
+            app: app.clone(),
+            changes,
+            generation,
+            previous_generation,
             actor,
         });
     }
@@ -1358,6 +1452,25 @@ impl EventSender {
         });
     }
 
+    // spec: EVT#app-events
+    pub fn gate_state_changed(
+        &self,
+        app: &AppName,
+        gate: &GateName,
+        state: &str,
+        previous_state: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::GateStateChanged {
+            timestamp: now(),
+            app: app.clone(),
+            gate: gate.clone(),
+            state: state.to_owned(),
+            previous_state: previous_state.to_owned(),
+            actor,
+        });
+    }
+
     // spec: CTL#resource-stop
     pub fn resource_unstopped(
         &self,
@@ -1381,36 +1494,17 @@ impl EventSender {
     pub fn operation(
         &self,
         app: AppName,
-        action_name: ActionName,
+        target: OperationTarget,
         operation_id: impl Into<String>,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
         actor: Option<Arc<Actor>>,
     ) -> OperationEventCtx {
         OperationEventCtx {
             tx: self.clone(),
             app,
-            action_name,
+            target,
             operation_id: operation_id.into(),
-            source_generation,
-            target_generation,
-            actor,
-        }
-    }
-
-    /// Build a context for param-change events (set/unset).
-    pub fn param_change(
-        &self,
-        app: AppName,
-        generation: u64,
-        previous_generation: u64,
-        actor: Option<Arc<Actor>>,
-    ) -> ParamEventCtx {
-        ParamEventCtx {
-            tx: self.clone(),
-            app,
-            generation,
-            previous_generation,
+            operation_generation,
             actor,
         }
     }
@@ -1534,14 +1628,14 @@ impl EventSenderWithActor {
         generation: u64,
         previous_generation: Option<u64>,
         definition: serde_json::Value,
-        param: Option<AppUpdatedParam>,
+        changes: Vec<ParamChangeEntry>,
     ) {
         self.inner.app_updated(
             app,
             generation,
             previous_generation,
             definition,
-            param,
+            changes,
             Some(Arc::clone(&self.actor)),
         );
     }
@@ -1581,33 +1675,34 @@ impl EventSenderWithActor {
     pub fn operation(
         &self,
         app: AppName,
-        action_name: ActionName,
+        target: OperationTarget,
         operation_id: impl Into<String>,
-        source_generation: u64,
-        target_generation: u64,
+        operation_generation: u64,
     ) -> OperationEventCtx {
         self.inner.operation(
             app,
-            action_name,
+            target,
             operation_id,
-            source_generation,
-            target_generation,
+            operation_generation,
             Some(Arc::clone(&self.actor)),
         )
     }
 
-    pub fn param_change(
+    // spec: PRM#parameter-changes
+    pub fn params_changed(
         &self,
-        app: AppName,
+        app: &AppName,
+        changes: Vec<ParamChangeEntry>,
         generation: u64,
         previous_generation: u64,
-    ) -> ParamEventCtx {
-        self.inner.param_change(
+    ) {
+        self.inner.params_changed(
             app,
+            changes,
             generation,
             previous_generation,
             Some(Arc::clone(&self.actor)),
-        )
+        );
     }
 
     // spec: CTL#deployment-restart
@@ -1630,6 +1725,12 @@ impl EventSenderWithActor {
     pub fn resource_unstopped(&self, app: &AppName, kind: &str, name: &str) {
         self.inner
             .resource_unstopped(app, kind, name, Some(Arc::clone(&self.actor)));
+    }
+
+    // spec: EVT#app-events
+    pub fn gate_state_changed(&self, app: &AppName, gate: &GateName, state: &str, previous: &str) {
+        self.inner
+            .gate_state_changed(app, gate, state, previous, Some(Arc::clone(&self.actor)));
     }
 
     // spec: ACTU#held-volumes
@@ -1940,10 +2041,9 @@ impl EventSenderWithActor {
 pub struct OperationEventCtx {
     tx: EventSender,
     pub app: AppName,
-    pub action_name: ActionName,
+    pub target: OperationTarget,
     pub operation_id: String,
-    pub source_generation: u64,
-    pub target_generation: u64,
+    pub operation_generation: u64,
     actor: Option<Arc<Actor>>,
 }
 
@@ -1952,10 +2052,10 @@ impl OperationEventCtx {
         self.tx.emit(OiEvent::OperationStarted {
             timestamp: now(),
             app: self.app.clone(),
-            action_name: self.action_name.clone(),
+            action_name: self.target.action().cloned(),
+            gate: self.target.gate().cloned(),
             operation_id: self.operation_id.clone(),
-            source_generation: self.source_generation,
-            target_generation: self.target_generation,
+            operation_generation: self.operation_generation,
             trigger: trigger.to_owned(),
             actor: self.actor.clone(),
         });
@@ -1965,10 +2065,10 @@ impl OperationEventCtx {
         self.tx.emit(OiEvent::OperationCompleted {
             timestamp: now(),
             app: self.app.clone(),
-            action_name: self.action_name.clone(),
+            action_name: self.target.action().cloned(),
+            gate: self.target.gate().cloned(),
             operation_id: self.operation_id.clone(),
-            source_generation: self.source_generation,
-            target_generation: self.target_generation,
+            operation_generation: self.operation_generation,
             actor: self.actor.clone(),
         });
     }
@@ -1978,10 +2078,10 @@ impl OperationEventCtx {
         self.tx.emit(OiEvent::OperationCancelled {
             timestamp: now(),
             app: self.app.clone(),
-            action_name: self.action_name.clone(),
+            action_name: self.target.action().cloned(),
+            gate: self.target.gate().cloned(),
             operation_id: self.operation_id.clone(),
-            source_generation: self.source_generation,
-            target_generation: self.target_generation,
+            operation_generation: self.operation_generation,
             actor: self.actor.clone(),
         });
     }
@@ -1990,79 +2090,11 @@ impl OperationEventCtx {
         self.tx.emit(OiEvent::OperationFailed {
             timestamp: now(),
             app: self.app.clone(),
-            action_name: self.action_name.clone(),
+            action_name: self.target.action().cloned(),
+            gate: self.target.gate().cloned(),
             operation_id: self.operation_id.clone(),
-            source_generation: self.source_generation,
-            target_generation: self.target_generation,
+            operation_generation: self.operation_generation,
             error: error.to_owned(),
-            actor: self.actor.clone(),
-        });
-    }
-}
-
-/// Context for parameter-change events (set / unset).
-#[derive(Clone)]
-pub struct ParamEventCtx {
-    tx: EventSender,
-    app: AppName,
-    generation: u64,
-    previous_generation: u64,
-    actor: Option<Arc<Actor>>,
-}
-
-impl ParamEventCtx {
-    pub fn set(&self, name: &ParamName, previous_value: Option<&str>, new_value: &str) {
-        self.tx.emit(OiEvent::ParamSet {
-            timestamp: now(),
-            app: self.app.clone(),
-            name: name.clone(),
-            previous_value: previous_value.map(str::to_owned),
-            new_value: Some(new_value.to_owned()),
-            redacted: false,
-            generation: self.generation,
-            previous_generation: self.previous_generation,
-            actor: self.actor.clone(),
-        });
-    }
-
-    // spec: PRM#parameter-storage
-    pub fn set_redacted(&self, name: &ParamName) {
-        self.tx.emit(OiEvent::ParamSet {
-            timestamp: now(),
-            app: self.app.clone(),
-            name: name.clone(),
-            previous_value: None,
-            new_value: None,
-            redacted: true,
-            generation: self.generation,
-            previous_generation: self.previous_generation,
-            actor: self.actor.clone(),
-        });
-    }
-
-    pub fn unset(&self, name: &ParamName, previous_value: &str) {
-        self.tx.emit(OiEvent::ParamUnset {
-            timestamp: now(),
-            app: self.app.clone(),
-            name: name.clone(),
-            previous_value: Some(previous_value.to_owned()),
-            redacted: false,
-            generation: self.generation,
-            previous_generation: self.previous_generation,
-            actor: self.actor.clone(),
-        });
-    }
-
-    // spec: PRM#parameter-storage
-    pub fn unset_redacted(&self, name: &ParamName) {
-        self.tx.emit(OiEvent::ParamUnset {
-            timestamp: now(),
-            app: self.app.clone(),
-            name: name.clone(),
-            previous_value: None,
-            redacted: true,
-            generation: self.generation,
-            previous_generation: self.previous_generation,
             actor: self.actor.clone(),
         });
     }

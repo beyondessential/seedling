@@ -499,10 +499,13 @@ pub fn clear_dynamic_resources_unreadable(db: &crate::runtime::db::Db) {
 /// The kinds of fault under which the runtime stops acting on the fault's
 /// subject until it clears.
 // spec: FLT#withholding-faults
-pub const WITHHOLDING_KINDS: [&str; 3] = [
+pub const WITHHOLDING_KINDS: [&str; 6] = [
     "external_volume_not_mapped",
     "crash_loop",
     "health_check_replace_failed",
+    "gate_failed",
+    "gate_check_unavailable",
+    "gate_state_unreadable",
 ];
 
 /// What an app's active faults come to for its status.
@@ -518,16 +521,21 @@ pub fn fault_standing(
     db: &crate::runtime::db::Db,
     app: &AppName,
 ) -> rusqlite::Result<FaultStanding> {
+    // One placeholder for each kind, after the app's.
+    let placeholders = (2..2 + WITHHOLDING_KINDS.len())
+        .map(|n| format!("?{n}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let (active, withholding): (i64, i64) = db.conn.query_row(
-        "SELECT COUNT(*),
-                COALESCE(SUM(kind IN (?2, ?3, ?4)), 0)
-         FROM faults WHERE app = ?1 AND cleared_at IS NULL",
-        rusqlite::params![
-            app,
-            WITHHOLDING_KINDS[0],
-            WITHHOLDING_KINDS[1],
-            WITHHOLDING_KINDS[2]
-        ],
+        &format!(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(kind IN ({placeholders})), 0)
+             FROM faults WHERE app = ?1 AND cleared_at IS NULL"
+        ),
+        rusqlite::params_from_iter(
+            std::iter::once(app as &dyn rusqlite::ToSql)
+                .chain(WITHHOLDING_KINDS.iter().map(|k| k as &dyn rusqlite::ToSql)),
+        ),
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     Ok(FaultStanding {
@@ -608,7 +616,7 @@ pub fn any_active_fault_of_kind(db: &crate::runtime::db::Db, kind: &str) -> rusq
 /// A global sweep such as ingress conflicts runs every tick; reading every
 /// active fault in the database and discarding all but one kind would make
 /// that cost grow with the total fault count rather than with the kind's.
-fn list_active_faults_in_scope(
+pub fn list_active_faults_in_scope(
     db: &crate::runtime::db::Db,
     scope: &FaultScope,
 ) -> rusqlite::Result<Vec<FaultRecord>> {

@@ -111,7 +111,6 @@ Wherever a message names a [resource type](../language/overview.md#resource-type
 | `not_found` | the method, or the app, resource, action, generation, shell session, port forward or other object the request names, does not exist |
 | `not_installed` | the request needs the app installed, and it is not |
 | `already_installed` | an install was requested for an app that is installed or uninstalling |
-| `install_in_progress` | an install was requested for an app whose install is running |
 | `operation_in_progress` | the request conflicts with a lifecycle operation running or queued for the app, with a change to the app being applied, or with an issuance running for the hostname; `message` names which |
 | `already_queued` | a lifecycle operation is already queued for the app |
 | `requirements_invalid` | the request cannot be parsed, or its actor or parameters are missing, malformed or out of range; `message` names each offending field |

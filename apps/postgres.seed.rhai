@@ -5,16 +5,24 @@
 // an exported app volume so other apps can mount it, and the database TCP port
 // is published through an exported service.
 //
-// Version upgrades:
-//   - Minor bumps (e.g. 16.2 → 16.3) trigger a rolling restart.
-//   - Major bumps (e.g. 15 → 17) run pg_upgrade via docker.io/tianon/postgres-upgrade
-//     through each intermediate major version. Data for major N lives at
-//     /data/pgN within the external data volume; old data directories are kept
-//     after upgrade for rollback.
+// Gates keep what the resource graph cannot express converged:
+//   - `config` renders postgresql.conf and pg_hba.conf into the config volume
+//     whenever their content changes; the server is ordered after it, so a
+//     change restarts the server.
+//   - `major` initialises the cluster on its first run and runs pg_upgrade
+//     whenever the major version changes. Data for major N lives at /data/pgN
+//     within the external data volume; old data directories are kept after
+//     upgrade for rollback. The server is stopped for the run and ordered
+//     after it.
+//   - `password` applies the superuser password to the running server.
+//   - `analyze` refreshes planner statistics after a major upgrade.
+//   - `bestool-psql` fetches the bestool-psql binaries when their version moves.
+//
+// Minor bumps (e.g. 16.2 → 16.3) change the image alone, so the server's
+// update strategy replaces it.
 //
 // The shell actions include a `bestool-psql` shell backed by binaries fetched
-// from the upstream GitHub release at install time (and via a standalone
-// action) into an app volume.
+// from the upstream GitHub release into an app volume.
 
 app.description("PostgreSQL database server with pgtune-style sizing, exported unix socket, and pg_upgrade-driven major version upgrades");
 
@@ -231,9 +239,9 @@ app.deployment("postgres")
     .cap_add("SETGID")
     .pids_limit(pids_budget.call())
     // PGDATA is the only password-agnostic env the entrypoint needs. The
-    // cluster is initdb'd by a dedicated install job (see on_install) so no
-    // POSTGRES_PASSWORD* / POSTGRES_INITDB_ARGS leak into the long-running
-    // deployment's spec — the entrypoint sees PG_VERSION and skips init.
+    // cluster is initdb'd by a dedicated job so no POSTGRES_PASSWORD* /
+    // POSTGRES_INITDB_ARGS leak into the long-running deployment's spec — the
+    // entrypoint sees PG_VERSION and skips init.
     .env("PGDATA", `/data/pg${pg_major.call()}`)
     .mount("/data", data)
     .mount("/var/run/postgresql", socket)
@@ -404,18 +412,143 @@ let reload_server = |rt| {
     rt.signal(app.deployment("postgres"), "SIGHUP");
 };
 
-// ── Install ───────────────────────────────────────────────────────────────────
+// ── Gates ─────────────────────────────────────────────────────────────────────
 
-app.on_install(|rt, _param| {
-    initdb_if_missing.call(rt, pg_major.call());
-    render_config.call(rt);
-    build_bestool_psql.call(rt);
+let pg_server = app.deployment("postgres");
 
-    // Generous deadline: a fresh postgres startup that needs to validate
-    // config and warm caches takes longer than the 30s default, especially
-    // on first install where the image was just pulled.
-    rt.start(app).ready(120);
-}, #{});
+// postgresql.conf and pg_hba.conf live in a persistent volume, outside the
+// deployment's spec, so the rendered content is the gate's key and the server
+// is ordered after it.
+let config_gate = app.gate("config")
+    .key([pg_conf_content.call(), pg_hba_content.call()])
+    .run(|rt| { render_config.call(rt); });
+
+let data_check = app.job("data-check")
+    .description("Check that the cluster for the configured major version exists in the data volume")
+    .image(pg_image.call())
+    .writable_rootfs()
+    .mount("/data", data)
+    .command(["test", "-f", `/data/pg${pg_major.call()}/PG_VERSION`])
+    .deadline(60);
+
+// First run: initdb the cluster for the configured major.
+// Later runs: pg_upgrade from the major of the last success through each
+// intermediate major, using /data/pgN subdirectories. Each new data directory
+// is initdb'd first by its major's postgres image; pg_upgrade then
+// hardlink-copies relation files across (no --link: safer, at the cost of
+// roughly doubling disk usage during the upgrade). The runtime pulls the
+// images before the server is stopped, so a tag that does not exist fails the
+// run with the old server still running.
+let major_gate = app.gate("major")
+    .key(pg_major.call())
+    .exclusive(pg_server)
+    .check(data_check, #{ interval: 600 })
+    .run(|rt, last| {
+        let new_major = pg_major.call();
+
+        if last == () {
+            initdb_if_missing.call(rt, new_major);
+            return;
+        }
+
+        let old_major = parse_major.call(last.param("version").value());
+        if new_major < old_major {
+            throw `refusing to downgrade from PostgreSQL ${old_major} to ${new_major}`;
+        }
+
+        let cur = old_major;
+        while cur < new_major {
+            let next = cur + 1;
+
+            // pg_upgrade replaces the roles/passwords from the old cluster
+            // immediately after, so the pwfile passed in here is superseded
+            // before the cluster ever serves traffic.
+            initdb_if_missing.call(rt, next);
+
+            // Workdir must be writable: pg_upgrade writes log files there.
+            rt.start(app.job()
+                .description(`pg_upgrade hardlink-copy from PostgreSQL ${cur} to ${next} via docker.io/tianon/postgres-upgrade`)
+                .image(`docker.io/tianon/postgres-upgrade:${cur}-to-${next}`)
+                .writable_rootfs()
+                .cap_add("CHOWN")
+                .cap_add("DAC_OVERRIDE")
+                .cap_add("FOWNER")
+                .cap_add("SETUID")
+                .cap_add("SETGID")
+                .mount("/data", data)
+                .workdir("/tmp")
+                .command(["sh", "-c", `
+set -e
+chown -R ${postgres_uid}:${postgres_uid} /data/pg${cur} /data/pg${next}
+cd /tmp
+setpriv --reuid=${postgres_uid} --regid=${postgres_uid} --clear-groups \
+  pg_upgrade \
+  --old-bindir=/usr/lib/postgresql/${cur}/bin \
+  --new-bindir=/usr/lib/postgresql/${next}/bin \
+  --old-datadir=/data/pg${cur} \
+  --new-datadir=/data/pg${next}
+`])
+            ).terminated(7200).ensure_success();
+
+            cur = next;
+        }
+    });
+
+pg_server.after([config_gate, major_gate]);
+
+// Apply the password via ALTER USER against the running cluster. The SQL is
+// staged into a RAM-backed tmpfs so the password isn't written to any
+// persistent volume. The password isn't part of the deployment's spec, so
+// nothing restarts. The gate's key is the password, which the runtime keeps
+// only as a digest under the host's secret key.
+let password_gate = app.gate("password")
+    .key(password.value())
+    .after(pg_server)
+    .run(|rt| {
+        // Rhai's `String.replace(from, to)` mutates the receiver in place and
+        // returns `()`, so bind the value first, then mutate it, then use it.
+        let escaped = password.value();
+        escaped.replace("'", "''");
+        let staging = app.volume().tmpfs()
+            .description("ALTER USER SQL staged in RAM for password rotation; never lands on a persistent volume");
+        staging.write("/alter.sql", `ALTER USER postgres WITH PASSWORD '${escaped}';`);
+
+        rt.start(app.job()
+            .description("Apply the postgres superuser password via ALTER USER")
+            .image(pg_image.call())
+            .writable_rootfs()
+            .mount("/var/run/postgresql", socket)
+            .mount("/staging", staging)
+            .env("PGHOST", "/var/run/postgresql")
+            .env("PGUSER", "postgres")
+            .command(["psql", "-d", "postgres", "-f", "/staging/alter.sql"])
+        ).terminated(60).ensure_success();
+    });
+
+// Post-upgrade analyze is highly recommended after a major bump. The first
+// run has nothing to refresh.
+let analyze_gate = app.gate("analyze")
+    .key(pg_major.call())
+    .after(pg_server)
+    .run(|rt, last| {
+        if last == () { return; }
+
+        rt.start(app.job()
+            .description("Post-pg_upgrade analyze-in-stages to refresh planner statistics on the new major")
+            .image(pg_image.call())
+            .writable_rootfs()
+            .mount("/var/run/postgresql", socket)
+            .env("PGHOST", "/var/run/postgresql")
+            .env("PGUSER", "postgres")
+            .command(["vacuumdb", "--all", "--analyze-in-stages", "--jobs", "2"])
+        ).terminated_eventually().ensure_success();
+    });
+
+// The binaries live in an app volume and are only invoked from on-demand
+// shell jobs, so nothing restarts when they are re-fetched.
+let bestool_gate = app.gate("bestool-psql")
+    .key(bestool_psql_version.value())
+    .run(|rt| { build_bestool_psql.call(rt); });
 
 // ── Maintenance actions ───────────────────────────────────────────────────────
 
@@ -589,156 +722,4 @@ app.on_shell("bestool-psql", |_rt, shell, param| {
         user: #{ kind: "text", default_value: "postgres", description: "PostgreSQL user to connect as" },
         database: #{ kind: "text", default_value: "postgres", description: "PostgreSQL database to connect to" },
     },
-});
-
-// ── Version changes ───────────────────────────────────────────────────────────
-
-// Minor bumps: regenerate config (in case initdb-time settings shift between
-// patchlevels) and restart via the Replace update strategy.
-// Major bumps: run pg_upgrade through tianon/postgres-upgrade for each
-// intermediate major version, using /data/pgN subdirectories. The new data
-// directory is initdb'd first by the new major's postgres image; pg_upgrade
-// then hardlink-copies relation files across (no --link: safer, at the cost
-// of roughly doubling disk usage during the upgrade).
-version.on_change(|rt, old| {
-    let old_major = parse_major.call(old.param("version").value());
-    let new_major = parse_major.call(version.value());
-
-    if new_major < old_major {
-        throw `refusing to downgrade from PostgreSQL ${old_major} to ${new_major}`;
-    }
-
-    // Prefetch every image this change will need before touching the running
-    // cluster. Also serves as a "does this version exist" check: if the new
-    // postgres tag (or an intermediate tianon upgrade image, on a major bump)
-    // is not pullable, the barrier throws and the old server keeps running.
-    let warm_jobs = [app.job().image(pg_image.call())];
-    let scan = old_major;
-    while scan < new_major {
-        let next_scan = scan + 1;
-        warm_jobs.push(app.job().image(`docker.io/library/postgres:${next_scan}`));
-        warm_jobs.push(app.job().image(`docker.io/tianon/postgres-upgrade:${scan}-to-${next_scan}`));
-        scan = next_scan;
-    }
-    rt.warm_images(warm_jobs).ready(600);
-
-    render_config.call(rt);
-
-    if new_major == old_major {
-        // Minor bump: Replace update strategy stops the old before starting
-        // the new, which is what we want on a shared data dir.
-        rt.stop(old.select(#{ types: [ResourceType.Deployment], names: ["postgres"] }));
-        rt.start(app).ready();
-    } else {
-        // Major upgrade path. Stop the old server first.
-        rt.stop(old.select(#{ types: [ResourceType.Deployment], names: ["postgres"] }));
-
-        let cur = old_major;
-        while cur < new_major {
-            let next = cur + 1;
-
-            // Initdb the new cluster inside the external data volume.
-            // pg_upgrade replaces the roles/passwords from the old cluster
-            // immediately after, so the pwfile passed in here is superseded
-            // before the cluster ever serves traffic.
-            initdb_if_missing.call(rt, next);
-
-            // pg_upgrade in the tianon image, which ships both major binaries.
-            // Workdir must be writable: pg_upgrade writes log files there.
-            rt.start(app.job()
-                .description(`pg_upgrade hardlink-copy from PostgreSQL ${cur} to ${next} via docker.io/tianon/postgres-upgrade`)
-                .image(`docker.io/tianon/postgres-upgrade:${cur}-to-${next}`)
-                .writable_rootfs()
-                .cap_add("CHOWN")
-                .cap_add("DAC_OVERRIDE")
-                .cap_add("FOWNER")
-                .cap_add("SETUID")
-                .cap_add("SETGID")
-                .mount("/data", data)
-                .workdir("/tmp")
-                .command(["sh", "-c", `
-set -e
-chown -R ${postgres_uid}:${postgres_uid} /data/pg${cur} /data/pg${next}
-cd /tmp
-setpriv --reuid=${postgres_uid} --regid=${postgres_uid} --clear-groups \
-  pg_upgrade \
-  --old-bindir=/usr/lib/postgresql/${cur}/bin \
-  --new-bindir=/usr/lib/postgresql/${next}/bin \
-  --old-datadir=/data/pg${cur} \
-  --new-datadir=/data/pg${next}
-`])
-            ).terminated(7200).ensure_success();
-
-            cur = next;
-        }
-
-        // Bring up the new-major deployment (PGDATA picks up /data/pg<new>
-        // from the env in the current AppDef).
-        rt.start(app).ready();
-
-        // Post-upgrade analyze is highly recommended; fire-and-forget-ish.
-        // Any operator-relevant failure surfaces through the normal action log.
-        rt.start(app.job()
-            .description("Post-pg_upgrade analyze-in-stages to refresh planner statistics on the new major")
-            .image(pg_image.call())
-            .writable_rootfs()
-            .mount("/var/run/postgresql", socket)
-            .env("PGHOST", "/var/run/postgresql")
-            .env("PGUSER", "postgres")
-            .command(["vacuumdb", "--all", "--analyze-in-stages", "--jobs", "2"])
-        ).terminated_eventually();
-    }
-});
-
-// ── Tuning parameter changes ──────────────────────────────────────────────────
-// Every tuning param touches a setting that either requires a restart (e.g.
-// max_connections, shared_buffers via AVAILABLE_MEMORY) or might (extra-config
-// is opaque). Restart rather than reload to be safe.
-
-max_connections.on_change(|rt, _old| {
-    render_config.call(rt);
-    rt.restart(app.deployment("postgres"));
-});
-
-db_type.on_change(|rt, _old| {
-    render_config.call(rt);
-    rt.restart(app.deployment("postgres"));
-});
-
-extra_config.on_change(|rt, _old| {
-    render_config.call(rt);
-    rt.restart(app.deployment("postgres"));
-});
-
-// Re-fetch the bestool-psql binaries on version change. No deployment
-// restart needed: the binaries live in an app volume and are only invoked
-// from on-demand shell jobs.
-bestool_psql_version.on_change(|rt, _old| {
-    build_bestool_psql.call(rt);
-});
-
-// ── Password rotation ────────────────────────────────────────────────────────
-// Apply the new password via ALTER USER against the running cluster. The SQL
-// is staged into a RAM-backed tmpfs so the password isn't written to any
-// persistent volume. No deployment restart is needed since the password isn't
-// referenced by the deployment spec.
-password.on_change(|rt, _old| {
-    // Rhai's `String.replace(from, to)` mutates the receiver in place and
-    // returns `()`, so bind the value first, then mutate it, then use it.
-    let escaped = password.value();
-    escaped.replace("'", "''");
-    let staging = app.volume().tmpfs()
-        .description("ALTER USER SQL staged in RAM for password rotation; never lands on a persistent volume");
-    staging.write("/alter.sql", `ALTER USER postgres WITH PASSWORD '${escaped}';`);
-
-    rt.start(app.job()
-        .description("Apply rotated postgres superuser password via ALTER USER")
-        .image(pg_image.call())
-        .writable_rootfs()
-        .mount("/var/run/postgresql", socket)
-        .mount("/staging", staging)
-        .env("PGHOST", "/var/run/postgresql")
-        .env("PGUSER", "postgres")
-        .command(["psql", "-d", "postgres", "-f", "/staging/alter.sql"])
-    ).terminated(60).ensure_success();
 });

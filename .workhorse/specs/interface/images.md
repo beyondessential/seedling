@@ -131,7 +131,7 @@ On success the result is `{ "ok": true }`.
 ## Image discovery
 
 `/apps/images/discover` runs the [probe](../runtime/images.md#image-discovery) over every handler an app declares, and reports the images each might pull.
-The handlers are the install action, the start action, every other action, every shell and every `on_change` handler the app declares.
+The handlers are every action, every shell and every gate's body the app declares.
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
@@ -162,8 +162,8 @@ Each `per_handler` entry is:
 
 | member | type | meaning |
 | --- | --- | --- |
-| `name` | string | `"install"` for the install action, the action's name for the start action and every other action, the shell's name for a shell, and the parameter's name for an `on_change` handler |
-| `kind` | string | `"install"`, `"start"`, `"action"`, `"shell"` or `"param_change"` |
+| `name` | string | the action's, shell's or gate's name |
+| `kind` | string | `"action"`, `"shell"` or `"gate"` |
 | `images` | array of strings | the image references the handler might pull |
 | `error` | string or null | why the handler could not be probed |
 | `skipped_reason` | string or null | why a lenient probe skipped the handler |

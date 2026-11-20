@@ -71,7 +71,7 @@ fn register_with_failing_script_files_script_error_fault() {
 
     // The script-error gate also blocks install.
     let (code, _) = oi
-        .call("/apps/install/invoke", json!({ "app": "broken" }))
+        .call("/apps/install", json!({ "app": "broken" }))
         .unwrap_err();
     assert_eq!(code, "script_error");
 }
@@ -310,20 +310,6 @@ fn uninstall_answers_each_phase_as_the_spec_says() {
         .call("/apps/uninstall", json!({ "app": "demo" }))
         .unwrap_err();
     assert_eq!(code, "not_installed", "while Uninstalling");
-
-    let installing = TestOi::with_app("fresh");
-    *installing
-        .state
-        .registry
-        .read()
-        .get("fresh")
-        .unwrap()
-        .phase
-        .lock() = AppPhase::Installing;
-    let (code, _) = installing
-        .call("/apps/uninstall", json!({ "app": "fresh" }))
-        .unwrap_err();
-    assert_eq!(code, "operation_in_progress", "while Installing");
 }
 
 // spec: TRD#uninstall-admission
@@ -332,6 +318,7 @@ fn uninstall_answers_each_phase_as_the_spec_says() {
 // what the closure was still driving. Only the scheduler knows.
 #[test]
 fn uninstall_is_refused_while_an_action_holds_the_app() {
+    use seedling_protocol::events::OperationTarget;
     use seedling_protocol::names::{ActionName, AppName};
 
     let oi = TestOi::with_app("demo");
@@ -341,9 +328,8 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     let action = ActionName::new("backup").expect("action name");
     oi.state.scheduler.lock().admit(
         &app,
-        &action,
+        &OperationTarget::Action(action),
         serde_json::Map::new(),
-        1,
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -364,7 +350,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     assert_ne!(desc["status"], "not_installed");
 
     // Once the action is done the uninstall goes through.
-    oi.state.scheduler.lock().complete_current();
+    oi.state.scheduler.lock().complete_current(|_| None);
     oi.call("/apps/uninstall", json!({ "app": "demo" }))
         .unwrap();
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
@@ -377,6 +363,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
 // be named whether it is running or waiting.
 #[test]
 fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
+    use seedling_protocol::events::OperationTarget;
     use seedling_protocol::names::{ActionName, AppName};
 
     let oi = TestOi::with_app("demo");
@@ -392,9 +379,8 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     let mut sched = oi.state.scheduler.lock();
     sched.admit(
         &other,
-        &backup,
+        &OperationTarget::Action(backup.clone()),
         serde_json::Map::new(),
-        1,
         1,
         "test",
         &installed(),
@@ -402,9 +388,8 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     );
     let queued = sched.admit(
         &demo,
-        &backup,
+        &OperationTarget::Action(backup),
         serde_json::Map::new(),
-        1,
         1,
         "test",
         &installed(),
@@ -493,7 +478,7 @@ fn plan_with_no_proposals_returns_empty_diff() {
     let oi = TestOi::with_app("demo");
     let plan = oi.call("/apps/plan", json!({ "app": "demo" })).unwrap();
     assert!(plan["diff"].as_array().unwrap().is_empty());
-    assert!(plan["on_change_would_fire"].as_array().unwrap().is_empty());
+    assert!(plan["gates_would_run"].as_array().unwrap().is_empty());
     assert_eq!(plan["errors"], json!([]));
 }
 
@@ -1375,13 +1360,13 @@ fn deregistering_discards_the_external_mappings_made_for_the_app() {
 /// Admit `action` for the installed app `app`, as the scheduler would for an
 /// operator invocation.
 fn admit(oi: &TestOi, app: &str, action: &str) {
+    use seedling_protocol::events::OperationTarget;
     use seedling_protocol::names::{ActionName, AppName};
 
     oi.state.scheduler.lock().admit(
         &AppName::new(app).expect("app name"),
-        &ActionName::new(action).expect("action name"),
+        &OperationTarget::Action(ActionName::new(action).expect("action name")),
         serde_json::Map::new(),
-        1,
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -1436,7 +1421,7 @@ fn no_operation_is_reported_for_an_app_the_scheduler_is_not_running() {
     assert_ne!(desc["status"], "operating");
     assert!(desc.get("current_operation").is_none(), "{desc}");
 
-    oi.state.scheduler.lock().complete_current();
+    oi.state.scheduler.lock().complete_current(|_| None);
     oi.call("/apps/uninstall", json!({ "app": "demo" }))
         .unwrap();
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
@@ -1669,7 +1654,7 @@ fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_valu
     .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "demo", "name": "api-key", "value": "hunter2hunter2" }),
+        json!({ "app": "demo", "params": { "api-key": "hunter2hunter2" } }),
     )
     .unwrap();
 
@@ -1841,4 +1826,284 @@ fn an_app_cannot_be_removed_while_a_session_on_it_has_a_slot() {
     sessions.close(&session);
     oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
     assert!(!oi.state.registry.read().is_registered("demo"));
+}
+
+// spec: APPS#removal
+#[test]
+fn an_app_cannot_be_removed_while_a_check_of_its_gates_has_a_slot() {
+    let oi = TestOi::with_app("demo");
+    let check = crate::runtime::apps::CheckId::generate();
+    let checks = std::sync::Arc::clone(&oi.state.registry.read().get("demo").unwrap().checks);
+    checks.open(check);
+
+    let (code, _) = oi
+        .call("/apps/remove", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+
+    checks.close(&check);
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+}
+
+// spec: ACI#install
+#[test]
+fn install_takes_only_the_app_and_moves_it_straight_to_installed() {
+    use crate::runtime::apps::AppPhase;
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    let mut events = oi.state.event_tx.subscribe();
+
+    let result = oi.call("/apps/install", json!({ "app": "demo" })).unwrap();
+
+    assert_eq!(result, json!({}));
+    assert_eq!(
+        *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+        AppPhase::Installed
+    );
+    let phase_event = loop {
+        if let OiEvent::AppPhaseChanged { app, phase, .. } =
+            events.try_recv().expect("an AppPhaseChanged event")
+        {
+            break (app.to_string(), phase);
+        }
+    };
+    assert_eq!(phase_event, ("demo".to_owned(), "installed".to_owned()));
+    assert!(
+        oi.state.scheduler.lock().active().is_none(),
+        "no operation runs for an install"
+    );
+    let persisted: bool = oi.state.db.call(|db| {
+        db.conn
+            .query_row(
+                "SELECT installed FROM registered_apps WHERE name = 'demo'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    });
+    assert!(persisted);
+}
+
+// spec: ACI#install
+#[test]
+fn install_refusals() {
+    let oi = TestOi::with_app("demo");
+
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "ghost" }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+
+    oi.install("demo");
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "already_installed", "while Installed");
+
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "already_installed", "while Uninstalling");
+}
+
+// spec: ACI#install
+#[test]
+fn install_refusals_are_given_in_the_order_the_spec_lists_them() {
+    use crate::runtime::scheduler::AppHold;
+    use jiff::Timestamp;
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::with_app("demo");
+    let name = AppName::new("demo").unwrap();
+    let break_app = || {
+        oi.state
+            .registry
+            .write()
+            .get_mut("demo")
+            .unwrap()
+            .script_error = Some(("it broke".to_owned(), Timestamp::now()));
+    };
+
+    let hold = AppHold::take(&oi.state.scheduler, &name).expect("nothing holds the app");
+    break_app();
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "script_error", "before a change being applied");
+    drop(hold);
+
+    oi.state
+        .registry
+        .write()
+        .get_mut("demo")
+        .unwrap()
+        .script_error = None;
+    oi.install("demo");
+    let hold = AppHold::take(&oi.state.scheduler, &name).expect("nothing holds the app");
+    break_app();
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "already_installed", "before a script error");
+    drop(hold);
+}
+
+// spec: ACI#install
+#[test]
+fn an_install_that_cannot_be_recorded_in_full_leaves_the_app_not_installed() {
+    use crate::runtime::apps::AppPhase;
+
+    let oi = TestOi::with_app("demo");
+    oi.state.db.call(|db| {
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER refuse_set_up BEFORE UPDATE OF set_up ON registered_apps
+                 BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            )
+            .unwrap()
+    });
+
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "internal");
+    assert_eq!(
+        *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+        AppPhase::NotInstalled
+    );
+    let (installed, seq): (i64, Option<i64>) = oi.state.db.call(|db| {
+        db.conn
+            .query_row(
+                "SELECT installed, install_seq FROM registered_apps WHERE name = 'demo'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    });
+    assert_eq!((installed, seq), (0, None));
+
+    oi.state.db.call(|db| {
+        db.conn
+            .execute_batch("DROP TRIGGER refuse_set_up;")
+            .unwrap()
+    });
+    oi.call("/apps/install", json!({ "app": "demo" })).unwrap();
+}
+
+// spec: ACI#install
+#[test]
+fn install_is_refused_while_a_change_to_the_app_is_being_applied() {
+    use crate::runtime::{apps::AppPhase, scheduler::AppHold};
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::with_app("demo");
+    let name = AppName::new("demo").unwrap();
+    let hold = AppHold::take(&oi.state.scheduler, &name).expect("nothing holds the app");
+
+    let (code, _) = oi
+        .call("/apps/install", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert_eq!(
+        *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+        AppPhase::NotInstalled
+    );
+
+    drop(hold);
+    oi.call("/apps/install", json!({ "app": "demo" })).unwrap();
+}
+
+// spec: ING#claims-across-apps
+#[test]
+fn installs_are_ordered_by_when_they_completed() {
+    let oi = TestOi::with_app("first");
+    oi.call(
+        "/apps/create",
+        json!({ "app": "second", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+
+    oi.install("second");
+    oi.install("first");
+
+    let seq = |app: &str| oi.state.registry.read().get(app).unwrap().install_seq;
+    assert!(seq("second").unwrap() < seq("first").unwrap());
+}
+
+const GATED_SCRIPT: &str = r#"
+    let migrate = app.gate("migrate").key(1);
+    app.deployment("web").image("docker.io/library/nginx:1.29").after(migrate);
+"#;
+
+fn status_of(oi: &TestOi, app: &str) -> String {
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == app)
+        .unwrap()["status"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+// spec: APPS#status-derivation
+#[test]
+fn an_installed_app_is_installing_until_every_gate_has_been_satisfied_at_once() {
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": GATED_SCRIPT }),
+    )
+    .unwrap();
+    oi.install("demo");
+    assert_eq!(status_of(&oi, "demo"), "installing");
+
+    let name = AppName::new("demo").unwrap();
+    oi.state
+        .db
+        .call(move |db| crate::runtime::gates::store::mark_set_up(db, &name).unwrap());
+    assert_ne!(status_of(&oi, "demo"), "installing");
+}
+
+// spec: APPS#status-derivation
+// spec: GRUN#app-setup
+#[test]
+fn an_app_that_declares_no_gates_is_not_installing_once_installed() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    assert_ne!(status_of(&oi, "demo"), "installing");
+}
+
+// spec: APPS#status-derivation
+#[test]
+fn a_withholding_gate_fault_outranks_installing() {
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": GATED_SCRIPT }),
+    )
+    .unwrap();
+    oi.install("demo");
+    let name = AppName::new("demo").unwrap();
+    oi.state.db.call(move |db| {
+        crate::runtime::faults::file_fault(
+            db,
+            &name,
+            None,
+            None,
+            None,
+            "gate_failed",
+            "gate migrate is not satisfied",
+        )
+        .unwrap();
+    });
+    assert_eq!(status_of(&oi, "demo"), "faulted");
 }

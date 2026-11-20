@@ -38,6 +38,9 @@ fixes for it*. Every instance looks locally reasonable and is destructive in agg
 - A failed ownership lookup was treated as "not owned" by a destructive startup sweep.
 - A withheld apply returned `Ok(())`, which the caller could not distinguish from a successful
   one, so it *cleared* the fault for the thing it had deliberately not done.
+- A gate whose record could not be read, or whose check could not be started, is neither
+  satisfied nor unsatisfied. Reading it as satisfied starts workloads that wait on a migration;
+  reading it as unsatisfied stops the gate's exclusive selection and runs the migration again.
 
 **Check:** for every error branch, ask what the caller will conclude from the value you return.
 If failure and a definite negative produce the same value, the type is wrong — split them
@@ -45,7 +48,7 @@ If failure and a definite negative produce the same value, the type is wrong —
 Absence *confirmed by a successful query* is real evidence and must keep working; it is only
 the unknown case that must not masquerade as it.
 
-Spec: [OBS#failed-observation](../.workhorse/specs/runtime/observation.md#failed-observation), [RCN#applying-absolute-state](../.workhorse/specs/runtime/reconciliation.md#applying-absolute-state).
+Spec: [OBS#failed-observation](../.workhorse/specs/runtime/observation.md#failed-observation), [GRUN#gate-state](../.workhorse/specs/runtime/gates.md#gate-state), [RCN#applying-absolute-state](../.workhorse/specs/runtime/reconciliation.md#applying-absolute-state).
 
 ## 2. On failure, observable state is unchanged
 
@@ -136,6 +139,8 @@ with nothing behind it.
   escalate to a fault and keep attempting at the cap — the fault can only clear because you
   kept trying.
 - `"retry immediately"` and a bare `_ => break` are the tells.
+- A failed gate run is retried at a delay that doubles to an hour and then stays there. It is
+  never abandoned, and a move of the gate's key makes the next run due at once.
 - Both ends of one protocol must classify errors identically. They did not, and one end killed
   forwards the other end merely dropped a datagram on.
 - **A subsystem with a central decision function admits no dispatch before the decision.** TLS
@@ -144,7 +149,7 @@ with nothing behind it.
   debounce state.
 
 Use `runtime::retry::RetryGate` for tick-driven pacing rather than hand-rolling counters.
-Spec: [IMG#image-pulls](../.workhorse/specs/runtime/images.md#image-pulls), [FWD#relay-resilience](../.workhorse/specs/interface/port-forwards.md#relay-resilience).
+Spec: [IMG#image-pulls](../.workhorse/specs/runtime/images.md#image-pulls), [GRUN#retries](../.workhorse/specs/runtime/gates.md#retries), [FWD#relay-resilience](../.workhorse/specs/interface/port-forwards.md#relay-resilience).
 
 ## 6. Throw at the boundary; never coerce
 

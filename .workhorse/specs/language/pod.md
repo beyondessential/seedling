@@ -40,3 +40,7 @@ Binding a pod to a route or Service Port of an [external service](service.md#ext
 
 > [!NOTE]
 > The endpoint an operator maps is an external service's only target, so no pod of the app can become a backend the operator does not see.
+
+## Start order
+
+`pod.after(target)` orders the pod's starts after `target`, as [start order](gate.md#start-order) specifies.

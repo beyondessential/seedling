@@ -7,8 +7,7 @@ use serde_json::{Value, json};
 
 use super::{
     appdef_json::{
-        action_entry_json, install_entry_json, param_schema_entry_json, resource_static_json,
-        shell_entry_json,
+        action_entry_json, param_schema_entry_json, resource_static_json, shell_entry_json,
     },
     apps as apps_handler,
     definition::{self, DefinitionInput, Resolved},
@@ -352,9 +351,6 @@ pub(crate) fn preview_template(
     let mut actions_json: Vec<Value> = def.actions.values().map(action_entry_json).collect();
     for s in def.shells.values() {
         actions_json.push(shell_entry_json(s));
-    }
-    if let Some(inst) = &def.install {
-        actions_json.push(install_entry_json(inst));
     }
 
     Ok(json!({

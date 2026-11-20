@@ -717,6 +717,7 @@ async fn main() {
             Arc::clone(&tick_notify),
         );
 
+    let gate_runtime = Arc::new(seedling_core::runtime::gates::GateRuntime::new());
     let reconciler = Reconciler::new(
         Arc::clone(&driver),
         node_prefix,
@@ -725,6 +726,7 @@ async fn main() {
         data_dir.clone(),
         obs_db,
         Arc::clone(&registry),
+        Arc::clone(&cipher),
         event_tx.clone(),
         dns_servers.clone(),
         dns_upstreams,
@@ -735,6 +737,7 @@ async fn main() {
         Some(Arc::clone(&tls_coordinator)),
         Some(Arc::clone(&site_resolver)),
         instance_gc,
+        Arc::clone(&gate_runtime),
     );
     let reconciler = reconciler.with_host_probes(host_probes);
 
@@ -798,6 +801,7 @@ async fn main() {
         tailscale_provider: Some(Arc::clone(&tailscale_provider)),
         site_resolver: Some(Arc::clone(&site_resolver)),
         definition_registry: Arc::new(seedling_core::runtime::definition::fetch::OciRegistry::new()),
+        gate_runtime,
     });
     // The coordinator and the cert endpoint were built before the state they
     // read the facts of a strategy chain from, and have decided nothing until
@@ -929,11 +933,8 @@ async fn main() {
                 // consistent lock order (registry → db) across the codebase.
                 if let Some(now) = schedule_ticker.maybe_tick() {
                     // spec: SCHED#firing
-                    // Only Installed apps' schedules may fire. Apps still
-                    // installing, uninstalling, or never installed are
-                    // excluded — otherwise a permanently-failing install
-                    // whose schedule keeps re-acquiring the scheduler slot
-                    // would block operator updates.
+                    // Only Installed apps' schedules may fire. Apps
+                    // uninstalling or never installed are excluded.
                     let app_generations: std::collections::HashMap<
                         AppName,
                         seedling_core::runtime::schedules::ScheduledApp,
@@ -1002,12 +1003,11 @@ async fn main() {
                             seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
                                 Arc::clone(&oi_state_for_sched),
                                 fire.app,
-                                fire.action,
+                                seedling_protocol::events::OperationTarget::Action(fire.action),
                                 op_id,
                                 seedling_core::oi::handler::actions::lifecycle::OperationParams::Requested(
                                     serde_json::Map::new(),
                                 ),
-                                fire.generation,
                                 fire.generation,
                                 "schedule".to_owned(),
                                 None,
@@ -1015,6 +1015,12 @@ async fn main() {
                         }
                     }
                 }
+
+                // spec: GRUN#initiating-runs
+                // Gates are brought up to date and their runs and checks
+                // initiated before the iteration acts on the host, so that
+                // what a gate holds is what the iteration reads.
+                seedling_core::runtime::gates::drive::drive(&oi_state_for_sched).await;
 
                 let tick = AssertUnwindSafe(reconciler.tick()).catch_unwind().await;
                 if reconciler.take_host_facts_changed() {
@@ -1077,20 +1083,6 @@ async fn main() {
 }
 
 // spec: OPS#initiating-events, SUSP#replay
-// spec: ACI#install-parameters
-/// Resume an interrupted lifecycle operation. Called after OiState is built
-/// and the cipher is available, before the reconciler starts ticking.
-///
-/// For install operations whose params were persisted encrypted, decrypt and
-/// spawn_accepted_operation with the restored params. Non-install operations
-/// have no params to restore — they re-run with an empty params map, relying
-/// on the action-log replay to reproduce their rt.start/stop sequence
-/// deterministically.
-///
-/// If the operation cannot be replayed (missing ciphertext for an install,
-/// app no longer registered, decrypt failure), the function clears the
-/// current_operation row, reverts any Installing phase to NotInstalled, and
-/// files an install_interrupted fault so the operator can see why.
 /// What a startup teardown leaves for [`keep_tearing_down`]: the records it
 /// could not tear down, or `None` where it could not read them.
 type Leftovers = Option<Vec<seedling_core::runtime::desired::DynamicResourceRecord>>;
@@ -1154,15 +1146,14 @@ async fn abandon_spared_resources(
 }
 
 /// Read the persisted operation state and act on it: spare or tear down
-/// dynamic resources, replay an interrupted operation, recover stuck installs,
-/// restore the queue and run each installed app's start action.
+/// dynamic resources, replay an interrupted operation, recover leftover
+/// resources and restore the queue.
 ///
 /// If the state cannot be read, files `operation_state_unreadable`, starts no
 /// operation, and does none of the above, since each acts on an operation's
 /// absence. Called again on each reconciliation iteration until it reads.
 // spec: OPS#unreadable-operation-state
 // spec: OPS#interrupted-operations
-// spec: OPS#initiating-events
 async fn resume_operations(oi_state: &Arc<OiState>) {
     use seedling_core::runtime::history::read_operation_state;
     use seedling_protocol::names::AppName;
@@ -1215,7 +1206,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
     if let Some(op) = &persisted_operation {
         tracing::info!(
             app = %op.app,
-            action = %op.action_name,
+            operation = %op.target,
             operation_id = %op.operation_id.0,
             "found interrupted operation; will replay after startup"
         );
@@ -1232,14 +1223,16 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
             .db
             .call(seedling_core::runtime::desired::list_dynamic_resources);
         // spec: OPS#shell-sessions
-        // A session open by the time this runs is the runtime's own, run since
-        // startup began; its resources are its to tear down.
-        let live_sessions = oi_state.registry.read().live_sessions();
+        // spec: GRUN#checks
+        // A session or gate check running by the time this runs is the
+        // runtime's own, run since startup began; its resources are its to
+        // tear down.
+        let live_slot_owners = oi_state.registry.read().live_slot_owners();
         let records = records.map(|rs| {
             seedling_core::runtime::dynamic_teardown::unspared(
                 rs,
                 replay_op_id.as_deref(),
-                &live_sessions,
+                &live_slot_owners,
             )
         });
         // spec: SUSP#abandoned-replay
@@ -1268,7 +1261,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
                     &replay_op_id
                         .iter()
                         .cloned()
-                        .chain(live_sessions.iter().cloned())
+                        .chain(live_slot_owners.iter().cloned())
                         .collect(),
                 );
                 Some(left)
@@ -1295,69 +1288,52 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
     };
 
     let db = &oi_state.db;
-    // spec: OPS#stuck-install-recovery
-    // Recover apps left in inconsistent state by a previous run:
-    //
-    // 1. `Installing` phase with no matching current_operation. Causes: a
-    //    previous run cancelled an op and cleared current_operation but its
-    //    phase-revert persist was interrupted by crash/restart; or the daemon
-    //    died between persisting the phase and persisting current_operation.
-    //    Without this sweep, the operator can neither cancel nor uninstall
-    //    such an app — both gates check phase.
-    //
-    // 2. `NotInstalled` phase but resource_instances still exist for the
-    //    app. Causes: a previous recovery dropped Installing → NotInstalled
-    //    directly (older code path), or DB-level surgery. The reconciler
-    //    skips NotInstalled apps so the orphaned resources never get torn
-    //    down through normal reconciliation.
-    //
-    // Both stuck apps transition to Uninstalling so the reconciler runs the
-    // teardown loop; it converges to NotInstalled once teardown completes.
+    // spec: OPS#leftover-resource-recovery
+    // An app that is `NotInstalled` while resource instances are still
+    // recorded for it has resources the reconciler leaves alone, so it moves
+    // to Uninstalling for its teardown loop, which converges to
+    // `NotInstalled` once it completes.
     {
         use seedling_core::runtime::apps::AppPhase;
-        let stuck: Vec<seedling_protocol::names::AppName> = {
+        let leftover: Vec<seedling_protocol::names::AppName> = {
             let reg = oi_state.registry.read();
             reg.iter()
                 .filter(|e| {
                     if replayed_app.as_ref() == Some(&e.name) {
                         return false;
                     }
-                    let phase = e.phase.lock();
-                    if matches!(*phase, AppPhase::Installing) {
-                        return true;
+                    if !matches!(*e.phase.lock(), AppPhase::NotInstalled) {
+                        return false;
                     }
-                    if matches!(*phase, AppPhase::NotInstalled) {
-                        let app_for_query = e.name.clone();
-                        let counted = db.call(move |db| {
-                            seedling_core::runtime::history::app_resource_instance_count(
-                                db,
-                                &app_for_query,
-                            )
-                        });
-                        // A count that cannot be read is not a count of none:
-                        // an app with recorded instances is left alone this
-                        // start, not declared clean.
-                        return match counted {
-                            Ok(count) => count > 0,
-                            Err(err) => {
-                                tracing::warn!(
-                                    app = %e.name,
-                                    "cannot count the instances recorded for an app; \
-                                     not recovering it: {err}"
-                                );
-                                false
-                            }
-                        };
+                    let app_for_query = e.name.clone();
+                    let counted = db.call(move |db| {
+                        seedling_core::runtime::history::app_resource_instance_count(
+                            db,
+                            &app_for_query,
+                        )
+                    });
+                    // A count that cannot be read is not a count of none: an
+                    // app with recorded instances is left alone this start,
+                    // not declared clean.
+                    match counted {
+                        Ok(count) => count > 0,
+                        Err(err) => {
+                            tracing::warn!(
+                                app = %e.name,
+                                "cannot count the instances recorded for an app; \
+                                 not recovering it: {err}"
+                            );
+                            false
+                        }
                     }
-                    false
                 })
                 .map(|e| e.name.clone())
                 .collect()
         };
-        for app_name in stuck {
+        for app_name in leftover {
             tracing::warn!(
                 app = %app_name,
-                "app in stuck state at startup; transitioning to Uninstalling for teardown"
+                "app has leftover resources at startup; transitioning to Uninstalling for teardown"
             );
             seedling_core::oi::handler::actions::lifecycle::set_phase_and_persist(
                 oi_state,
@@ -1370,30 +1346,6 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
 
     // spec: OPS#concurrency
     seedling_core::oi::handler::actions::lifecycle::restore_queue(oi_state, state.queued);
-
-    // spec: OPS#initiating-events
-    // spec: ACN#start-action
-    // Each installed app with no operation being replayed or waiting has its
-    // start action run, with the trigger `boot`; until it ends the app's
-    // desired state is held, so the start action brings it up in its own
-    // order.
-    {
-        use seedling_core::runtime::apps::AppPhase;
-        let installed: Vec<AppName> = {
-            let reg = oi_state.registry.read();
-            reg.iter()
-                .filter(|e| matches!(*e.phase.lock(), AppPhase::Installed))
-                .filter(|e| replayed_app.as_ref() != Some(&e.name))
-                .filter(|e| oi_state.scheduler.lock().blocker_for(&e.name).is_none())
-                .map(|e| e.name.clone())
-                .collect()
-        };
-        for app_name in installed {
-            seedling_core::oi::handler::actions::lifecycle::initiate_start(
-                oi_state, &app_name, "boot", None,
-            );
-        }
-    }
 }
 
 // spec: SUSP#abandoned-replay
@@ -1434,8 +1386,7 @@ fn start_replay(
     };
 
     let app_name = op.app.clone();
-    let action_name = op.action_name.clone();
-    let is_install = action_name == "install";
+    let target = op.target.clone();
 
     // Check that the app is still registered. If the previous run
     // deregistered mid-operation (shouldn't happen, but defensive), drop
@@ -1459,8 +1410,7 @@ fn start_replay(
     // spec: OPS#persistence
     // Restore the encrypted params that were persisted when the operation
     // began. Every persisted lifecycle operation has params (empty map for
-    // actions that take none), so a None here is an install-specific
-    // failure mode that pre-dates the generalised persistence.
+    // actions that take none).
     // spec: OPS#operation-scoped-volumes
     // The bindings its `<key>_volume` params name are read with them, and an
     // operation whose bindings cannot be read is not replayed, as one whose
@@ -1475,19 +1425,9 @@ fn start_replay(
         match loaded {
             Ok((Some(params), bindings)) => (params, bindings),
             Ok((None, _)) => {
-                if is_install {
-                    tracing::error!(
-                        app = %app_name,
-                        "interrupted install has no persisted params; reverting to NotInstalled"
-                    );
-                    seedling_core::oi::handler::actions::lifecycle::recover_unreplayable_install(
-                        &state, &app_name,
-                    );
-                    return false;
-                }
                 tracing::warn!(
                     app = %app_name,
-                    action = %action_name,
+                    operation = %target,
                     "interrupted operation has no persisted params (legacy row); replaying with empty map"
                 );
                 (serde_json::Map::new(), Default::default())
@@ -1495,48 +1435,29 @@ fn start_replay(
             Err(e) => {
                 tracing::error!(
                     app = %app_name,
-                    action = %action_name,
+                    operation = %target,
                     "failed to read interrupted operation params: {e}"
                 );
-                if is_install {
-                    seedling_core::oi::handler::actions::lifecycle::recover_unreplayable_install(
-                        &state, &app_name,
-                    );
-                } else {
-                    state.db.call(|db| {
-                        let _ = clear_current_operation(db);
-                    });
-                }
+                state.db.call(|db| {
+                    let _ = clear_current_operation(db);
+                });
                 return false;
             }
         }
     };
 
-    // Sanity-check phase vs action. An install must find its app in
-    // Installing (or NotInstalled if the phase persistence raced with a
-    // crash). A non-install must not find its app in Installing.
-    if is_install && !matches!(phase, AppPhase::Installing | AppPhase::NotInstalled) {
-        tracing::warn!(
-            app = %app_name,
-            ?phase,
-            "interrupted install but phase is not Installing; clearing row"
-        );
-        state.db.call(|db| {
-            let _ = clear_current_operation(db);
-        });
-        return false;
-    }
+    // spec: OPS#interrupted-operations
     // spec: SCHED#firing
-    // A non-install operation only makes sense on an Installed app. If a
-    // crash interrupted a scheduled action that fired in a window before the
+    // An operation only makes sense on an Installed app. If a crash
+    // interrupted a scheduled action that fired in a window before the
     // installed-phase gate landed, the persisted row would otherwise replay
     // forever, monopolising the scheduler slot and blocking script updates.
-    if !is_install && !matches!(phase, AppPhase::Installed) {
+    if !matches!(phase, AppPhase::Installed) {
         tracing::warn!(
             app = %app_name,
             ?phase,
-            action = %action_name,
-            "interrupted non-install operation but app is not Installed; clearing row"
+            operation = %target,
+            "interrupted operation but app is not Installed; clearing row"
         );
         state.db.call(|db| {
             let _ = clear_current_operation(db);
@@ -1549,10 +1470,9 @@ fn start_replay(
     let params_for_sched = params.clone();
     let sched_result = state.scheduler.lock().request_with_id(
         &app_name,
-        &action_name,
+        &target,
         params_for_sched,
-        op.source_generation,
-        op.target_generation,
+        op.generation,
         "replay",
         op.operation_id.clone(),
         None,
@@ -1582,7 +1502,7 @@ fn start_replay(
 
     tracing::info!(
         app = %app_name,
-        action = %action_name,
+        operation = %target,
         operation_id = %op.operation_id.0,
         "replaying interrupted operation"
     );
@@ -1590,14 +1510,13 @@ fn start_replay(
     seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
         state,
         app_name,
-        action_name,
+        target,
         op.operation_id,
         seedling_core::oi::handler::actions::lifecycle::OperationParams::Replayed {
             params,
             bindings: volume_bindings,
         },
-        op.source_generation,
-        op.target_generation,
+        op.generation,
         "replay".to_owned(),
         None,
     );
