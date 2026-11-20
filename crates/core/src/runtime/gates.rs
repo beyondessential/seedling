@@ -33,7 +33,7 @@ use crate::{
         lifecycle::LifecycleState,
         scaling,
         secrets::{Cipher, KeyDigest},
-        stopped::StoppedSet,
+        stopped::{self, StoppedSet},
     },
 };
 
@@ -651,6 +651,44 @@ impl Exclusions {
             Gated::Known(ids) => Ok(named(ids)),
             Gated::Unreadable(why) => Err(why.clone()),
         }
+    }
+}
+
+/// What an app's resources are, as the checks and runs of its gates are
+/// decided from.
+pub struct World {
+    pub readiness: Readiness,
+    pub held: BTreeSet<ResourceId>,
+    pub stopped: StoppedSet,
+}
+
+impl World {
+    /// Read what `holds` holds, what is stopped and how ready each target is,
+    /// or why it could not be told what is held or stopped: either read as
+    /// empty would count a held or stopped workload as one that is down.
+    ///
+    /// Readiness that could not be read is carried on the world, as
+    /// [`Readiness::unreadable`].
+    // spec: GRUN#checks
+    // spec: GRUN#initiating-runs
+    pub fn read(
+        db: &Db,
+        app: &AppName,
+        def: &AppDef,
+        holds: &Result<Holds, String>,
+    ) -> Result<Self, String> {
+        let held = match holds {
+            Ok(holds) => held_resources(def, holds).into_keys().collect(),
+            Err(why) => return Err(format!("could not read what the app's gates hold: {why}")),
+        };
+        let stopped = stopped::load_stopped(db, app)
+            .map_err(|e| format!("could not read the app's stopped resources: {e}"))?;
+        let readiness = read_readiness(db, app, def, &held, &stopped);
+        Ok(Self {
+            readiness,
+            held,
+            stopped,
+        })
     }
 }
 

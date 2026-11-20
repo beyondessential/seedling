@@ -25,10 +25,10 @@ use crate::{
     runtime::{
         AppPhase,
         gates::{
-            self, AppGates, GateState, GateView, Undetermined, Wait, held_resources,
-            read_readiness, store, unready_targets,
+            self, AppGates, GateState, GateView, Undetermined, Wait, World, held_resources, store,
+            unready_targets,
         },
-        stopped::{self, StoppedSet},
+        stopped::StoppedSet,
     },
 };
 
@@ -316,14 +316,7 @@ fn unready_targets_of(
         .db
         .call(move |db| {
             let gates = gates::evaluate(db, &app, &def, &cipher, None, &remembered);
-            let holds = gates
-                .holds
-                .as_ref()
-                .map_err(|why| format!("could not read what the app's gates hold: {why}"))?;
-            let held = held_resources(&def, holds).into_keys().collect();
-            let stopped = stopped::load_stopped(db, &app)
-                .map_err(|e| format!("could not read the app's stopped resources: {e}"))?;
-            let readiness = read_readiness(db, &app, &def, &held, &stopped);
+            let World { readiness, .. } = World::read(db, &app, &def, &gates.holds)?;
             if let Some(why) = readiness.unreadable {
                 return Err(format!(
                     "could not read whether the app's workloads are ready: {why}"

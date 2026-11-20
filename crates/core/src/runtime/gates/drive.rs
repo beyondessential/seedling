@@ -15,9 +15,9 @@ use seedling_protocol::{
 };
 
 use super::{
-    AppGates, Decision, GateSnapshot, GateState, Readiness, Remembered, Undetermined, decide,
-    declared_order, dependants_down, evaluate, held_resources, interval_check_due, read_readiness,
-    retry_delay,
+    AppGates, Decision, GateSnapshot, GateState, Readiness, Remembered, Undetermined, World,
+    decide, declared_order, dependants_down, evaluate, held_resources, interval_check_due,
+    read_readiness, retry_delay,
     run::{CheckOutcome, check_retry_is_due, eligible_for_check, run_check},
     store::{self, FailedRuns},
     unready_targets,
@@ -71,13 +71,6 @@ struct Synced {
     /// What the checks and runs decide from, or `None` when what is held or
     /// what is stopped cannot be read, so that no check or run is decided.
     world: Option<World>,
-}
-
-/// What an app's resources are, as the checks and runs of its gates read it.
-struct World {
-    readiness: Readiness,
-    held: BTreeSet<ResourceId>,
-    stopped: StoppedSet,
 }
 
 /// The gate half of one iteration, for every installed app.
@@ -168,22 +161,28 @@ fn sync_db(
         gates = evaluate(db, app, def, cipher, definition_error, remembered);
     }
 
+    // Whether a hold was written, or may have been: what is held is then read
+    // again before anything is decided from it.
+    let mut holds_written = false;
     if let Ok(holds) = &gates.holds {
         for (gate, covered) in holds {
             match def.gates.get(gate) {
                 // spec: RCN#gate-holds
                 None if definition_error.is_none() => {
+                    holds_written = true;
                     if let Err(e) = store::clear_hold(db, app, gate) {
                         tracing::error!(%app, %gate, "cannot clear the hold of a gate the definition no longer declares: {e}");
                     }
                 }
                 None => {}
                 Some(_) if gates.state(gate).is_some_and(GateState::is_satisfied) => {
+                    holds_written = true;
                     if let Err(e) = store::clear_hold(db, app, gate) {
                         tracing::error!(%app, %gate, "cannot clear the hold of a satisfied gate: {e}");
                     }
                 }
                 Some(gate_def) if definition_error.is_none() && *covered != gate_def.exclusive => {
+                    holds_written = true;
                     if let Err(e) = store::set_hold(db, app, gate, &gate_def.exclusive) {
                         tracing::error!(%app, %gate, "cannot bring the hold up to the gate's selection: {e}");
                     }
@@ -207,40 +206,34 @@ fn sync_db(
 
     sync_gate_faults(db, app, &gates);
 
-    let world = read_world(db, app, def, &mut gates);
+    let world = read_world(db, app, def, &mut gates, holds_written);
     Synced { gates, world }
 }
 
 /// What the checks and runs of an app's gates decide from, or `None` when
-/// what is held or what is stopped cannot be read: either read as empty would
-/// count a held or stopped workload as one that is down.
+/// what is held or what is stopped cannot be read.
 ///
-/// What is held is read again, as the sync may have released holds, and
-/// `gates` takes it in place of what it held before.
+/// What is held is read again where the sync wrote a hold, and `gates` takes
+/// it in place of what it held before.
 // spec: GRUN#checks
 // spec: GRUN#initiating-runs
-fn read_world(db: &Db, app: &AppName, def: &AppDef, gates: &mut AppGates) -> Option<World> {
-    gates.holds = store::load_holds(db, app).map_err(|e| e.to_string());
-    let held = match &gates.holds {
-        Ok(holds) => held_resources(def, holds).into_keys().collect(),
-        Err(e) => {
-            tracing::error!(%app, "cannot read what the app's gates hold, so no check or run of them is decided: {e}");
-            return None;
+fn read_world(
+    db: &Db,
+    app: &AppName,
+    def: &AppDef,
+    gates: &mut AppGates,
+    holds_written: bool,
+) -> Option<World> {
+    if holds_written {
+        gates.holds = store::load_holds(db, app).map_err(|e| e.to_string());
+    }
+    match World::read(db, app, def, &gates.holds) {
+        Ok(world) => Some(world),
+        Err(why) => {
+            tracing::error!(%app, "no check or run of the app's gates is decided: {why}");
+            None
         }
-    };
-    let stopped = match stopped::load_stopped(db, app) {
-        Ok(stopped) => stopped,
-        Err(e) => {
-            tracing::error!(%app, "cannot read the app's stopped resources, so no check or run of its gates is decided: {e}");
-            return None;
-        }
-    };
-    let readiness = read_readiness(db, app, def, &held, &stopped);
-    Some(World {
-        readiness,
-        held,
-        stopped,
-    })
+    }
 }
 
 /// Clear the check that could not be run from the record of each gate whose
