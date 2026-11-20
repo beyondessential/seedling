@@ -945,7 +945,9 @@ async fn wait_for_check(
                             }
                         }
                     }
-                } else if lifecycle == LifecycleState::Pending && began.elapsed() >= START_WAIT {
+                } else if !lifecycle.has_reached(LifecycleState::Running)
+                    && began.elapsed() >= START_WAIT
+                {
                     return CheckOutcome::Unavailable(format!(
                         "it did not start within {} seconds",
                         START_WAIT.as_secs()
