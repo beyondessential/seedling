@@ -456,6 +456,10 @@ impl Run<'_> {
     // spec: GRUN#preparation
     async fn wait_for_selection(&self, selection: &BTreeSet<ResourceId>) -> Result<(), Stopped> {
         let began = Instant::now();
+        // The reconciler was woken when the hold was set; it is woken again
+        // only when what is still running changes, so that a selection slow
+        // to stop does not drive its iterations at the rate of this poll.
+        let mut last_seen: Option<String> = None;
         loop {
             if self.cancel.is_cancelled() {
                 return Err(Stopped::Cancelled);
@@ -476,6 +480,10 @@ impl Run<'_> {
                             SELECTION_WAIT.as_secs()
                         )));
                     }
+                    if last_seen.as_ref().is_some_and(|seen| *seen != what) {
+                        self.tick_notify.notify_one();
+                    }
+                    last_seen = Some(what);
                 }
                 Err(e) => {
                     tracing::warn!(app = %self.app_name, gate = %self.gate, "cannot tell whether the exclusive selection has stopped: {e}");
@@ -486,7 +494,6 @@ impl Run<'_> {
                     }
                 }
             }
-            self.tick_notify.notify_one();
             tokio::time::sleep(PREPARE_POLL).await;
         }
     }
