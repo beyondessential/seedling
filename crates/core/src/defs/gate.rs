@@ -18,11 +18,10 @@ use super::{
 use crate::runtime::secrets::{Cipher, Error as SecretsError, KeyDigest};
 
 // spec: GATE#keys
-/// The value a gate's definition gives it, held as the JSON value it is the
-/// same as another key by.
+/// The value a gate's definition gives it, held as the canonical JSON text it
+/// is the same as another key by.
 #[derive(Debug, Clone)]
 pub struct GateKey {
-    value: Value,
     canonical: Box<[u8]>,
 }
 
@@ -45,7 +44,6 @@ impl GateKey {
         let mut canonical = String::new();
         write_canonical(&value, &mut canonical);
         Self {
-            value,
             canonical: canonical.into_bytes().into_boxed_slice(),
         }
     }
@@ -55,10 +53,6 @@ impl GateKey {
     // spec: GATE#keys
     pub fn from_script(value: Dynamic) -> Result<Self, Box<EvalAltResult>> {
         json_of("`key`", value).map(Self::new)
-    }
-
-    pub fn as_json(&self) -> &Value {
-        &self.value
     }
 
     /// The bytes the key is told apart from another by: its JSON text, with
