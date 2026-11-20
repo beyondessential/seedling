@@ -133,6 +133,40 @@ impl From<String> for Stopped {
 // spec: GRUN#retries
 // spec: GRUN#pauses
 pub async fn run_gate(state: &Arc<OiState>, input: GateRunInput) {
+    // A run that panics ends its own task rather than the dispatcher's, and
+    // ends as a failed run, so that its operation is still completed and the
+    // gate's next run is spaced as after any other failure.
+    let after_panic = Run {
+        state,
+        app_name: input.op_ctx.app.clone(),
+        gate: input.gate.clone(),
+        op_ctx: input.op_ctx.clone(),
+        active_progress: Arc::clone(&input.active_progress),
+        tick_notify: Arc::clone(&input.tick_notify),
+        cancel: Arc::clone(&input.cancel_token),
+        db_path: input.db_path.clone(),
+    };
+    let current = input.app.clone();
+    let task_state = Arc::clone(state);
+    let ran = tokio::spawn(async move { execute_and_finish(&task_state, input).await }).await;
+    if let Err(e) = ran {
+        tracing::error!(app = %after_panic.app_name, gate = %after_panic.gate, "a run of the gate ended without an outcome: {e}");
+        let key = current
+            .def
+            .load()
+            .gates
+            .get(&after_panic.gate)
+            .and_then(|gate| gate.key.digest(&state.cipher).ok());
+        after_panic
+            .finish(RunEnd::Failed {
+                how: format!("the run's task failed: {e}"),
+                key,
+            })
+            .await;
+    }
+}
+
+async fn execute_and_finish(state: &Arc<OiState>, input: GateRunInput) {
     let GateRunInput {
         app,
         gate,
