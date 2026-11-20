@@ -959,8 +959,8 @@ mod tests {
             name,
             desired: Default::default(),
             steady: true,
-            app_def: (*app.def.load_full()).clone(),
-            declarations: (*app.def.load_full()).clone(),
+            app_def: app.def.load_full(),
+            declarations: app.def.load_full(),
             phase: crate::runtime::AppPhase::Installed,
             phase_handle: std::sync::Arc::new(parking_lot::Mutex::new(
                 crate::runtime::AppPhase::Installed,

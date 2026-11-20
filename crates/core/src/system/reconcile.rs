@@ -387,12 +387,12 @@ struct AppSnapshot {
     /// operation, install or uninstall is steering it instead.
     // spec: GC#unscheduled-instances
     steady: bool,
-    app_def: AppDef,
+    app_def: Arc<AppDef>,
     /// `app_def` with each resource an operation placed as the operation's
     /// definition declares it: what the proxy routes, the tier slices and the
     /// healthcheck pass read.
     // spec: OPS#changes-to-an-app
-    declarations: AppDef,
+    declarations: Arc<AppDef>,
     phase: AppPhase,
     phase_handle: Arc<Mutex<AppPhase>>,
     /// Hostnames whose certs should be pre-warmed. Captured from the in-flight
@@ -992,8 +992,7 @@ impl Reconciler {
             // the GC sweeps by it.
             let steady = entry.is_steady();
             let progress = entry.active_progress.read();
-            let app_def_arc = entry.app.def.load_full();
-            let app_def = (*app_def_arc).clone();
+            let app_def = entry.app.def.load_full();
             // spec: AUTO#scale
             let effective_scales =
                 self.compute_effective_scales(&name, &app_def, &scaling_decisions);
@@ -1024,7 +1023,7 @@ impl Reconciler {
             let gates = match phase {
                 AppPhase::Installed => {
                     let (app_name, def, cipher) =
-                        (name.clone(), app_def.clone(), Arc::clone(&self.cipher));
+                        (name.clone(), Arc::clone(&app_def), Arc::clone(&self.cipher));
                     let stopped = stopped_set.clone();
                     let remembered = self.gate_runtime.remembered(&name);
                     let definition_error = entry.script_error.as_ref().map(|(why, _)| why.clone());
@@ -1034,7 +1033,7 @@ impl Reconciler {
                         .and_then(crate::runtime::OperationProgress::body_starts);
                     let driven = self.gate_runtime.take_snapshot(
                         &name,
-                        &app_def_arc,
+                        &app_def,
                         definition_error.as_deref(),
                         &stopped,
                     );
@@ -3557,12 +3556,12 @@ mod tests {
             &crate::ScriptLimits::default(),
         );
         assert!(err.is_none(), "test script must evaluate: {err:?}");
-        let app_def = (*app.def.load_full()).clone();
+        let app_def = app.def.load_full();
         AppSnapshot {
             name: app_name,
             desired: DesiredState::default(),
             steady: true,
-            declarations: app_def.clone(),
+            declarations: Arc::clone(&app_def),
             app_def,
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
@@ -3587,12 +3586,12 @@ mod tests {
             &crate::ScriptLimits::default(),
         );
         assert!(err.is_none(), "test script must evaluate: {err:?}");
-        let app_def = (*app.def.load_full()).clone();
+        let app_def = app.def.load_full();
         AppSnapshot {
             name: app_name,
             desired: DesiredState::default(),
             steady: true,
-            declarations: app_def.clone(),
+            declarations: Arc::clone(&app_def),
             app_def,
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
@@ -6879,7 +6878,7 @@ mod tests {
 
         let moved = GateKeyDigests::of(
             &{
-                let mut def = app.app_def.clone();
+                let mut def = (*app.app_def).clone();
                 def.gates.get_mut("migrate").unwrap().key =
                     crate::defs::gate::GateKey::from_script("2.0.0".into()).unwrap();
                 def

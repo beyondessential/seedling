@@ -63,8 +63,8 @@ impl DesiredState {
     /// this desired state resolved against an operation's definition as that
     /// definition declares it.
     // spec: OPS#changes-to-an-app
-    pub fn declarations(&self, current: &AppDef) -> AppDef {
-        let mut resolved = current.clone();
+    pub fn declarations(&self, current: &Arc<AppDef>) -> Arc<AppDef> {
+        let mut resolved: Option<AppDef> = None;
         for resource in &self.resources {
             let (Some(_), true, Some(name)) = (
                 &resource.declared_by,
@@ -77,9 +77,12 @@ impl DesiredState {
                 kind: resource.instance.kind,
                 name: Arc::new(name.clone()),
             };
-            resolved.resources.insert(id, resource.definition.clone());
+            resolved
+                .get_or_insert_with(|| (**current).clone())
+                .resources
+                .insert(id, resource.definition.clone());
         }
-        resolved
+        resolved.map_or_else(|| Arc::clone(current), Arc::new)
     }
 }
 
