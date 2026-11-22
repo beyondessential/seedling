@@ -20,7 +20,7 @@ Add a `purl` kind with `std::parse_purl`, accepting a [Package URL](https://gith
 
 ## Version parameter kind and requirement matching
 
-Add a `version` kind with `parse_version`, returning a `Version` with major, minor, patch, pre-release and build getters, ordered by SemVer 2.0.0 precedence. `version.matches(requirement)` takes the same requirement syntax as the `seedling` field of `seedling.toml`, such as `~2.71`. A leading `v` is accepted. To settle: whether one- and two-part versions are accepted (strictness keeps an image tag like `16.4-bookworm` from reading as a pre-release); how pre-releases match a requirement.
+Add a `version` kind with `parse_version`, returning a `Version` with major, minor, patch, pre-release and build getters, ordered by SemVer 2.0.0 precedence... or an alternative design  `version.matches(requirement)` takes the same requirement syntax as the `seedling` field of `seedling.toml`, such as `~2.71`. A leading `v` is accepted. To settle: whether one- and two-part versions are accepted (strictness keeps an image tag like `16.4-bookworm` from reading as a pre-release); how pre-releases match a requirement.
 
 ## Definition version in the bundle metadata
 
