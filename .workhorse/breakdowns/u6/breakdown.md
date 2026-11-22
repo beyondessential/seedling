@@ -56,7 +56,7 @@ Add SHA-256, SHA-512, BLAKE2b and BLAKE3 digests, HMAC, base64 and hex encoding 
 
 ## Replicable randomness and password hashing · V6
 
-Give scripts random bytes, random strings, random (v4) UUIDs, which return the same value on every evaluation of the same app. Each value is derived from a seed the runtime holds per app, protected like a secret parameter and never visible to the script, together with a label the script passes and the call's own inputs. Deriving by label rather than drawing from a stream means adding, removing or reordering a call does not change the values other calls return, and two apps never share values. To settle: whether the seed travels with an app when it is migrated or restored; whether an operator can rotate it, knowing every derived value changes; and whether derived values are redacted in logs and history like secret parameters.
+Give scripts random bytes, random strings, random (v4 and v7) UUIDs, which return the same value on every evaluation of the same app. Each value is derived from a seed the runtime holds per app, protected like a secret parameter and never visible to the script, together with a label the script passes and the call's own inputs. Deriving by label rather than drawing from a stream means adding, removing or reordering a call does not change the values other calls return, and two apps never share values. To settle: whether the seed travels with an app when it is migrated or restored; whether an operator can rotate it, knowing every derived value changes; and whether derived values are redacted in logs and history like secret parameters.
 
 ## Regular expressions
 
