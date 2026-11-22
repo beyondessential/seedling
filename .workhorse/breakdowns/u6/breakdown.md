@@ -52,7 +52,7 @@ Add functions that quote a string as a shell argument, a SQL string literal and 
 
 ## Digests and binary encodings
 
-Add SHA-256, SHA-512, BLAKE2b and BLAKE3 digests, HMAC, base64 and hex encoding and decoding, name-based (v5) UUIDs, and salted password hashes such as Argon2id, bcrypt and htpasswd entries, for basic-auth headers, keys that move when content moves, and stable identifiers.
+Add SHA-256, SHA-512, BLAKE2b and BLAKE3 digests, HMAC, base64 and hex encoding and decoding, name-based (v3 and v5) UUIDs, and salted password hashes such as Argon2id, bcrypt and htpasswd entries, for basic-auth headers, keys that move when content moves, and stable identifiers.
 
 ## Replicable randomness and password hashing · V6
 
