@@ -19,7 +19,7 @@ Applies to the helpers in the [std module](std.md#the-std-module) through which 
 
 ## Byte arguments
 
-Every argument these helpers give the type `bytes` MUST accept a string, read as its UTF-8 encoding, a Blob, read as its bytes, a [`File`](bundle.md#bundle-files), read as its contents, or a [`Directory`](bundle.md#bundle-files), read as its [directory encoding](#directory-encoding).
+Every argument to which a [helper](std.md#helper)'s signature gives the type `bytes` MUST accept a string, read as its UTF-8 encoding, a Blob, read as its bytes, a [`File`](bundle.md#bundle-files), read as its contents, or a [`Directory`](bundle.md#bundle-files), read as its [directory encoding](#directory-encoding).
 A `bytes` argument of any other type MUST raise a script error, as the [argument rules](overview.md#arguments) require.
 
 ### Directory encoding
