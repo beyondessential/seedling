@@ -148,7 +148,7 @@ An `integer` kind's `range` MUST be an exclusive or inclusive integer range cont
 
 > [!NOTE]
 > BSL reads a range with no start, such as `..10`, as one starting at 0, so an `integer` kind given only an upper bound accepts no negative value.
-> A range with no end, such as `1..=`, runs to the largest integer.
+> A range with no end runs to the largest integer where it is inclusive, such as `1..=`, and to one short of it where it is exclusive, such as `1..`.
 
 A `choice` kind's `options` MUST be a non-empty array of non-empty strings, no two of which are equal, each of which `std::parse_text` accepts.
 
