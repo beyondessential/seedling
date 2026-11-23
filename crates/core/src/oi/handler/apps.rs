@@ -1594,6 +1594,7 @@ pub(crate) fn deregister_app(
             db.atomically(|db| {
                 AppRegistry::remove_app(db, &name_owned)?;
                 crate::runtime::apps::delete_app_params(db, &name_owned)?;
+                crate::runtime::apps::secret_params::delete_app_secret_params(db, &name_owned)?;
                 // spec: SEC#app-seeds
                 crate::runtime::apps::seeds::delete_app_seed(db, &name_owned)?;
                 // spec: GEN#lineage
