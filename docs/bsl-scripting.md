@@ -168,7 +168,7 @@ let vol = app.volume("data")
 
 ```rhai
 let version = app.param("version")
-    .kind("text")           // text (one line) | multiline | email | password | weak-password | random
+    .kind("text")           // text (one line) | multiline | email | password | weak-password | random | version | version-semver
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -392,7 +392,7 @@ Calling a helper that does not exist throws, like any unknown function. Which he
 
 ### Parsing a kind
 
-Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random` and `std::parse_volume`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_version`, `std::parse_version_semver` and `std::parse_volume`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
 
 ```rhai
 let contact = std::parse_email("ops@example.org");
@@ -402,7 +402,35 @@ contact.domain  // "example.org"
 app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
-`std::parse_email` returns the parts of the address, split at its first `@`. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_version` and `std::parse_version_semver` return a version, described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+
+### Versions
+
+There are two version kinds. `version` takes a version of any scheme: a Debian package version, a partial image tag such as `16.4`, or a release tag. `version-semver` takes only a full [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version, so `2.71` is refused, and adds its parts and requirement matching. Both accept a leading `v` or `V`.
+
+`std::parse_version` returns a `Version`. A value must be printable ASCII with no spaces and hold at least one digit, so floating tags such as `latest` are refused. Versions compare with `<`, `<=`, `>`, `>=`, `==` and `!=` using [libversion](https://github.com/repology/libversion/blob/master/doc/ALGORITHM.md)'s ordering, which ignores the separators and leading zeros, puts `alpha`, `beta`, `rc` and `pre` before the release and `patch`, `post` and `pl` after it, and ignores a leading `v` before a digit. `segments()` splits the version into its runs of digits, as integers, and of letters, as strings:
+
+```rhai
+let pg = std::parse_version("16.4-bookworm");
+pg.segments()                                         // [16, 4, "bookworm"]
+std::parse_version("1.0rc1") < std::parse_version("1.0")    // true
+std::parse_version("v2.0") == std::parse_version("2.0.0")   // true
+```
+
+`std::parse_version_semver` returns a `SemVer`, with `major()`, `minor()` and `patch()` as integers and `pre_release()` and `build()` as strings, empty when absent. SemVers compare by SemVer precedence, which ignores build metadata. `matches(requirement)` takes the same requirement syntax as the `seedling` field of the [bundle metadata](#definition-bundles), and a pre-release only matches a requirement that names a pre-release of the same version:
+
+```rhai
+let release = std::parse_version_semver("v2.71.3");
+release.minor()               // 71
+release.matches("~2.71")      // true
+std::parse_version_semver("2.71.4-rc.1").matches("~2.71")    // false
+
+app.param("version").kind("version-semver").validate(|v, all| {
+    if !std::parse_version_semver(v).matches("~2.71") { throw "this definition runs 2.71.x"; }
+});
+```
+
+A version prints exactly as it was written, `v` included, so `` `ghcr.io/org/app:${release}` `` gives back the operator's tag. Comparing a version with anything but a version of the same type throws, including a string or the other version type. Sort a list of versions with a closure: `versions.sort(|a, b| a <= b)`.
 
 ### Derived random values
 
