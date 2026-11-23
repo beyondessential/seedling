@@ -184,8 +184,17 @@ fn password_refuses_a_weak_value() {
 #[test]
 fn volume_follows_the_name_rules() {
     assert_eq!(accepts("parse_volume", r#""backups""#), "backups");
-    for value in ["ab", "-abc", "abc-"] {
-        refusal("parse_volume", &format!("{value:?}"));
+    for (value, literal) in [
+        ("ab", r#""ab""#),
+        ("-abc", r#""-abc""#),
+        ("abc-", r#""abc-""#),
+        ("ab\u{1b}c", r#""ab\u001bc""#),
+    ] {
+        let reason = refusal("parse_volume", literal);
+        assert!(
+            !reason.contains(value),
+            "the reason should not echo {value:?}: {reason}"
+        );
     }
 }
 

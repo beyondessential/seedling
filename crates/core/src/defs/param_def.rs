@@ -84,8 +84,14 @@ impl ParamKind {
                 }
             }
             // spec: ACN#kind-parsers
+            // No control-character check runs before this one, so the reason
+            // leaves the value out rather than echo whatever it holds.
             Self::Volume => {
-                SiteVolumeName::new(value).map_err(|e| e.to_string())?;
+                SiteVolumeName::new(value).map_err(|_| {
+                    "volume name must be 3 to 63 characters matching \
+                     ^[a-zA-Z][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$"
+                        .to_owned()
+                })?;
             }
         }
         Ok(ParsedValue::Value(value.to_owned()))
