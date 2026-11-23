@@ -34,13 +34,14 @@ Each parameter kind has a helper that parses a value of that kind, as [kind pars
 ## Results
 
 A helper that parses compound text, such as a URL or an email address, MUST return an object map from the name of each part to its value.
-A helper whose result is a single value with no parts MUST return it as a string, an integer or a boolean.
+A helper whose result is a single value with no parts MUST return it as a string, an integer, a boolean or a Blob.
 A helper MUST return a value of a type of its own only where that value needs methods, such as comparing two versions or testing whether a subnet holds an address.
 
 ## Replicability
 
 A helper MUST return the same result, or raise the same script error, every time it is called with the same arguments.
 A helper MUST NOT read the clock, the network, the host's filesystem, or any state of the app or host that its arguments do not carry.
+A [derivation helper](random.md#derivation-helper) is the exception to both: it also reads the seed its context selects, as [seeds](random.md#seeds) specifies.
 A helper MUST NOT change the app, so every helper is callable in the validator context.
 
 > [!NOTE]

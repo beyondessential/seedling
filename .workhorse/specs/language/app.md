@@ -72,10 +72,6 @@ An anonymous resource remains open to its builder methods for the rest of the li
 A dynamic resource MUST exist only for the lifecycle operation or shell session that created it.
 The runtime MUST clean up every dynamic resource when that lifecycle operation or shell session ends.
 
-## Derived random values
-
-`app` MUST offer the [derivation methods](random.md#methods), deriving from the app's seed.
-
 ## App description
 
 `app.description(text: string)` MUST set a free-form, human-readable description of the app, and MUST return `app`.

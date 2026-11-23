@@ -4,19 +4,19 @@ Password hashing formats are a later card; this card provides the derivation the
 
 ## Seed lifetimes
 
-Two seeds, each scoped to the BSL object whose lifetime it shares:
+The script sees one set of `std::` helpers; the runtime picks the seed by where the call runs:
 
-- `app.random_*` derives from a per-registration seed, available in the static and action contexts.
-- `rt.random_*` derives from a per-operation seed, available only where `rt` is.
+- In the static context, a per-registration app seed.
+- In an action closure (action, shell, gate body), a per-operation seed. Gate checks run a Job, not a closure, so every action closure has an operation or shell session behind it.
 
 Lifetimes considered:
 
 | lifetime | outcome |
 | --- | --- |
 | per evaluation | Unusable: static values churn on every evaluation, restarting every consuming container; action values differ between passes, breaking the closure determinism replay relies on (SUSP#replay), and the runtime may replay at any time, not only after a restart. |
-| per operation | Kept, as `rt.random_*`. Persisted with the operation and encrypted like its parameters (OPS#persistence), cleared when the operation ends, so every pass and restart replay sees the same values. No static context. |
+| per operation | Kept, for action closures. Persisted with the operation and encrypted like its parameters (OPS#persistence), cleared when the operation ends, so every pass and restart replay sees the same values. |
 | per generation | Rejected: every definition or parameter change restarts every consumer, and nothing needs it that per-registration does not cover. |
-| per registration | Kept, as `app.random_*`. Covers the pairing case: a static deployment's env and an install action's `rt.exec` deriving the same database password. |
+| per registration | Kept, for the static context. A closure that needs the same value as a workload's config, such as the database password an install action sets, captures the top-level value. |
 
 The app seed is created at registration and discarded at deregistration with the rest of the app's state.
 It has no import or export: an exported seed would disclose every value the app will ever derive, more than any secret parameter does.
@@ -25,11 +25,10 @@ A host restored from its database and key file keeps its seeds; an app moved to 
 An operator can rotate the app seed (`/apps/seed/rotate`, `apps seed rotate <app> --yes`, a `dangerous`-mode console control). Rotation re-evaluates without bumping the generation, like a host constant change; every consumer restarts, and data stores are re-keyed by hand. Operation seeds need no rotation.
 
 Shell sessions are never persisted or replayed, so a session's seed can live in memory only.
-Validators get no randomness: they judge a proposed value, and randomness has no meaning there.
 
 ## Functions
 
-The same set on `app` and on `rt`, differing only in seed:
+In `std`, as every BSL helper is (STD):
 
 - `random_bytes(label, n)` returns a Blob. Encodings to text arrive with the hashing card.
 - `random_string(label, length, alphabet)` draws `length` characters from `alphabet`, without bias. The alphabet is required, so a script always states which characters a consumer accepts.
@@ -37,7 +36,7 @@ The same set on `app` and on `rt`, differing only in seed:
 
 The derivation is pinned in RND (HMAC-SHA-256 over a length-prefixed call encoding, keying a ChaCha20 stream), since changing it would rotate every derived value on upgrade.
 
-The methods live on `app` and `rt`, not in the `std` module: a `std` helper may read no state its arguments do not carry (STD#replicability), and a derivation reads its seed.
+STD#replicability names derivation helpers as the one exception to reading only what the arguments carry, and STD#results admits a Blob result.
 The app seed counts among the inputs of replicable evaluation (BSL#replicability), beside the bundle, parameter values and host constants.
 
 A label is any non-empty string.
@@ -54,7 +53,8 @@ The redaction gaps secret parameters already have (volume file writes, sub-actio
 
 A guide in `docs/` covers the pitfalls:
 
-- An operation-seeded value differs in the next operation; anything that must outlive the operation goes into a volume or comes from the app seed.
+- The same call derives a different value inside an action closure than at the top level: derive a value the workloads also hold at the top level and capture it.
+- An operation-seeded value differs in the next operation; anything that must outlive the operation goes into a volume or is derived at the top level.
 - App-seeded values change on rotation, on re-registration, or when an app moves to another host, while data written to volumes keeps the old ones.
-- The Replicability paragraph of `docs/bsl-scripting.md` lists the app seed among an evaluation's inputs.
+- The Replicability paragraph and the Standard helpers section of `docs/bsl-scripting.md` cover the app seed as an evaluation input, the derivation helpers, and their one exception to the helper conventions.
 - The function, label and every argument enter the derivation: changing a length or alphabet changes the value, and two uses wanting distinct secrets need distinct labels.

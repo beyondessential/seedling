@@ -14,15 +14,15 @@ A parameter whose effective [`secret` flag](../language/parameter.md#secret-para
 
 ### App seed
 
-The secret from which an [app](../overview.md#app)'s methods on `app` derive their values, held for as long as the app is registered.
+The secret from which [derivation helpers](../language/random.md#derivation-helper) called in the static context of an [app](../overview.md#app)'s definition derive their values, held for as long as the app is registered.
 
 ### Operation seed
 
-The secret from which the methods of one [runtime handle](../language/rt.md#runtime-handle) derive their values, held for one [lifecycle operation](operations.md#operation) or one [shell session](../interface/shells.md#shell-session).
+The secret from which derivation helpers called in the action closures of one [lifecycle operation](operations.md#operation) or one [shell session](../interface/shells.md#shell-session) derive their values.
 
 ### Derived value
 
-A value returned by one of the methods [derived random values](../language/random.md) specifies, from either seed.
+A value returned by a derivation helper, from either seed.
 
 ## Secret key
 
@@ -53,7 +53,7 @@ The runtime MUST create an app's seed when it registers the app, and MUST persis
 Every registered app MUST have exactly one app seed.
 The runtime MUST discard the app seed when it [deregisters](app-teardown.md#deregistration) the app.
 
-If the runtime cannot read an app's seed, every evaluation of the app's definition that calls a method deriving from it MUST fail.
+If the runtime cannot read an app's seed, every evaluation of the app's definition that calls a derivation helper in the static context MUST fail.
 The runtime MUST NOT create a replacement seed for an app that has one it cannot read.
 
 > [!NOTE]
