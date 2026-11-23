@@ -34,14 +34,14 @@ The runtime MUST store it, and it takes effect once the app's definition declare
 
 The server MUST validate a definition update and a parameter change before it persists any part of the change.
 
-Validation runs the [validator](../language/parameter.md#validators) of every parameter that is set in the proposed values, against the proposed values.
-The validators are those the proposed definition declares when evaluated with the proposed values.
-For a parameter change whose proposed values fail to evaluate, the validators are those of the app's most recent successful evaluation.
-If that evaluation fails too, no validator runs.
+Validation [checks the kind](../language/parameter.md#kind-checks) of every parameter that is set in the proposed values, then runs the [validator](../language/parameter.md#validators) of each such parameter whose kind accepts its value, against the proposed values.
+The kinds and validators are those the proposed definition declares when evaluated with the proposed values.
+For a parameter change whose proposed values fail to evaluate, the kinds and validators are those of the app's most recent successful evaluation.
+If that evaluation fails too, no kind is checked and no validator runs.
 
-If any validator rejects, the server MUST refuse the request with `validation_failed`, with a `message` naming each rejecting parameter and its reason, and MUST persist nothing.
+If any kind check or validator rejects, the server MUST refuse the request with `validation_failed`, with a `message` naming each rejecting parameter and its reason, and MUST persist nothing.
 
-Registering an app and reloading a stored app run no validators.
+Registering an app and reloading a stored app check no kinds and run no validators.
 
 > [!NOTE]
 > A newly registered app has no set parameters, and a stored combination was validated when it was written.
@@ -105,7 +105,7 @@ The result has these members.
 | `diff` | array | one entry per resource added, removed or modified |
 | `gates_would_run` | array of strings | where the app is installed, in ascending order, the names of the gates the evaluated definition declares that would be [unsatisfied](../runtime/gates.md#gate-state) under it and the proposed values |
 | `errors` | array of strings | the parse or evaluation errors, if the evaluated definition fails to parse or evaluate |
-| `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose validator rejects the proposed values |
+| `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose kind check or validator rejects the proposed values |
 
 If the evaluated definition fails to parse or evaluate, the result MUST carry `errors` and no other member.
 Otherwise `errors` MUST be empty.
