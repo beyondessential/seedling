@@ -812,11 +812,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         })
         .map(String::as_str)
         .filter(|v| !v.is_empty())
-        // spec: SEC#redaction — and so does one containing a value the
-        // evaluation derived from the app seed.
-        .chain(def.derived.iter())
         .collect();
-    super::appdef_json::redact_secret_env(&mut resources_json, &secret_values);
+    super::appdef_json::redact_secret_env(&mut resources_json, |v| {
+        secret_values.iter().any(|s| v.contains(s))
+            // spec: SEC#redaction — and so does one containing a value the
+            // evaluation derived from the app seed.
+            || def.derived.found_in(v)
+    });
 
     // Dynamic resources (created inside action closures, not in AppDef).
     // Returned as a separate top-level field so consumers can choose whether

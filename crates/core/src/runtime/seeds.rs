@@ -5,9 +5,15 @@
 //! evaluation derives from are installed on its thread for the length of the
 //! evaluation, the way the action-closure and validator flags are.
 
-use std::{cell::RefCell, collections::BTreeSet, fmt, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+    fmt,
+    sync::{Arc, OnceLock},
+};
 
 use secrecy::{ExposeSecret, SecretBox, zeroize::Zeroize};
+use siphasher::sip::SipHasher13;
 
 use crate::runtime::secrets::{self, Cipher};
 
@@ -107,25 +113,62 @@ thread_local! {
 /// The text forms of the values an evaluation derived from its app seed,
 /// which the runtime withholds wherever it withholds secret parameter values.
 ///
-/// Each form is held once however often it was derived, and shared by every
-/// copy of the definition that carries it.
+/// They are needed only to find them in other text, so each is held as its
+/// length and a keyed hash of its bytes: a fixed size however long the value,
+/// and nothing a value could be read back from. A hash that collides only
+/// withholds text that held no derived value. The set is shared by every copy
+/// of the definition that carries it.
 // spec: SEC#redaction
 #[derive(Clone, Default)]
-pub struct DerivedValues(Arc<BTreeSet<String>>);
+pub struct DerivedValues(Arc<BTreeMap<usize, HashSet<u64>>>);
+
+/// The key the runtime hashes derived values under, drawn once per process.
+fn redaction_hasher() -> &'static SipHasher13 {
+    static HASHER: OnceLock<SipHasher13> = OnceLock::new();
+    HASHER.get_or_init(|| {
+        use rand::Rng;
+        let mut rng = rand::rng();
+        SipHasher13::new_with_keys(rng.next_u64(), rng.next_u64())
+    })
+}
 
 impl DerivedValues {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &str> {
-        self.0.iter().map(String::as_str)
+    /// How many distinct forms are held.
+    pub fn len(&self) -> usize {
+        self.0.values().map(HashSet::len).sum()
+    }
+
+    fn insert(&mut self, form: &str) {
+        if form.is_empty() {
+            return;
+        }
+        let hash = redaction_hasher().hash(form.as_bytes());
+        Arc::make_mut(&mut self.0)
+            .entry(form.len())
+            .or_default()
+            .insert(hash);
+    }
+
+    // spec: SEC#redaction
+    /// Whether `text` contains any of the forms held.
+    pub fn found_in(&self, text: &str) -> bool {
+        let hasher = redaction_hasher();
+        let bytes = text.as_bytes();
+        self.0.iter().any(|(len, hashes)| {
+            bytes
+                .windows(*len)
+                .any(|window| hashes.contains(&hasher.hash(window)))
+        })
     }
 }
 
 impl fmt::Debug for DerivedValues {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DerivedValues({} withheld)", self.0.len())
+        write!(f, "DerivedValues({} withheld)", self.len())
     }
 }
 
@@ -228,7 +271,9 @@ pub fn operation_seed() -> Result<Seed, String> {
 pub fn record_derived(forms: impl IntoIterator<Item = String>) {
     DERIVED.with(|d| {
         if let Some(values) = d.borrow_mut().as_mut() {
-            Arc::make_mut(&mut values.0).extend(forms.into_iter().filter(|f| !f.is_empty()));
+            for form in forms {
+                values.insert(&form);
+            }
         }
     });
 }

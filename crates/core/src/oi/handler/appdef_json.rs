@@ -47,21 +47,15 @@ pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
 /// Callers building a richer view (/apps/show) augment the returned object
 /// with live `instances`, `faults`, `stopped`, and a `scale.current`.
 /// Report as null each environment value, in the described resources, that
-/// contains one of `secrets`.
+/// `withheld` says holds a value to withhold.
 // spec: APPS#redacted-environment-values
-pub(crate) fn redact_secret_env(resources: &mut [Value], secrets: &[&str]) {
-    if secrets.is_empty() {
-        return;
-    }
+pub(crate) fn redact_secret_env(resources: &mut [Value], withheld: impl Fn(&str) -> bool) {
     for resource in resources {
         let Some(Value::Object(env)) = resource.pointer_mut("/def/container/env") else {
             continue;
         };
         for value in env.values_mut() {
-            if value
-                .as_str()
-                .is_some_and(|v| secrets.iter().any(|s| v.contains(s)))
-            {
+            if value.as_str().is_some_and(&withheld) {
                 *value = Value::Null;
             }
         }

@@ -315,25 +315,28 @@ fn an_evaluation_records_what_it_derived() {
         r#"
             let pw = std::random_string("pw", 16, "abcdefghijklmnop");
             let raw = std::random_bytes("raw", 9);
-            app.description(pw);
+            app.description(pw + " " + raw.to_string());
         "#,
         &seed(1),
     );
     assert!(err.is_none(), "{err:?}");
     let def = app.def.load();
-    let derived: Vec<&str> = def.derived.iter().collect();
-    assert!(
-        derived.contains(&def.description.as_deref().unwrap()),
-        "{derived:?}"
-    );
+    let description = def.description.clone().unwrap();
+    let (pw, raw) = description.split_once(' ').unwrap();
     assert_eq!(
-        derived.len(),
+        def.derived.len(),
         3,
         "the string, and the Blob's UTF-8 and hex forms"
     );
+    assert!(def.derived.found_in(&format!("password={pw};")));
     assert!(
-        derived.iter().any(|d| d.len() == 19 && d.contains(' ')),
-        "{derived:?}"
+        def.derived.found_in(raw.trim_start_matches('[')),
+        "the Blob's hex digits are found without the brackets"
+    );
+    assert!(!def.derived.found_in("password=abcdefghijklmnop;"));
+    assert!(
+        !def.derived.found_in(&pw[1..]),
+        "part of a value is not the value"
     );
 }
 
