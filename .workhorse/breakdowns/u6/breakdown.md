@@ -16,7 +16,7 @@ Establish the convention the kind cards build on: a `std::parse_k(text)` functio
 
 ## URL and hostname parameter kinds
 
-Add `url`, `url-origin` and `hostname` kinds with `parse_url`, `parse_url_origin` and `parse_hostname`. `parse_url` returns a map of scheme, host, port, path, query, fragment, username and password, with the port filled from the scheme's default when the URL gives none. `url-origin` accepts an `http` or `https` URL with a host and an optional port and nothing else (a single trailing `/` allowed), which is what an ingress is declared from. `hostname` accepts a name valid as an ingress hostname and returns it in lower case. To settle: IPv6 literals and internationalised hostnames in `url`, given an ingress hostname is ASCII letters, digits and hyphens; and whether the query comes back as a raw string or decoded into a map.
+Add `url`, `url-origin` and `hostname` kinds with `parse_url`, `parse_url_origin` and `parse_hostname`. `parse_url` returns a map of scheme, host, port, path, query, fragment, username and password, with the port filled from the scheme's default when the URL gives none. `url-origin` accepts an `http` or `https` URL with a host and an optional port and nothing else (a single trailing `/` allowed), which is what an ingress is declared from. `hostname` accepts a name valid as an ingress hostname and returns it in lower case. To settle: IPv6 literals and internationalised hostnames in `url`, given an ingress hostname is ASCII letters, digits and hyphens (); and whether the query comes back as a raw string or decoded into a map.
 
 ## Package URL parameter kind
 
