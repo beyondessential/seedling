@@ -64,4 +64,4 @@ Give scripts random bytes, random strings, random (v4 not v7) UUIDs, which retur
 
 ## Regular expressions
 
-Add regular expression matching, capture, replacement and splitting, with an engine whose running time is linear in its input, or supports eval budgets, so a pattern from a parameter cannot stall evaluation.
+Add regular expression matching, capture, replacement and splitting, with an engine whose running time is linear in its input, or supports execution budgets, so a pattern from a parameter cannot stall evaluation.
