@@ -18,7 +18,7 @@ Adds the `version` and `version-semver` param kinds, their `std` parsers, and th
 ## Types and kinds
 
 - [x] `cargo add -p seedling-core libversion`
-- [x] `crates/core/src/defs/stdlib/version.rs`: `Version` with `parse`, libversion ordering, `segments()` and `Display` as written
+- [x] `crates/core/src/defs/version.rs`: `Version` with `parse`, libversion ordering, `segments()` and `Display` as written
 - [x] Same file: `SemVer` with `parse`, the five getters, precedence ordering, `matches(requirement)` and `Display` as written
 - [x] `crates/core/src/defs/param_def.rs`: `ParamKind::Version` and `ParamKind::VersionSemver` in `as_str`, `FromStr` and `parse`, allowed in static schemas; `ParsedValue::Version` and `ParsedValue::SemVer`
 - [x] `crates/core/src/defs/stdlib/kinds.rs`: return the new `ParsedValue` variants as their script types

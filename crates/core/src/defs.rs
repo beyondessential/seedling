@@ -109,6 +109,7 @@ pub mod service;
 pub mod stdlib;
 pub mod summary;
 pub mod take;
+pub mod version;
 pub mod volume;
 
 // spec: BSL#evaluation
@@ -136,8 +137,8 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<collection::Collection>();
     engine.build_type::<shell::ShellControl>();
     engine.build_type::<shell::ShellExit>();
-    engine.build_type::<stdlib::version::Version>();
-    engine.build_type::<stdlib::version::SemVer>();
+    engine.build_type::<version::Version>();
+    engine.build_type::<version::SemVer>();
 
     // spec: COL#coercion
     engine.register_fn("col", collection::col);

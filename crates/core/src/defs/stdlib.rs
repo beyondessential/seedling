@@ -2,7 +2,6 @@
 
 pub(crate) mod kinds;
 mod random;
-pub(crate) mod version;
 
 // spec: STD#the-std-module
 /// The `std` module, holding every helper BSL offers.

@@ -2,7 +2,7 @@ use seedling_protocol::names::SiteVolumeName;
 use strum::VariantArray;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
-use super::stdlib::version::{SemVer, Version};
+use super::version::{SemVer, Version};
 
 // spec: ACN#param-schemas
 #[derive(Debug, Clone, PartialEq)]
