@@ -86,13 +86,13 @@ pub(super) fn register(module: &mut rhai::Module) {
 /// Counted against the evaluation's limit on derived values, which its engine
 /// carries as its tag.
 fn seed_for_call(ctx: &NativeCallContext) -> Result<Seed, Box<EvalAltResult>> {
-    let limit = ctx
-        .tag()
-        .and_then(|tag| tag.as_int().ok())
-        .and_then(|n| usize::try_from(n).ok())
-        // An engine not built to the runtime's limits gets their defaults,
-        // never none.
-        .unwrap_or_else(|| crate::ScriptLimits::default().max_derived_values);
+    // The tag is the runtime's, never the script's: an engine that does not
+    // carry a limit was not built by `setup_language`, and derives nothing
+    // rather than deriving without one.
+    let limit = match ctx.tag().map(rhai::Dynamic::as_int) {
+        Some(Ok(n)) => usize::try_from(n).map_err(|_| no_limit())?,
+        _ => return Err(no_limit()),
+    };
     if !seeds::count_derivation(limit) {
         return Err(too_large("Number of derived values"));
     }
@@ -151,6 +151,10 @@ fn take_count(
         return Err(too_large(limit_name));
     }
     Ok(n)
+}
+
+fn no_limit() -> Box<EvalAltResult> {
+    "this evaluation carries no limit on derived values, so it derives none".into()
 }
 
 fn too_large(what: &str) -> Box<EvalAltResult> {
