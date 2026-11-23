@@ -26,12 +26,14 @@ A `bytes` argument of any other type MUST raise a script error, as the [argument
 
 A directory's encoding is the concatenation, for each file in the directory in ascending bytewise order of the UTF-8 encoding of its path relative to the directory, of these fields:
 
-1. the file's path relative to the directory, with `/` as its separator, as the length of its UTF-8 encoding in bytes as an unsigned 32-bit big-endian integer, followed by that encoding;
-2. the file's contents, as their length in bytes as an unsigned 64-bit big-endian integer, followed by the contents.
+1. the file's path relative to the directory, with `/` as its separator, as a string field;
+2. the file's contents, as a bytes field.
+
+String fields and bytes fields are those of the [call encoding](random.md#call-encoding).
 
 > [!NOTE]
 > Every file's path is part of the encoding, so renaming or moving a file within the directory changes a digest of it as surely as changing a file's contents.
-> The order and the length prefixes are fixed so that the same directory has the same encoding in every Seedling version.
+> The order and the fields are fixed so that the same directory has the same encoding in every Seedling version.
 
 ## Results
 
