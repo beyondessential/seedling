@@ -200,3 +200,13 @@ fn builder_methods_chain() {
     "#,
     );
 }
+
+// spec: BSL#replicability
+#[test]
+fn a_script_cannot_read_the_clock() {
+    let err = run_test_script_err("let now = timestamp();");
+    assert!(
+        matches!(*err, rhai::EvalAltResult::ErrorFunctionNotFound(ref name, _) if name.starts_with("timestamp")),
+        "expected timestamp to be absent, got {err:?}",
+    );
+}
