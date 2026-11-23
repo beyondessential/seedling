@@ -490,7 +490,7 @@ The work factors are fixed, so a hash is cheap enough to compute on every evalua
 
 ### Digests and encodings
 
-These helpers turn bytes into text and back, digest them, authenticate them under a key, and name them with a UUID. Each one that takes bytes accepts a string (its UTF-8 bytes), a Blob, or a [bundle file](#definition-bundles) (its contents).
+These helpers turn bytes into text and back, digest them, authenticate them under a key, and name them with a UUID. Each one that takes bytes accepts a string (its UTF-8 bytes), a Blob, a [bundle file](#definition-bundles) (its contents) or a bundle directory (every file's path and contents, in a fixed order).
 
 | helper | returns |
 | --- | --- |
@@ -509,6 +509,7 @@ let auth = "Basic " + std::encode_base64("admin:" + admin_password);
 
 // An environment value that changes when the config file does, restarting the workload with it.
 let config_rev = std::encode_hex(std::digest_sha256(app.file("nginx.conf")));
+let configs_rev = std::encode_hex(std::digest_blake3(app.dir("config")));
 
 // An identifier that is the same for the same name in every app, on every host.
 let tenant_id = std::uuid_v5("6ba7b811-9dad-11d1-80b4-00c04fd430c8", "https://example.org/tenant/a");
