@@ -812,6 +812,9 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         })
         .map(String::as_str)
         .filter(|v| !v.is_empty())
+        // spec: SEC#redaction — and so does one containing a value the
+        // evaluation derived from the app seed.
+        .chain(def.derived.iter())
         .collect();
     super::appdef_json::redact_secret_env(&mut resources_json, &secret_values);
 

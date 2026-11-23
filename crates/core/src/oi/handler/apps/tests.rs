@@ -1675,6 +1675,33 @@ fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_valu
     );
 }
 
+// spec: APPS#redacted-environment-values
+// spec: SEC#redaction
+#[test]
+fn an_env_value_containing_a_derived_value_is_null() {
+    let oi = TestOi::new();
+    let script = r#"
+        let pw = std::random_string("db-password", 24, "abcdefghijklmnopqrstuvwxyz0123456789");
+        let raw = std::random_bytes("raw", 8);
+        let web = app.deployment("web").image("docker.io/library/nginx:1.29");
+        web.env("URL", "postgres://app:" + pw + "@db/app");
+        web.env("RAW", "key=" + raw.to_string());
+        web.env("PLAIN", "visible");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let env = &shown["resources"][0]["def"]["container"]["env"];
+    assert_eq!(env["URL"], json!(null), "{env}");
+    assert_eq!(
+        env["RAW"],
+        json!(null),
+        "a Blob's string form is withheld too: {env}"
+    );
+    assert_eq!(env["PLAIN"], json!("visible"));
+}
+
 // spec: APPS#resources
 #[test]
 fn an_instance_reports_the_state_of_its_health_check() {
