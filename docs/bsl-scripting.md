@@ -12,6 +12,10 @@ The conventional extension is `.seed.rhai`. A script can stand alone, or be one 
 
 A script runs in a fresh scope every time it is evaluated. The `app` global is pre-injected; everything else must be defined or computed.
 
+### Replicability
+
+A script is evaluated many times over an app's life, and must declare the same app each time from the same inputs: its bundle, its parameter values and the [host constants](#constants). So BSL leaves out the parts of Rhai that would let an evaluation differ or stall: there is no `timestamp()`, `sleep()` throws, and `import` is refused. An action that needs the time or the network reaches it through `rt`, for example by running a command in a container with `rt.exec`.
+
 ### Names
 
 Most resources take a name. Valid names are 3–63 characters, ASCII alphanumeric with hyphens, must not start with a digit or hyphen, and must not end with a hyphen. Regex: `^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$`.
@@ -371,6 +375,18 @@ app.on_shell("check", |rt, shell, _param| {
     rt.start(app.job().image(image.call()).command(["cleanup"])).terminated().ensure_success();
 });
 ```
+
+## Standard helpers
+
+Helpers for parsing, checking and encoding values live in the `std` module, and are called by their qualified name, as `std::name(arguments)`. Keeping them in a module means a helper added in a later Seedling version cannot collide with a function or variable your script already defines. `std` is available everywhere a script runs: at the top level, in action and shell closures, in gate bodies and in validators.
+
+Every helper follows the same conventions:
+
+- **It throws on malformed input.** A helper never guesses, coerces or returns a partial result. A validator can call a parsing helper and let it throw, which rejects the value; to turn a failure into a yes-or-no answer elsewhere, catch it with `try`/`catch`.
+- **It returns a map for compound text** such as a URL, a plain string, integer or boolean where that is all the value is, and a value of its own type only where that value has methods, such as comparing versions.
+- **It is replicable.** The same arguments always give the same result: a helper never reads the clock, the network or the filesystem, and never changes the app.
+
+Calling a helper that does not exist throws, like any unknown function. Which helpers exist depends on the Seedling version, so declare the versions a definition supports with the `seedling` field of its [bundle metadata](#definition-bundles).
 
 ## Gates
 
