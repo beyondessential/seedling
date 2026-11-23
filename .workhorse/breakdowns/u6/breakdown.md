@@ -26,7 +26,7 @@ Add a `purl` kind with `std::parse_purl`, accepting a [Package URL](https://gith
 
 Add a `version` kind with `parse_version`, returning a `Version` with major, minor, patch, pre-release and build getters, ordered by SemVer 2.0.0 precedence... or an alternative design supporting purl's wider version definition (which could also be useful for e.g. handling deb/rpm versions, or python versions, etc) - in which case we'd probably have a `version-semver` kind to opt into the stricter behaviour. `version.matches(requirement)` takes the same requirement syntax as the `seedling` field of `seedling.toml`, such as `~2.71`. A leading `v` is accepted.
 
-## Definition version in the bundle metadata
+## Definition version in the bundle metadata · D7
 
 Add a `version` field to `seedling.toml` and expose it to scripts as a constant holding a `Version`, so a definition can default its image tag to the release it was published for and refuse versions outside a compatible range. Builds on the version kind card. To settle: the constant's name and its value when the field is absent; whether build metadata (such as a commit tag for an unreleased build) carries the image tag, or the tag is declared separately.
 
