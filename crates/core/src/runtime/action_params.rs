@@ -43,13 +43,6 @@ pub enum ParamValidationError {
     VolumeNotString { key: String },
     /// A required `kind: "volume"` param was absent.
     VolumeMissing { key: String },
-    /// A `kind: "volume"` value did not parse as a valid site-volume
-    /// name.
-    VolumeInvalidName {
-        key: String,
-        value: String,
-        reason: String,
-    },
     /// A `kind: "volume"` value did not resolve to an existing site
     /// volume.
     VolumeNotFound { key: String, value: String },
@@ -72,10 +65,6 @@ impl std::fmt::Display for ParamValidationError {
             Self::VolumeMissing { key } => {
                 write!(f, "param {key:?}: required volume reference is missing")
             }
-            Self::VolumeInvalidName { key, value, reason } => write!(
-                f,
-                "param {key:?}: invalid site volume name {value:?}: {reason}"
-            ),
             Self::VolumeNotFound { key, value } => {
                 write!(f, "param {key:?}: site volume {value:?} not found")
             }
@@ -179,11 +168,11 @@ pub fn validate_volume_params<L: VolumeLookup>(
                 });
             }
         };
+        // A name the kind's parser refuses is reported as that parser
+        // reports it, so the refusal reads the same whichever check found it.
         let site_name =
-            SiteVolumeName::new(&val).map_err(|e| ParamValidationError::VolumeInvalidName {
-                key: key.to_owned(),
-                value: val.clone(),
-                reason: e.to_string(),
+            SiteVolumeName::new(&val).map_err(|e| ParamValidationError::Requirements {
+                messages: vec![format!("{key}: {e}")],
             })?;
         if !lookup.site_volume_exists(&site_name) {
             return Err(ParamValidationError::VolumeNotFound {
