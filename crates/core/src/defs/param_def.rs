@@ -1,4 +1,5 @@
 use seedling_protocol::names::SiteVolumeName;
+use strum::VariantArray;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 // spec: ACN#param-schemas
@@ -25,7 +26,7 @@ impl ParamDef {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, VariantArray)]
 pub enum ParamKind {
     // spec: ACN#param-kinds
     #[default]
@@ -48,16 +49,6 @@ pub enum ParamKind {
 }
 
 impl ParamKind {
-    pub const ALL: [Self; 7] = [
-        Self::Text,
-        Self::Multiline,
-        Self::Email,
-        Self::Password,
-        Self::WeakPassword,
-        Self::Random,
-        Self::Volume,
-    ];
-
     /// Whether this kind may appear in static param schemas (`app.param`).
     /// `Volume` is rejected there because its bindings are operation-scoped —
     /// the only sensible static equivalent is a declared external_volume

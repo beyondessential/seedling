@@ -7,7 +7,7 @@ Each parameter kind gets a `std::parse_<kind>` helper, and that helper's accepta
 - `parse_text` decides by Unicode general category query (Cc, Zl, Zp) through a dependency that exposes general categories, not a code-point table of our own. The dependency maintains its table; we do not. `unicode-properties` with its `general-category` feature is the pick: it is from the unicode-rs project, like the `unicode-segmentation` and `unicode-normalization` crates already in the lockfile. Add it with `cargo add` and pin the full version.
 - The runtime's kind check and the `std::parse_<kind>` helpers share one implementation per kind, so the two cannot drift. `run_requirements` in `crates/core/src/runtime/action_params.rs` calls the same functions the `std` module registers.
 - Stored app parameters gain a kind check in the parameter validation path (`/apps/params/set`, `/apps/update`, `/apps/plan` rejections), before each validator; a value its kind rejects skips its validator.
-- The parse lives on `ParamKind` (`ParamKind::parse(self, &str)`), and the `std` module registers a helper for every variant by iterating `ParamKind::ALL`, so a kind added later cannot ship without its helper. The helper's name is derived from `as_str()` with `-` written as `_`.
+- The parse lives on `ParamKind` (`ParamKind::parse(self, &str)`), and the `std` module registers a helper for every variant by iterating `ParamKind::VARIANTS`, which strum derives from the enum, so a kind added later cannot ship without its helper. The helper's name is derived from `as_str()` with `-` written as `_`.
 - Layout matches card V6's helpers: `crates/core/src/defs/stdlib.rs` holds `module()`, and each group of helpers is a submodule with a `register(&mut rhai::Module)`. This card adds `defs/stdlib/kinds.rs`, so whichever of the two lands second resolves a one-line conflict in `stdlib.rs`.
 - The runtime check on stored parameters does not skip an empty value, unlike `run_requirements`, which treats an empty action param as absent.
 
@@ -21,11 +21,11 @@ Each parameter kind gets a `std::parse_<kind>` helper, and that helper's accepta
 ## Parsers
 
 - [x] `cargo add unicode-properties --features general-category` in `crates/core`
-- [x] `ParamKind::ALL` and `ParamKind::parse` in `crates/core/src/defs/param_def.rs`, returning a `ParsedValue` (`Text(String)` or `Email { local, domain }`) or the reason as a string; cite `// spec: ACN#kind-parsers` per arm
+- [x] `ParamKind::VARIANTS` and `ParamKind::parse` in `crates/core/src/defs/param_def.rs`, returning a `ParsedValue` (`Text(String)` or `Email { local, domain }`) or the reason as a string; cite `// spec: ACN#kind-parsers` per arm
   - [x] Single-line rule shared by `text`, `email`, `password`, `weak-password` and `random`: refuse any char whose general category is Control, LineSeparator or ParagraphSeparator, naming the offending character by code point in the reason
   - [x] Move `is_valid_email` and `is_strong_password` out of `action_params.rs` into the email and password arms; `email` splits at the first `@` into `local` and `domain`
   - [x] `volume` checks the general name rules with the same validator `SiteVolumeName::new` uses
-- [x] `crates/core/src/defs/stdlib.rs` with `module()`, and `defs/stdlib/kinds.rs` registering `parse_<kind>` for every `ParamKind::ALL`; replace the empty `rhai::Module::new()` in `crates/core/src/defs.rs` with `stdlib::module()`
+- [x] `crates/core/src/defs/stdlib.rs` with `module()`, and `defs/stdlib/kinds.rs` registering `parse_<kind>` for every `ParamKind::VARIANTS`; replace the empty `rhai::Module::new()` in `crates/core/src/defs.rs` with `stdlib::module()`
   - [x] Take the argument as `Dynamic` and convert with `defs::take::take_string`, so a non-string raises the argument-rules error rather than "function not found"
   - [x] A rejected value raises a runtime error carrying the parser's reason, so a validator that lets it propagate reports that reason
   - [x] `Email` returns a `rhai::Map` with `local` and `domain`; every other kind returns the string unchanged
@@ -44,7 +44,7 @@ Each parameter kind gets a `std::parse_<kind>` helper, and that helper's accepta
 
 ## Tests
 
-- [x] `crates/core/src/tests/stdlib.rs`: every `ParamKind::ALL` member resolves to a `std::parse_<kind>` helper; `std::parse_weak_password` exists
+- [x] `crates/core/src/tests/stdlib.rs`: every `ParamKind::VARIANTS` member resolves to a `std::parse_<kind>` helper; `std::parse_weak_password` exists
 - [x] `tests/stdlib.rs`: `parse_text` refuses LF, CR, tab, NUL, ESC, DEL, U+0085, U+2028 and U+2029, and accepts accented letters and emoji; `parse_multiline` accepts line breaks and control characters
 - [x] `tests/stdlib.rs`: `parse_email` returns `local` and `domain`, splits `a@b@c.d` at the first `@`, refuses `@x.y`, `a@b`, `a@.b`, `a@b.` and an address with a line break; `parse_password` refuses `password` and accepts a strong passphrase; `parse_weak_password` accepts `a`; `parse_random` refuses a line break; `parse_volume` refuses `ab` and `-abc`
 - [x] `tests/stdlib.rs`: a non-string argument raises the argument-rules error; a parser called in a validator propagates its reason as the rejection reason; helpers are callable in the static, action and validator contexts

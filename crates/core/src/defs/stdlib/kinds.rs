@@ -1,6 +1,7 @@
 //! A parser for every parameter kind, `std::parse_<kind>`.
 
 use rhai::{Dynamic, EvalAltResult, FuncRegistration};
+use strum::VariantArray;
 
 use crate::defs::{
     param_def::{ParamKind, ParsedValue},
@@ -9,7 +10,7 @@ use crate::defs::{
 
 // spec: ACN#kind-parsers
 pub(super) fn register(module: &mut rhai::Module) {
-    for kind in ParamKind::ALL {
+    for &kind in ParamKind::VARIANTS {
         FuncRegistration::new(helper_name(kind)).set_into_module(
             module,
             move |value: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
