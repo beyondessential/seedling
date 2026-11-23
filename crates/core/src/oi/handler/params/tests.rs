@@ -966,3 +966,154 @@ fn a_plan_takes_several_proposed_parameters() {
     );
     assert_eq!(generation_count(&oi), 1, "a plan changes nothing");
 }
+
+fn oi_with_contact_app(validator: &str) -> TestOi {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": format!(
+                r#"
+                app.param("contact").kind("email").required(false){validator};
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                "#
+            ),
+        }),
+    )
+    .unwrap();
+    oi
+}
+
+// spec: PARAM#kind-checks
+// spec: PRM#validation
+#[test]
+fn a_value_its_kind_refuses_is_not_stored() {
+    let oi = oi_with_contact_app("");
+    for value in ["not-an-email", ""] {
+        let (code, message) = oi
+            .call(
+                "/apps/params/set",
+                json!({ "app": "demo", "params": { "contact": value } }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "validation_failed", "{value:?}: {message}");
+        assert!(
+            message.contains("contact: invalid email address"),
+            "{value:?}: {message}"
+        );
+    }
+    assert_eq!(stored_values(&oi), vec![]);
+    assert_eq!(generation_count(&oi), 1);
+
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "contact": "ops@example.org" } }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "contact": null } }),
+    )
+    .expect("an unset parameter is not checked");
+    assert_eq!(stored_values(&oi), vec![]);
+}
+
+// spec: PARAM#kind-checks
+#[test]
+fn a_validator_never_sees_a_value_its_kind_refuses() {
+    let oi = oi_with_contact_app(r#".validate(|v, all| { throw "the validator ran"; })"#);
+    let (code, message) = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "params": { "contact": "not-an-email" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "validation_failed");
+    assert!(message.contains("invalid email address"), "{message}");
+    assert!(!message.contains("the validator ran"), "{message}");
+}
+
+// spec: PARAM#validators
+// spec: ACN#kind-parsers
+#[test]
+fn a_validator_calling_a_parser_rejects_with_its_reason() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("contact").required(false).validate(|v, all| { std::parse_email(v); });
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    let (code, message) = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "params": { "contact": "nobody" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "validation_failed");
+    assert!(
+        message.contains("contact: invalid email address"),
+        "{message}"
+    );
+}
+
+// spec: PRM#validation
+// spec: PARAM#kind-checks
+#[test]
+fn an_update_changing_a_kind_is_refused_when_a_stored_value_breaks_it() {
+    let oi = TestOi::new();
+    let script = |kind: &str| {
+        format!(
+            r#"
+            app.param("contact").kind("{kind}").required(false);
+            app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#
+        )
+    };
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": script("text") }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "contact": "the ops desk" } }),
+    )
+    .unwrap();
+
+    let (code, message) = oi
+        .call(
+            "/apps/update",
+            json!({ "app": "demo", "script": script("email") }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "validation_failed", "{message}");
+    assert!(message.contains("contact"), "{message}");
+}
+
+// spec: PRM#change-planning
+// spec: PARAM#kind-checks
+#[test]
+fn a_plan_reports_a_kind_rejection() {
+    let oi = oi_with_contact_app("");
+    let plan = oi
+        .call(
+            "/apps/plan",
+            json!({ "app": "demo", "proposed_params": { "contact": "a\nb@example.org" } }),
+        )
+        .unwrap();
+    assert_eq!(
+        plan["rejections"],
+        json!([{
+            "name": "contact",
+            "reason": "contains U+000A, which a single-line value cannot hold",
+        }])
+    );
+    assert_eq!(generation_count(&oi), 1, "a plan changes nothing");
+}

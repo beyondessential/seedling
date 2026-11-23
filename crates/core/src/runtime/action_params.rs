@@ -348,4 +348,46 @@ mod tests {
             "empty and required is missing"
         );
     }
+
+    fn of_kind(kind: ParamKind) -> ParamDef {
+        ParamDef {
+            kind,
+            required: false,
+            default_value: None,
+            description: None,
+            secret: None,
+        }
+    }
+
+    // spec: ACN#kind-parsers
+    #[test]
+    fn a_text_param_with_a_line_break_is_refused_naming_the_field() {
+        let mut params = serde_json::Map::new();
+        params.insert("note".to_owned(), serde_json::json!("one\ntwo"));
+
+        let err = apply_schema(&schema("note", of_kind(ParamKind::Text)), &mut params)
+            .expect_err("text is a single line");
+        assert_eq!(
+            err,
+            ParamValidationError::Requirements {
+                messages: vec![
+                    "note: contains U+000A, which a single-line value cannot hold".to_owned()
+                ]
+            }
+        );
+
+        apply_schema(&schema("note", of_kind(ParamKind::Multiline)), &mut params)
+            .expect("multiline takes line breaks");
+    }
+
+    // spec: ACN#param-schemas
+    // spec: ACN#kind-parsers
+    #[test]
+    fn an_empty_param_is_absent_rather_than_refused_by_its_kind() {
+        let mut params = serde_json::Map::new();
+        params.insert("contact".to_owned(), serde_json::json!(""));
+
+        apply_schema(&schema("contact", of_kind(ParamKind::Email)), &mut params)
+            .expect("an empty optional email is absent");
+    }
 }
