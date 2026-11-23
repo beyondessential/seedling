@@ -112,6 +112,7 @@ The runtime MUST withhold the result of a helper that [digests and encodings](..
 An argument contains a withheld value when the string, or the bytes of the Blob, includes that value in any form in which the runtime withholds it.
 No argument contains a withheld value that is empty.
 A [`File`](../language/bundle.md#bundle-files) or [`Directory`](../language/bundle.md#bundle-files) argument contains no withheld value.
+Each result withheld this way MUST count toward the derived values [limit](engine-limits.md#limits).
 
 > [!NOTE]
 > An encoding can be reversed outright, and a digest or HMAC of a short secret can be recovered by guessing, so neither result is safer to show than the value it was computed from.
