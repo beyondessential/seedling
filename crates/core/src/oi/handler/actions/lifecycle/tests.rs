@@ -810,6 +810,19 @@ fn a_gate_body_declaring_more_than_two_parameters_fails_when_called() {
     assert!(why.contains("at most two"), "{why}");
 }
 
+// spec: STD#the-std-module
+#[test]
+fn a_gate_body_reaches_the_std_module() {
+    let script = r#"
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.gate("gated").key(1).run(|rt| { std::nope(); });
+    "#;
+    let app = evaluated(script);
+    let db = DbHandle::open_in_memory().unwrap();
+    let why = failure_of(run_gate_body(&app, script, "gated", None, &db, "op"));
+    assert!(why.contains("Function not found: std::nope"), "{why}");
+}
+
 // spec: GATE#body
 #[test]
 fn last_is_the_app_at_the_last_success_and_the_unit_value_where_there_is_none() {
