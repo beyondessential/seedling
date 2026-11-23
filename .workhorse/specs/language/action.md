@@ -113,11 +113,12 @@ The runtime MUST handle a param whose `secret` is `true` as it handles a [secret
 
 The runtime MUST validate an invocation's params against the schema, in this order, before the closure runs:
 
-1. A declared param supplied as anything other than a string MUST be rejected, except that a boolean supplied for a `boolean` param, or an integer supplied for an `integer` param, MUST be taken as its canonical form.
-2. A declared param that is absent or supplied as the empty string MUST take its `default_value`, if it has one.
-3. A required param that is still absent or empty MUST be rejected.
-4. A declared param that is still absent or empty MUST NOT be validated against its kind.
-5. Every other declared param's value MUST then be validated as its kind specifies.
+1. A boolean supplied for a `boolean` param, or an integer supplied for an `integer` param, MUST be taken as its canonical form.
+2. Any other declared param supplied as anything other than a string MUST be rejected.
+3. A declared param that is absent or supplied as the empty string MUST take its `default_value`, if it has one.
+4. A required param that is still absent or empty MUST be rejected.
+5. A declared param that is still absent or empty MUST NOT be validated against its kind.
+6. Every other declared param's value MUST then be validated as its kind specifies.
 
 A param the schema does not declare MUST be passed to the closure as supplied.
 
@@ -146,19 +147,20 @@ A kind name MUST be equivalent to a kind map holding only `name`.
 
 A kind is valid only if it names a kind, carries no key that is neither `name` nor one of that kind's arguments, carries every argument the table marks required, and satisfies the rules below for each argument it carries.
 
-An `integer` kind's `range` MUST be an exclusive or inclusive integer range containing at least one integer.
+An `integer` kind's `range` is valid only if it is an exclusive or inclusive integer range containing at least one integer.
 
 > [!NOTE]
 > BSL reads a range with no start, such as `..10`, as one starting at 0, so an `integer` kind given only an upper bound accepts no negative value.
 > A range with no end runs to the largest integer where it is inclusive, such as `1..=`, and to one short of it where it is exclusive, such as `1..`.
 
-A `choice` kind's `options` MUST be a non-empty array of non-empty strings, no two of which are equal, each of which `std::parse_text` accepts.
+A `choice` kind's `options` is valid only if it is a non-empty array of non-empty strings, no two of which are equal, each of which `std::parse_text` accepts.
 
 ### Kind parsers
 
 Every kind MUST have a parser, the [helper](std.md#helper) `std::parse_<kind>`, where `<kind>` is the kind's name with each `-` written as `_`.
 A parser takes the value as its first argument, followed by the kind's argument where the kind has one, returns the parser result the kind table gives, and raises a script error for a value the kind does not accept.
-`std::parse_integer` MUST accept being called with or without `range`, and `std::parse_choice` MUST require `options`.
+`std::parse_integer` MUST accept being called with or without `range`.
+`std::parse_choice` MUST throw when called without `options`.
 A parser MUST throw when given an argument that a kind map carrying it would make invalid.
 The runtime MUST reject a value that its kind's parser rejects, with the parser's error as the reason.
 The runtime MUST accept a value that its kind's parser accepts, except where [volume params](#volume-params) add a check.
