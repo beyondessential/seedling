@@ -23,6 +23,8 @@ pub(super) fn register(module: &mut rhai::Module) {
                         parts.insert("domain".into(), domain.into());
                         parts.into()
                     }
+                    ParsedValue::Version(version) => Dynamic::from(version),
+                    ParsedValue::SemVer(version) => Dynamic::from(version),
                 })
             },
         );

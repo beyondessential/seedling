@@ -381,4 +381,31 @@ mod tests {
         apply_schema(&schema("contact", of_kind(ParamKind::Email)), &mut params)
             .expect("an empty optional email is absent");
     }
+
+    // spec: ACN#kind-parsers
+    // spec: VER#semver-versions
+    #[test]
+    fn a_version_param_is_checked_by_its_kind() {
+        for (kind, refused, accepted) in [
+            (ParamKind::Version, "latest", "16.4"),
+            (ParamKind::VersionSemver, "2.71", "v2.71.3"),
+        ] {
+            let mut params = serde_json::Map::new();
+            params.insert("target".to_owned(), serde_json::json!(refused));
+            let err =
+                apply_schema(&schema("target", of_kind(kind)), &mut params).expect_err(refused);
+            let ParamValidationError::Requirements { messages } = err else {
+                panic!("{refused}: expected a requirement failure, got {err:?}");
+            };
+            assert!(
+                messages.len() == 1 && messages[0].starts_with("target: "),
+                "{refused}: {messages:?}"
+            );
+
+            let mut params = serde_json::Map::new();
+            params.insert("target".to_owned(), serde_json::json!(accepted));
+            apply_schema(&schema("target", of_kind(kind)), &mut params).expect(accepted);
+            assert_eq!(params["target"], serde_json::json!(accepted));
+        }
+    }
 }

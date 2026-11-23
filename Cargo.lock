@@ -3557,6 +3557,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libversion"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b56aa3ed548a0e6161f4c1499d511b8bed304a37dffbc7589d576f2f669bbde9"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5405,6 +5414,7 @@ dependencies = [
  "ipnet",
  "jiff",
  "libc",
+ "libversion",
  "miette",
  "nftables",
  "nix 0.31.3",

@@ -55,8 +55,9 @@ A Seedling version requirement is a string of one or more comparator sets separa
 Each comparator set is a comma-separated list of comparators in Cargo's [version requirement syntax](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#version-requirement-syntax), such as `>=0.13, <0.15`.
 Whitespace around `||` is ignored, and a requirement with an empty comparator set is invalid.
 
-A Seedling version satisfies a requirement when it satisfies every comparator of at least one comparator set.
-Seedling versions are [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) versions.
+A version satisfies a requirement when it satisfies every comparator of at least one comparator set.
+A version with a pre-release satisfies a comparator set only when a comparator of that set names a pre-release with the same major, minor and patch numbers, so `2.71.4-rc.1` satisfies `>=2.71.4-rc.0` but not `~2.71`.
+Seedling versions are [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) versions, and a script matches a [SemVer](version.md#semver-versions) value against a requirement of this form.
 
 ## Script formation
 

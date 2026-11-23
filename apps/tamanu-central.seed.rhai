@@ -40,6 +40,7 @@ are sent from, and the home of the patient portal integration.
 // ── Params ────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
+    .kind("version-semver")
     .required(true)
     .default_value("v2.53.3")
     .description("Tamanu image tag (e.g. v2.10.0); applied to central, frontend, and patient-portal images");
@@ -407,7 +408,7 @@ app.on_action("warm-images", |rt, param| {
     description: "Pre-pull the images for a target version",
     params: #{
         "target-version": #{
-            kind: "text",
+            kind: "version-semver",
             required: false,
             description: "Tamanu image tag to warm; defaults to the currently configured version",
         },

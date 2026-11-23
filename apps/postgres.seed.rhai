@@ -29,6 +29,7 @@ app.description("PostgreSQL database server with pgtune-style sizing, exported u
 // ── Params ────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
+    .kind("version")
     .required(true)
     .description("PostgreSQL image tag (docker.io/library/postgres:<tag>), e.g. 18.3");
 
@@ -67,9 +68,9 @@ let postgres_uid = 999;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let parse_major = |v| {
-    let head = v.split(".")[0].split("-")[0];
-    if head == "" { throw `cannot extract major version from "${v}"` }
-    parse_int(head)
+    let major = std::parse_version(v).segments()[0];
+    if type_of(major) != "i64" { throw `"${v}" does not start with a major version number` }
+    major
 };
 
 let pg_major = || parse_major.call(version.value());

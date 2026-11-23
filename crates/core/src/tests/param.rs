@@ -329,6 +329,58 @@ fn param_schema_kind_volume_rejected_on_static_param() {
     let _ = run_test_script_err(r#"app.param("dst").kind("volume");"#);
 }
 
+// spec: PARAM#schema
+// spec: ACN#param-kinds
+#[test]
+fn param_schema_kind_version() {
+    use crate::defs::param_def::ParamKind;
+
+    for (name, kind) in [
+        ("version", ParamKind::Version),
+        ("version-semver", ParamKind::VersionSemver),
+    ] {
+        let app = run_test_script_app(&format!(r#"app.param("tag").kind("{name}");"#));
+        let def = app.def.load();
+        let schema = def.params.get("tag").expect("param declared");
+        assert_eq!(schema.kind, kind, "{name}");
+        assert!(!schema.is_secret(), "{name}");
+    }
+}
+
+// spec: ACN#param-kinds
+#[test]
+fn action_param_kind_version_accepted() {
+    let app = run_test_script_app(
+        r#"
+        app.on_action("warm", |rt, _param| {}, #{
+            params: #{
+                generic: #{ kind: "version" },
+                strict: #{ kind: "version-semver" },
+            }
+        });
+    "#,
+    );
+    let def = app.def.load();
+    let action = def.actions.get("warm").expect("warm action");
+    let kind_of = |name: &str| {
+        action
+            .params
+            .get(&seedling_protocol::names::ParamName::new_unchecked(
+                name.to_owned(),
+            ))
+            .expect("param declared")
+            .kind
+    };
+    assert_eq!(
+        kind_of("generic"),
+        crate::defs::param_def::ParamKind::Version
+    );
+    assert_eq!(
+        kind_of("strict"),
+        crate::defs::param_def::ParamKind::VersionSemver
+    );
+}
+
 // spec: ACN#volume-params
 #[test]
 fn action_param_kind_volume_accepted() {

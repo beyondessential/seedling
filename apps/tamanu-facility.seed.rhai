@@ -33,6 +33,7 @@ app.description("Tamanu facility server: API workers, scheduled tasks, sync work
 // ── Params ────────────────────────────────────────────────────────────────────
 
 let version = app.param("version")
+    .kind("version-semver")
     .required(true)
     .default_value("v2.53.3")
     .description("Tamanu image tag (e.g. v2.10.0); applied to facility and frontend images");
@@ -522,7 +523,7 @@ app.on_action("warm-images", |rt, param| {
     description: "Pre-pull the facility and frontend images for a target version",
     params: #{
         "target-version": #{
-            kind: "text",
+            kind: "version-semver",
             required: false,
             description: "Tamanu image tag to warm (e.g. v2.10.0); defaults to the currently configured version",
         },
