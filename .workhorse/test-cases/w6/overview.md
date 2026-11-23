@@ -12,4 +12,4 @@
 
 - [x] `timestamp()` is not in a script's scope (verifies spec: BSL)
 - [x] `sleep(60)` and `sleep(60.0)` throw without pausing evaluation (verifies spec: LIM)
-- [ ] `import` is refused, including an `import` whose alias is never used (verifies spec: BSL)
+- [x] A script containing `import` fails evaluation, including one inside `try` and one that would never run (verifies spec: BSL)
