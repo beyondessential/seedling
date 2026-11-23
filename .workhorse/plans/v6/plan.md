@@ -61,75 +61,72 @@ A guide in `docs/` covers the pitfalls:
 
 ## Implementation notes
 
-- **Seed frame.** `std` helpers are free functions with no receiver, so they read their seeds from a thread-local frame, the way `is_in_action_closure()` and `ValidatorFrame` already carry context. The frame holds an app seed slot and an operation seed slot. A helper picks the operation slot when `is_in_action_closure()` holds, and the app slot otherwise (static and validator).
-- **A slot is three-state:** a seed, an unreadable seed carrying its error, or no seed for this evaluation. A helper throws on the last two with distinct messages. An unreadable seed must never read as an absent one, and absent must never silently become a fresh one.
-- **Seeds are required by type.** `apps::evaluate`, `evaluate_validated`, `run_definition` and `reconstruct_app_def` take the app seed as a parameter, not an `Option`, so the compiler finds every evaluation site. The sites are registration, update, `set_params`, template preview, image discovery, `load_from_db`, `reload`, and generation reconstruction for operations.
-- **Unregistered apps.** Registration draws the seed before it evaluates, evaluates against it, and writes it in the registration transaction. Template preview and image discovery for a proposed script evaluate against a throwaway seed. Neither persists anything derived.
-- **In-memory copy.** `AppEntry` holds the decrypted app seed, or its unreadable state, loaded in `load_from_db` and set in `insert_registered`. `reload`, `reconstruct_app_def` and rotation read it from there rather than going back to the database for each evaluation.
-- **Operation seed.** It is drawn in `run_operation_loop` and gate runs (`gates/run.rs`) before the first persist, carried in `OperationContext`, and installed by `ActionClosureGuard`. Replay reads it back through `read_operation_state`, which already fails as a whole when any part is unreadable. Shell sessions draw one in `run_app_shell` and never persist it. Probes draw a throwaway one.
-- **Storage.**
-  - New table `app_seeds (app_name PK, ciphertext BLOB NOT NULL)`, plus a new `seed_ciphertext` column on `current_operation`.
-  - Both column names end in `ciphertext`, so `protected_values_exist` sees them and a missing key file still stops the daemon.
-  - Seeds are encrypted with the existing `Cipher` (orion AEAD) via `SecretString`, or a byte-oriented equivalent added beside it.
-- **Backfill for already-registered apps.** Migrations run before the cipher is loaded, so they cannot draw or encrypt seeds. The migration creates the table and records that a backfill is pending. After `Cipher::load_or_create`, the daemon gives a seed to every registered app without an `app_seeds` row, in one transaction, then clears the marker. An existing but unreadable row is never replaced.
-- **Size limits.** `random_bytes` and `random_string` check `n` and `length` against the engine's array and string size limits before allocating. A large `n` fails as an engine limit rather than allocating first.
-- **Dependencies.**
-  - `hmac` must be the version built on the same `digest` as the workspace `sha2` 0.11.1.
-  - `chacha20` is the RFC 8439 variant (`ChaCha20`, 12-byte nonce).
-  - Add both with `cargo add`. Confirm with the RFC 8439 §2.4.2 keystream vector that the crate's counter and nonce layout matches the spec.
-- **Recording derived values.** Every value a helper returns is recorded in the frame:
-  - Values from the static evaluation are kept on `AppEntry` beside the seed, for `describe_app`'s substring redaction.
-  - Values from an operation are kept for the operation's own logs. Redacting them in `rt.exec` breadcrumbs is #X6's, filed there.
-- **`script_error` fault sync.** It has three copies: `sync_fault_state`, `sync_script_error_fault`, and an inlined copy in `re_evaluate_all_apps`. Rotation adds a fourth caller, so fold the three into one first, per the rule on shared contracts.
-- **Pre-existing bug.** Deregistration never deletes `secret_params` rows: `delete_app_params` only clears `params`, and `delete_app_secret_params` has no caller. An app registered again under the same name would load the old app's secret values. It is fixed here because the app seed's deletion goes into the same block.
+- **Seed frame.** `std` helpers are free functions with no receiver, so they read their seeds from a thread-local frame (`runtime/seeds.rs`), the way the action-closure and validator flags already work. A helper reads the operation slot when `is_in_action_closure()` holds, and the app slot otherwise (static and validator).
+- **Missing seeds.** An app seed is `Ready` or `Unreadable(reason)`, and a frame with no seed installed is a third case. A helper throws on the last two with distinct messages. A registered app without a recorded seed loads as unreadable, never as one to create.
+- **Seeds are required by type** in `apps::evaluate` and `evaluate_validated`. The evaluated `App` carries the seed it was evaluated with, and `capture_closures` re-enters it. So every operation pass and probe re-evaluates the static part against the seed the running definition was declared with, and a closure that captures a top-level value captures the one the workloads hold. `reconstruct_app_def` loads the seed from the database, one seed serving every generation of a registration.
+- **Who evaluates against which seed.**
+  - Registration draws the seed before evaluating and commits it in the registration transaction.
+  - Template preview evaluates against a throwaway seed.
+  - Image discovery, updates and parameter changes use the registered app's seed.
+- **Operation seed.**
+  - The seed is drawn before the first persist and stored, encrypted, in `current_operation.seed_ciphertext`. Saving again for the same operation keeps the seed on record, which a gate run's replay relies on.
+  - Every operation loop reads the seed back from the database before its first pass (`history::load_operation_seed`).
+  - A row from before the column existed derived nothing, so it is given a seed. An unreadable seed fails the operation.
+  - Shell sessions draw one in memory, and probes draw a throwaway one.
+- **Backfill.** Migration v83 creates `app_seeds` and a one-row `app_seed_backfill` marker. After the cipher loads, the daemon seeds every registered app without a row, then deletes the marker.
+- **Derived values** are recorded only from the app seed, on `AppDef::derived`, and `describe_app` adds them to the environment redaction set. A Blob is recorded in both text forms Rhai offers: its UTF-8 reading, and the hex digits of its string form. Values derived from an operation seed are not recorded, because their redaction in `rt.exec` breadcrumbs is #X6's.
+- **Size limits.** `n` and `length` are checked against the engine's array and string limits before allocating, and the allocation itself uses `try_reserve`.
+- **Rotation** takes the app's change hold only while nothing runs or is queued, checked and taken under one scheduler lock (`AppHold::take_idle`). It persists the new seed, updates the entry, announces `AppSeedRotated`, then reloads at the same generation and syncs faults. The CLI refuses an unconfirmed rotation before it connects.
+- **`script_error` fault sync** is one function now. Re-evaluation after a host change also records a changed Canopy type, which the copy it had did not.
+- **Deregistration** deletes the app's seed and its `secret_params` rows. The latter was a pre-existing bug, fixed in its own commit.
 
 ## Checklist
 
 ### Derivation
 
-- [ ] `cargo add` `hmac` and `chacha20` to `crates/core` (workspace dependencies, full versions)
-- [ ] `crates/core/src/defs/std.rs` (replacing the empty `Module::new()` in `defs.rs`) with `defs/std/random.rs`: call encoding, call key, byte stream, and the three value constructions, cited `// spec: RND#call-encoding` / `#byte-stream` / `#values`
-- [ ] Known-answer tests for each helper, against vectors computed outside this code (Python `hmac` plus a ChaCha20 checked against RFC 8439 §2.4.2), committed with the script that produced them as a comment
-- [ ] Argument checks through `defs::take`: empty label, `n`/`length` below 1, alphabet under two characters or with a repeat (counted as Unicode scalar values), engine size limits; one test per rule
-- [ ] `random_string` rejection sampling: a test with an alphabet size that does not divide 2^32, asserting the discard boundary
-- [ ] `uuid_v4`: version and variant bits, lowercase hyphenated form
+- [x] `cargo add` `hmac` and `chacha20` to `crates/core`
+- [x] `crates/core/src/defs/stdlib.rs` with `defs/stdlib/random.rs`: call encoding, call key, byte stream, the three value constructions
+- [x] Known-answer tests against vectors from an independent Python implementation, plus the RFC 8439 §2.4.2 keystream
+- [x] Argument checks through `defs::take`, with one test per rule
+- [x] `random_string` rejection boundary test
+- [x] `uuid_v4` version and variant bits
 
 ### Seed frame and contexts
 
-- [ ] Thread-local seed frame with app and operation slots, its guard, and the three-state slot type, in `runtime/seeds.rs` (or beside `secrets.rs`)
-- [ ] Helpers pick the slot by context; tests in `tests/stdlib.rs` for each context: static and validator calls agree; an action closure call differs from the same call at top level; a closure capturing a top-level value sees it unchanged
-- [ ] `run_definition` and `capture_closures` install the app seed; `run_validators` runs inside the same frame
-- [ ] `ActionClosureGuard` installs the operation seed from `OperationContext`; probes get throwaway seeds
-- [ ] Thread the app seed through `evaluate`, `evaluate_validated`, `reconstruct_app_def`, `reload`, and every call site listed above
+- [x] Thread-local seed frame, guards and the app seed type in `runtime/seeds.rs`
+- [x] Helpers pick the seed by context: static, validator and action tests, including a captured top-level value
+- [x] `run_definition` and `capture_closures` install the app seed; validators run inside the same frame
+- [x] `ActionClosureGuard::with_operation_seed`; probes get a throwaway operation seed
+- [x] App seed threaded through every evaluation site
 
 ### Storage
 
-- [ ] Migration v83: `app_seeds` table, `current_operation.seed_ciphertext`, backfill marker
-- [ ] `runtime/apps/seeds.rs`: draw (CSPRNG, 32 bytes), encrypt, upsert with `ON CONFLICT DO UPDATE`, load to the three-state type, delete; cited `SEC#seeds`, `SEC#app-seeds`
-- [ ] Daemon start: backfill after the cipher loads, then `load_from_db` fills `AppEntry` seeds; test that an unreadable row stays unreadable and the app's helper calls fail with `script_error`
-- [ ] Registration draws and persists the seed in its transaction; test that two registrations of one script derive different values
-- [ ] Deregistration deletes the app's seed and its `secret_params` (the pre-existing bug, own commit with its own test)
-- [ ] `save_current_operation` stores the operation seed; `read_operation_state` and `start_replay` restore it; a test severs in-memory state between persist and replay and checks a closure's derived values match
-- [ ] Invoked actions derive from the caller's operation seed (test through `Action.invoke`)
-- [ ] Shell sessions draw an in-memory seed per session
+- [x] Migration v83: `app_seeds`, `current_operation.seed_ciphertext`, backfill marker
+- [x] `runtime/apps/seeds.rs`: store, load, delete, backfill
+- [x] Daemon start: backfill, then `load_from_db` fills `AppEntry` seeds; unreadable rows stay unreadable
+- [x] Registration draws and persists the seed in its transaction; two registrations derive apart
+- [x] Deregistration deletes the app's seed and its `secret_params` (own commit and test)
+- [x] Operation seed persisted and read back on replay; a test replays from a persisted row
+- [x] Invoked actions derive from the caller's operation seed
+- [x] Shell sessions draw an in-memory seed
 
 ### Rotation
 
-- [ ] Consolidate the three `script_error` sync copies into one function (own commit)
-- [ ] `/apps/seed/rotate` in `oi/handler/apps.rs` and the `handler.rs` route table: `not_found`, `blocker_for` mapped through `app_blocked`, `AppHold` for the duration, persist the new seed, then reload without a generation change, sync the `script_error` fault, wake the tick, reply `{}`; cited `CTL#seed-rotation`
-- [ ] `AppSeedRotated` event in `crates/protocol/src/events.rs` with emitters on both senders and the shape test
-- [ ] Handler tests: `not_found`; `operation_in_progress` for running, queued and held; generation unchanged; a failing evaluation keeps the new seed and files `script_error`; the event is emitted
-- [ ] CLI `apps seed rotate <app> --yes` in `crates/ctl/src/apps.rs` (nested like `apps gate run`); without `--yes`, print the consequences, send nothing, exit non-zero
-- [ ] Web console: a Rotate seed control on the app detail page, `safety="dangerous"`, with a confirm dialog through `useOiAction`; `AppSeedRotated` in `EventsSidebar`, `actor_activity.rs`, `APP_DETAIL_EVENTS` and the app list refresh set; frontend test asserting the OI call
+- [x] One `script_error` sync function (own commit)
+- [x] `/apps/seed/rotate` handler and route
+- [x] `AppSeedRotated` event, emitters and shape test
+- [x] Handler tests: `not_found`; `operation_in_progress` for running, queued and held; same generation; failing evaluation keeps the seed and files `script_error`; event emitted
+- [x] CLI `apps seed rotate <app> --yes`, refusing before connecting without it
+- [x] Console Rotate seed control (dangerous), confirm dialog, event handling, frontend tests
 
 ### Redaction
 
-- [ ] Record derived values in the frame and keep the static evaluation's on `AppEntry`
-- [ ] `describe_app` adds them to the substring set passed to `redact_secret_env`; test with a derived value inside an env value
-- [ ] Seeds never reach a log line, event or OI response: grep-level review of every place the new types are formatted, and `Debug` on the seed type that prints nothing
+- [x] Derived values recorded on the definition
+- [x] `describe_app` withholds env values holding them, including a Blob's string form
+- [x] Seeds print as `Seed(..)` and are never formatted into logs, events or responses
 
 ### Docs
 
-- [ ] `docs/bsl-scripting.md`: Replicability lists the app seed; Standard helpers lists the three helpers and names derivation as the one exception to the replicability convention; a Derived random values section with the pitfalls above
-- [ ] `docs/deploying.md` operator commands: `apps seed rotate`
-- [ ] `docs/threat-model.md`: seeds under the secret key, rotation, and what a leaked key file now exposes
+- [x] `docs/bsl-scripting.md`: replicability inputs, the helpers' exception to the conventions, a Derived random values section with the pitfalls (its example checked by running it)
+- [x] `docs/deploying.md`: `apps seed rotate`
+- [x] `docs/threat-model.md`: seeds and derived values
