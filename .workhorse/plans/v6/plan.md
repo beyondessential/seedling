@@ -36,6 +36,13 @@ The same set on `app` and on `rt`, differing only in seed:
 A label is any non-empty string.
 The function name, the label and every argument enter the derivation, so no call's value is a prefix of, or otherwise related to, another's.
 
+## Redaction
+
+Every value an evaluation derives, from either seed, is redacted wherever secret parameter values are: the substring rule for environment values in describing an app, and the runtime's logs and events.
+A derived Blob counts through each encoding BSL offers, worded generically so the hashing card's encodings fall under it without editing the spec; with no encodings yet, that clause has nothing to match.
+Generation history records parameters, not derived values, so it needs no change.
+The redaction gaps secret parameters already have (volume file writes, sub-action parameter maps in the action log) are card X6.
+
 ## Docs
 
 A guide in `docs/` covers the pitfalls:
