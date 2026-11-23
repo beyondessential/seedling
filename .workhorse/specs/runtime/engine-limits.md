@@ -23,6 +23,8 @@ An evaluation that exceeds any limit MUST fail with an error.
 
 The expression nesting limit MUST apply both at the top level of a script and within function bodies.
 
+Functions in a script's scope MAY NOT pause evaluation for any span of time, other than using the methods of a [runtime handle](../language/rt.md#runtime-handle).
+
 An operator MAY override each limit with its daemon option when the daemon starts.
 Setting the operations, expression nesting, string, array or object map limit to 0 MUST remove that limit.
 The daemon MUST refuse to start with a function call nesting depth of 0.

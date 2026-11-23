@@ -37,6 +37,7 @@ mod param;
 mod pod;
 mod runtime;
 mod service;
+mod stdlib;
 mod volume;
 
 pub fn run_test_script(source: &str) -> (Engine, Scope<'static>, defs::app::App, AST) {

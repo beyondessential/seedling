@@ -47,6 +47,8 @@ A method that throws raises a script error.
 A script is written in [Rhai](https://rhai.rs/book/).
 The runtime MUST evaluate a script as Rhai, with the types, functions, constants and variables the BSL specifications define in its scope.
 
+A script that contains an `import` statement MUST fail evaluation, whether or not the statement would run.
+
 The runtime MUST evaluate each script in a scope of its own.
 A variable or value set by one evaluation MUST NOT be visible to another.
 
@@ -55,6 +57,15 @@ If a script error propagates to the top level of the script, the evaluation MUST
 
 > [!NOTE]
 > A script cannot catch the error raised when evaluation reaches one of the [engine limits](../runtime/engine-limits.md).
+
+## Replicability
+
+Two evaluations of the same script with the same definition bundle, parameter values and [host constants](constants.md#host-constants) MUST declare the same [resource graph](#resource-graph).
+No function, method or constant in a script's scope MAY read the clock, the network or the host's filesystem, other than the host constants and the methods of a [runtime handle](rt.md#runtime-handle).
+
+> [!NOTE]
+> A definition is evaluated many times over an app's life, and an evaluation that could read the clock would declare a different app each time without any of its inputs changing.
+> An action that needs the time or the network reaches it through its runtime handle, such as by running a command in a container.
 
 ## Arguments
 

@@ -202,4 +202,21 @@ mod engine_limits_tests {
         )
         .expect("normal script should run within default limits");
     }
+
+    // spec: LIM#limits
+    #[test]
+    fn a_script_cannot_pause_evaluation() {
+        for call in ["sleep(60)", "sleep(60.0)"] {
+            let started = std::time::Instant::now();
+            let err = eval(ScriptLimits::default(), call).expect_err("sleep should throw");
+            assert!(
+                matches!(*err, rhai::EvalAltResult::ErrorRuntime(..)),
+                "expected {call} to throw, got {err:?}",
+            );
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "{call} paused evaluation",
+            );
+        }
+    }
 }
