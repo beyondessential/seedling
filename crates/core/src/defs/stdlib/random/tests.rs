@@ -40,7 +40,7 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 fn a_string_field_is_its_length_then_its_utf8() {
     assert_eq!(
-        encode(&[Field::Str("αb"), Field::Int(258)]),
+        encode(&[Field::Str("αb"), Field::Int(258)]).unwrap(),
         [0, 0, 0, 3, 0xce, 0xb1, b'b', 0, 0, 0, 0, 0, 0, 1, 2],
     );
 }
@@ -76,7 +76,7 @@ fn random_string_known_answers() {
 #[test]
 fn uuid_v4_known_answer() {
     assert_eq!(
-        uuid_v4(&seed(), "instance"),
+        uuid_v4(&seed(), "instance").unwrap(),
         "a4555b20-bf11-416d-a1be-f82adabd9e22"
     );
 }
@@ -104,7 +104,7 @@ fn a_word_in_the_biased_top_is_discarded() {
 #[test]
 fn uuid_v4_carries_the_version_and_variant() {
     for label in ["a", "b", "c", "d"] {
-        let uuid = uuid::Uuid::parse_str(&uuid_v4(&seed(), label)).unwrap();
+        let uuid = uuid::Uuid::parse_str(&uuid_v4(&seed(), label).unwrap()).unwrap();
         assert_eq!(uuid.get_version_num(), 4);
         assert_eq!(uuid.get_variant(), uuid::Variant::RFC4122);
     }

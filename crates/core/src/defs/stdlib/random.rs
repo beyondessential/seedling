@@ -72,7 +72,7 @@ pub(super) fn register(module: &mut rhai::Module) {
             |label: Dynamic| -> Result<String, Box<EvalAltResult>> {
                 let label = take_label(label)?;
                 let seed = seed_for_call()?;
-                let value = uuid_v4(&seed, &label);
+                let value = uuid_v4(&seed, &label)?;
                 record(|| vec![value.clone()]);
                 Ok(value)
             },
@@ -172,29 +172,30 @@ enum Field<'a> {
 }
 
 // spec: RND#call-encoding
-fn encode(fields: &[Field<'_>]) -> Vec<u8> {
+/// The call's encoding, or an error where a string is too long for its
+/// length to be written, as an engine with no string limit allows.
+fn encode(fields: &[Field<'_>]) -> Result<Vec<u8>, Box<EvalAltResult>> {
     let mut out = Vec::new();
     for field in fields {
         match field {
             Field::Str(s) => {
-                let len =
-                    u32::try_from(s.len()).expect("engine limits bound a string far below 4 GiB");
+                let len = u32::try_from(s.len()).map_err(|_| too_large("Length of string"))?;
                 out.extend_from_slice(&len.to_be_bytes());
                 out.extend_from_slice(s.as_bytes());
             }
             Field::Int(n) => out.extend_from_slice(&n.to_be_bytes()),
         }
     }
-    out
+    Ok(out)
 }
 
 // spec: RND#byte-stream
-fn byte_stream(seed: &Seed, fields: &[Field<'_>]) -> ChaCha20 {
+fn byte_stream(seed: &Seed, fields: &[Field<'_>]) -> Result<ChaCha20, Box<EvalAltResult>> {
     let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(seed.expose())
         .expect("HMAC takes a key of any length");
-    mac.update(&encode(fields));
+    mac.update(&encode(fields)?);
     let key: [u8; 32] = mac.finalize().into_bytes().into();
-    ChaCha20::new(&key.into(), &[0u8; 12].into())
+    Ok(ChaCha20::new(&key.into(), &[0u8; 12].into()))
 }
 
 fn take_bytes(stream: &mut ChaCha20, buf: &mut [u8]) {
@@ -215,7 +216,7 @@ fn random_bytes(seed: &Seed, label: &str, n: usize) -> Result<Vec<u8>, Box<EvalA
             Field::Str(label),
             Field::Int(n as u64),
         ],
-    );
+    )?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(n)
@@ -241,7 +242,7 @@ fn random_string(
             Field::Int(length as u64),
             Field::Str(&alphabet_text),
         ],
-    );
+    )?;
     let mut out = String::new();
     out.try_reserve(length.saturating_mul(widest(alphabet)))
         .map_err(|_| allocation_failed())?;
@@ -269,13 +270,13 @@ fn pick(w: u32, k: usize) -> Option<usize> {
 }
 
 // spec: RND#values
-fn uuid_v4(seed: &Seed, label: &str) -> String {
-    let mut stream = byte_stream(seed, &[Field::Str(UUID_V4), Field::Str(label)]);
+fn uuid_v4(seed: &Seed, label: &str) -> Result<String, Box<EvalAltResult>> {
+    let mut stream = byte_stream(seed, &[Field::Str(UUID_V4), Field::Str(label)])?;
     let mut bytes = [0u8; 16];
     take_bytes(&mut stream, &mut bytes);
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
+    Ok(uuid::Uuid::from_bytes(bytes).hyphenated().to_string())
 }
 
 #[cfg(test)]
