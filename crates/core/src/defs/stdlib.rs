@@ -1,6 +1,6 @@
 //! The helpers of the `std` module.
 
-mod kinds;
+pub(crate) mod kinds;
 
 // spec: STD#the-std-module
 /// The `std` module, holding every helper BSL offers.

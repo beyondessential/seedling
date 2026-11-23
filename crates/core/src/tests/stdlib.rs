@@ -82,7 +82,7 @@ fn every_kind_has_a_parser_named_for_it() {
     use crate::defs::param_def::ParamKind;
 
     for &kind in ParamKind::VARIANTS {
-        let name = format!("parse_{}", kind.as_str().replace('-', "_"));
+        let name = crate::defs::stdlib::kinds::helper_name(kind);
         let err = eval(&format!("std::{name}(())")).expect_err("a unit is not a value");
         assert!(
             !matches!(*err, rhai::EvalAltResult::ErrorFunctionNotFound(..)),
