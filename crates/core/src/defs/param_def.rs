@@ -85,11 +85,7 @@ impl ParamKind {
             }
             // spec: ACN#kind-parsers
             Self::Volume => {
-                SiteVolumeName::new(value).map_err(|_| {
-                    "volume name must be 3 to 63 characters matching \
-                     ^[a-zA-Z][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]$"
-                        .to_owned()
-                })?;
+                SiteVolumeName::new(value).map_err(|e| e.to_string())?;
             }
         }
         Ok(ParsedValue::Value(value.to_owned()))
