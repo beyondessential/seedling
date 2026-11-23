@@ -42,7 +42,7 @@ Add `byte-size` and `bit-size` kinds with `parse_byte_size` and `parse_bit_size`
 
 Add `ip-address`, `ip-subnet` and `ip-range` kinds with their parse functions, for allow-lists, trusted proxies and address pools. Parsed values tell their family and test containment of an address or another subnet. To settle: whether a subnet with host bits set is refused or masked, the syntax of a range, and whether IPv4-mapped IPv6 addresses and zones are accepted.
 
-## Boolean, integer and choice parameter kinds
+## Boolean, integer and choice parameter kinds · B7
 
 Add `boolean`, `integer` and `choice` kinds with their parse functions, so a script stops comparing parameter values against `"true"` and operator interfaces can offer a toggle, a number field and a dropdown. An integer's range and a choice's options are arguments of the kind, which the schema API takes today as a bare string, so this card changes that API.
 
