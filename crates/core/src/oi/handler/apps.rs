@@ -1507,10 +1507,12 @@ pub(crate) fn deregister_app(
         }
     }
 
-    // Reject if an operation is active or queued for this app.
-    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
-        return Err(app_blocked(name, "remove", &blocker));
-    }
+    // spec: APPS#removal
+    // Refused while an operation is active or queued for the app or a change
+    // is being applied, and held until the removal is done, so neither can
+    // begin on an app part-way gone.
+    let _hold = crate::runtime::scheduler::AppHold::take_idle(&state.scheduler, &params.app)
+        .map_err(|blocker| app_blocked(name, "remove", &blocker))?;
 
     // spec: APPS#removal
     // The teardown of a session or a gate check is driven through the app's
@@ -2470,11 +2472,13 @@ pub(crate) fn unstop_all_resources(
 // spec: CTL#seed-rotation
 pub(crate) fn rotate_seed(state: &OiState, params: AppParams, ctx: &RequestCtx) -> HandlerResult {
     let app = &params.app;
+    // Held before the app is looked up, so a removal cannot run between the
+    // lookup and the write and leave a seed behind for an app that is gone.
+    let _hold = crate::runtime::scheduler::AppHold::take_idle(&state.scheduler, app)
+        .map_err(|blocker| app_blocked(app.as_str(), "rotate the seed of", &blocker))?;
     if !state.registry.read().is_registered(app.as_str()) {
         return Err(OiError::not_found(format!("app not found: {app}")));
     }
-    let _hold = crate::runtime::scheduler::AppHold::take_idle(&state.scheduler, app)
-        .map_err(|blocker| app_blocked(app.as_str(), "rotate the seed of", &blocker))?;
 
     // spec: SEC#app-seed-rotation — the new seed is durable, and the old one
     // gone, before anything is evaluated against it.

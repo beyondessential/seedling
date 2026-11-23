@@ -2233,6 +2233,25 @@ fn rotating_the_seed_changes_derived_values_at_the_same_generation() {
     );
 }
 
+// spec: APPS#removal
+#[test]
+fn removal_is_refused_while_a_change_holds_the_app() {
+    let oi = TestOi::with_app("demo");
+    let demo = seedling_protocol::names::AppName::new("demo").unwrap();
+    {
+        let _hold = crate::runtime::scheduler::AppHold::take(&oi.state.scheduler, &demo).unwrap();
+        let (code, _) = oi
+            .call("/apps/remove", json!({ "app": "demo" }))
+            .unwrap_err();
+        assert_eq!(code, "operation_in_progress");
+    }
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+    assert!(
+        crate::runtime::scheduler::AppHold::take(&oi.state.scheduler, &demo).is_ok(),
+        "the removal let go of its hold"
+    );
+}
+
 // spec: CTL#seed-rotation
 #[test]
 fn rotating_the_seed_of_an_unregistered_app_is_not_found() {
