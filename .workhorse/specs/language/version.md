@@ -16,8 +16,16 @@ Applies to the `version` and `version-semver` [param kinds](action.md#param-kind
 ## Generic versions
 
 `std::parse_version(text)` MUST return a `Version` for a value it accepts.
+It MUST accept a value made only of printable ASCII characters other than space, holding at least one ASCII digit, and MUST reject every other value.
+
+> [!NOTE]
+> Requiring a digit rejects floating tags such as `latest` or `stable`, which libversion order would otherwise place below every numbered release.
 
 Two `Version` values MUST compare by libversion order through `<`, `<=`, `>`, `>=`, `==` and `!=`.
+A leading `v` or `V` directly followed by an ASCII digit MUST be disregarded when ordering, so that `v2.0` and `2.0` are equal.
+
+> [!NOTE]
+> Plain libversion order reads a leading `v` as a pre-release component, placing `v2.0` below `0.1`.
 
 > [!NOTE]
 > The `version` kind is for values whose scheme Seedling does not know, such as a Debian package version or a partial image tag like `16.4`.
