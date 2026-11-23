@@ -2157,3 +2157,148 @@ fn each_registration_has_a_seed_of_its_own() {
         "registering again draws a new seed"
     );
 }
+
+fn stored_seed(oi: &TestOi, app: &str) -> Vec<u8> {
+    let app = app.to_owned();
+    oi.state
+        .db
+        .call(move |db| {
+            db.conn.query_row(
+                "SELECT ciphertext FROM app_seeds WHERE app_name = ?1",
+                [app],
+                |r| r.get(0),
+            )
+        })
+        .unwrap()
+}
+
+// spec: CTL#seed-rotation
+// spec: SEC#app-seed-rotation
+#[test]
+fn rotating_the_seed_changes_derived_values_at_the_same_generation() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::new();
+    let script = r#"app.description(std::uuid_v4("id"));"#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+    let before = listed_description(&oi, "demo");
+    let mut events = oi.state.event_tx.subscribe();
+
+    let result = oi
+        .call("/apps/seed/rotate", json!({ "app": "demo" }))
+        .unwrap();
+    assert_eq!(result, json!({}));
+    assert_ne!(before, listed_description(&oi, "demo"));
+
+    let generations = oi
+        .call("/apps/generations", json!({ "app": "demo" }))
+        .unwrap();
+    assert_eq!(
+        generations.as_array().unwrap().len(),
+        1,
+        "no generation is added"
+    );
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|ev| matches!(ev, OiEvent::AppSeedRotated { .. })),
+        "the rotation was announced"
+    );
+}
+
+// spec: CTL#seed-rotation
+#[test]
+fn rotating_the_seed_of_an_unregistered_app_is_not_found() {
+    let oi = TestOi::new();
+    let (code, _) = oi
+        .call("/apps/seed/rotate", json!({ "app": "ghost" }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+}
+
+// spec: CTL#seed-rotation
+#[test]
+fn rotation_is_refused_while_an_operation_or_change_holds_the_app() {
+    use seedling_protocol::events::OperationTarget;
+    use seedling_protocol::names::{ActionName, AppName};
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    let demo = AppName::new("demo").unwrap();
+    let other = AppName::new("other").unwrap();
+    let backup = OperationTarget::Action(ActionName::new("backup").unwrap());
+    let installed = || parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed);
+    let seed = stored_seed(&oi, "demo");
+    let refused = |what: &str| {
+        let (code, message) = oi
+            .call("/apps/seed/rotate", json!({ "app": "demo" }))
+            .unwrap_err();
+        assert_eq!(code, "operation_in_progress", "{what}: {message}");
+        assert_eq!(
+            stored_seed(&oi, "demo"),
+            seed,
+            "{what}: the seed is untouched"
+        );
+    };
+
+    {
+        let _hold = crate::runtime::scheduler::AppHold::take(&oi.state.scheduler, &demo).unwrap();
+        refused("a change");
+    }
+
+    let admit = |app: &AppName| {
+        oi.state.scheduler.lock().admit(
+            app,
+            &backup,
+            serde_json::Map::new(),
+            1,
+            "test",
+            &installed(),
+            None,
+        )
+    };
+    admit(&demo);
+    refused("a running operation");
+    oi.state.scheduler.lock().complete_current(|_| None);
+
+    admit(&other);
+    assert_eq!(
+        admit(&demo),
+        crate::runtime::scheduler::ScheduleResult::Queued
+    );
+    refused("a queued operation");
+}
+
+// spec: CTL#seed-rotation
+// spec: SEC#app-seed-rotation
+#[test]
+fn a_definition_failing_against_the_new_seed_keeps_it_and_files_script_error() {
+    let oi = TestOi::new();
+    let script = r#"if std::random_bytes("coin", 1)[0] < 128 { throw "tails"; }"#;
+    // Register until the first seed lands heads, so registration succeeds.
+    let registered_clean = (0..64).any(|_| {
+        oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+            .unwrap();
+        let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+        let clean = faults.as_array().unwrap().is_empty();
+        if !clean {
+            oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+        }
+        clean
+    });
+    assert!(registered_clean, "no registration landed heads");
+    // Each rotation lands tails half the time; 64 heads in a row is not a
+    // chance worth counting.
+    for _ in 0..64 {
+        let before = stored_seed(&oi, "demo");
+        oi.call("/apps/seed/rotate", json!({ "app": "demo" }))
+            .unwrap();
+        assert_ne!(before, stored_seed(&oi, "demo"), "the new seed is kept");
+        let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+        if let Some(fault) = faults.as_array().unwrap().first() {
+            assert_eq!(fault["kind"], "script_error");
+            return;
+        }
+    }
+    panic!("no rotation landed tails");
+}

@@ -456,6 +456,21 @@ impl AppHold {
             app: app.clone(),
         })
     }
+
+    /// Hold `app` only while no operation is running or queued for it, or
+    /// name what keeps it; checked and taken under one lock, so no operation
+    /// is admitted in between.
+    pub fn take_idle(scheduler: &Arc<Mutex<Scheduler>>, app: &AppName) -> Result<Self, AppBlocker> {
+        let mut locked = scheduler.lock();
+        if let Some(blocker) = locked.blocker_for(app) {
+            return Err(blocker);
+        }
+        locked.hold(app)?;
+        Ok(Self {
+            scheduler: Arc::clone(scheduler),
+            app: app.clone(),
+        })
+    }
 }
 
 impl Drop for AppHold {

@@ -245,6 +245,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/apps/resource/unstop" => apps::unstop_resource(state, params.parse()?, ctx),
         // spec: CTL#resource-stop
         "/apps/unstop" => apps::unstop_all_resources(state, params.parse()?, ctx),
+        // spec: CTL#seed-rotation
+        "/apps/seed/rotate" => apps::rotate_seed(state, params.parse()?, ctx),
         // spec: APPS#definition-retrieval
         "/apps/script" => apps::get_app_script(state, params.parse()?),
         // spec: APPS#definition-retrieval

@@ -44,6 +44,7 @@ function eventSummary(ev: SeedlingEvent): string {
   switch (ev.type) {
     case "AppRegistered": return `registered (gen ${ev.generation ?? "?"})`;
     case "AppDeregistered": return "deregistered";
+    case "AppSeedRotated": return "seed rotated";
     case "AppUpdated": return `updated to gen ${ev.generation ?? "?"}`;
     case "AppPhaseChanged": return `phase → ${ev.phase ?? "?"}`;
     case "ParamsChanged": return `params ${(ev.changes ?? []).map((c) => c.name).join(", ")} changed`;

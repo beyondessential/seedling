@@ -2464,5 +2464,63 @@ pub(crate) fn unstop_all_resources(
     Ok(json!({}))
 }
 
+// spec: CTL#seed-rotation
+pub(crate) fn rotate_seed(state: &OiState, params: AppParams, ctx: &RequestCtx) -> HandlerResult {
+    let app = &params.app;
+    if !state.registry.read().is_registered(app.as_str()) {
+        return Err(OiError::not_found(format!("app not found: {app}")));
+    }
+    let _hold = crate::runtime::scheduler::AppHold::take_idle(&state.scheduler, app)
+        .map_err(|blocker| app_blocked(app.as_str(), "rotate the seed of", &blocker))?;
+
+    // spec: SEC#app-seed-rotation — the new seed is durable, and the old one
+    // gone, before anything is evaluated against it.
+    let seed = crate::runtime::seeds::Seed::draw()
+        .map_err(|e| OiError::internal(format!("no seed could be drawn: {e:?}")))?;
+    {
+        let (name, cipher, seed) = (app.clone(), Arc::clone(&state.cipher), seed.clone());
+        state
+            .db
+            .call(move |db| crate::runtime::apps::seeds::store_app_seed(db, &cipher, &name, &seed))
+            .map_err(|e| OiError::internal(format!("the new seed cannot be stored: {e}")))?;
+    }
+    if let Some(entry) = state.registry.write().get_mut(app.as_str()) {
+        entry.seed = crate::runtime::seeds::AppSeed::Ready(seed);
+    }
+    tracing::info!(app = %app, "app seed rotated");
+    ctx.events.app_seed_rotated(app);
+
+    // spec: SEC#app-seed-rotation — evaluated again at the same generation.
+    // A definition that no longer evaluates keeps the new seed, and the
+    // failure is the app's script_error fault.
+    let loaded = {
+        let (name, cipher) = (app.clone(), Arc::clone(&state.cipher));
+        state
+            .db
+            .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name))
+    };
+    let stored = loaded.map_err(|e| {
+        tracing::error!(app = %app, "not re-evaluating after seed rotation: could not read the stored params: {e}");
+        OiError::internal(format!(
+            "the seed was replaced, but the app could not be evaluated against it: \
+             its stored parameters cannot be read: {e}"
+        ))
+    })?;
+    let _ = crate::runtime::apps::reload(
+        &state.registry,
+        &state.db,
+        &state.cipher,
+        app,
+        &stored,
+        &state.script_limits,
+    );
+    let reg = state.registry.read();
+    if let Some(entry) = reg.get(app.as_str()) {
+        sync_fault_state(&state.db, entry);
+        entry.tick_notify.notify_one();
+    }
+    Ok(json!({}))
+}
+
 #[cfg(test)]
 mod tests;

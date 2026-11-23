@@ -2489,6 +2489,64 @@ function AppImagesSection({
   );
 }
 
+function RotateSeedButton({
+  appName,
+  onRotated,
+}: {
+  appName: string;
+  onRotated: () => void;
+}) {
+  // spec: UI#guarded-controls
+  const { execute, loading, error, clearError } = useOiAction();
+  const [confirming, setConfirming] = useState(false);
+  const close = () => {
+    setConfirming(false);
+    clearError();
+  };
+  return (
+    <>
+      <OutlinedActionButton
+        safety="dangerous"
+        size="small"
+        disabled={loading}
+        onClick={() => setConfirming(true)}
+      >
+        Rotate seed
+      </OutlinedActionButton>
+      <Dialog open={confirming} onClose={close} fullWidth maxWidth="sm">
+        <DialogTitle>Rotate seed?</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Typography>
+              Every random value <strong>{appName}</strong> derives from its
+              seed changes, and every workload holding one restarts. Data
+              already written with the old values keeps them.
+            </Typography>
+            {error && <OiErrorAlert error={error} />}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={close} disabled={loading}>
+            Cancel
+          </Button>
+          <SolidActionButton
+            safety="dangerous"
+            disabled={loading}
+            onClick={async () => {
+              // spec: CTL#seed-rotation
+              if ((await execute("/apps/seed/rotate", { app: appName })) === null) return;
+              setConfirming(false);
+              onRotated();
+            }}
+          >
+            Rotate seed
+          </SolidActionButton>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
 function ClearFaultsButton({
   appName,
   onCleared,
@@ -2674,6 +2732,7 @@ const APP_DETAIL_EVENTS: Set<string> = new Set([
   "DeploymentRestarted",
   "ResourceStopped",
   "ResourceUnstopped",
+  "AppSeedRotated",
 ]);
 
 export default function AppDetail() {
@@ -2766,6 +2825,7 @@ export default function AppDetail() {
         >
           Edit script
         </OutlinedActionButton>
+        <RotateSeedButton appName={name!} onRotated={refetch} />
         <IconActionButton
           safety="read"
           tooltip="Refresh"

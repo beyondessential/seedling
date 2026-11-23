@@ -37,7 +37,7 @@ const APP_LIST_EVENTS: Set<string> = new Set([
   "AppRegistered", "AppDeregistered", "AppUpdated", "AppPhaseChanged",
   "OperationStarted", "OperationCompleted", "OperationFailed", "OperationCancelled",
   "FaultFiled", "FaultCleared", "ResourceStopped", "ResourceUnstopped",
-  "AppPriorityChanged",
+  "AppPriorityChanged", "AppSeedRotated",
 ]);
 
 const SESSION_EVENTS: Set<string> = new Set([

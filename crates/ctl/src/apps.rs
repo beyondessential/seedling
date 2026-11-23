@@ -75,6 +75,11 @@ pub(super) enum AppsCommand {
         #[command(subcommand)]
         command: GateCommand,
     },
+    /// Manage the seed an app's random values are derived from
+    Seed {
+        #[command(subcommand)]
+        command: SeedCommand,
+    },
     /// Invoke a lifecycle action
     Action {
         app: AppName,
@@ -290,6 +295,35 @@ pub(super) enum ParamCommand {
 }
 
 #[derive(Subcommand)]
+pub(super) enum SeedCommand {
+    /// Replace the app's seed, changing every value derived from it
+    // spec: CLI#seed-rotation
+    Rotate {
+        app: AppName,
+        /// Rotate the seed; without it, nothing is sent
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// Refuse, before anything connects, a command that needs a confirmation it
+/// was not given.
+// spec: CLI#seed-rotation
+pub(super) fn refuse_unconfirmed(command: &AppsCommand) {
+    if let AppsCommand::Seed {
+        command: SeedCommand::Rotate { app, yes: false },
+    } = command
+    {
+        eprintln!(
+            "Rotating {app}'s seed changes every value derived from it, and every workload \
+             holding one restarts. Data already written with the old values keeps them. \
+             Run again with --yes to rotate."
+        );
+        std::process::exit(1);
+    }
+}
+
+#[derive(Subcommand)]
 pub(super) enum GateCommand {
     /// Run a gate now, whether or not it is satisfied
     // spec: CLI#action-and-shell-parameters
@@ -487,6 +521,17 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                             "/apps/gates/run",
                             serde_json::json!({ "app": app, "gate": gate }),
                         )
+                        .await,
+                );
+            }
+        },
+        AppsCommand::Seed { command } => match command {
+            // spec: CLI#seed-rotation
+            // Unconfirmed, it never got this far: see `refuse_unconfirmed`.
+            SeedCommand::Rotate { app, .. } => {
+                print_result(
+                    client
+                        .request("/apps/seed/rotate", serde_json::json!({ "app": app }))
                         .await,
                 );
             }
@@ -816,6 +861,24 @@ mod tests {
         ])
         .expect("setting and unsetting different parameters together parses");
         assert!(matches!(cli.cmd, AppsCommand::Update { .. }));
+    }
+
+    // spec: CLI#seed-rotation
+    #[test]
+    fn seed_rotate_is_confirmed_only_by_yes() {
+        let rotate = |args: &[&str]| {
+            let cli = TestCli::try_parse_from(args).expect("parses");
+            let AppsCommand::Seed {
+                command: SeedCommand::Rotate { app, yes },
+            } = cli.cmd
+            else {
+                panic!("expected seed rotate");
+            };
+            assert_eq!(app.as_str(), "web");
+            yes
+        };
+        assert!(!rotate(&["t", "seed", "rotate", "web"]));
+        assert!(rotate(&["t", "seed", "rotate", "web", "--yes"]));
     }
 
     // spec: CLI#parameter-changes
