@@ -40,7 +40,7 @@ Each run of digits MUST be an integer, and each run of letters MUST be a string 
 ## SemVer versions
 
 `std::parse_version_semver(text)` MUST return a `SemVer` for a value it accepts.
-It MUST accept a value that is a SemVer version, or a `v` followed by a SemVer version, and MUST reject every other value.
+It MUST accept a value that is a SemVer version, or a `v` or `V` followed by a SemVer version, and MUST reject every other value.
 It MUST reject a value whose major, minor or patch number is too large for a BSL integer.
 
 > [!NOTE]
