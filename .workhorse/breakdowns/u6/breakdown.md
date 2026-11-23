@@ -18,7 +18,7 @@ Establish the convention the kind cards build on: a `std::parse_k(text)` functio
 
 Add `url`, `url-origin` and `hostname` kinds with `parse_url`, `parse_url_origin` and `parse_hostname`. `parse_url` returns a map of scheme, host, port, path, query, fragment, username and password, with the port filled from the scheme's default when the URL gives none. `url-origin` accepts an `http` or `https` URL with a host and an optional port and nothing else (a single trailing `/` allowed), which is what an ingress is declared from. `hostname` accepts a name valid as an ingress hostname and returns it in lower case. To settle: IPv6 literals and internationalised hostnames in `url`, given an ingress hostname is ASCII letters, digits and hyphens (could add IDN/punycode handling, or teach ingress about it); and whether the query comes back as a raw string or decoded into a map.
 
-## Package URL parameter kind
+## Package URL parameter kind · E7
 
 Add a `purl` kind with `std::parse_purl`, accepting a [Package URL](https://github.com/package-url/purl-spec) such as `pkg:docker/library/postgres@16.4` and returning a map of type, namespace, name, version, qualifiers and subpath, so a definition can take a package or image reference in one standard form. To settle: whether the type-specific rules for known types (such as `docker` and `oci`) are checked or only the generic syntax, and how a purl's version relates to the version kind.
 
