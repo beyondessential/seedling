@@ -472,6 +472,9 @@ pub struct AppDef {
     /// declare. Their bodies are recovered from the capture buffer.
     // spec: GATE#declaration
     pub gates: BTreeMap<GateName, GateDef>,
+    /// Values the evaluation derived from the app seed, withheld wherever
+    /// secret parameter values are.
+    pub derived: crate::runtime::seeds::DerivedValues,
 }
 
 fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAltResult>> {

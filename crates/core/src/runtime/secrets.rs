@@ -171,6 +171,15 @@ impl Cipher {
         Ok(aead::seal(&self.key, plaintext.expose_secret().as_bytes())?)
     }
 
+    // spec: SEC#seeds
+    pub fn encrypt_bytes(&self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+        Ok(aead::seal(&self.key, plaintext)?)
+    }
+
+    pub fn decrypt_bytes(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
+        Ok(aead::open(&self.key, ciphertext)?)
+    }
+
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<SecretString, Error> {
         let plaintext = aead::open(&self.key, ciphertext)?;
         let s = String::from_utf8(plaintext).map_err(|_| Error::BadEncoding)?;

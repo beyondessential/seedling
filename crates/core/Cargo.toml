@@ -71,6 +71,8 @@ toml.workspace = true
 siphasher = "1.0.4"
 unicode-properties = { version = "0.1.5", default-features = false, features = ["general-category"] }
 strum = { version = "0.27.2", features = ["derive"] }
+hmac = "0.13.0"
+chacha20 = "0.10.2"
 
 [dev-dependencies]
 rcgen = { version = "0.14.10", features = ["x509-parser"] }

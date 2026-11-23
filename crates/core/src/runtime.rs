@@ -38,6 +38,7 @@ pub mod scaling;
 pub mod scheduler;
 pub mod schedules;
 pub mod secrets;
+pub mod seeds;
 pub mod service_addresses;
 pub mod site_ingress_attachments;
 pub mod site_ingresses;
