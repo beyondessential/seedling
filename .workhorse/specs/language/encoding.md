@@ -52,7 +52,7 @@ The std module MUST offer these helpers.
 | `std::encode_utf8(text: string)` | a Blob of the UTF-8 encoding of `text` |
 | `std::decode_utf8(data: bytes)` | the string whose UTF-8 encoding is `data` |
 
-Encoding no bytes MUST return the empty string, and decoding the empty string MUST return an empty Blob.
+Given an empty string or no bytes, each of these helpers MUST return an empty string or an empty Blob, as its result type is.
 
 `decode_hex` MUST accept the base16 alphabet in either case.
 It MUST throw when `text` holds an odd number of characters, or any character outside the base16 alphabet in either case.
