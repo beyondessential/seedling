@@ -23,7 +23,7 @@ An evaluation that exceeds any limit MUST fail with an error.
 
 The expression nesting limit MUST apply both at the top level of a script and within function bodies.
 
-Functions in a script's scope MAY pause evaluation for a span of time, other than the methods of a [runtime handle](../language/rt.md#runtime-handle).
+Functions in a script's scope MAY NOT pause evaluation for any span of time, other than the methods of a [runtime handle](../language/rt.md#runtime-handle).
 
 > [!NOTE]
 > A pause costs no operations, so a function that paused evaluation would hold it open past every limit above.
