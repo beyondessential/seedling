@@ -14,7 +14,7 @@ A script runs in a fresh scope every time it is evaluated. The `app` global is p
 
 ### Replicability
 
-A script is evaluated many times over an app's life, and must declare the same app each time from the same inputs: its bundle, its parameter values and the [host constants](#constants). So BSL leaves out the parts of Rhai that would let an evaluation differ or stall: there is no `timestamp()`, `sleep()` throws, and a script that contains `import` fails to evaluate. An action that needs the time or the network reaches it through `rt`, for example by running a command in a container with `rt.exec`.
+A script is evaluated many times over an app's life, and must declare the same app each time from the same inputs: its bundle, its parameter values, the [host constants](#constants) and the app's seed, which [derived random values](#derived-random-values) come from. So BSL leaves out the parts of Rhai that would let an evaluation differ or stall: there is no `timestamp()`, `sleep()` throws, and a script that contains `import` fails to evaluate. An action that needs the time or the network reaches it through `rt`, for example by running a command in a container with `rt.exec`.
 
 ### Names
 
@@ -386,7 +386,7 @@ Every helper follows the same conventions:
 
 - **It throws on malformed input.** A helper never guesses, coerces or returns a partial result. A validator can call a parsing helper and let it throw, which rejects the value; to turn a failure into a yes-or-no answer elsewhere, catch it with `try`/`catch`.
 - **It returns a map for compound text** such as a URL, a plain string, integer or boolean where that is all the value is, and a value of its own type only where that value has methods, such as comparing versions.
-- **It is replicable.** The same arguments always give the same result: a helper never reads the clock, the network or the filesystem, and never changes the app.
+- **It is replicable.** The same arguments always give the same result: a helper never reads the clock, the network or the filesystem, and never changes the app. The [derived random value](#derived-random-values) helpers are the one exception: they also read a seed the runtime holds, so the same call gives the same value wherever the seed is the same.
 
 Calling a helper that does not exist throws, like any unknown function. Which helpers exist depends on the Seedling version, so declare the versions a definition supports with the `seedling` field of its [bundle metadata](#definition-bundles).
 
@@ -403,6 +403,46 @@ app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
 `std::parse_email` returns the parts of the address, split at its first `@`. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+
+### Derived random values
+
+A script that needs a password, a token or an identifier draws it from a seed the runtime holds, rather than from a random source, so the value is the same on every evaluation:
+
+```rhai
+let alphanumeric = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+let db_password = std::random_string("db-password", 32, alphanumeric);
+
+app.deployment("database")
+    .image("docker.io/library/postgres:17")
+    .env("POSTGRES_PASSWORD", db_password);
+app.volume("config");
+
+app.on_action("write-client-config", |rt, p| {
+    // The captured value: the one the database container was given.
+    rt.write(app.volume("config"), "/db.env", `DB_PASSWORD=${db_password}\n`);
+});
+```
+
+| helper | returns |
+| --- | --- |
+| `std::random_bytes(label, n)` | a Blob of `n` bytes |
+| `std::random_string(label, length, alphabet)` | `length` characters, each drawn evenly from `alphabet`, which holds at least two distinct characters |
+| `std::uuid_v4(label)` | a version 4 UUID, hyphenated and lowercase |
+
+The label names the value, and is any non-empty string. A value depends only on the seed, the helper, the label and the other arguments, so adding, removing or reordering calls leaves every other value as it was, and no two apps derive the same values.
+
+Which seed a call derives from depends on where it runs:
+
+- **At the top level and in validators,** from the app's seed, created when the app is registered and kept until it is deregistered.
+- **Inside an action, shell or gate body closure,** from the operation's seed, created when the operation starts and kept for every pass and replay of it, including after a daemon restart. An action invoked from another derives from its caller's.
+
+Pitfalls:
+
+- **The same call gives a different value inside a closure than at the top level.** A closure that needs a value the app's workloads also hold, like the password above, captures the top-level value rather than calling the helper again.
+- **An operation's values differ in the next operation.** Anything that must outlast the operation is derived at the top level, or written into a volume by the operation that derived it.
+- **Every argument is part of the value.** Changing a length or an alphabet gives a different value, not a longer or shorter one; two uses that need different secrets need different labels.
+- **App-seeded values change when the seed does:** when an operator rotates it, when the app is deregistered and registered again, and when an app is moved to another host, which registers it there afresh. Data written with the old values keeps them, so a database whose password came from the seed needs its password changed to match.
+- **Derived values are withheld like secret parameters.** An environment value that holds one reads as `null` when an operator describes the app.
 
 ## Gates
 

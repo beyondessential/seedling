@@ -179,6 +179,16 @@ after restoring a database from a backup:
 seedling-ctl apps gate run tamanu migrate
 ```
 
+Every value an app derives from its seed, such as a generated database
+password, changes when the seed is rotated, and every workload holding one
+restarts. Data already written with the old values keeps them, so change any
+stored password to match. Rotation is refused while an operation runs or is
+queued for the app:
+
+```bash
+seedling-ctl apps seed rotate tamanu --yes
+```
+
 `apps install tamanu` takes no parameters: set them first with `apps params
 set`, or in the same generation as a definition with `apps update --set`.
 
