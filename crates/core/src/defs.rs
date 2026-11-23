@@ -138,7 +138,21 @@ pub fn register(engine: &mut Engine) {
 
     // spec: COL#coercion
     engine.register_fn("col", collection::col);
+
+    // spec: LIM#limits
+    // Rhai's core package offers `sleep`, which no feature removes; the
+    // engine's own functions are found before any package's.
+    engine.register_fn(
+        "sleep",
+        |_: rhai::INT| -> Result<(), Box<rhai::EvalAltResult>> { Err(NO_SLEEP.into()) },
+    );
+    engine.register_fn(
+        "sleep",
+        |_: rhai::FLOAT| -> Result<(), Box<rhai::EvalAltResult>> { Err(NO_SLEEP.into()) },
+    );
 }
+
+const NO_SLEEP: &str = "`sleep` is not available: evaluation cannot pause";
 
 // spec: BSL#evaluation
 // spec: BSL#enums
