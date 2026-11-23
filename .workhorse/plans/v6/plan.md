@@ -25,6 +25,13 @@ A host restored from its database and key file keeps its seeds; an app moved to 
 Shell sessions are never persisted or replayed, so a session's seed can live in memory only.
 Validators get no randomness: they judge a proposed value, and randomness has no meaning there.
 
+## Functions
+
+The same set on `app` and on `rt`, differing only in seed:
+
+- `random_bytes(label, n)` returns a Blob. Encodings to text arrive with the hashing card.
+- `random_string(label, length, alphabet)` draws `length` characters from `alphabet`, without bias. The alphabet is required, so a script always states which characters a consumer accepts.
+
 ## Docs
 
 A guide in `docs/` covers the pitfalls:
