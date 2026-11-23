@@ -14,7 +14,7 @@ Applies to the helpers in the [std module](std.md#the-std-module) through which 
 | BLAKE2b | The hash function defined in [RFC 7693](https://www.rfc-editor.org/rfc/rfc7693). |
 | BLAKE3 | The hash function defined in the [BLAKE3 specification](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf). |
 | HMAC | The keyed-hash message authentication code defined in [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104). |
-| base64, base64url | The encodings defined in [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) sections 4 and 5. |
+| base16, base64, base64url | The encodings defined in [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) sections 8, 4 and 5. |
 | UUID | A 128-bit universally unique identifier, [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562). |
 
 ## Byte arguments
@@ -43,8 +43,8 @@ The std module MUST offer these helpers.
 
 | helper | returns |
 | --- | --- |
-| `std::encode_hex(data: bytes)` | a string of two lowercase hexadecimal digits per byte of `data` |
-| `std::decode_hex(text: string)` | a Blob of the bytes `text` encodes in hexadecimal |
+| `std::encode_hex(data: bytes)` | a string encoding `data` in base16, with lowercase digits |
+| `std::decode_hex(text: string)` | a Blob of the bytes `text` encodes in base16 |
 | `std::encode_base64(data: bytes)` | a string encoding `data` in base64, with padding |
 | `std::decode_base64(text: string)` | a Blob of the bytes `text` encodes in base64 |
 | `std::encode_base64url(data: bytes)` | a string encoding `data` in base64url, without padding |
@@ -54,8 +54,8 @@ The std module MUST offer these helpers.
 
 Encoding no bytes MUST return the empty string, and decoding the empty string MUST return an empty Blob.
 
-`decode_hex` MUST accept hexadecimal digits in either case.
-It MUST throw when `text` holds an odd number of characters, or any character that is not a hexadecimal digit.
+`decode_hex` MUST accept the base16 alphabet in either case.
+It MUST throw when `text` holds an odd number of characters, or any character outside the base16 alphabet in either case.
 
 `decode_base64` MUST throw when `text` holds a character outside the base64 alphabet, other than one or two padding characters at its end, or when its length is not a multiple of four.
 `decode_base64url` MUST throw when `text` holds a character outside the base64url alphabet, including padding, or when its length leaves a remainder of one when divided by four.
