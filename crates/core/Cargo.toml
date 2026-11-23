@@ -18,7 +18,7 @@ libc = "0.2.191"
 nftables = { version = "0.6.3", features = ["tokio"] }
 nix = { version = "0.31.3", features = ["signal", "term"] }
 parking_lot.workspace = true
-podman-rest-client = { version = "0.13.0", features = ["uds"] }
+podman-rest-client = { version = "0.13.0", default-features = false, features = ["uds", "v5"] }
 quinn.workspace = true
 rand.workspace = true
 reqwest.workspace = true
