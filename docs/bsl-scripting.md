@@ -486,7 +486,7 @@ let admin_hash = std::password_argon2id("admin-password", admin_password);
 | `std::password_argon2id(label, password)` | an Argon2id hash, as a PHC string (`$argon2id$v=19$m=19456,t=2,p=1$...`) |
 | `std::password_bcrypt(label, password)` | a bcrypt hash (`$2b$12$...`) |
 
-The work factors are fixed, so a hash is cheap enough to compute on every evaluation, and one evaluation computes at most 16 hashes unless the operator raises the limit. `std::password_bcrypt` throws on a password longer than 72 bytes or holding a zero byte, because bcrypt would silently ignore everything from that point on. Inside a closure the operation's seed gives a different hash each operation; every one of them verifies the same password. A password hash is withheld like any other derived value.
+The work factors are fixed, so a hash is cheap enough to compute on every evaluation, and one evaluation computes at most 16 hashes unless the operator raises the limit. Both throw on an empty password, which most often means a value that was never set. `std::password_bcrypt` also throws on a password longer than 72 bytes or holding a zero byte, because bcrypt would silently ignore everything from that point on. Inside a closure the operation's seed gives a different hash each operation; every one of them verifies the same password. A password hash is withheld like any other derived value.
 
 ### Digests and encodings
 

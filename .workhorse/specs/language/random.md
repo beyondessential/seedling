@@ -85,9 +85,13 @@ The std module MUST also offer these derivation helpers, each of which hashes a 
 | `std::password_bcrypt(label: string, password: bytes)` | a bcrypt hash of `password`, in modular crypt form |
 
 `password` is a [`bytes` argument](encoding.md#byte-arguments).
+A password hash helper MUST throw when `password` is empty.
 `password_bcrypt` MUST throw when `password` is longer than 72 bytes or holds a zero byte.
 
 The runtime MUST bound the number of password hash helper calls in one evaluation, as the [engine limits](../runtime/engine-limits.md#limits) specify.
+
+> [!NOTE]
+> A hash of the empty password guards nothing, and an empty password most often comes from a value that was never set.
 
 > [!NOTE]
 > bcrypt reads a password only up to its 72nd byte or its first zero byte, so a longer password, or one holding a zero byte, would verify against every password sharing its prefix.
