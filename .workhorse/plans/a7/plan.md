@@ -38,6 +38,12 @@ Adds the `version` and `version-semver` param kinds, their `std` parsers, and th
 - [ ] `crates/core/src/oi/handler/params/tests.rs`: a stored value the kind rejects is refused with the parser's reason, for each new kind
 - [ ] `crates/web/frontend/src/components/ParamFields.test.tsx`: both kinds render a single-line text input
 
+## Demo definitions
+
+- [ ] `apps/postgres.seed.rhai`: `version` param `.kind("version")`; replace the `parse_major` closure with `std::parse_version(v).segments()[0]` at its two call sites
+- [ ] `apps/tamanu-facility.seed.rhai` and `apps/tamanu-central.seed.rhai`: `version` param `.kind("version-semver")`, and the same kind on the `target-version` param of `warm-images`
+- [ ] Run `crates/core/src/tests/definitions.rs`, which evaluates the demos
+
 ## Docs
 
 - [ ] `docs/bsl-scripting.md`: the kind list in the Parameter block, the parser list in the `std` section, and a short section on `Version` and `SemVer` values
