@@ -60,7 +60,7 @@ If a script error propagates to the top level of the script, the evaluation MUST
 
 ## Replicability
 
-Two evaluations of the same script with the same definition bundle, parameter values and [host constants](constants.md#host-constants) MUST declare the same [resource graph](#resource-graph).
+Two evaluations of the same script with the same definition bundle, parameter values, [host constants](constants.md#host-constants) and [app seed](../runtime/secrets.md#app-seed) MUST declare the same [resource graph](#resource-graph).
 No function, method or constant in a script's scope MAY read the clock, the network or the host's filesystem, other than the host constants and the methods of a [runtime handle](rt.md#runtime-handle).
 
 > [!NOTE]

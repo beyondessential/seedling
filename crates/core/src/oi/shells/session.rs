@@ -726,6 +726,18 @@ pub(super) async fn run_app_shell(
             shell_as_action,
         );
         let world = Arc::new(DbWorldOracle::new(db.clone()));
+        // spec: SEC#operation-seeds — a session's seed lives as long as the
+        // session and is never persisted.
+        let operation_seed = match crate::runtime::seeds::Seed::draw() {
+            Ok(seed) => seed,
+            Err(e) => {
+                tracing::error!(
+                    app = %app_name_for_task, shell = %shell_name_for_task,
+                    "no seed could be drawn for the shell session: {e:?}"
+                );
+                return ScriptEnd::Failed("no seed could be drawn for the session".into());
+            }
+        };
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,
@@ -765,6 +777,7 @@ pub(super) async fn run_app_shell(
                     operation_id: op_id_for_log.clone(),
                     app: &app,
                     subject: Subject::Shell(shell_name_for_task.as_str()),
+                    operation_seed: operation_seed.clone(),
                     log: &log,
                     world: Arc::clone(&world),
                     registry: Arc::clone(&registry),

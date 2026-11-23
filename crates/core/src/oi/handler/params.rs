@@ -316,11 +316,12 @@ fn validate_proposed(
     app: &AppName,
     proposed: &BTreeMap<String, String>,
 ) -> Result<(), OiError> {
-    let (bundle, last_good) = {
+    let (bundle, seed, last_good) = {
         let reg = state.registry.read();
         let entry = reg.get(app.as_str()).expect("confirmed registered");
         (
             Arc::clone(&entry.bundle),
+            entry.seed.clone(),
             (
                 Arc::clone(&entry.app.bundle),
                 entry.app.stored.lock().clone(),
@@ -329,7 +330,7 @@ fn validate_proposed(
     };
     let limits = &state.script_limits;
     let (_, result) =
-        crate::runtime::apps::evaluate_validated(app, &bundle, proposed, proposed, limits);
+        crate::runtime::apps::evaluate_validated(app, &bundle, proposed, proposed, &seed, limits);
     let rejections = match result {
         Ok(r) => r,
         Err(_) => {
@@ -339,6 +340,7 @@ fn validate_proposed(
                 &last_bundle,
                 &last_values,
                 proposed,
+                &seed,
                 limits,
             );
             // With no evaluation that succeeds there are no validators to

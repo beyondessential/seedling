@@ -113,7 +113,7 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 
 | kind | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- |
-| `script_error` | none | the app's stored definition fails to parse or evaluate outside an update request: at registration, on a parameter change, on a change to the registry allowlist, when an undetermined [host constant](../language/constants.md#determining-host-constants) is determined, or when the runtime starts | the definition next evaluates | condition |
+| `script_error` | none | the app's stored definition fails to parse or evaluate outside an update request: at registration, on a parameter change, on a [seed rotation](../interface/app-control.md#seed-rotation), on a change to the registry allowlist, when an undetermined [host constant](../language/constants.md#determining-host-constants) is determined, or when the runtime starts | the definition next evaluates | condition |
 | `disallowed_registry` | none | an image a Deployment or Job declares is from a registry outside the [allowlist](../language/container.md#registry-allowlist) | an evaluation finds no declared image outside the allowlist | condition |
 | `desired_state_unreadable` | none | the runtime cannot compute the app's [desired state](reconciliation.md#desired-state) from its stored records | the runtime next computes it | condition |
 | `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes successfully | event |

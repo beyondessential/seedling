@@ -1117,3 +1117,30 @@ fn a_plan_reports_a_kind_rejection() {
     );
     assert_eq!(generation_count(&oi), 1, "a plan changes nothing");
 }
+
+// spec: TRD#deregistration
+#[test]
+fn a_secret_value_is_not_inherited_by_the_next_app_of_the_name() {
+    let oi = oi_with_params_app();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "api-key": "hunter2-Gravel-Otter-91" } }),
+    )
+    .unwrap();
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": PARAMS_SCRIPT }),
+    )
+    .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let api_key_set = desc["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "api-key")
+        .expect("api-key param")["is_set"]
+        .clone();
+    assert_eq!(api_key_set, false);
+}

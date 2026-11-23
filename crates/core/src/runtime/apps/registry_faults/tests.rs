@@ -34,6 +34,7 @@ fn entry_with_script(name: &str, script: &str) -> AppEntry {
         script_error: None,
         current_generation: 0,
         install_seq: None,
+        seed: crate::runtime::seeds::AppSeed::for_tests(),
     }
 }
 

@@ -77,10 +77,10 @@ While they are not all gone a minute after the operation ends, or while their re
 
 ## Persistence
 
-Before an operation first does anything, the runtime MUST persist durably the operation's identifier, app, action or gate, operation generation, and parameters.
+Before an operation first does anything, the runtime MUST persist durably the operation's identifier, app, action or gate, operation generation, parameters, and [operation seed](secrets.md#operation-seeds).
 If the runtime cannot persist them, it MUST NOT start the operation.
 
-The runtime MUST encrypt the persisted parameters with the cipher it uses for [stored secret parameters](secrets.md#storage).
+The runtime MUST encrypt the persisted parameters and seed with the cipher it uses for [stored secret parameters](secrets.md#storage).
 On replay, the runtime MUST pass the action closure the persisted parameters.
 
 The runtime MUST clear the persisted operation when the operation ends.

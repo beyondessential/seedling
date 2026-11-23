@@ -120,6 +120,13 @@ pub enum OiEvent {
         actor: Option<Arc<Actor>>,
     },
     // spec: EVT#event-types
+    AppSeedRotated {
+        timestamp: Timestamp,
+        app: AppName,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // spec: EVT#event-types
     AppUpdated {
         timestamp: Timestamp,
         app: AppName,
@@ -765,6 +772,14 @@ impl EventSender {
 
     pub fn app_deregistered(&self, app: &AppName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::AppDeregistered {
+            timestamp: now(),
+            app: app.clone(),
+            actor,
+        });
+    }
+
+    pub fn app_seed_rotated(&self, app: &AppName, actor: Option<Arc<Actor>>) {
+        self.emit(OiEvent::AppSeedRotated {
             timestamp: now(),
             app: app.clone(),
             actor,
@@ -1585,6 +1600,11 @@ impl EventSenderWithActor {
     pub fn app_deregistered(&self, app: &AppName) {
         self.inner
             .app_deregistered(app, Some(Arc::clone(&self.actor)));
+    }
+
+    pub fn app_seed_rotated(&self, app: &AppName) {
+        self.inner
+            .app_seed_rotated(app, Some(Arc::clone(&self.actor)));
     }
 
     // spec: EVT#event-objects

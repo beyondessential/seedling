@@ -60,41 +60,36 @@ pub fn delete_one_param(
     Ok(())
 }
 
-/// Synchronize the in-memory script_error state with the faults DB table.
-/// Call after register/reload to persist fault changes.
-pub fn sync_script_error_fault(db: &Db, entry: &AppEntry) {
-    let existing: Vec<_> = crate::runtime::faults::list_active_faults(db, Some(&entry.name))
+/// Bring the app's `script_error` fault in line with its evaluation: filed
+/// with `script_error`'s message where the evaluation failed, replacing one
+/// filed for another message, and cleared where it succeeded.
+// spec: FLT#app-faults
+pub fn sync_script_error_fault(db: &Db, app_name: &AppName, script_error: Option<&str>) {
+    use crate::runtime::faults;
+    let existing: Vec<_> = faults::list_active_faults(db, Some(app_name))
         .unwrap_or_default()
         .into_iter()
         .filter(|f| f.kind == "script_error")
         .collect();
-
-    match &entry.script_error {
-        Some((msg, _)) => {
-            let dominated = existing.iter().any(|f| f.description == *msg);
-            if !dominated {
-                for f in &existing {
-                    if let Err(e) = crate::runtime::faults::clear_fault(db, &f.id, &entry.name) {
-                        tracing::warn!(app = %entry.name, fault_id = %f.id, "failed to clear stale script-error fault: {e}");
-                    }
+    match script_error {
+        Some(msg) => {
+            if existing.iter().any(|f| f.description == msg) {
+                return;
+            }
+            for f in &existing {
+                if let Err(e) = faults::clear_fault(db, &f.id, app_name) {
+                    tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale script-error fault: {e}");
                 }
-                if let Err(e) = crate::runtime::faults::file_fault(
-                    db,
-                    &entry.name,
-                    None,
-                    None,
-                    None,
-                    "script_error",
-                    msg,
-                ) {
-                    tracing::warn!(app = %entry.name, "failed to file script-error fault: {e}");
-                }
+            }
+            if let Err(e) = faults::file_fault(db, app_name, None, None, None, "script_error", msg)
+            {
+                tracing::warn!(app = %app_name, "failed to file script-error fault: {e}");
             }
         }
         None => {
             for f in &existing {
-                if let Err(e) = crate::runtime::faults::clear_fault(db, &f.id, &entry.name) {
-                    tracing::warn!(app = %entry.name, fault_id = %f.id, "failed to clear script-error fault: {e}");
+                if let Err(e) = faults::clear_fault(db, &f.id, app_name) {
+                    tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear script-error fault: {e}");
                 }
             }
         }

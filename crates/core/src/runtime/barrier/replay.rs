@@ -356,6 +356,10 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// What `rt.start` and `rt.stop` leave out on account of gates.
     // spec: RT#resources-a-gate-holds
     pub exclusions: crate::runtime::gates::Exclusions,
+    /// The seed the closure's derivation helpers derive from, the same for
+    /// every pass of the operation or shell session.
+    // spec: SEC#operation-seeds
+    pub operation_seed: crate::runtime::seeds::Seed,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -369,6 +373,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let OperationContext {
         engine,
         script_ast,
+        operation_seed,
         operation_id,
         app,
         subject,
@@ -579,7 +584,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let result = crate::defs::app::with_action_call_table(captured_actions, outer_name, || {
         let _guard =
             ActionClosureGuard::new(action_def, op_id_str.clone(), operation_volume_bindings)
-                .with_active_rt(rt_for_table);
+                .with_active_rt(rt_for_table)
+                .with_operation_seed(&operation_seed);
         engine.eval_ast_with_scope::<Dynamic>(scope, &call_ast)
     });
 

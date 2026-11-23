@@ -76,6 +76,10 @@ pub(crate) fn capture_closures(
         // spec: CONST#host-constants
         .map_err(|e| Box::new(EvalAltResult::ErrorRuntime(e.into(), Position::NONE)))?;
     let _evaluation = fresh_app.guard_evaluation();
+    let _seed = app
+        .seed
+        .as_ref()
+        .map(crate::runtime::seeds::AppSeedFrame::enter);
     let app_name = app.def.load().name.clone();
     fresh_app.def.rcu(|d| {
         let mut d = (**d).clone();
@@ -472,6 +476,9 @@ pub struct AppDef {
     /// declare. Their bodies are recovered from the capture buffer.
     // spec: GATE#declaration
     pub gates: BTreeMap<GateName, GateDef>,
+    /// Values the evaluation derived from the app seed, withheld wherever
+    /// secret parameter values are.
+    pub derived: crate::runtime::seeds::DerivedValues,
 }
 
 fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAltResult>> {
@@ -553,6 +560,11 @@ pub struct App {
     /// `app.file` and `app.dir`.
     // spec: BND#bundle-files
     pub bundle: Arc<Bundle>,
+    /// The seed this app was evaluated against, which evaluating its script
+    /// again derives from too, so that a closure captures the values the
+    /// app's resources were declared with.
+    // spec: RND#seeds
+    pub(crate) seed: Option<crate::runtime::seeds::AppSeed>,
     /// The evaluation this app is declared by, which holds the selections
     /// its script gives its gates.
     evaluation: EvaluationId,
@@ -564,6 +576,7 @@ impl App {
             def: Arc::new(arc_swap::ArcSwap::new(Arc::new(AppDef::default()))),
             stored: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
             bundle,
+            seed: None,
             evaluation: EvaluationId::fresh(),
         }
     }

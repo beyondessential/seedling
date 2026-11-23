@@ -358,9 +358,23 @@ fn run_probe(
 
     clear_barrier_hit();
 
+    // A probe's derived values go nowhere, so any seed will do.
+    let seed = match crate::runtime::seeds::Seed::draw() {
+        Ok(seed) => seed,
+        Err(e) => {
+            return HandlerProbe {
+                name: handler_name.to_owned(),
+                kind,
+                images: BTreeSet::new(),
+                error: Some(format!("no seed could be drawn for the probe: {e:?}")),
+                skipped_reason: None,
+            };
+        }
+    };
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
     let eval_result = {
-        let _guard = ActionClosureGuard::new(action_def, op_id.0.clone(), HashMap::new());
+        let _guard = ActionClosureGuard::new(action_def, op_id.0.clone(), HashMap::new())
+            .with_operation_seed(&seed);
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
         engine.compile(call_script).ok().and_then(|ast| {

@@ -86,6 +86,7 @@ fn barrier_satisfied_on_first_pass() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -132,6 +133,7 @@ fn barrier_suspends_then_resumes() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -162,6 +164,7 @@ fn barrier_suspends_then_resumes() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -209,6 +212,7 @@ fn sequential_barriers() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -238,6 +242,7 @@ fn sequential_barriers() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -267,6 +272,7 @@ fn sequential_barriers() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -326,6 +332,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -368,6 +375,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -421,6 +429,7 @@ fn barrier_deadline_zero_uses_the_state_default() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -448,6 +457,7 @@ fn barrier_deadline_zero_uses_the_state_default() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -500,6 +510,7 @@ fn replay_idempotency() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -529,6 +540,7 @@ fn replay_idempotency() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -592,6 +604,7 @@ fn rt_stop_acts_as_barrier() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -621,6 +634,7 @@ fn rt_stop_acts_as_barrier() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -672,6 +686,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -720,6 +735,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -771,6 +787,7 @@ fn warm_images_barrier_uses_image_oracle() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -818,6 +835,7 @@ fn warm_images_barrier_suspends_when_image_absent() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -886,6 +904,7 @@ fn terminated_eventually_never_times_out() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -936,6 +955,7 @@ fn terminated_eventually_never_times_out() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -985,6 +1005,7 @@ fn cancel_aborts_with_cancelled_result() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -1065,6 +1086,7 @@ fn rt_stop_deadline_is_enforced() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -1095,6 +1117,7 @@ fn rt_stop_deadline_is_enforced() {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -1148,6 +1171,7 @@ fn run_pass_with_db(
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         scope,
     )
@@ -2293,6 +2317,7 @@ fn default_stop_deadline_of(declarations: &str, stopped: &str) -> Option<u64> {
             volume_writer: None,
             executor: None,
             exclusions: Default::default(),
+            operation_seed: crate::runtime::seeds::Seed::for_tests(),
         },
         &mut scope,
     );
@@ -2359,6 +2384,7 @@ fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
                 volume_writer: None,
                 executor: None,
                 exclusions: Default::default(),
+                operation_seed: crate::runtime::seeds::Seed::for_tests(),
             },
             &mut scope,
         )

@@ -1169,3 +1169,66 @@ fn an_external_volumes_state_is_the_one_held_for_it_and_no_observation_changes_i
         .unwrap();
     assert_eq!(rows, 0);
 }
+
+fn op(id: &str) -> CurrentOperation {
+    CurrentOperation {
+        operation_id: OperationId(id.into()),
+        app: app_name("myapp"),
+        target: action_name("start").into(),
+        generation: 1,
+    }
+}
+
+fn save(db: &Db, cipher: &crate::runtime::secrets::Cipher, id: &str) {
+    save_current_operation(
+        db,
+        cipher,
+        &op(id),
+        &serde_json::Map::new(),
+        &Default::default(),
+    )
+    .unwrap();
+}
+
+fn seed_of(db: &Db, cipher: &crate::runtime::secrets::Cipher, id: &str) -> [u8; 32] {
+    *load_operation_seed(db, cipher, &OperationId(id.into()))
+        .unwrap()
+        .expose()
+}
+
+// spec: SEC#operation-seeds
+#[test]
+fn an_operation_keeps_the_seed_first_drawn_for_it() {
+    let db = Db::open_in_memory().unwrap();
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    save(&db, &cipher, "op-1");
+    let first = seed_of(&db, &cipher, "op-1");
+    assert_eq!(first, seed_of(&db, &cipher, "op-1"));
+    save(&db, &cipher, "op-1");
+    assert_eq!(
+        first,
+        seed_of(&db, &cipher, "op-1"),
+        "a replay's save keeps the seed on record"
+    );
+
+    save(&db, &cipher, "op-2");
+    assert_ne!(
+        first,
+        seed_of(&db, &cipher, "op-2"),
+        "the next operation draws its own"
+    );
+    assert!(load_operation_seed(&db, &cipher, &OperationId("op-1".into())).is_err());
+}
+
+// spec: SEC#operation-seeds
+#[test]
+fn an_unreadable_operation_seed_is_not_replaced() {
+    let db = Db::open_in_memory().unwrap();
+    let other_key = crate::runtime::secrets::Cipher::for_tests_with(&[3; 32]);
+    save(&db, &other_key, "op-1");
+    seed_of(&db, &other_key, "op-1");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let id = OperationId("op-1".into());
+    assert!(load_operation_seed(&db, &cipher, &id).is_err());
+    assert!(load_operation_seed(&db, &cipher, &id).is_err());
+}

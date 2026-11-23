@@ -81,6 +81,7 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
         current_generation: 0,
         install_seq: None,
+        seed: crate::runtime::seeds::AppSeed::for_tests(),
     }
 }
 
@@ -90,7 +91,11 @@ fn sync_clears_fault_on_successful_reload() {
     let db = Db::open_in_memory().expect("open");
 
     let entry = make_entry("myapp", Some("has_value not found"));
-    sync_script_error_fault(&db, &entry);
+    sync_script_error_fault(
+        &db,
+        &entry.name,
+        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+    );
     assert_eq!(
         crate::runtime::faults::list_active_faults(&db, Some(&app("myapp")))
             .unwrap()
@@ -99,7 +104,11 @@ fn sync_clears_fault_on_successful_reload() {
     );
 
     let entry = make_entry("myapp", None);
-    sync_script_error_fault(&db, &entry);
+    sync_script_error_fault(
+        &db,
+        &entry.name,
+        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+    );
     assert!(
         crate::runtime::faults::list_active_faults(&db, Some(&app("myapp")))
             .unwrap()
@@ -114,14 +123,22 @@ fn sync_replaces_fault_when_error_changes() {
     let db = Db::open_in_memory().expect("open");
 
     let entry = make_entry("myapp", Some("has_value not found"));
-    sync_script_error_fault(&db, &entry);
+    sync_script_error_fault(
+        &db,
+        &entry.name,
+        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+    );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(faults.len(), 1);
     assert_eq!(faults[0].description, "has_value not found");
     let old_id = faults[0].id.clone();
 
     let entry = make_entry("myapp", Some("different error"));
-    sync_script_error_fault(&db, &entry);
+    sync_script_error_fault(
+        &db,
+        &entry.name,
+        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+    );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(
         faults.len(),
@@ -138,12 +155,20 @@ fn sync_is_idempotent_for_same_error() {
     let db = Db::open_in_memory().expect("open");
 
     let entry = make_entry("myapp", Some("parse failed"));
-    sync_script_error_fault(&db, &entry);
+    sync_script_error_fault(
+        &db,
+        &entry.name,
+        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+    );
     let first = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(first.len(), 1);
     let first_id = first[0].id.clone();
 
-    sync_script_error_fault(&db, &entry);
+    sync_script_error_fault(
+        &db,
+        &entry.name,
+        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+    );
     let second = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(second.len(), 1);
     assert_eq!(
@@ -496,6 +521,7 @@ fn replace_definition_installs_bundle_and_source() {
         &app("myapp"),
         &bundle,
         &BTreeMap::new(),
+        &crate::runtime::seeds::AppSeed::for_tests(),
         &crate::ScriptLimits::default(),
     );
     assert!(err.is_none());
@@ -820,7 +846,11 @@ fn a_stored_definition_that_no_longer_evaluates_is_faulted_on_reload() {
     .expect("load registry");
     let loaded = registry.get("myapp").expect("still registered");
     assert!(loaded.script_error.is_some());
-    sync_script_error_fault(&db, loaded);
+    sync_script_error_fault(
+        &db,
+        &loaded.name,
+        loaded.script_error.as_ref().map(|(m, _)| m.as_str()),
+    );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert!(
         faults.iter().any(|f| f.kind == "script_error"),

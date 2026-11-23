@@ -18,6 +18,7 @@ The runtime MUST bound the resources a single evaluation of a BSL script can con
 | string length | bytes | 1 048 576 (1 MiB) | `--script-max-string-size` |
 | array length | elements | 10 000 | `--script-max-array-size` |
 | object map size | entries | 10 000 | `--script-max-map-size` |
+| derived values | calls to a [derivation helper](../language/random.md#derivation-helper) | 1 000 | `--script-max-derived-values` |
 
 An evaluation that exceeds any limit MUST fail with an error.
 
@@ -26,8 +27,11 @@ The expression nesting limit MUST apply both at the top level of a script and wi
 Functions in a script's scope MAY NOT pause evaluation for any span of time, other than using the methods of a [runtime handle](../language/rt.md#runtime-handle).
 
 An operator MAY override each limit with its daemon option when the daemon starts.
-Setting the operations, expression nesting, string, array or object map limit to 0 MUST remove that limit.
+Setting the operations, expression nesting, string, array, object map or derived values limit to 0 MUST remove that limit.
 The daemon MUST refuse to start with a function call nesting depth of 0.
 
 > [!NOTE]
 > A depth of 0 would allow no function calls at all, and an unbounded depth would let a script overflow the runtime's own stack.
+
+> [!NOTE]
+> The runtime keeps what an evaluation derived for as long as it withholds those values from operators, so the derived values limit bounds what one definition can make it hold.

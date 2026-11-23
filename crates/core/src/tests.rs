@@ -12,9 +12,13 @@ use crate::runtime::barrier::{
     replay::{InMemoryActionLog, OperationContext, OperationResult, Subject, run_operation},
 };
 
-/// An engine, scope and app evaluating no particular definition.
+/// An engine, scope and app evaluating no particular definition, against
+/// the test app seed.
 pub fn setup(limits: &crate::ScriptLimits) -> (Engine, Scope<'static>, defs::app::App) {
-    crate::setup_language(limits, Default::default()).expect("the scope builds")
+    let (engine, scope, mut app) =
+        crate::setup_language(limits, Default::default()).expect("the scope builds");
+    app.seed = Some(crate::runtime::seeds::AppSeed::for_tests());
+    (engine, scope, app)
 }
 
 mod action;
@@ -59,8 +63,9 @@ pub fn run_test_script_in(
     let bundle = std::sync::Arc::new(
         crate::runtime::definition::Bundle::from_files(all).expect("a valid test bundle"),
     );
-    let (engine, mut scope, app) =
+    let (engine, mut scope, mut app) =
         crate::setup_language(&crate::ScriptLimits::default(), bundle).expect("the scope builds");
+    app.seed = Some(crate::runtime::seeds::AppSeed::for_tests());
     let ast = run_script(&engine, &mut scope, source)?;
     Ok((engine, scope, app, ast))
 }
@@ -149,6 +154,7 @@ pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
         volume_writer: hooks.volume_writer,
         executor: hooks.executor,
         exclusions: Default::default(),
+        operation_seed: crate::runtime::seeds::Seed::for_tests(),
     }
 }
 
@@ -330,6 +336,8 @@ pub fn run_script(
     scope: &mut Scope,
     source: &str,
 ) -> Result<AST, Box<rhai::EvalAltResult>> {
+    let _seed =
+        crate::runtime::seeds::AppSeedFrame::enter(&crate::runtime::seeds::AppSeed::for_tests());
     let ast = engine.compile(source)?;
     engine.run_ast_with_scope(scope, &ast)?;
     Ok(ast)

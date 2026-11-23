@@ -78,6 +78,11 @@ fn app_lifecycle_events_wire_shape() {
         json!({"type": "AppDeregistered", "app": "web"})
     );
 
+    assert_eq!(
+        shape(|tx| tx.app_seed_rotated(&app, None)),
+        json!({"type": "AppSeedRotated", "app": "web"})
+    );
+
     let definition = json!({"kind": "pushed", "pushed_by": null, "reported_origin": null});
     assert_eq!(
         shape(|tx| tx.app_updated(&app, 3, Some(2), definition.clone(), vec![], None)),
@@ -934,6 +939,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
 
     sender.app_registered(&app, 1);
     sender.app_deregistered(&app);
+    sender.app_seed_rotated(&app);
     sender.app_updated(&app, 2, Some(1), json!({"kind": "pushed"}), vec![]);
     sender.app_phase_changed(&app, "installed");
     sender.scale(app.clone(), "srv", 0, 4).changed(2, Some(1));
@@ -1030,5 +1036,5 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
         );
         count += 1;
     }
-    assert_eq!(count, 43, "every delegate emitted exactly one event");
+    assert_eq!(count, 44, "every delegate emitted exactly one event");
 }

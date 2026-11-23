@@ -68,6 +68,20 @@ An app with no stored app priority has the priority `normal`.
 `/apps/show` reports, for each deployment, a `priority` member giving the [deployment priority](../language/deployment.md#priority) its definition declares, or `normal` where it declares none.
 If the stored app priority cannot be read, the server MUST refuse `/apps/show` and `/apps/list` with `internal`, and MUST NOT report `normal` in its place.
 
+## Seed rotation
+
+`/apps/seed/rotate` replaces an app's [app seed](../runtime/secrets.md#app-seed) with a fresh one, as [app seed rotation](../runtime/secrets.md#app-seed-rotation) specifies.
+It takes an `app` parameter.
+
+The server MUST refuse the request with `not_found` if the app is not registered.
+It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, or a change to it is being applied.
+The server MUST accept the request for a registered app in any install phase.
+The server MUST reply once the new seed is persisted, without waiting for the app's workloads to restart.
+The result is `{}`.
+On success the server MUST emit an `AppSeedRotated` event.
+
+If the app's definition fails to evaluate against the new seed, the server MUST still keep the new seed, and the failure is reported as a [`script_error`](../runtime/faults.md#app-faults) fault.
+
 ## Deployment restart
 
 `/apps/restart` replaces every running instance of one deployment with a fresh instance of the same configuration.

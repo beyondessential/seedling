@@ -71,6 +71,7 @@ A member marked "optional" is absent where it has no value.
 | `AppUpdated` | `app`, `generation`, `previous_generation`, `definition` (object), `changes` (array, optional) | as [definition update](apps.md#update) specifies |
 | `AppPhaseChanged` | `app`, `phase` | on every change of an app's [install phase](../overview.md#install-phase) |
 | `AppPriorityChanged` | `app`, `priority` (string), `previous_priority` (string) | as [priority change](app-control.md#app-priority) specifies |
+| `AppSeedRotated` | `app` | as [seed rotation](app-control.md#seed-rotation) specifies |
 | `ParamsChanged` | `app`, `changes` (array), `generation`, `previous_generation` | as [parameter changes](params.md#parameter-changes) specify |
 | `ScaleChanged` | `app`, `deployment`, `scale` (integer), `previous_scale` (integer or null), `bounds_low`, `bounds_high` (integers) | when a deployment's scale changes, by [operator request](app-control.md#scaling) or [autonomously](../runtime/autonomous.md#scale) |
 | `DeploymentRestarted` | `app`, `deployment`, `restart_id` (string) | as [deployment restart](app-control.md#deployment-restart) specifies |

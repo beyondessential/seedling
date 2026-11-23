@@ -389,10 +389,14 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
     let name = AppName::new(&params.app)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, format!("invalid app: {e}")))?;
 
-    let (stored_app, registered_bundle) = {
+    let (stored_app, registered_bundle, seed) = {
         let reg = state.registry.read();
         match reg.get(name.as_str()) {
-            Some(entry) => (entry.app.clone(), std::sync::Arc::clone(&entry.bundle)),
+            Some(entry) => (
+                entry.app.clone(),
+                std::sync::Arc::clone(&entry.bundle),
+                entry.seed.clone(),
+            ),
             None => return Err(OiError::not_found(format!("app not registered: {name}"))),
         }
     };
@@ -411,8 +415,13 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
             .db
             .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned))
             .map_err(|e| OiError::internal(format!("db error: {e}")))?;
-        let (proposed_app, err) =
-            crate::runtime::apps::evaluate(&name, &bundle, &stored_params, &state.script_limits);
+        let (proposed_app, err) = crate::runtime::apps::evaluate(
+            &name,
+            &bundle,
+            &stored_params,
+            &seed,
+            &state.script_limits,
+        );
         // spec: IMGM#image-discovery
         if let Some(e) = err {
             return Err(OiError::script_error(format!(

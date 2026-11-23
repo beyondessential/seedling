@@ -346,6 +346,23 @@ builders enumerated in the [language specs](../.workhorse/specs/language/).
   secret, so the historical plaintext does not linger
   ([SEC#migration](../.workhorse/specs/runtime/secrets.md#migration)).
 
+### Seeds and derived values
+
+- **App and operation seeds are encrypted under the same key** as secret
+  parameters, and are never given to a script, an operator, a log or an
+  event ([SEC#seeds](../.workhorse/specs/runtime/secrets.md#seeds)). The key
+  file and the database together disclose every value an app derives, past
+  and future, so they carry the same weight as every secret parameter.
+- **Seeds are never exported.** An app moved to another host is registered
+  there with a fresh seed, rather than carrying a secret that discloses more
+  than any one parameter does
+  ([SEC#app-seeds](../.workhorse/specs/runtime/secrets.md#app-seeds)).
+- **Rotation is the recovery for a disclosed seed**, at the cost of every
+  derived value; it needs the console's dangerous mode or an explicit `--yes`
+  ([SEC#app-seed-rotation](../.workhorse/specs/runtime/secrets.md#app-seed-rotation)).
+- **Derived values are redacted like secret parameters** in describe
+  responses ([SEC#redaction](../.workhorse/specs/runtime/secrets.md#redaction)).
+
 ### TLS certificate handling
 
 The runtime owns the full lifecycle of operator-managed certificates

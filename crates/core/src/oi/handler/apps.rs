@@ -213,45 +213,16 @@ pub(crate) fn sync_fault_state(
         // A definition that failed to evaluate says nothing of its type, and
         // dropping the type would take the app out of Canopy as if it had none.
         if script_error.is_none()
-            && let Err(e) = crate::runtime::canopy::absent::sync_app_type(
-                db,
-                &app_name,
-                canopy_type.as_deref(),
-            )
+            && let Err(e) =
+                crate::runtime::canopy::absent::sync_app_type(db, &app_name, canopy_type.as_deref())
         {
             tracing::error!(app = %app_name, "cannot record the app's Canopy type: {e}");
         }
-        // Sync script_error fault.
-        {
-            use crate::runtime::faults;
-            let existing: Vec<_> = faults::list_active_faults(db, Some(&app_name))
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|f| f.kind == "script_error")
-                .collect();
-            match &script_error {
-                Some((msg, _)) => {
-                    let dominated = existing.iter().any(|f| f.description == *msg);
-                    if !dominated {
-                        for f in &existing {
-                            if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                                tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale script-error fault: {e}");
-                            }
-                        }
-                        if let Err(e) = faults::file_fault(db, &app_name, None, None, None, "script_error", msg) {
-                            tracing::warn!(app = %app_name, "failed to file script-error fault: {e}");
-                        }
-                    }
-                }
-                None => {
-                    for f in &existing {
-                        if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                            tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear script-error fault: {e}");
-                        }
-                    }
-                }
-            }
-        }
+        crate::runtime::apps::sync_script_error_fault(
+            db,
+            &app_name,
+            script_error.as_ref().map(|(msg, _)| msg.as_str()),
+        );
         crate::runtime::apps::sync_used_registries(db, &app_name, &used_registries);
     });
 }
@@ -842,7 +813,12 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .map(String::as_str)
         .filter(|v| !v.is_empty())
         .collect();
-    super::appdef_json::redact_secret_env(&mut resources_json, &secret_values);
+    super::appdef_json::redact_secret_env(&mut resources_json, |v| {
+        secret_values.iter().any(|s| v.contains(s))
+            // spec: SEC#redaction — and so does one containing a value the
+            // evaluation derived from the app seed.
+            || def.derived.found_in(v)
+    });
 
     // Dynamic resources (created inside action closures, not in AppDef).
     // Returned as a separate top-level field so consumers can choose whether
@@ -1302,11 +1278,13 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         None => current_params.clone(),
     };
 
+    let seed = registered_seed(state, &params.app)?;
     let (proposed_app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
         &proposed_bundle,
         &proposed_param_map,
         &proposed_param_map,
+        &seed,
         &state.script_limits,
     );
     let rejections = match evaluation {
@@ -1418,6 +1396,20 @@ pub(crate) fn check_registrable(state: &OiState, app: &AppName) -> Result<(), Oi
     Ok(())
 }
 
+/// The seed a registered app evaluates against.
+// spec: SEC#app-seeds
+pub(crate) fn registered_seed(
+    state: &OiState,
+    app: &AppName,
+) -> Result<crate::runtime::seeds::AppSeed, OiError> {
+    state
+        .registry
+        .read()
+        .get(app.as_str())
+        .map(|entry| entry.seed.clone())
+        .ok_or_else(|| OiError::not_found(format!("app not found: {app}")))
+}
+
 /// Register `app` from a definition already resolved from its source.
 // spec: APPS#registration
 pub(crate) fn register_resolved(
@@ -1436,24 +1428,32 @@ pub(crate) fn register_resolved(
     // so a failed persist leaves nothing for `/apps/list` to show, nothing
     // for a restart to silently drop (load_from_db skips generation-0 rows),
     // and nothing for a retried `/apps/create` to collide with.
+    // spec: SEC#app-seeds — the seed is drawn before the first evaluation,
+    // which derives from it, and committed with the registration.
+    let seed = crate::runtime::seeds::Seed::draw()
+        .map_err(|e| OiError::internal(format!("no seed could be drawn: {e:?}")))?;
+    let app_seed = crate::runtime::seeds::AppSeed::Ready(seed.clone());
     // spec: PRM#validation — registration runs no validators: a newly
     // registered app has no set parameters.
     let (app, script_error) = crate::runtime::apps::evaluate(
         app_name,
         &bundle,
         &std::collections::BTreeMap::new(),
+        &app_seed,
         &state.script_limits,
     );
 
     let name_owned = app_name.clone();
     let bundle_owned = Arc::clone(&bundle);
     let source_owned = source.clone();
+    let cipher = Arc::clone(&state.cipher);
     let generation = state
         .db
         .call(move |db| -> rusqlite::Result<u64> {
             let tx = db.conn.unchecked_transaction()?;
             // The app row first, so the generation rows can FK against it.
             persist_app_fields(db, &name_owned, 0, false, false)?;
+            crate::runtime::apps::seeds::store_app_seed(db, &cipher, &name_owned, &seed)?;
             // spec: GEN#generation-numbers — initial registration creates
             // generation 1.
             let generation = crate::runtime::generations::bump_register(
@@ -1476,6 +1476,7 @@ pub(crate) fn register_resolved(
         script_error,
         Arc::clone(&state.tick_notify),
         generation,
+        app_seed,
     );
 
     {
@@ -1508,10 +1509,12 @@ pub(crate) fn deregister_app(
         }
     }
 
-    // Reject if an operation is active or queued for this app.
-    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
-        return Err(app_blocked(name, "remove", &blocker));
-    }
+    // spec: APPS#removal
+    // Refused while an operation is active or queued for the app or a change
+    // is being applied, and held until the removal is done, so neither can
+    // begin on an app part-way gone.
+    let _hold = crate::runtime::scheduler::AppHold::take_idle(&state.scheduler, &params.app)
+        .map_err(|blocker| app_blocked(name, "remove", &blocker))?;
 
     // spec: APPS#removal
     // The teardown of a session or a gate check is driven through the app's
@@ -1569,6 +1572,9 @@ pub(crate) fn deregister_app(
             db.atomically(|db| {
                 AppRegistry::remove_app(db, &name_owned)?;
                 crate::runtime::apps::delete_app_params(db, &name_owned)?;
+                crate::runtime::apps::secret_params::delete_app_secret_params(db, &name_owned)?;
+                // spec: SEC#app-seeds
+                crate::runtime::apps::seeds::delete_app_seed(db, &name_owned)?;
                 // spec: GEN#lineage
                 crate::runtime::generations::delete_for_app(db, &name_owned)?;
                 // spec: CNR#applications
@@ -1868,11 +1874,13 @@ pub(crate) fn update_app(
 
     // spec: PRM#validation — the validators are those of the new
     // definition, evaluated with the values the request would produce.
+    let seed = registered_seed(state, &params.app)?;
     let (app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
         &bundle,
         &proposed,
         &proposed,
+        &seed,
         &state.script_limits,
     );
     let rejections = evaluation.map_err(|e| OiError::new(ErrorCode::ScriptError, e.to_string()))?;
@@ -2460,6 +2468,70 @@ pub(crate) fn unstop_all_resources(
         entry.tick_notify.notify_one();
     }
 
+    Ok(json!({}))
+}
+
+// spec: CTL#seed-rotation
+pub(crate) fn rotate_seed(state: &OiState, params: AppParams, ctx: &RequestCtx) -> HandlerResult {
+    let app = &params.app;
+    // Held before the app is looked up, so a removal cannot run between the
+    // lookup and the write and leave a seed behind for an app that is gone.
+    let _hold = crate::runtime::scheduler::AppHold::take_idle(&state.scheduler, app)
+        .map_err(|blocker| app_blocked(app.as_str(), "rotate the seed of", &blocker))?;
+    if !state.registry.read().is_registered(app.as_str()) {
+        return Err(OiError::not_found(format!("app not found: {app}")));
+    }
+
+    // Read before the seed is replaced: once it is, the request has done what
+    // it asked, and a failure to evaluate is the app's fault to report, not
+    // the request's.
+    let stored = {
+        let (name, cipher) = (app.clone(), Arc::clone(&state.cipher));
+        state
+            .db
+            .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name))
+            .map_err(|e| {
+                OiError::internal(format!(
+                    "the app's stored parameters cannot be read, so it could not be \
+                     evaluated against a new seed; the seed is unchanged: {e}"
+                ))
+            })?
+    };
+
+    // spec: SEC#app-seed-rotation — the new seed is durable, and the old one
+    // gone, before anything is evaluated against it.
+    let seed = crate::runtime::seeds::Seed::draw()
+        .map_err(|e| OiError::internal(format!("no seed could be drawn: {e:?}")))?;
+    {
+        let (name, cipher, seed) = (app.clone(), Arc::clone(&state.cipher), seed.clone());
+        state
+            .db
+            .call(move |db| crate::runtime::apps::seeds::store_app_seed(db, &cipher, &name, &seed))
+            .map_err(|e| OiError::internal(format!("the new seed cannot be stored: {e}")))?;
+    }
+    if let Some(entry) = state.registry.write().get_mut(app.as_str()) {
+        entry.seed = crate::runtime::seeds::AppSeed::Ready(seed);
+    }
+    tracing::info!(app = %app, "app seed rotated");
+    ctx.events.app_seed_rotated(app);
+
+    // spec: SEC#app-seed-rotation — evaluated again at the same generation.
+    // A definition that no longer evaluates keeps the new seed, and the
+    // failure is the app's script_error fault. The hold keeps the stored
+    // parameters as they were read.
+    let _ = crate::runtime::apps::reload(
+        &state.registry,
+        &state.db,
+        &state.cipher,
+        app,
+        &stored,
+        &state.script_limits,
+    );
+    let reg = state.registry.read();
+    if let Some(entry) = reg.get(app.as_str()) {
+        sync_fault_state(&state.db, entry);
+        entry.tick_notify.notify_one();
+    }
     Ok(json!({}))
 }
 

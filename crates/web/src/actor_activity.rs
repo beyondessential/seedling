@@ -148,6 +148,7 @@ fn render_action(event_type: &str, obj: &serde_json::Map<String, Value>) -> Stri
         ("AppRegistered", Some(app)) => format!("registered {app}"),
         ("AppUpdated", Some(app)) => format!("updated {app}"),
         ("AppDeregistered", Some(app)) => format!("deregistered {app}"),
+        ("AppSeedRotated", Some(app)) => format!("rotated the seed of {app}"),
         ("ScaleChanged", Some(app)) => match (deployment, scale) {
             (Some(d), Some(n)) => format!("scaled {d} to {n} on {app}"),
             (Some(d), None) => format!("scaled {d} on {app}"),

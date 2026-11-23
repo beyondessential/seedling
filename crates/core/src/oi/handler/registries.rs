@@ -112,73 +112,9 @@ pub fn re_evaluate_all_apps(state: &OiState) {
             &loaded_params,
             &state.script_limits,
         );
-        {
-            let reg = state.registry.read();
-            if let Some(entry) = reg.get(name.as_str()) {
-                // Extract data from entry before the db.call since AppEntry is not Send.
-                let app_name = entry.name.clone();
-                let script_error = entry.script_error.clone();
-                let used_registries: std::collections::BTreeSet<String> = {
-                    use crate::defs::{container::image_registry, resource::Resource};
-                    let def = entry.app.def.load();
-                    let mut regs = std::collections::BTreeSet::new();
-                    for resource in def.resources.values() {
-                        let image = match resource {
-                            Resource::Deployment(d) => {
-                                let dd = d.def.lock();
-                                let pod = dd.pod.lock();
-                                pod.container.lock().image.clone()
-                            }
-                            Resource::Job(j) => {
-                                let jd = j.def.lock();
-                                let pod = jd.pod.lock();
-                                pod.container.lock().image.clone()
-                            }
-                            _ => None,
-                        };
-                        if let Some(ref img) = image
-                            && let Some(reg) = image_registry(img)
-                        {
-                            regs.insert(reg.to_owned());
-                        }
-                    }
-                    regs
-                };
-                state.db.call(move |db| {
-                    // Inline sync_script_error_fault logic.
-                    {
-                        use crate::runtime::faults;
-                        let existing: Vec<_> = faults::list_active_faults(db, Some(&app_name))
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|f| f.kind == "script_error")
-                            .collect();
-                        match &script_error {
-                            Some((msg, _)) => {
-                                let dominated = existing.iter().any(|f| f.description == *msg);
-                                if !dominated {
-                                    for f in &existing {
-                                        if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                                            tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale script-error fault: {e}");
-                                        }
-                                    }
-                                    if let Err(e) = faults::file_fault(db, &app_name, None, None, None, "script_error", msg) {
-                                        tracing::warn!(app = %app_name, "failed to file script-error fault: {e}");
-                                    }
-                                }
-                            }
-                            None => {
-                                for f in &existing {
-                                    if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                                        tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear script-error fault: {e}");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    crate::runtime::apps::sync_used_registries(db, &app_name, &used_registries);
-                });
-            }
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(name.as_str()) {
+            super::apps::sync_fault_state(&state.db, entry);
         }
     }
 }

@@ -333,7 +333,15 @@ pub(crate) fn preview_template(
     // rules is overkill. Use new_unchecked so the "(preview)" placeholder is
     // allowed to stand in for an unnamed preview.
     let preview_app = AppName::new_unchecked(display_name.clone());
-    let (app, err) = evaluate(&preview_app, &bundle, &empty_params, &state.script_limits);
+    // A preview's derived values go nowhere, so any seed will do.
+    let seed = crate::runtime::seeds::AppSeed::throwaway();
+    let (app, err) = evaluate(
+        &preview_app,
+        &bundle,
+        &empty_params,
+        &seed,
+        &state.script_limits,
+    );
     let def = app.def.load();
 
     let resources_json: Vec<Value> = def

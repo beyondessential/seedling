@@ -624,6 +624,20 @@ pub(crate) fn run_operation_loop(
         }
     }
 
+    // spec: SEC#operation-seeds
+    // Every pass, and every replay after a restart, derives from the seed on
+    // record for the operation, recorded here before the first pass.
+    let operation_seed = {
+        let (id, cipher) = (operation_id.clone(), Arc::clone(&cipher));
+        match db.call(move |db| crate::runtime::history::load_operation_seed(db, &cipher, &id)) {
+            Ok(seed) => seed,
+            Err(e) => {
+                tracing::error!(app = %app_name, action = %action_name, "{action_name} not run: {e}");
+                return OperationEnd::NotRun(format!("{action_name} not run: {e}"));
+            }
+        }
+    };
+
     loop {
         // spec: RT#resources-a-gate-holds
         // What gates keep from the closure is read for each pass, so a pass
@@ -663,6 +677,7 @@ pub(crate) fn run_operation_loop(
                     }),
                     _ => Subject::Action(action_name),
                 },
+                operation_seed: operation_seed.clone(),
                 log: &log,
                 world: Arc::clone(&world),
                 registry: Arc::clone(&registry),

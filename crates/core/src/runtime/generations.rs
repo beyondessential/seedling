@@ -688,7 +688,9 @@ pub fn reconstruct_app_def(
     let (hash, _) = definition_at(db, app, generation)?;
     let bundle = load_bundle(db, &hash)?;
     let params = param_map_at(db, app, generation, cipher)?;
-    let (evaled, script_error) = apps::evaluate(app, &bundle, &params, limits);
+    // spec: SEC#app-seeds — one seed serves every generation of a registration.
+    let seed = apps::seeds::load_app_seed(db, cipher, app)?;
+    let (evaled, script_error) = apps::evaluate(app, &bundle, &params, &seed, limits);
     if let Some(e) = script_error {
         return Err(Error::Script(e));
     }

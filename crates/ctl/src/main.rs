@@ -245,6 +245,9 @@ async fn main() {
         client::dispatch(command, &identity, &key_path);
         return;
     }
+    if let Command::Apps { command } = &top_cmd {
+        apps::refuse_unconfirmed(command);
+    }
 
     // spec: WIRE#actor-attribution
     let actor = {

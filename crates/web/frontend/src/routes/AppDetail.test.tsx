@@ -177,6 +177,33 @@ describe("AppDetail page", () => {
     expect(stop.disabled).toBe(false);
   });
 
+  // spec: UI#guarded-controls
+  it("requires the dangerous mode to rotate the seed", async () => {
+    mount(baseFixtures(makeDetail()), "write");
+    expect(await screen.findByText("gen 4")).toBeTruthy();
+    const rotate = screen.getByRole("button", { name: "Rotate seed" }) as HTMLButtonElement;
+    expect(rotate.disabled).toBe(true);
+  });
+
+  // spec: UI#operator-capabilities
+  it("rotates the seed through the confirm dialog", async () => {
+    const { request } = mount(
+      { ...baseFixtures(makeDetail()), "/apps/seed/rotate": {} },
+      "dangerous",
+    );
+    expect(await screen.findByText("gen 4")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Rotate seed" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Rotate seed?")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate seed" }));
+    await waitFor(() =>
+      expect(callsTo(request, "/apps/seed/rotate")).toEqual([
+        ["/apps/seed/rotate", { app: "myapp" }],
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("uninstalls an installed app through the confirm dialog", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "dangerous");
     expect(await screen.findByText("gen 4")).toBeTruthy();

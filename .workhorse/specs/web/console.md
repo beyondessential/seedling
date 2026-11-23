@@ -24,7 +24,7 @@ It MUST offer log streaming for both app workloads and the host's infrastructure
 
 The console MUST let the operator list apps with their statuses, and see an app's status with its resources, faults, parameters, gates and actions.
 It MUST let the operator register an app with a script, update an app's script or fetch its definition from a registry, and deregister an app.
-It MUST let the operator set and unset several of an app's parameters as one [change](../interface/params.md#parameter-changes), scale its deployments, set its priority, view its generation history, and plan a change.
+It MUST let the operator set and unset several of an app's parameters as one [change](../interface/params.md#parameter-changes), scale its deployments, set its priority, rotate its [seed](../interface/app-control.md#seed-rotation), view its generation history, and plan a change.
 It MUST let the operator install an app, invoke its lifecycle actions, and run its gates.
 
 The console MUST let the operator list the authorised client keys, authorise a key, and revoke a key.
@@ -58,6 +58,7 @@ A console reloaded in the same browser tab MAY resume an elevation that has not 
 A control that changes host state MUST require at least the `write` mode.
 A control that removes, revokes, stops, cancels or clears something MUST require the `dangerous` mode, with two exceptions.
 A control that clears [faults](../overview.md#fault) MUST require the `write` mode.
+A control that rotates an app's seed MUST require the `dangerous` mode.
 Closing a shell the console itself opened, which stops it, MUST be available in every safety mode.
 A control that requires a mode above the console's current one MUST be disabled, and SHOULD show the mode it requires.
 

@@ -187,6 +187,10 @@ struct ScriptLimitArgs {
     /// Maximum object map size in entries (0 = unlimited)
     #[arg(long, default_value_t = 10_000)]
     script_max_map_size: usize,
+
+    /// Maximum calls to a derivation helper per evaluation (0 = unlimited)
+    #[arg(long, default_value_t = 1_000)]
+    script_max_derived_values: usize,
 }
 
 // spec: LIM#limits
@@ -207,6 +211,7 @@ impl From<ScriptLimitArgs> for seedling_core::ScriptLimits {
             max_string_size: a.script_max_string_size,
             max_array_size: a.script_max_array_size,
             max_map_size: a.script_max_map_size,
+            max_derived_values: a.script_max_derived_values,
         }
     }
 }
@@ -332,6 +337,11 @@ async fn main() {
             });
         std::sync::Arc::new(c)
     };
+
+    // spec: SEC#app-seeds — apps registered before seeds existed get theirs
+    // here, once the key that protects them is loaded.
+    seedling_core::runtime::apps::seeds::backfill_app_seeds(&db, &cipher)
+        .unwrap_or_else(|e| fatal!("cannot give registered apps their seeds: {e}"));
 
     // ---------------------------------------------------------------------------
     // System backends
@@ -473,7 +483,11 @@ async fn main() {
                 // evaluates is faulted, and one that evaluates again clears
                 // its old fault.
                 for entry in registry.iter() {
-                    seedling_core::runtime::apps::sync_script_error_fault(&db, entry);
+                    seedling_core::runtime::apps::sync_script_error_fault(
+                        &db,
+                        &entry.name,
+                        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+                    );
                 }
             },
         )
