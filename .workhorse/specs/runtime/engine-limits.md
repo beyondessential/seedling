@@ -24,6 +24,9 @@ The runtime MUST bound the resources a single evaluation of a BSL script can con
 
 An evaluation that exceeds any limit MUST fail with an error.
 
+> [!NOTE]
+> A password hash helper is a derivation helper, so each call to one counts toward both the derived values and the password hashes limits.
+
 The expression nesting limit MUST apply both at the top level of a script and within function bodies.
 
 Functions in a script's scope MAY NOT pause evaluation for any span of time, other than using the methods of a [runtime handle](../language/rt.md#runtime-handle).
