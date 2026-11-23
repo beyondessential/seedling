@@ -14,7 +14,7 @@ A script runs in a fresh scope every time it is evaluated. The `app` global is p
 
 ### Replicability
 
-A script is evaluated many times over an app's life, and must declare the same app each time from the same inputs: its bundle, its parameter values and the [host constants](#constants). So BSL leaves out the parts of Rhai that would let an evaluation differ or stall: there is no `timestamp()`, `sleep()` throws, and `import` is refused. An action that needs the time or the network reaches it through `rt`, for example by running a command in a container with `rt.exec`.
+A script is evaluated many times over an app's life, and must declare the same app each time from the same inputs: its bundle, its parameter values and the [host constants](#constants). So BSL leaves out the parts of Rhai that would let an evaluation differ or stall: there is no `timestamp()`, `sleep()` throws, and a script that contains `import` fails to evaluate. An action that needs the time or the network reaches it through `rt`, for example by running a command in a container with `rt.exec`.
 
 ### Names
 
