@@ -383,3 +383,67 @@ fn a_multibyte_alphabet_is_read_as_characters() {
     assert_eq!(value.chars().count(), 30);
     assert!(value.chars().all(|c| c == 'α' || c == 'β'));
 }
+
+/// The value an action closure derived, which it throws to report.
+fn thrown_by_action(source: &str) -> String {
+    run_action_err(source, "call")
+}
+
+// spec: RND#seeds
+#[test]
+fn an_action_closure_derives_from_the_operation_seed() {
+    let inside =
+        thrown_by_action(r#"app.on_action("call", |rt, p| { throw std::uuid_v4("id"); });"#);
+    let top = thrown_by_action(
+        r#"let top = std::uuid_v4("id"); app.on_action("call", |rt, p| { throw top; });"#,
+    );
+    assert_ne!(
+        inside, top,
+        "the same call derives apart inside and outside a closure"
+    );
+
+    let static_value = description_with(
+        r#"app.description(std::uuid_v4("id"));"#,
+        &crate::runtime::seeds::AppSeed::for_tests(),
+    );
+    assert!(top.contains(&static_value), "{top} carries {static_value}");
+}
+
+// spec: RND#seeds
+#[test]
+fn a_captured_value_is_the_one_the_app_was_declared_with() {
+    let source = r#"
+        let pw = std::random_string("pw", 20, "abcdefghijklmnopqrstuvwxyz");
+        app.description(pw);
+        app.on_action("call", |rt, p| { throw pw; });
+    "#;
+    let (result, app) = run_action_on(source, &[], "call", None, ActionHooks::default());
+    let crate::runtime::barrier::replay::OperationResult::Failed(err) = result else {
+        panic!("expected the throw");
+    };
+    let declared = app.def.load().description.clone().expect("described");
+    assert!(
+        err.to_string().contains(&declared),
+        "{err} carries {declared}"
+    );
+}
+
+// spec: SEC#operation-seeds
+#[test]
+fn an_invoked_action_derives_from_its_callers_operation_seed() {
+    let direct =
+        thrown_by_action(r#"app.on_action("call", |rt, p| { throw std::uuid_v4("id"); });"#);
+    let invoked = thrown_by_action(
+        r#"
+            app.on_action("inner", |rt, p| { throw std::uuid_v4("id"); });
+            app.on_action("call", |rt, p| { app.action("inner").invoke(); });
+        "#,
+    );
+    let uuid = |s: &str| {
+        s.split_whitespace()
+            .find(|w| uuid::Uuid::parse_str(w).is_ok())
+            .expect("a thrown UUID")
+            .to_owned()
+    };
+    assert_eq!(uuid(&invoked), uuid(&direct));
+}

@@ -360,7 +360,12 @@ fn run_probe(
 
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
     let eval_result = {
-        let _guard = ActionClosureGuard::new(action_def, op_id.0.clone(), HashMap::new());
+        let mut _guard = ActionClosureGuard::new(action_def, op_id.0.clone(), HashMap::new());
+        // A probe's derived values go nowhere, so any seed will do; with none
+        // drawn, a closure that derives fails the probe of it.
+        if let Ok(seed) = crate::runtime::seeds::Seed::draw() {
+            _guard = _guard.with_operation_seed(&seed);
+        }
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
         engine.compile(call_script).ok().and_then(|ast| {

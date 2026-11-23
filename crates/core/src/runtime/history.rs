@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension as _, params};
 use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, GateName};
 
@@ -402,7 +402,6 @@ fn external_volume_state(
     db: &Db,
     instance: &ResourceInstance,
 ) -> rusqlite::Result<(LifecycleState, Option<SystemTime>)> {
-    use rusqlite::OptionalExtension as _;
     let row: Option<(String, i64)> = db
         .conn
         .query_row(
@@ -840,12 +839,18 @@ fn target_of_columns(
 /// replayed. Called with an empty map for operations that take no params.
 ///
 /// The params are serialised as JSON and then encrypted as a single blob.
+///
+/// `seed` is recorded as the operation's seed unless the row already holds
+/// one for this same operation, as it does when a gate run's replay saves it
+/// again: every pass and replay derives from the seed first recorded.
+// spec: SEC#operation-seeds
 pub fn save_current_operation(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
     op: &CurrentOperation,
     params: &serde_json::Map<String, serde_json::Value>,
     volume_bindings: &OperationVolumeBindings,
+    seed: &crate::runtime::seeds::Seed,
 ) -> Result<(), OperationPersistError> {
     let plaintext = serde_json::to_string(params).map_err(OperationPersistError::Json)?;
     // spec: OPS#operation-scoped-volumes
@@ -857,6 +862,7 @@ pub fn save_current_operation(
     let ciphertext = cipher
         .encrypt(&secrecy::SecretString::new(plaintext.into()))
         .map_err(OperationPersistError::Cipher)?;
+    let seed_ciphertext = seed.seal(cipher).map_err(OperationPersistError::Cipher)?;
     let (action, gate) = target_columns(&op.target);
     db.conn
         .execute(
@@ -871,9 +877,15 @@ pub fn save_current_operation(
             // which is exactly how this kind of bug arrives.
             "INSERT INTO current_operation
                 (singleton, operation_id, app, action_name, gate,
-                 generation, params_ciphertext, volume_bindings)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 generation, params_ciphertext, volume_bindings, seed_ciphertext)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(singleton) DO UPDATE SET
+                seed_ciphertext = CASE
+                    WHEN current_operation.operation_id = excluded.operation_id
+                         AND current_operation.seed_ciphertext IS NOT NULL
+                    THEN current_operation.seed_ciphertext
+                    ELSE excluded.seed_ciphertext
+                END,
                 operation_id = excluded.operation_id,
                 app = excluded.app,
                 action_name = excluded.action_name,
@@ -889,10 +901,57 @@ pub fn save_current_operation(
                 op.generation as i64,
                 ciphertext,
                 volume_bindings,
+                seed_ciphertext,
             ],
         )
         .map_err(OperationPersistError::Db)?;
     Ok(())
+}
+
+/// The seed the persisted operation `operation_id` derives from.
+///
+/// An operation persisted before operation seeds existed has none on record
+/// and derived nothing, so it is given one now; a seed on record that cannot
+/// be read fails the operation rather than being replaced.
+// spec: SEC#operation-seeds
+pub fn load_operation_seed(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+    operation_id: &OperationId,
+) -> Result<crate::runtime::seeds::Seed, String> {
+    use crate::runtime::seeds::Seed;
+    let read = |db: &Db| -> Result<Option<Option<Vec<u8>>>, String> {
+        db.conn
+            .query_row(
+                "SELECT seed_ciphertext FROM current_operation WHERE operation_id = ?1",
+                [&operation_id.0],
+                |row| row.get::<_, Option<Vec<u8>>>(0),
+            )
+            .optional()
+            .map_err(|e| format!("the operation's seed cannot be read: {e}"))
+    };
+    let ciphertext = match read(db)? {
+        None => return Err("the operation is not on record".into()),
+        Some(Some(ciphertext)) => ciphertext,
+        Some(None) => {
+            let seed = Seed::draw().map_err(|e| format!("no seed could be drawn: {e:?}"))?;
+            let sealed = seed
+                .seal(cipher)
+                .map_err(|e| format!("the operation's seed cannot be sealed: {e}"))?;
+            db.conn
+                .execute(
+                    "UPDATE current_operation SET seed_ciphertext = ?2 \
+                     WHERE operation_id = ?1 AND seed_ciphertext IS NULL",
+                    params![operation_id.0, sealed],
+                )
+                .map_err(|e| format!("the operation's seed cannot be recorded: {e}"))?;
+            match read(db)? {
+                Some(Some(ciphertext)) => ciphertext,
+                _ => return Err("the operation is not on record".into()),
+            }
+        }
+    };
+    Seed::open(cipher, &ciphertext).map_err(|e| format!("the operation's seed cannot be read: {e}"))
 }
 
 /// Decrypt the persisted params for the current in-flight operation, if

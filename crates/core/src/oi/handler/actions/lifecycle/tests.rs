@@ -1144,3 +1144,79 @@ fn a_call_that_would_act_on_a_workload_fails_while_what_gates_hold_cannot_be_rea
     let why = failure_of(run_action_body(&app, "poke", &db, "op-unreadable"));
     assert!(why.contains("cannot tell whether a gate holds"), "{why}");
 }
+
+/// What the action `derive` threw when replayed against an operation persisted
+/// with `seed`, as after a restart severs everything held in memory.
+fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
+    let name = AppName::new("demo").unwrap();
+    let script = r#"app.on_action("derive", |rt, _p| { throw std::uuid_v4("id"); });"#;
+    let (app, _) = crate::runtime::apps::evaluate_script(
+        &name,
+        script,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    );
+    let db = DbHandle::open_in_memory().unwrap();
+    let cipher = Arc::new(Cipher::for_tests());
+    let operation_id = OperationId::new();
+    let target: OperationTarget = ActionName::new("derive").unwrap().into();
+    {
+        let record = crate::runtime::history::CurrentOperation {
+            operation_id: operation_id.clone(),
+            app: name.clone(),
+            target: target.clone(),
+            generation: 0,
+        };
+        let (cipher, seed) = (Arc::clone(&cipher), seed.clone());
+        db.call(move |db| {
+            crate::runtime::history::save_current_operation(
+                db,
+                &cipher,
+                &record,
+                &serde_json::Map::new(),
+                &HashMap::new(),
+                &seed,
+            )
+        })
+        .unwrap();
+    }
+    let tx = new_event_channel();
+    let op_ctx = tx.operation(name, target, operation_id.0.clone(), 0, None);
+    let end = super::run_operation_loop(
+        &app,
+        db,
+        Ok(BoundParams {
+            params: serde_json::Map::new(),
+            bindings: HashMap::new(),
+        }),
+        Arc::new(RwLock::new(None)),
+        Arc::new(Notify::new()),
+        &op_ctx,
+        &crate::ScriptLimits::default(),
+        cipher,
+        &crate::runtime::gates::GateRuntime::new(),
+        &RwLock::new(crate::runtime::apps::AppRegistry::new()),
+        Arc::new(CancelToken::new()),
+        None,
+        None,
+        None,
+        None,
+        Persisted::Yes,
+    );
+    match end {
+        OperationEnd::Failed(thrown) => thrown,
+        _ => panic!("expected the throw"),
+    }
+}
+
+// spec: SEC#operation-seeds
+#[test]
+fn a_replay_derives_from_the_seed_on_record() {
+    let seed = crate::runtime::seeds::Seed::from_bytes([1; 32]);
+    let first = derived_on_replay(&seed);
+    assert_eq!(first, derived_on_replay(&seed));
+    assert_ne!(
+        first,
+        derived_on_replay(&crate::runtime::seeds::Seed::from_bytes([2; 32]))
+    );
+}

@@ -27,6 +27,11 @@ impl Seed {
     }
 
     #[cfg(test)]
+    pub fn for_tests() -> Self {
+        Self::from_bytes([5; SEED_LEN])
+    }
+
+    #[cfg(test)]
     pub fn from_bytes(bytes: [u8; SEED_LEN]) -> Self {
         Self(Arc::new(SecretBox::new(Box::new(bytes))))
     }

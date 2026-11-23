@@ -345,7 +345,9 @@ fn anon_vol_name(operation: uuid::Uuid, counter: u32) -> String {
 
 /// RAII guard that sets the in-action-closure flag on construction and clears
 /// it on drop, ensuring the flag is always cleaned up even on early return.
-pub struct ActionClosureGuard;
+pub struct ActionClosureGuard {
+    operation_seed: Option<crate::runtime::seeds::OperationSeedFrame>,
+}
 
 impl ActionClosureGuard {
     pub fn new(
@@ -359,7 +361,16 @@ impl ActionClosureGuard {
         ANON_VOL_COUNTER.with(|c| c.set(0));
         ANON_RESOURCE_COUNTER.with(|c| c.set(0));
         set_operation_volume_bindings(bindings);
-        Self
+        Self {
+            operation_seed: None,
+        }
+    }
+
+    // spec: RND#seeds
+    /// Install the seed the closure's derivation helpers derive from.
+    pub fn with_operation_seed(mut self, seed: &crate::runtime::seeds::Seed) -> Self {
+        self.operation_seed = Some(crate::runtime::seeds::OperationSeedFrame::enter(seed));
+        self
     }
 
     // spec: ACN#action-invocation
