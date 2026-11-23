@@ -271,10 +271,6 @@ impl Run<'_> {
             generation,
         };
         let cipher = Arc::clone(&state.cipher);
-        let seed = match crate::runtime::seeds::Seed::draw() {
-            Ok(seed) => seed,
-            Err(e) => return failed(format!("no seed could be drawn for the operation: {e:?}")),
-        };
         let persisted = state.db.call(move |db| {
             save_current_operation(
                 db,
@@ -282,7 +278,6 @@ impl Run<'_> {
                 &record,
                 &serde_json::Map::new(),
                 &HashMap::new(),
-                &seed,
             )
         });
         if let Err(e) = persisted {

@@ -1167,7 +1167,7 @@ fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
             target: target.clone(),
             generation: 0,
         };
-        let (cipher, seed) = (Arc::clone(&cipher), seed.clone());
+        let (cipher, seed, id) = (Arc::clone(&cipher), seed.clone(), operation_id.clone());
         db.call(move |db| {
             crate::runtime::history::save_current_operation(
                 db,
@@ -1175,10 +1175,10 @@ fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
                 &record,
                 &serde_json::Map::new(),
                 &HashMap::new(),
-                &seed,
             )
-        })
-        .unwrap();
+            .unwrap();
+            crate::runtime::history::record_operation_seed(db, &cipher, &id, &seed);
+        });
     }
     let tx = new_event_channel();
     let op_ctx = tx.operation(name, target, operation_id.0.clone(), 0, None);

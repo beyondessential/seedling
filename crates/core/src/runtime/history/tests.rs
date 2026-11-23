@@ -44,7 +44,6 @@ fn a_gate_run_is_persisted_and_read_back_as_a_gate_run() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
@@ -60,7 +59,6 @@ fn a_gate_run_is_persisted_and_read_back_as_a_gate_run() {
         },
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     assert_eq!(
@@ -138,7 +136,6 @@ fn save_and_load_current_operation() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
@@ -172,7 +169,6 @@ fn clear_current_operation_removes_record() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     clear_current_operation(&db).unwrap();
@@ -198,7 +194,6 @@ fn cancel_requested_round_trips_through_db() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
 
@@ -219,7 +214,6 @@ fn cancel_requested_round_trips_through_db() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     let flipped = set_cancel_requested(&db, &OperationId("other-op".into())).unwrap();
@@ -262,30 +256,14 @@ fn volume_bindings_persist_with_the_current_operation() {
             read_only: true,
         },
     )]);
-    save_current_operation(
-        &db,
-        &cipher,
-        &op,
-        &params,
-        &bindings,
-        &crate::runtime::seeds::Seed::for_tests(),
-    )
-    .unwrap();
+    save_current_operation(&db, &cipher, &op, &params, &bindings).unwrap();
     assert_eq!(
         load_current_operation_volume_bindings(&db).unwrap(),
         bindings
     );
 
     // A later save without bindings leaves none behind.
-    save_current_operation(
-        &db,
-        &cipher,
-        &op,
-        &params,
-        &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
-    )
-    .unwrap();
+    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
     assert!(
         load_current_operation_volume_bindings(&db)
             .unwrap()
@@ -321,15 +299,7 @@ fn operation_params_round_trip_through_cipher() {
     params.insert("passphrase".into(), serde_json::json!("hunter2"));
     params.insert("bucket".into(), serde_json::json!("my-backups"));
 
-    save_current_operation(
-        &db,
-        &cipher,
-        &op,
-        &params,
-        &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
-    )
-    .unwrap();
+    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
 
     // Metadata loads via the normal path.
     let meta = load_current_operation(&db).unwrap().unwrap();
@@ -369,7 +339,6 @@ fn empty_params_round_trip() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
 
@@ -405,7 +374,6 @@ fn save_overwrites_previous_current_operation() {
         &op1,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     save_current_operation(
@@ -414,7 +382,6 @@ fn save_overwrites_previous_current_operation() {
         &op2,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     let loaded = load_current_operation(&db).unwrap().unwrap();
@@ -1003,7 +970,6 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     assert!(set_cancel_requested(&db, &OperationId("op-cancel".into())).unwrap());
@@ -1016,7 +982,6 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
 
@@ -1155,7 +1120,6 @@ fn the_persisted_operation_state_carries_a_persisted_cancel() {
         &op,
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::for_tests(),
     )
     .unwrap();
     assert!(!read_operation_state(&db, &cipher).unwrap().cancel_requested);
@@ -1215,69 +1179,54 @@ fn op(id: &str) -> CurrentOperation {
     }
 }
 
-fn save_with(db: &Db, cipher: &crate::runtime::secrets::Cipher, id: &str, byte: u8) {
+fn save(db: &Db, cipher: &crate::runtime::secrets::Cipher, id: &str) {
     save_current_operation(
         db,
         cipher,
         &op(id),
         &serde_json::Map::new(),
         &Default::default(),
-        &crate::runtime::seeds::Seed::from_bytes([byte; 32]),
     )
     .unwrap();
 }
 
+fn seed_of(db: &Db, cipher: &crate::runtime::secrets::Cipher, id: &str) -> [u8; 32] {
+    *load_operation_seed(db, cipher, &OperationId(id.into()))
+        .unwrap()
+        .expose()
+}
+
 // spec: SEC#operation-seeds
 #[test]
-fn saving_an_operation_again_keeps_its_first_seed() {
+fn an_operation_keeps_the_seed_first_drawn_for_it() {
     let db = Db::open_in_memory().unwrap();
     let cipher = crate::runtime::secrets::Cipher::for_tests();
-    save_with(&db, &cipher, "op-1", 1);
-    save_with(&db, &cipher, "op-1", 2);
-    let seed = load_operation_seed(&db, &cipher, &OperationId("op-1".into())).unwrap();
+    save(&db, &cipher, "op-1");
+    let first = seed_of(&db, &cipher, "op-1");
+    assert_eq!(first, seed_of(&db, &cipher, "op-1"));
+    save(&db, &cipher, "op-1");
     assert_eq!(
-        seed.expose(),
-        &[1; 32],
+        first,
+        seed_of(&db, &cipher, "op-1"),
         "a replay's save keeps the seed on record"
     );
 
-    save_with(&db, &cipher, "op-2", 3);
-    let seed = load_operation_seed(&db, &cipher, &OperationId("op-2".into())).unwrap();
-    assert_eq!(
-        seed.expose(),
-        &[3; 32],
-        "the next operation records its own"
+    save(&db, &cipher, "op-2");
+    assert_ne!(
+        first,
+        seed_of(&db, &cipher, "op-2"),
+        "the next operation draws its own"
     );
     assert!(load_operation_seed(&db, &cipher, &OperationId("op-1".into())).is_err());
 }
 
 // spec: SEC#operation-seeds
 #[test]
-fn an_operation_persisted_without_a_seed_is_given_one_that_lasts() {
-    let db = Db::open_in_memory().unwrap();
-    let cipher = crate::runtime::secrets::Cipher::for_tests();
-    save_with(&db, &cipher, "op-1", 1);
-    db.conn
-        .execute("UPDATE current_operation SET seed_ciphertext = NULL", [])
-        .unwrap();
-    let id = OperationId("op-1".into());
-    let first = load_operation_seed(&db, &cipher, &id).unwrap();
-    assert_eq!(
-        first.expose(),
-        load_operation_seed(&db, &cipher, &id).unwrap().expose()
-    );
-}
-
-// spec: SEC#operation-seeds
-#[test]
 fn an_unreadable_operation_seed_is_not_replaced() {
     let db = Db::open_in_memory().unwrap();
-    save_with(
-        &db,
-        &crate::runtime::secrets::Cipher::for_tests_with(&[3; 32]),
-        "op-1",
-        1,
-    );
+    let other_key = crate::runtime::secrets::Cipher::for_tests_with(&[3; 32]);
+    save(&db, &other_key, "op-1");
+    seed_of(&db, &other_key, "op-1");
     let cipher = crate::runtime::secrets::Cipher::for_tests();
     let id = OperationId("op-1".into());
     assert!(load_operation_seed(&db, &cipher, &id).is_err());

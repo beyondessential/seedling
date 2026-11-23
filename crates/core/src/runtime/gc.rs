@@ -361,7 +361,6 @@ mod tests {
             },
             &serde_json::Map::new(),
             &Default::default(),
-            &crate::runtime::seeds::Seed::for_tests(),
         )
         .unwrap();
 

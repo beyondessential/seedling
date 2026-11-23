@@ -604,15 +604,6 @@ pub(crate) fn run_operation_loop(
         let params_for_persist = params.clone();
         let bindings_for_persist = operation_volume_bindings.clone();
         let cipher_for_persist = Arc::clone(&cipher);
-        let seed = match crate::runtime::seeds::Seed::draw() {
-            Ok(seed) => seed,
-            Err(e) => {
-                tracing::error!(app = %app_name, action = %action_name, "no seed could be drawn: {e:?}");
-                return OperationEnd::NotRun(format!(
-                    "{action_name} not run: no seed could be drawn for the operation"
-                ));
-            }
-        };
         if let Err(e) = db.call(move |db| {
             save_current_operation(
                 db,
@@ -620,7 +611,6 @@ pub(crate) fn run_operation_loop(
                 &record,
                 &params_for_persist,
                 &bindings_for_persist,
-                &seed,
             )
         }) {
             tracing::error!(
@@ -636,7 +626,7 @@ pub(crate) fn run_operation_loop(
 
     // spec: SEC#operation-seeds
     // Every pass, and every replay after a restart, derives from the seed on
-    // record for the operation.
+    // record for the operation, recorded here before the first pass.
     let operation_seed = {
         let (id, cipher) = (operation_id.clone(), Arc::clone(&cipher));
         match db.call(move |db| crate::runtime::history::load_operation_seed(db, &cipher, &id)) {

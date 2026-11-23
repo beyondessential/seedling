@@ -840,9 +840,9 @@ fn target_of_columns(
 ///
 /// The params are serialised as JSON and then encrypted as a single blob.
 ///
-/// `seed` is recorded as the operation's seed unless the row already holds
-/// one for this same operation, as it does when a gate run's replay saves it
-/// again: every pass and replay derives from the seed first recorded.
+/// The operation's seed is left to [`load_operation_seed`]: saving the same
+/// operation again, as a gate run's replay does, keeps the seed on record,
+/// and saving another clears it.
 // spec: SEC#operation-seeds
 pub fn save_current_operation(
     db: &Db,
@@ -850,7 +850,6 @@ pub fn save_current_operation(
     op: &CurrentOperation,
     params: &serde_json::Map<String, serde_json::Value>,
     volume_bindings: &OperationVolumeBindings,
-    seed: &crate::runtime::seeds::Seed,
 ) -> Result<(), OperationPersistError> {
     let plaintext = serde_json::to_string(params).map_err(OperationPersistError::Json)?;
     // spec: OPS#operation-scoped-volumes
@@ -862,7 +861,6 @@ pub fn save_current_operation(
     let ciphertext = cipher
         .encrypt(&secrecy::SecretString::new(plaintext.into()))
         .map_err(OperationPersistError::Cipher)?;
-    let seed_ciphertext = seed.seal(cipher).map_err(OperationPersistError::Cipher)?;
     let (action, gate) = target_columns(&op.target);
     db.conn
         .execute(
@@ -877,14 +875,12 @@ pub fn save_current_operation(
             // which is exactly how this kind of bug arrives.
             "INSERT INTO current_operation
                 (singleton, operation_id, app, action_name, gate,
-                 generation, params_ciphertext, volume_bindings, seed_ciphertext)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 generation, params_ciphertext, volume_bindings)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(singleton) DO UPDATE SET
                 seed_ciphertext = CASE
                     WHEN current_operation.operation_id = excluded.operation_id
-                         AND current_operation.seed_ciphertext IS NOT NULL
                     THEN current_operation.seed_ciphertext
-                    ELSE excluded.seed_ciphertext
                 END,
                 operation_id = excluded.operation_id,
                 app = excluded.app,
@@ -901,18 +897,34 @@ pub fn save_current_operation(
                 op.generation as i64,
                 ciphertext,
                 volume_bindings,
-                seed_ciphertext,
             ],
         )
         .map_err(OperationPersistError::Db)?;
     Ok(())
 }
 
-/// The seed the persisted operation `operation_id` derives from.
+/// Record `seed` as the persisted operation's, as a restart would find it.
+#[cfg(test)]
+pub fn record_operation_seed(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+    operation_id: &OperationId,
+    seed: &crate::runtime::seeds::Seed,
+) {
+    db.conn
+        .execute(
+            "UPDATE current_operation SET seed_ciphertext = ?2 WHERE operation_id = ?1",
+            params![operation_id.0, seed.seal(cipher).unwrap()],
+        )
+        .unwrap();
+}
+
+/// The seed the persisted operation `operation_id` derives from, drawn and
+/// recorded the first time it is asked for, before the operation's first
+/// pass.
 ///
-/// An operation persisted before operation seeds existed has none on record
-/// and derived nothing, so it is given one now; a seed on record that cannot
-/// be read fails the operation rather than being replaced.
+/// A seed on record that cannot be read fails the operation rather than
+/// being replaced.
 // spec: SEC#operation-seeds
 pub fn load_operation_seed(
     db: &Db,
