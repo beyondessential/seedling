@@ -1036,5 +1036,5 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
         );
         count += 1;
     }
-    assert_eq!(count, 43, "every delegate emitted exactly one event");
+    assert_eq!(count, 44, "every delegate emitted exactly one event");
 }
