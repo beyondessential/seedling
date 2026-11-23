@@ -20,6 +20,7 @@ A parameter with a stored value whose name the app's current definition does not
 
 The runtime MUST store parameter values durably, keyed by app name and parameter name.
 A parameter value is a string.
+The runtime MUST store a value supplied as a boolean or an integer as its [canonical form](../language/action.md#kind-parsers).
 A parameter with no stored value is unset.
 
 Every evaluation of an app's definition MUST be given the app's stored parameter values.
@@ -35,6 +36,7 @@ The runtime MUST store it, and it takes effect once the app's definition declare
 The server MUST validate a definition update and a parameter change before it persists any part of the change.
 
 Validation [checks the kind](../language/parameter.md#kind-checks) of every parameter that is set in the proposed values.
+A value supplied as a boolean for a parameter whose kind is not `boolean`, or as an integer for one whose kind is not `integer`, MUST fail validation, as MUST one supplied so for an unknown parameter.
 If every kind accepts its value, validation then runs the [validator](../language/parameter.md#validators) of each such parameter against the proposed values.
 The kinds and validators are those the proposed definition declares when evaluated with the proposed values.
 For a parameter change whose proposed values fail to evaluate, the kinds and validators are those of the app's most recent successful evaluation.
@@ -54,11 +56,11 @@ Registering an app and reloading a stored app check no kinds and run no validato
 | parameter | type | required | meaning |
 | --- | --- | --- | --- |
 | `app` | string | yes | the app's name |
-| `params` | object | yes | one member per parameter to change, named for the parameter, whose value is a string to set or `null` to unset |
+| `params` | object | yes | one member per parameter to change, named for the parameter, whose value is a string, a boolean or a [JSON integer](actions.md#action-parameters) to set, or `null` to unset |
 
 The result is `{ "generation": <integer> }`, the app's current [generation](../overview.md#generation) once the request completes.
 
-The server MUST refuse the request with `requirements_invalid` if `params` has no members, names a parameter more than once, has a member whose name breaks the [naming rules](../language/overview.md#names), or has a member whose value is neither a string nor `null`.
+The server MUST refuse the request with `requirements_invalid` if `params` has no members, names a parameter more than once, has a member whose name breaks the [naming rules](../language/overview.md#names), or has a member whose value is not a string, a boolean, a JSON integer or `null`.
 It MUST refuse it with `not_found` if the app is not registered.
 It MUST refuse it with `operation_in_progress` if another change to the app is being applied.
 
