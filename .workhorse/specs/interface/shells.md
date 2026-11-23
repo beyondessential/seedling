@@ -32,7 +32,7 @@ A client opens a [shell session](#shell-session) on one of an app's [shells](../
 | `name` | string | yes | the shell's name |
 | `rows` | integer, 0 to 65535 | yes | the terminal's initial height in rows |
 | `cols` | integer, 0 to 65535 | yes | the terminal's initial width in columns |
-| `params` | object of strings | no | parameter values for the shell, keyed by parameter name |
+| `params` | object | no | parameter values for the shell, keyed by parameter name, each of a type [action parameters](actions.md#action-parameters) allows |
 
 The server MUST reject a request naming an app that is not registered with `not_found`.
 The server MUST reject the request with `not_installed` unless the app's [install phase](../overview.md#install-phase) is `Installed`.

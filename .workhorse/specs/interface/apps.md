@@ -302,7 +302,9 @@ Each entry of `params` has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `name` | string | the parameter's name |
-| `kind` | string | `text`, `multiline`, `email`, `password`, `weak-password`, `random` or `volume` |
+| `kind` | string | the name of its [kind](../language/action.md#param-kinds) |
+| `range` | object or null | for an `integer` kind given a `range`, `{ "min": <integer>, "max": <integer> }`, its least and greatest accepted values, and `null` otherwise |
+| `options` | array of strings or null | for a `choice` kind, its options in the order the script declared them, and `null` otherwise |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
 | `default_value` | string or null | its default value |
@@ -326,7 +328,7 @@ Each entry of `actions` has these members.
 | `name` | string | the action's name |
 | `description` | string or null | its description |
 | `kind` | string | `action` or `shell` |
-| `params` | object | for each parameter its schema declares, `{ "kind", "required", "description", "default_value", "secret" }` as in `params` above |
+| `params` | object | for each parameter its schema declares, `{ "kind", "range", "options", "required", "description", "default_value", "secret" }` as in `params` above |
 | `schedules` | array | one `{ "cronexpr", "last_fired_at", "next_fire_at" }` for each [schedule](../language/action.md#scheduled-actions) attached to the action |
 
 Shells have no schedules.

@@ -28,7 +28,7 @@ The server MUST reject with `not_found` a `name` that names no action the app de
 
 A `params` key ending in `_volume` or `_filename` is [reserved](../language/action.md#param-delivery), and the server MUST reject a request carrying one with `requirements_invalid`.
 Where the action declares parameters, the server MUST validate the submitted values as [action parameters](#action-parameters) specifies before the operation is scheduled.
-The value of a declared parameter MUST be a JSON string, and the server MUST reject a value of any other type with `requirements_invalid` rather than treat the parameter as absent.
+The value of a declared parameter MUST be of a type [action parameters](#action-parameters) allows, and the server MUST reject a value of any other type with `requirements_invalid` rather than treat the parameter as absent.
 If a declared parameter of kind `volume` names a site volume that does not exist, the server MUST reject the request with `not_found`.
 The server MUST deliver `params`, with defaults filled in, to the action closure as `param`.
 
@@ -47,7 +47,7 @@ The server MUST give every operation an `operation_id` that no other operation o
 
 ### Action parameters
 
-Each value the server validates against a declared parameter MUST be a JSON string.
+Each value the server validates against a declared parameter MUST be a JSON string, except that a `boolean` parameter MAY take a JSON boolean and an `integer` parameter MAY take a JSON number that is an integer, each taken as its [param schema](../language/action.md#param-schemas) specifies.
 The server MUST validate each value against the parameter's declared [kind](../language/action.md#param-schemas).
 The server MUST treat an empty string as no value.
 The server MUST fill in a parameter with no value from its `default_value`, where it declares one.

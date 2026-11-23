@@ -32,6 +32,11 @@ If the parameter has neither, `param.value()` MUST throw.
 
 `param.is_set()` MUST return `false` while a default is in effect, so that a script can tell an operator's value from a default.
 
+`param.parsed()` MUST return the [parser result](action.md#param-kinds) of the parameter's kind for the value `param.value()` returns, and MUST throw where `param.value()` throws.
+
+> [!NOTE]
+> A stored value and a default have both passed the kind's parser, so `parsed()` fails only where `value()` does.
+
 ## Schema
 
 A script MAY attach schema metadata to a `Param` through the builder methods below.
@@ -41,14 +46,14 @@ A schema method MUST throw when called in the [action context](app.md#action-con
 
 | method | sets | default |
 | --- | --- | --- |
-| `kind(kind: string)` | how the parameter is presented and checked | `"text"` |
+| `kind(kind: string \| map)` | how the parameter is presented and checked, as a [kind](action.md#kind-arguments) | `"text"` |
 | `required(required: bool)` | whether the parameter needs a value | `false` |
 | `default_value(value: string)` | the value [`value()`](#values) returns when none is stored | none |
 | `description(description: string)` | a human-readable description | none |
 | `secret(secret: bool)` | whether the value is [secret](#secret-parameters) | implied by `kind` |
 
-`kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"` and `"random"`, each with the meaning [param kinds](action.md#param-kinds) give it.
-`kind` MUST throw when given `"volume"`, which only action and shell [params](action.md#param-schemas) accept, or any value it does not define.
+`kind` MUST accept every valid [kind](action.md#kind-arguments) other than `volume`, with the meaning [param kinds](action.md#param-kinds) give it.
+`kind` MUST throw when given the `volume` kind, which only action and shell [params](action.md#param-schemas) accept, or anything that is not a valid kind.
 
 ## Secret parameters
 
@@ -63,6 +68,11 @@ The runtime MUST protect a secret parameter's value as [secret storage](../runti
 The runtime MUST check a parameter's proposed value with its kind's [parser](action.md#kind-parsers), and MUST reject a value the parser rejects, with the parser's error as the reason.
 The runtime MUST check a value only while its parameter would be set, and an empty stored value is a value it checks.
 The runtime MUST NOT run a parameter's [validator](#validators) on a value its kind rejects.
+
+Once a script's evaluation has run to completion, the runtime MUST check each declared default against its parameter's kind, and MUST fail the evaluation if the kind rejects one, naming the parameter and giving the parser's error.
+
+> [!NOTE]
+> `kind` and `default_value` may be called in either order, so the pair can be checked only once the script has finished declaring them.
 
 When the runtime checks kinds, and which request a rejection refuses, is specified in [parameter validation](../interface/params.md#validation).
 
