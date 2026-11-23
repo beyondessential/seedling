@@ -303,7 +303,7 @@ Each entry of `params` has these members.
 | --- | --- | --- |
 | `name` | string | the parameter's name |
 | `kind` | string | the name of its [kind](../language/action.md#param-kinds) |
-| `range` | object or null | for an `integer` kind given a `range`, `{ "min": <integer>, "max": <integer> }`, its least and greatest accepted values, and `null` otherwise |
+| `range` | object or null | for an `integer` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values, and `null` otherwise |
 | `options` | array of strings or null | for a `choice` kind, its options in the order the script declared them, and `null` otherwise |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
@@ -311,6 +311,11 @@ Each entry of `params` has these members.
 | `secret` | boolean | its effective [secret flag](../language/parameter.md#secret-parameters) |
 | `is_set` | boolean | whether it has a stored value |
 | `value` | string or null | its stored value, or `null` where it is unset or secret |
+
+In `range`, `min` MUST be `null` where the range starts at the smallest signed 64-bit integer, and `max` MUST be `null` where it ends at the largest, whether that end is inclusive or exclusive.
+
+> [!NOTE]
+> Many JSON clients hold numbers as double-precision floats, which represent integers exactly only up to 2^53 in magnitude, so a bound beyond that may be read imprecisely.
 
 When a parameter's effective secret flag is true, its `value` MUST be `null` whether or not a value is stored.
 A client MUST use `is_set` to tell an unset secret from a set one.
