@@ -84,7 +84,7 @@ The std module MUST also offer these derivation helpers, each of which hashes a 
 | `std::password_argon2id(label: string, password: bytes)` | an Argon2id hash of `password`, as a PHC string |
 | `std::password_bcrypt(label: string, password: bytes)` | a bcrypt hash of `password`, in modular crypt form |
 
-`password` MUST accept a string, read as its UTF-8 encoding, or a Blob, read as its bytes.
+`password` is a [`bytes` argument](encoding.md#byte-arguments).
 `password_bcrypt` MUST throw when `password` is longer than 72 bytes or holds a zero byte.
 
 The runtime MUST bound the number of password hash helper calls in one evaluation, as the [engine limits](../runtime/engine-limits.md#limits) specify.

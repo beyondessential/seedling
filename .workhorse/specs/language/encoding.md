@@ -19,7 +19,7 @@ Applies to the helpers in the [std module](std.md#the-std-module) through which 
 
 ## Byte arguments
 
-Every argument these helpers give the type `bytes` MUST accept a string, read as its UTF-8 encoding, or a Blob, read as its bytes.
+Every argument these helpers give the type `bytes` MUST accept a string, read as its UTF-8 encoding, a Blob, read as its bytes, or a [`File`](bundle.md#bundle-files), read as its contents.
 A `bytes` argument of any other type MUST raise a script error, as the [argument rules](overview.md#arguments) require.
 
 ## Encodings
@@ -34,6 +34,8 @@ The std module MUST offer these helpers.
 | `std::decode_base64(text: string)` | a Blob of the bytes `text` encodes in base64 |
 | `std::encode_base64url(data: bytes)` | a string encoding `data` in base64url, without padding |
 | `std::decode_base64url(text: string)` | a Blob of the bytes `text` encodes in base64url |
+| `std::encode_utf8(text: string)` | a Blob of the UTF-8 encoding of `text` |
+| `std::decode_utf8(data: bytes)` | the string whose UTF-8 encoding is `data` |
 
 Encoding no bytes MUST return the empty string, and decoding the empty string MUST return an empty Blob.
 
@@ -43,6 +45,8 @@ It MUST throw when `text` holds an odd number of characters, or any character th
 `decode_base64` MUST throw when `text` holds a character outside the base64 alphabet, other than one or two padding characters at its end, or when its length is not a multiple of four.
 `decode_base64url` MUST throw when `text` holds a character outside the base64url alphabet, including padding, or when its length leaves a remainder of one when divided by four.
 Both MUST throw when the last character before any padding encodes bits that are not zero beyond the final byte.
+
+`decode_utf8` MUST throw when `data` is not valid UTF-8.
 
 > [!NOTE]
 > A strict decoder gives every byte sequence exactly one encoding, so text that decodes is the text the matching encoder would have written.
