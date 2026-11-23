@@ -110,7 +110,7 @@ The runtime MUST derive each value exactly as this section specifies.
 
 A call's encoding is the concatenation of these fields, in order:
 
-1. the helper's name, as a string field;
+1. the helper's name without its `std::` prefix, which is one of `random_bytes`, `random_string`, `uuid_v4`, `password_argon2id` or `password_bcrypt`, as a string field;
 2. the label, as a string field;
 3. for `random_bytes`, `n` as an integer field;
 4. for `random_string`, `length` as an integer field, then `alphabet` as a string field.
