@@ -18,6 +18,10 @@ Lifetimes considered:
 | per generation | Rejected: every definition or parameter change restarts every consumer, and nothing needs it that per-registration does not cover. |
 | per registration | Kept, as `app.random_*`. Covers the pairing case: a static deployment's env and an install action's `rt.exec` deriving the same database password. |
 
+The app seed is created at registration and discarded at deregistration with the rest of the app's state.
+It has no import or export: an exported seed would disclose every value the app will ever derive, more than any secret parameter does.
+A host restored from its database and key file keeps its seeds; an app moved to another host gets a new seed, and its operator re-keys any data store holding app-seeded values.
+
 Shell sessions are never persisted or replayed, so a session's seed can live in memory only.
 Validators get no randomness: they judge a proposed value, and randomness has no meaning there.
 
@@ -26,5 +30,5 @@ Validators get no randomness: they judge a proposed value, and randomness has no
 A guide in `docs/` covers the pitfalls:
 
 - An operation-seeded value differs in the next operation; anything that must outlive the operation goes into a volume or comes from the app seed.
-- App-seeded values change on re-registration while data written to volumes keeps the old ones.
+- App-seeded values change on re-registration, or when an app moves to another host, while data written to volumes keeps the old ones.
 - The function, label and every argument enter the derivation: changing a length or alphabet changes the value, and two uses wanting distinct secrets need distinct labels.
