@@ -10,9 +10,12 @@
 
 ## Build
 
-- [ ] Register an empty `std` static module on the engine in `setup_language`, so every context that evaluates through it reaches the module.
-- [ ] Enable Rhai's `no_time` feature; check no script, test or fixture calls `timestamp()`.
-- [ ] Replace the engine's module resolver with one that refuses every path.
-- [ ] Remove `sleep` from the engine (it is in Rhai's core package behind `no_std` only, so build the engine from `new_raw` plus the packages minus it, or register a throwing override); check no script calls it.
-- [ ] Tests: `std::` with an unknown name raises a script error; `timestamp()` and `sleep()` are not in scope; `import` raises a script error.
-- [ ] Add a "Standard helpers" section to `docs/bsl-scripting.md` introducing the module, its calling form and its conventions.
+- [x] Register an empty `std` static module in `defs::register`, which every engine goes through, so every context reaches it.
+- [x] Enable Rhai's `no_time` feature; no script, test or fixture called `timestamp()`.
+- [ ] Refuse `import`.
+  - A refusing module resolver leaves a hole: Rhai's optimiser drops an `import` whose alias is never used inside a block, so `try { import "x" as m; } catch {}` raises nothing. Waiting on a decision between disabling the keyword (any script containing `import` fails to compile) and keeping the resolver with a loosened spec.
+- [x] Make `sleep` throw: `disable_symbol` only reaches keywords and `sleep` is in Rhai's core package, so the engine registers throwing `sleep` overloads, which it finds before any package's.
+- [ ] Tests: `std::` with an unknown name raises a function-not-found error in the static, action, gate-body and validator contexts, and a script cannot add to `std`; `timestamp()` is not in scope; `sleep()` throws without pausing; `import` is refused.
+  - [x] `std`, `timestamp()` and `sleep()`
+  - [ ] `import`
+- [x] Add a "Standard helpers" section to `docs/bsl-scripting.md` introducing the module, its calling form and its conventions, and a replicability note under the language fundamentals.
