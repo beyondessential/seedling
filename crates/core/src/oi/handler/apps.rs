@@ -798,7 +798,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             )
         })?;
 
-    // spec: APPS#redacted-environment-values
+    // spec: APPS#redacted-values
     // An environment value that contains the stored value of a parameter whose
     // effective secret flag is true is reported as null.
     let secret_values: Vec<&str> = def

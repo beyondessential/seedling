@@ -207,7 +207,7 @@ Whenever an instance's `health` changes, the runtime MUST emit an `InstanceHealt
 | `ingress` | `service` (string), `hostname` (string), `port` (integer), `tls` (boolean), `dtls` (boolean), `http_terminate` (`"http1"`, `"http2"` or null), `redirect` (`{ "port": <integer>, "code": <integer> }` or null), `description` (string or null) |
 | `deployment` | `container`, `pod`, `scale` (`{ "low": <integer>, "high": <integer> }`), `on_update` (`"rolling"` or `"replace"`), `on_terminate` (`"recreate"`), `priority` (string), `description` (string or null) |
 | `job` | `container`, `pod`, `deadline` (seconds, or null), `description` (string or null) |
-| `volume` | `readonly` (boolean), `tmpfs` (boolean), `writes` (object of path to contents), `exported` (boolean), `export_description` (string or null), `description` (string or null) |
+| `volume` | `readonly` (boolean), `tmpfs` (boolean), `writes` (object of path to contents, or to `null` for a [redacted](#redacted-values) write), `exported` (boolean), `export_description` (string or null), `description` (string or null) |
 | `external_volume` | `description` (string or null) |
 | `external_service` | `description` (string or null) |
 
@@ -217,7 +217,7 @@ A `container` object has these members.
 | --- | --- | --- |
 | `image` | string or null | the image reference |
 | `command`, `args` | array of strings or null | the entrypoint and its arguments |
-| `env` | object | each environment variable's name and value, or `null` for a [redacted](#redacted-environment-values) value |
+| `env` | object | each environment variable's name and value, or `null` for a [redacted](#redacted-values) value |
 | `volume_mounts` | object | for each mount path, `{ "kind": "volume", "name": <string or null> }` or `{ "kind": "external_volume", "name": <string> }` |
 | `on_exit` | string | `"default"`, `"restart"`, `"terminate"` or `"restart_on_failure"` |
 | `memory` | string or null | the memory limit |
@@ -235,10 +235,10 @@ A `container` object has these members.
 A `pod` object has the members `service_mounts`, each `"<service>:<port>"`; `http_bindings`, each `"<pod port> -> <service> <prefix>"`; and `tcp_bindings` and `udp_bindings`, each `"<pod port> -> <service>:<port>"`.
 Each is an array of strings in ascending order.
 
-### Redacted environment values
+### Redacted values
 
-The server MUST report as `null` the value of an environment variable whose value contains the stored value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true.
-It MUST also report as `null` the value of an environment variable whose value contains a [withheld value](../runtime/secrets.md#withheld-value) that the evaluation declaring the resource returned, in any form the [redaction](../runtime/secrets.md#redaction) of derived values names.
+The server MUST report as `null` the value of an environment variable, and the contents of a declared file write, that contain a [sensitive value](../runtime/secrets.md#sensitive-value).
+For a declared resource, the sensitive values to match are the stored values of [secret parameters](../runtime/secrets.md#secret-parameter), and the [derived values](../runtime/secrets.md#derived-value) the evaluation declaring the resource returned, in any form the [redaction](../runtime/secrets.md#redaction) of derived values names.
 
 ### Proxy settings
 

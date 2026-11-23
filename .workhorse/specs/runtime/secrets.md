@@ -4,7 +4,7 @@ id: SEC
 
 # Secret storage
 
-Applies to how the [runtime](../overview.md#runtime) protects secret values at rest, holds the seeds that [derived random values](../language/random.md) come from, and withholds secret parameter values and derived values from operators.
+Applies to how the [runtime](../overview.md#runtime) protects secret values at rest, holds the seeds that [derived random values](../language/random.md) come from, and withholds sensitive values from operators.
 
 ## Terminology
 
@@ -27,6 +27,10 @@ A value returned by a derivation helper, from either seed.
 ### Withheld value
 
 A secret parameter's value, a derived value, or a helper result the runtime withholds as a derived value, as [redaction](#redaction) specifies.
+
+### Sensitive value
+
+A non-empty value that is the stored value of a secret parameter, the value supplied for an action or shell param whose [`secret`](../language/action.md#param-schemas) is `true`, or a derived value.
 
 ## Secret key
 
@@ -101,11 +105,10 @@ The runtime MUST decrypt protected history values when it reconstructs a past ge
 
 ## Redaction
 
-The runtime MUST NOT return the value of a secret parameter to a caller of the [Operator Interface](../overview.md#operator-interface).
-The runtime MUST NOT write a secret parameter's value to its logs, or emit it in an [event](../interface/events.md).
+The runtime MUST NOT return a sensitive value to a caller of the [Operator Interface](../overview.md#operator-interface), write one to its logs, or emit one in an [event](../interface/events.md).
+It MUST withhold a value that contains a sensitive value wherever it would withhold the sensitive value itself.
 It MUST NOT return a value recorded in the generation history if the parameter is secret now, or if the value was protected when it was recorded.
 
-The runtime MUST withhold every derived value under the same rules as a secret parameter's value, wherever it would withhold one.
 A Blob derived value MUST be withheld in each text encoding of it that BSL offers a script.
 
 The runtime MUST withhold the result of a helper that [digests and encodings](../language/encoding.md) specify as a derived value when any of its arguments contains a withheld value.
@@ -121,7 +124,7 @@ Each result withheld this way MUST count toward the derived values [limit](engin
 > No minimum length applies, so a short secret value withholds more results than it needs to, which an operator can see, rather than fewer, which an operator could not.
 > A bundle's files come from the definition, not from secret storage or a seed.
 
-A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as [describing an app](../interface/apps.md#parameters) and the [generation history](../interface/apps.md#generation-history) define.
+A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as describing an app's [parameters](../interface/apps.md#parameters) and [redacted values](../interface/apps.md#redacted-values), and the [generation history](../interface/apps.md#generation-history) define.
 
 ## Migration
 

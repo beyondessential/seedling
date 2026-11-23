@@ -1631,7 +1631,7 @@ fn an_unreadable_schedule_record_makes_the_description_internal() {
     assert_eq!(code, "internal");
 }
 
-// spec: APPS#redacted-environment-values
+// spec: APPS#redacted-values
 #[test]
 fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_values() {
     let oi = TestOi::new();
@@ -1675,7 +1675,7 @@ fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_valu
     );
 }
 
-// spec: APPS#redacted-environment-values
+// spec: APPS#redacted-values
 // spec: SEC#redaction
 #[test]
 fn an_env_value_containing_a_derived_value_is_null() {

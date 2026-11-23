@@ -48,7 +48,7 @@ pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
 /// with live `instances`, `faults`, `stopped`, and a `scale.current`.
 /// Report as null each environment value, in the described resources, that
 /// `withheld` says holds a value to withhold.
-// spec: APPS#redacted-environment-values
+// spec: APPS#redacted-values
 pub(crate) fn redact_secret_env(resources: &mut [Value], withheld: impl Fn(&str) -> bool) {
     for resource in resources {
         let Some(Value::Object(env)) = resource.pointer_mut("/def/container/env") else {

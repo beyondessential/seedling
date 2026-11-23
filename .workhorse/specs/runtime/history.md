@@ -94,6 +94,7 @@ An entry for a call that acts on the host also holds whether the call was begun 
 A barrier's record also holds when the barrier began to wait, as [barrier anchoring](suspension.md#barrier-anchoring) specifies.
 
 Before [`Action.invoke()`](../language/action.md#action-invocation) runs the called closure, the runtime MUST record an entry for the invocation holding the called action's name and its validated parameter map.
+The entry MUST protect each value in that map that is a secret param's, or that contains a [sensitive value](secrets.md#sensitive-value), as [secret storage](secrets.md#storage) protects a secret parameter's value.
 Replay of that entry is specified by [sub-action parameters](operations.md#sub-action-parameters).
 
 The action execution log MUST hold enough to [replay](suspension.md#replay) an interrupted lifecycle operation from its beginning and fast-forward to the point of interruption.
