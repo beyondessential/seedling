@@ -54,7 +54,7 @@ Add encoders producing JSON from any value (not only a map, as Rhai's `to_json` 
 
 Add functions that quote a string as a shell argument, a SQL string literal and a SQL identifier, and that percent-encode a URL component, so values put into commands and statements cannot change their meaning. To settle: the SQL dialects covered, and whether shell quoting always quotes or only when needed.
 
-## Digests and binary encodings
+## Digests and binary encodings · C7
 
 Add SHA-256, SHA-512, BLAKE2b and BLAKE3 digests, HMAC, base64 and hex encoding and decoding, name-based (v5) UUIDs, and salted password hashes such as Argon2id, bcrypt and htpasswd entries, for basic-auth headers, keys that move when content moves, and stable identifiers.
 
