@@ -139,6 +139,9 @@ pub fn register(engine: &mut Engine) {
     // spec: COL#coercion
     engine.register_fn("col", collection::col);
 
+    // spec: STD#the-std-module
+    engine.register_static_module("std", rhai::Module::new().into());
+
     // spec: LIM#limits
     // Rhai's core package offers `sleep`, which no feature removes; the
     // engine's own functions are found before any package's.
