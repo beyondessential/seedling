@@ -216,22 +216,24 @@ pub fn run_requirements(
 
     for (field, req_def) in schema {
         let field_str = field.as_str();
-        let raw = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
+        let value = match filled.get(field_str).filter(|v| !v.is_empty()) {
+            Some(value) => value.clone(),
+            None => match &req_def.default_value {
+                Some(default) => {
+                    filled.insert(field_str.to_owned(), default.clone());
+                    default.clone()
+                }
+                None => {
+                    if req_def.required {
+                        errors.push(format!("{field_str}: required field is missing"));
+                    }
+                    continue;
+                }
+            },
+        };
 
-        if raw.is_empty() {
-            if let Some(default) = &req_def.default_value {
-                filled.insert(field_str.to_owned(), default.clone());
-            } else if req_def.required {
-                errors.push(format!("{field_str}: required field is missing"));
-                continue;
-            } else {
-                continue;
-            }
-        }
-
-        let value = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
         // spec: ACN#kind-parsers
-        if let Err(reason) = req_def.kind.parse(value) {
+        if let Err(reason) = req_def.kind.parse(&value) {
             errors.push(format!("{field_str}: {reason}"));
         }
     }
