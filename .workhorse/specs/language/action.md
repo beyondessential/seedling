@@ -160,7 +160,7 @@ It SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/use
 
 ### Presentation of kinds
 
-A presentation layer SHOULD offer a single-line input for a `text` param, and a multi-line input for a `multiline` param.
+A presentation layer SHOULD offer a single-line input for a `text`, `version` or `version-semver` param, and a multi-line input for a `multiline` param.
 A presentation layer MAY warn about an `email` value that is valid but unlikely to be meant, such as `" "@example.org`.
 A presentation layer SHOULD indicate the strength of a `weak-password` value as it is entered, and MUST NOT refuse a `weak-password` value for its strength.
 A presentation layer SHOULD offer a generator of strong passwords for `password` and `weak-password` params.

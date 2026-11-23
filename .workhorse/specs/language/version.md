@@ -63,6 +63,13 @@ Two `SemVer` values MUST compare by SemVer precedence through `<`, `<=`, `>`, `>
 `semver.matches(requirement: string)` MUST return `true` when the version satisfies `requirement` as a [Seedling version requirement](bundle.md#seedling-version-requirement), and `false` otherwise.
 `matches` MUST raise a script error when `requirement` is not a valid Seedling version requirement.
 
+## Text of a version
+
+A `Version` or a `SemVer` MUST convert to a string as the value it was parsed from, unchanged, including any leading `v` or `V`.
+
+> [!NOTE]
+> A script composing an image reference from a version gets back the tag the operator entered.
+
 ## Mixing version types
 
 Comparing a `Version` or a `SemVer` with a value of any other type, including the other version type, MUST raise a script error.
