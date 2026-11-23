@@ -32,10 +32,12 @@ If the parameter has neither, `param.value()` MUST throw.
 
 `param.is_set()` MUST return `false` while a default is in effect, so that a script can tell an operator's value from a default.
 
-`param.parsed()` MUST return the [parser result](action.md#param-kinds) of the parameter's kind for the value `param.value()` returns, and MUST throw where `param.value()` throws.
+`param.parsed()` MUST return the [parser result](action.md#param-kinds) of the parameter's kind, as declared at the time of the call, for the value `param.value()` returns.
+`param.parsed()` MUST throw where `param.value()` throws.
+`param.parsed()` MUST throw the parser's error where the kind rejects the value.
 
 > [!NOTE]
-> A stored value and a default have both passed the kind's parser, so `parsed()` fails only where `value()` does.
+> A stored value passed its kind's check when it was written, but a kind whose arguments the script derives from something that has since changed can reject it.
 
 ## Schema
 
