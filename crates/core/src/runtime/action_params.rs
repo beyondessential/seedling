@@ -230,22 +230,9 @@ pub fn run_requirements(
         }
 
         let value = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
-        match req_def.kind {
-            ParamKind::Email => {
-                if !is_valid_email(value) {
-                    errors.push(format!("{field_str}: invalid email address"));
-                }
-            }
-            ParamKind::Password => {
-                if !is_strong_password(value) {
-                    errors.push(format!("{field_str}: password is too weak"));
-                }
-            }
-            ParamKind::Text
-            | ParamKind::Multiline
-            | ParamKind::WeakPassword
-            | ParamKind::Random => {}
-            ParamKind::Volume => {}
+        // spec: ACN#kind-parsers
+        if let Err(reason) = req_def.kind.parse(value) {
+            errors.push(format!("{field_str}: {reason}"));
         }
     }
 
@@ -254,23 +241,6 @@ pub fn run_requirements(
     } else {
         Err(ParamValidationError::Requirements { messages: errors })
     }
-}
-
-// spec: ACN#param-kinds
-pub(crate) fn is_valid_email(email: &str) -> bool {
-    let mut parts = email.splitn(2, '@');
-    let local = parts.next().unwrap_or("");
-    let domain = parts.next().unwrap_or("");
-    !local.is_empty()
-        && !domain.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-}
-
-// spec: ACN#param-kinds
-pub(crate) fn is_strong_password(password: &str) -> bool {
-    zxcvbn::zxcvbn(password, &[]).score() >= zxcvbn::Score::Three
 }
 
 #[cfg(test)]

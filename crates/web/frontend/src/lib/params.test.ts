@@ -37,12 +37,13 @@ describe("paramsBlocker", () => {
     expect(paramsBlocker(entries, { a: "", p: "" })).toBeNull();
   });
 
-  // spec: ACN#param-kinds
+  // spec: ACN#presentation-of-kinds
   it("never refuses a weak-password for its strength", () => {
     const entries = [["p", def({ kind: "weak-password" })]] as ParamEntries;
     expect(paramsBlocker(entries, { p: "a" })).toBeNull();
   });
 
+  // spec: ACN#kind-parsers
   it("holds back a weak password the runtime would reject", () => {
     const entries = [["p", def({ kind: "password" })]] as ParamEntries;
     expect(paramsBlocker(entries, { p: "a" })).not.toBeNull();
@@ -51,7 +52,7 @@ describe("paramsBlocker", () => {
 });
 
 describe("generateRandomHex", () => {
-  // spec: ACN#param-kinds
+  // spec: ACN#presentation-of-kinds
   it("is 32 random bytes as 64 lowercase hex digits", () => {
     const a = generateRandomHex();
     expect(a).toMatch(/^[0-9a-f]{64}$/);

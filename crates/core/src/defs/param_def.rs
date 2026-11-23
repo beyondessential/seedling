@@ -1,3 +1,6 @@
+use seedling_protocol::names::SiteVolumeName;
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
+
 // spec: ACN#param-schemas
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamDef {
@@ -45,12 +48,64 @@ pub enum ParamKind {
 }
 
 impl ParamKind {
+    pub const ALL: [Self; 7] = [
+        Self::Text,
+        Self::Multiline,
+        Self::Email,
+        Self::Password,
+        Self::WeakPassword,
+        Self::Random,
+        Self::Volume,
+    ];
+
     /// Whether this kind may appear in static param schemas (`app.param`).
     /// `Volume` is rejected there because its bindings are operation-scoped —
     /// the only sensible static equivalent is a declared external_volume
     /// mapping.
     pub fn allowed_static(self) -> bool {
         !matches!(self, Self::Volume)
+    }
+
+    /// Parse `value` as a value of this kind, or give the reason it is not
+    /// one. This is the whole of the kind's check on a value, both for the
+    /// runtime and for the kind's `std` helper.
+    // spec: ACN#kind-parsers
+    pub fn parse(self, value: &str) -> Result<ParsedValue, String> {
+        if self.is_single_line() {
+            reject_control_characters(value)?;
+        }
+        match self {
+            Self::Text | Self::Multiline | Self::WeakPassword | Self::Random => {}
+            // spec: ACN#kind-parsers
+            Self::Email => {
+                let Some((local, domain)) = split_email(value) else {
+                    return Err("invalid email address".to_owned());
+                };
+                return Ok(ParsedValue::Email {
+                    local: local.to_owned(),
+                    domain: domain.to_owned(),
+                });
+            }
+            // spec: ACN#kind-parsers
+            Self::Password => {
+                if !is_strong_password(value) {
+                    return Err("password is too weak".to_owned());
+                }
+            }
+            // spec: ACN#kind-parsers
+            Self::Volume => {
+                SiteVolumeName::new(value).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(ParsedValue::Value(value.to_owned()))
+    }
+
+    // spec: ACN#kind-parsers
+    fn is_single_line(self) -> bool {
+        matches!(
+            self,
+            Self::Text | Self::Email | Self::Password | Self::WeakPassword | Self::Random
+        )
     }
 
     pub fn as_str(self) -> &'static str {
@@ -81,4 +136,49 @@ impl std::str::FromStr for ParamKind {
             _ => Err(()),
         }
     }
+}
+
+/// What a kind's parser makes of a value it accepts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedValue {
+    /// The value itself, for a kind with no parts.
+    Value(String),
+    Email {
+        local: String,
+        domain: String,
+    },
+}
+
+// spec: ACN#kind-parsers
+fn reject_control_characters(value: &str) -> Result<(), String> {
+    match value.chars().find(|c| {
+        matches!(
+            c.general_category(),
+            GeneralCategory::Control
+                | GeneralCategory::LineSeparator
+                | GeneralCategory::ParagraphSeparator
+        )
+    }) {
+        Some(c) => Err(format!(
+            "contains U+{:04X}, which a single-line value cannot hold",
+            u32::from(c)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The local part and domain of an email address, split at the first `@`.
+// spec: ACN#kind-parsers
+fn split_email(email: &str) -> Option<(&str, &str)> {
+    let (local, domain) = email.split_once('@')?;
+    let valid = !local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.');
+    valid.then_some((local, domain))
+}
+
+// spec: ACN#kind-parsers
+fn is_strong_password(password: &str) -> bool {
+    zxcvbn::zxcvbn(password, &[]).score() >= zxcvbn::Score::Three
 }

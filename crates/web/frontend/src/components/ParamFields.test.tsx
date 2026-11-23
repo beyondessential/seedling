@@ -38,7 +38,7 @@ describe("ParamFields", () => {
     expect((screen.getByText("submit") as HTMLButtonElement).disabled).toBe(true);
   });
 
-  // spec: ACN#param-kinds
+  // spec: ACN#presentation-of-kinds
   it("generates 64 lowercase hex digits for a random param", () => {
     renderWithSession(<Form entries={[["token", def({ kind: "random" })]] as ParamEntries} />);
     expect((screen.getByText("submit") as HTMLButtonElement).disabled).toBe(true);
@@ -48,7 +48,7 @@ describe("ParamFields", () => {
     expect((screen.getByText("submit") as HTMLButtonElement).disabled).toBe(false);
   });
 
-  // spec: ACN#param-kinds
+  // spec: ACN#presentation-of-kinds
   it("shows the strength of a weak-password but still lets it be submitted", () => {
     renderWithSession(<Form entries={[["pw", def({ kind: "weak-password" })]] as ParamEntries} />);
     fireEvent.change(screen.getByLabelText(/pw/, { selector: "input" }), { target: { value: "a" } });

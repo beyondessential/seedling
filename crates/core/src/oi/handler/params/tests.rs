@@ -60,7 +60,7 @@ fn secret_param_is_redacted_in_describe_and_history() {
     let oi = oi_with_params_app();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "demo", "params": { "api-key": "hunter2hunter2" } }),
+        json!({ "app": "demo", "params": { "api-key": "hunter2-Gravel-Otter-91" } }),
     )
     .unwrap();
 
@@ -86,7 +86,7 @@ fn secret_param_is_redacted_in_describe_and_history() {
     assert_eq!(changed["name"], "api-key");
     assert_eq!(changed["redacted"], true);
     assert!(changed.get("new_value").is_none());
-    assert!(!generations.to_string().contains("hunter2hunter2"));
+    assert!(!generations.to_string().contains("hunter2-Gravel-Otter-91"));
 }
 
 fn drain_events(
@@ -107,12 +107,12 @@ fn setting_and_unsetting_a_secret_param_emits_no_value() {
     let mut rx = oi.state.event_tx.subscribe();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "demo", "params": { "api-key": "hunter2hunter2" } }),
+        json!({ "app": "demo", "params": { "api-key": "hunter2-Gravel-Otter-91" } }),
     )
     .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "demo", "params": { "api-key": "correcthorse9" } }),
+        json!({ "app": "demo", "params": { "api-key": "correcthorse9-Ladle-Fig-44" } }),
     )
     .unwrap();
     oi.call(
@@ -135,7 +135,7 @@ fn setting_and_unsetting_a_secret_param_emits_no_value() {
         assert!(change.get("new_value").is_none(), "{event}");
     }
     let everything = serde_json::to_string(&events).unwrap();
-    for value in ["hunter2hunter2", "correcthorse9"] {
+    for value in ["hunter2-Gravel-Otter-91", "correcthorse9-Ladle-Fig-44"] {
         assert!(!everything.contains(value), "{value} leaked: {everything}");
     }
 }
@@ -179,7 +179,7 @@ fn a_definition_update_changing_a_secret_param_emits_no_value() {
     let oi = oi_with_params_app();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "demo", "params": { "api-key": "hunter2hunter2" } }),
+        json!({ "app": "demo", "params": { "api-key": "hunter2-Gravel-Otter-91" } }),
     )
     .unwrap();
     let mut rx = oi.state.event_tx.subscribe();
@@ -188,7 +188,7 @@ fn a_definition_update_changing_a_secret_param_emits_no_value() {
         json!({
             "app": "demo",
             "script": PARAMS_SCRIPT,
-            "params": { "api-key": "correcthorse9" },
+            "params": { "api-key": "correcthorse9-Ladle-Fig-44" },
         }),
     )
     .unwrap();
@@ -203,7 +203,7 @@ fn a_definition_update_changing_a_secret_param_emits_no_value() {
         json!([{ "name": "api-key", "redacted": true }])
     );
     let everything = serde_json::to_string(&events).unwrap();
-    for value in ["hunter2hunter2", "correcthorse9"] {
+    for value in ["hunter2-Gravel-Otter-91", "correcthorse9-Ladle-Fig-44"] {
         assert!(!everything.contains(value), "{value} leaked: {everything}");
     }
 }
@@ -237,7 +237,7 @@ fn unknown_param_held_in_secret_storage_is_not_returned() {
             &cipher,
             &seedling_protocol::names::AppName::new_unchecked("demo"),
             &seedling_protocol::names::ParamName::new_unchecked("retired-token"),
-            &secrecy::SecretString::new("hunter2hunter2".into()),
+            &secrecy::SecretString::new("hunter2-Gravel-Otter-91".into()),
         )
         .unwrap();
     });
@@ -249,7 +249,7 @@ fn unknown_param_held_in_secret_storage_is_not_returned() {
         .find(|p| p["name"] == "retired-token")
         .expect("the stored secret is listed as unknown");
     assert!(retired["value"].is_null());
-    assert!(!desc.to_string().contains("hunter2hunter2"));
+    assert!(!desc.to_string().contains("hunter2-Gravel-Otter-91"));
 }
 
 // spec: PRM#parameter-changes
@@ -552,7 +552,7 @@ fn a_change_of_several_parameters_is_one_generation_and_one_event() {
                 "params": {
                     "mystery": "42",
                     "greeting": null,
-                    "api-key": "hunter2hunter2",
+                    "api-key": "hunter2-Gravel-Otter-91",
                 },
             }),
         )
@@ -620,7 +620,7 @@ fn members_that_change_nothing_are_left_out_of_the_change() {
             "/apps/params/set",
             json!({
                 "app": "demo",
-                "params": { "greeting": "hello", "mystery": null, "api-key": "k-12345678" },
+                "params": { "greeting": "hello", "mystery": null, "api-key": "k-Gravel-Otter-91" },
             }),
         )
         .unwrap();
@@ -833,7 +833,7 @@ fn an_update_changes_several_parameters_in_one_generation_and_event() {
             json!({
                 "app": "demo",
                 "script": PARAMS_SCRIPT,
-                "params": { "greeting": "hello", "mystery": "42", "api-key": "hunter2hunter2" },
+                "params": { "greeting": "hello", "mystery": "42", "api-key": "hunter2-Gravel-Otter-91" },
             }),
         )
         .unwrap();

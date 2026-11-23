@@ -106,6 +106,7 @@ pub mod param_def;
 pub mod pod;
 pub mod resource;
 pub mod service;
+pub mod stdlib;
 pub mod summary;
 pub mod take;
 pub mod volume;
@@ -140,7 +141,7 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn("col", collection::col);
 
     // spec: STD#the-std-module
-    engine.register_static_module("std", rhai::Module::new().into());
+    engine.register_static_module("std", stdlib::module().into());
 
     // spec: BSL#evaluation
     // Refused at compile time: the optimiser drops an `import` whose alias is

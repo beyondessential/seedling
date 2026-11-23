@@ -69,7 +69,7 @@ function helper(def: ParamSchema, value: string): string | undefined {
 /** One input per declared param of an action or shell: each
  *  pre-filled by its owner with the param's `default_value`, required ones marked. */
 // spec: ACN#param-schemas
-// spec: ACN#param-kinds
+// spec: ACN#presentation-of-kinds
 export function ParamFields({
   entries,
   values,
