@@ -24,6 +24,10 @@ The secret from which derivation helpers called in the action closures of one [l
 
 A value returned by a derivation helper, from either seed.
 
+### Withheld value
+
+A secret parameter's value, a derived value, or a helper result the runtime withholds as a derived value, as [redaction](#redaction) specifies.
+
 ## Secret key
 
 The runtime MUST keep a secret key for protecting secret values at rest, in the file `seedling.db.key` in its [data directory](actuation.md#data-directory), beside the database.
@@ -104,7 +108,7 @@ It MUST NOT return a value recorded in the generation history if the parameter i
 The runtime MUST withhold every derived value under the same rules as a secret parameter's value, wherever it would withhold one.
 A Blob derived value MUST be withheld in each text encoding of it that BSL offers a script.
 
-The runtime MUST withhold the result of a [digest or encoding helper](../language/encoding.md) as a derived value when any of its arguments contains a value the runtime withholds.
+The runtime MUST withhold the result of a helper that [digests and encodings](../language/encoding.md) specify as a derived value when any of its arguments contains a withheld value.
 An argument contains a withheld value when the string, or the bytes of the Blob, includes that value in any form in which the runtime withholds it.
 
 > [!NOTE]

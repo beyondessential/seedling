@@ -101,4 +101,5 @@ It MUST write its result in hyphenated form with lowercase hexadecimal digits.
 
 ## Withheld arguments
 
-A result of one of these helpers computed from a withheld value is itself withheld, as [redaction](../runtime/secrets.md#redaction) specifies.
+> [!NOTE]
+> A result of one of these helpers is withheld from operators when an argument contains a [withheld value](../runtime/secrets.md#withheld-value), as [redaction](../runtime/secrets.md#redaction) specifies.
