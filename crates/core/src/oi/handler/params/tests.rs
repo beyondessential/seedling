@@ -1135,11 +1135,12 @@ fn a_secret_value_is_not_inherited_by_the_next_app_of_the_name() {
     .unwrap();
 
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
-    let api_key = desc["params"]
+    let api_key_set = desc["params"]
         .as_array()
         .unwrap()
         .iter()
         .find(|p| p["name"] == "api-key")
-        .expect("api-key param");
-    assert_eq!(api_key["is_set"], false, "{api_key}");
+        .expect("api-key param")["is_set"]
+        .clone();
+    assert_eq!(api_key_set, false);
 }
