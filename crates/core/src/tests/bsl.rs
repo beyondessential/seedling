@@ -210,3 +210,19 @@ fn a_script_cannot_read_the_clock() {
         "expected timestamp to be absent, got {err:?}",
     );
 }
+
+// spec: BSL#evaluation
+#[test]
+fn a_script_containing_import_fails_evaluation() {
+    for source in [
+        r#"import "seedling" as m;"#,
+        r#"try { import "seedling" as m; } catch { }"#,
+        r#"if false { import "seedling" as m; }"#,
+    ] {
+        let err = run_test_script_err(source);
+        assert!(
+            matches!(*err, rhai::EvalAltResult::ErrorParsing(..)),
+            "{source}: expected import to fail evaluation, got {err:?}",
+        );
+    }
+}
