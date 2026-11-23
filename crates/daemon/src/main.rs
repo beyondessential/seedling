@@ -478,7 +478,11 @@ async fn main() {
                 // evaluates is faulted, and one that evaluates again clears
                 // its old fault.
                 for entry in registry.iter() {
-                    seedling_core::runtime::apps::sync_script_error_fault(&db, entry);
+                    seedling_core::runtime::apps::sync_script_error_fault(
+                        &db,
+                        &entry.name,
+                        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+                    );
                 }
             },
         )

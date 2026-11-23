@@ -213,45 +213,16 @@ pub(crate) fn sync_fault_state(
         // A definition that failed to evaluate says nothing of its type, and
         // dropping the type would take the app out of Canopy as if it had none.
         if script_error.is_none()
-            && let Err(e) = crate::runtime::canopy::absent::sync_app_type(
-                db,
-                &app_name,
-                canopy_type.as_deref(),
-            )
+            && let Err(e) =
+                crate::runtime::canopy::absent::sync_app_type(db, &app_name, canopy_type.as_deref())
         {
             tracing::error!(app = %app_name, "cannot record the app's Canopy type: {e}");
         }
-        // Sync script_error fault.
-        {
-            use crate::runtime::faults;
-            let existing: Vec<_> = faults::list_active_faults(db, Some(&app_name))
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|f| f.kind == "script_error")
-                .collect();
-            match &script_error {
-                Some((msg, _)) => {
-                    let dominated = existing.iter().any(|f| f.description == *msg);
-                    if !dominated {
-                        for f in &existing {
-                            if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                                tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale script-error fault: {e}");
-                            }
-                        }
-                        if let Err(e) = faults::file_fault(db, &app_name, None, None, None, "script_error", msg) {
-                            tracing::warn!(app = %app_name, "failed to file script-error fault: {e}");
-                        }
-                    }
-                }
-                None => {
-                    for f in &existing {
-                        if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                            tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear script-error fault: {e}");
-                        }
-                    }
-                }
-            }
-        }
+        crate::runtime::apps::sync_script_error_fault(
+            db,
+            &app_name,
+            script_error.as_ref().map(|(msg, _)| msg.as_str()),
+        );
         crate::runtime::apps::sync_used_registries(db, &app_name, &used_registries);
     });
 }
