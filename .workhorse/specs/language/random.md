@@ -14,8 +14,9 @@ Applies to the helpers in the [std module](std.md#the-std-module) through which 
 | HMAC-SHA-256 | HMAC, [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104), over SHA-256, [FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final). |
 | ChaCha20 | The stream cipher defined in [RFC 8439](https://www.rfc-editor.org/rfc/rfc8439). |
 | Argon2id | The password hash defined in [RFC 9106](https://www.rfc-editor.org/rfc/rfc9106). |
+| base64 | The encoding defined in [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) section 4. |
 | PHC string | The text form of a password hash defined by the [PHC string format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md). |
-| bcrypt | The password hash defined in [A Future-Adaptable Password Scheme](https://www.usenix.org/legacy/events/usenix99/provos/provos.pdf), written in its `$2b$` modular crypt form as OpenBSD defines it. |
+| bcrypt | The password hash defined in [A Future-Adaptable Password Scheme](https://www.usenix.org/legacy/events/usenix99/provos/provos.pdf), written in its `$2b$` modular crypt form as [OpenBSD's crypt(3)](https://man.openbsd.org/crypt.3) defines it. |
 
 ## Terminology
 
@@ -144,7 +145,7 @@ Where `k` is the number of characters in `alphabet`, it MUST discard each `w` at
 A password hash helper MUST take the first 16 bytes of the call's byte stream as its salt.
 
 `password_argon2id` MUST compute an Argon2id tag of 32 bytes over `password` and the salt, at version 19, with a memory size of 19456 KiB, 2 passes and 1 lane, and no secret or associated data.
-It MUST write the hash as the PHC string `$argon2id$v=19$m=19456,t=2,p=1$`, followed by the salt, a `$`, and the tag, the salt and the tag each in unpadded base64.
+It MUST write the hash as the PHC string `$argon2id$v=19$m=19456,t=2,p=1$`, followed by the salt, a `$`, and the tag, the salt and the tag each in base64 without padding.
 
 `password_bcrypt` MUST compute a bcrypt hash of `password` under the salt at cost 12.
 It MUST write the hash as `$2b$12$`, followed by the salt in 22 characters and the hash in 31 characters, both in bcrypt's base64 alphabet.
