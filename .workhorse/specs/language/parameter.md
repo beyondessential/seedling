@@ -61,7 +61,7 @@ The runtime MUST protect a secret parameter's value as [secret storage](../runti
 ## Kind checks
 
 The runtime MUST check a parameter's proposed value with its kind's [parser](action.md#kind-parsers), and MUST reject a value the parser rejects, with the parser's error as the reason.
-The runtime MUST check a value only while its parameter would be set.
+The runtime MUST check a value only while its parameter would be set, and an empty stored value is a value it checks.
 The runtime MUST NOT run a parameter's [validator](#validators) on a value its kind rejects.
 
 When the runtime checks kinds, and which request a rejection refuses, is specified in [parameter validation](../interface/params.md#validation).

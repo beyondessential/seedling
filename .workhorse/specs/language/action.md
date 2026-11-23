@@ -141,17 +141,17 @@ The runtime MUST accept a value that its kind's parser accepts, except where [vo
 > [!NOTE]
 > A validator or action closure calls the same parser to apply the runtime's own check, or to read the parts of a compound value without parsing it again.
 
-`std::parse_text` MUST reject a value containing any character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp).
+The parsers of `text`, `email`, `password`, `weak-password` and `random` MUST reject a value containing any character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp).
+`std::parse_text`, `std::parse_weak_password` and `std::parse_random` MUST accept every other value.
+`std::parse_multiline` MUST accept any string.
 
 > [!NOTE]
-> Multi-line text is what `multiline` is for, and a control character in a single line of text is invisible where it is shown and is most often a paste or injection the operator did not mean.
+> Every kind but `multiline` is entered as a single line, so a line break or other control character in one is invisible where it is shown and is most often a paste or injection the operator did not mean.
 
-`std::parse_multiline`, `std::parse_weak_password` and `std::parse_random` MUST accept any string.
-
-`std::parse_email` MUST reject a value that contains no `@`, that has nothing before its first `@`, or whose part after the first `@` contains no `.` or begins or ends with `.`.
+`std::parse_email` MUST also reject a value that contains no `@`, that has nothing before its first `@`, or whose part after the first `@` contains no `.` or begins or ends with `.`.
 `std::parse_email` SHOULD NOT reject any other value.
 
-`std::parse_password` MUST reject a value it judges weak.
+`std::parse_password` MUST also reject a value it judges weak.
 It SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/usenixsecurity16/technical-sessions/presentation/wheeler) scores it below 3.
 
 `std::parse_volume` MUST reject a value that breaks the [name rules](overview.md#names).
