@@ -47,6 +47,8 @@ A method that throws raises a script error.
 A script is written in [Rhai](https://rhai.rs/book/).
 The runtime MUST evaluate a script as Rhai, with the types, functions, constants and variables the BSL specifications define in its scope.
 
+A script's `import` statement MUST raise a script error.
+
 The runtime MUST evaluate each script in a scope of its own.
 A variable or value set by one evaluation MUST NOT be visible to another.
 
