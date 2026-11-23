@@ -54,6 +54,8 @@ A schema method MUST throw when called in the [action context](app.md#action-con
 | `description(description: string)` | a human-readable description | none |
 | `secret(secret: bool)` | whether the value is [secret](#secret-parameters) | implied by `kind` |
 
+`default_value("")` MUST declare no default, and MUST remove any default declared before.
+
 `kind` MUST accept every valid [kind](action.md#kind-arguments) other than `volume`, with the meaning [param kinds](action.md#param-kinds) give it.
 `kind` MUST throw when given the `volume` kind, which only action and shell [params](action.md#param-schemas) accept, or anything that is not a valid kind.
 

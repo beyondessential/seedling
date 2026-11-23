@@ -103,7 +103,8 @@ A param schema is an object map from param name to a param definition, which is 
 | `description` | string | none | free-form text telling operators the value's meaning or purpose |
 | `secret` | boolean | by kind | whether the value is sensitive |
 
-Declaring a param schema MUST throw if any param name is not a valid name, any definition is not a map, a definition carries any other key, a key's value is not of the type in the table, `kind` is not a valid [kind](#kind-arguments), or a `default_value` is one its kind's [parser](#kind-parsers) rejects.
+Declaring a param schema MUST throw if any param name is not a valid name, any definition is not a map, a definition carries any other key, a key's value is not of the type in the table, `kind` is not a valid [kind](#kind-arguments), or a non-empty `default_value` is one its kind's [parser](#kind-parsers) rejects.
+An empty `default_value` MUST be treated as no `default_value`.
 
 `secret` defaults to `true` for the `password` and `weak-password` kinds and to `false` for every other kind.
 The runtime MUST handle a param whose `secret` is `true` as it handles a [secret parameter](parameter.md#secret-parameters).
@@ -149,7 +150,7 @@ An `integer` kind's `range` MUST be an exclusive or inclusive integer range cont
 > BSL reads a range with no start, such as `..10`, as one starting at 0, so an `integer` kind given only an upper bound accepts no negative value.
 > A range with no end, such as `1..=`, runs to the largest integer.
 
-A `choice` kind's `options` MUST be a non-empty array of strings, no two of which are equal, each of which `std::parse_text` accepts.
+A `choice` kind's `options` MUST be a non-empty array of non-empty strings, no two of which are equal, each of which `std::parse_text` accepts.
 
 ### Kind parsers
 
