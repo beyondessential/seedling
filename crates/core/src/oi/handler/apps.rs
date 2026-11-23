@@ -2480,6 +2480,22 @@ pub(crate) fn rotate_seed(state: &OiState, params: AppParams, ctx: &RequestCtx) 
         return Err(OiError::not_found(format!("app not found: {app}")));
     }
 
+    // Read before the seed is replaced: once it is, the request has done what
+    // it asked, and a failure to evaluate is the app's fault to report, not
+    // the request's.
+    let stored = {
+        let (name, cipher) = (app.clone(), Arc::clone(&state.cipher));
+        state
+            .db
+            .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name))
+            .map_err(|e| {
+                OiError::internal(format!(
+                    "the app's stored parameters cannot be read, so it could not be \
+                     evaluated against a new seed; the seed is unchanged: {e}"
+                ))
+            })?
+    };
+
     // spec: SEC#app-seed-rotation — the new seed is durable, and the old one
     // gone, before anything is evaluated against it.
     let seed = crate::runtime::seeds::Seed::draw()
@@ -2499,20 +2515,8 @@ pub(crate) fn rotate_seed(state: &OiState, params: AppParams, ctx: &RequestCtx) 
 
     // spec: SEC#app-seed-rotation — evaluated again at the same generation.
     // A definition that no longer evaluates keeps the new seed, and the
-    // failure is the app's script_error fault.
-    let loaded = {
-        let (name, cipher) = (app.clone(), Arc::clone(&state.cipher));
-        state
-            .db
-            .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name))
-    };
-    let stored = loaded.map_err(|e| {
-        tracing::error!(app = %app, "not re-evaluating after seed rotation: could not read the stored params: {e}");
-        OiError::internal(format!(
-            "the seed was replaced, but the app could not be evaluated against it: \
-             its stored parameters cannot be read: {e}"
-        ))
-    })?;
+    // failure is the app's script_error fault. The hold keeps the stored
+    // parameters as they were read.
     let _ = crate::runtime::apps::reload(
         &state.registry,
         &state.db,

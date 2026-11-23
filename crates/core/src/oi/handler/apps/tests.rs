@@ -2348,3 +2348,19 @@ fn a_definition_failing_against_the_new_seed_keeps_it_and_files_script_error() {
     }
     panic!("no rotation landed tails");
 }
+
+// spec: CTL#seed-rotation
+#[test]
+fn rotation_that_cannot_read_the_parameters_changes_nothing() {
+    let oi = TestOi::with_app("demo");
+    let seed = stored_seed(&oi, "demo");
+    oi.state
+        .db
+        .call(|db| db.conn.execute_batch("DROP TABLE params;"))
+        .unwrap();
+    let (code, _) = oi
+        .call("/apps/seed/rotate", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "internal");
+    assert_eq!(stored_seed(&oi, "demo"), seed, "the seed is unchanged");
+}
