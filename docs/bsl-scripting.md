@@ -168,7 +168,7 @@ let vol = app.volume("data")
 
 ```rhai
 let version = app.param("version")
-    .kind("text")           // text | multiline | email | password | weak-password | random
+    .kind("text")           // text (one line) | multiline | email | password | weak-password | random
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -183,6 +183,8 @@ version.validate(|value, all| {
     if !value.starts_with("2.12") { throw "this definition runs 2.12.x"; }
 });
 ```
+
+Every set value is first checked against its kind, by the kind's [parser](#parsing-a-kind): `text` and every kind but `multiline` hold a single line with no control characters, `email` needs an address and `password` a strong one. A value its kind refuses is rejected with the parser's reason, and its validator does not run. An empty stored value is checked like any other; unset a parameter to clear it.
 
 A validator decides whether a proposed value is acceptable. It runs before any definition update or parameter change is stored, against the values the app would hold if the request went through, so it sees the new definition's rules alongside the new values. A rejection refuses the request with `validation_failed` and the thrown value as the reason; nothing changes. A validator runs only while its param is set (use `required` for presence), gets no `rt`, and may not define resources. Call `validate` at most once per param, at the top level.
 
@@ -387,6 +389,20 @@ Every helper follows the same conventions:
 - **It is replicable.** The same arguments always give the same result: a helper never reads the clock, the network or the filesystem, and never changes the app.
 
 Calling a helper that does not exist throws, like any unknown function. Which helpers exist depends on the Seedling version, so declare the versions a definition supports with the `seedling` field of its [bundle metadata](#definition-bundles).
+
+### Parsing a kind
+
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random` and `std::parse_volume`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+
+```rhai
+let contact = std::parse_email("ops@example.org");
+contact.local   // "ops"
+contact.domain  // "example.org"
+
+app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
+```
+
+`std::parse_email` returns the parts of the address, split at its first `@`. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
 
 ## Gates
 

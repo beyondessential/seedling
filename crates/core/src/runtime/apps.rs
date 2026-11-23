@@ -768,7 +768,7 @@ pub(crate) fn migrate_param_storage(
     }
 }
 
-/// A parameter whose validator rejected the proposed values.
+/// A parameter whose kind or validator rejected the proposed values.
 // spec: PRM#validation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejection {
@@ -791,8 +791,9 @@ pub fn evaluate(
     (app, result.err())
 }
 
-/// Evaluate a definition with `params`, then run the validator of every
-/// parameter set in `proposed` against `proposed`.
+/// Evaluate a definition with `params`, then check the kind of every
+/// parameter set in `proposed` and run the validator of each one its kind
+/// accepts, against `proposed`.
 ///
 /// `params` and `proposed` are the same map except when validators are taken
 /// from an earlier evaluation because the proposed values fail to evaluate.
@@ -885,11 +886,37 @@ fn run_definition(
     if let Err(e) = crate::defs::finish_evaluation(&app) {
         return (app, Err(ScriptError(e)));
     }
-    let (Some(proposed), Some(validators)) = (validate, validators) else {
+    let (Some(proposed), Some(mut validators)) = (validate, validators) else {
         return (app, Ok(Vec::new()));
     };
-    let rejections = run_validators(&engine, &ast, script, &validators, proposed);
+    let mut rejections = check_kinds(&app.def.load().params, proposed);
+    // spec: PARAM#kind-checks
+    // A value its kind rejects never reaches its validator.
+    validators.retain(|name, _| !rejections.iter().any(|r| r.name == name.as_str()));
+    rejections.extend(run_validators(&engine, &ast, script, &validators, proposed));
+    rejections.sort_by(|a, b| a.name.cmp(&b.name));
     (app, Ok(rejections))
+}
+
+/// Check every parameter set in `proposed` against the kind `declared` gives
+/// it, rejecting each value its kind's parser refuses.
+// spec: PARAM#kind-checks
+fn check_kinds(
+    declared: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
+    proposed: &BTreeMap<String, String>,
+) -> Vec<Rejection> {
+    declared
+        .iter()
+        .filter_map(|(name, def)| {
+            // An unset parameter is not checked; an empty stored value is.
+            let value = proposed.get(name.as_str())?;
+            let reason = def.kind.parse(value).err()?;
+            Some(Rejection {
+                name: name.as_str().to_owned(),
+                reason,
+            })
+        })
+        .collect()
 }
 
 // spec: PARAM#validators
@@ -914,11 +941,16 @@ fn run_validators(
         let result: Result<rhai::Dynamic, _> =
             validator.call(engine, ast, (value.clone(), values.clone()));
         if let Err(e) = result {
-            // A thrown value is the reason; any other failure rejects too,
-            // with the error itself as the reason.
-            let reason = match *e {
-                rhai::EvalAltResult::ErrorRuntime(ref thrown, _) => thrown.to_string(),
-                ref other => script.remap_error(&other.to_string()),
+            // A thrown value is the reason, whether the validator threw it or
+            // a function it called did, as a kind parser does; any other
+            // failure rejects too, with the error itself as the reason.
+            let mut cause = &*e;
+            while let rhai::EvalAltResult::ErrorInFunctionCall(_, _, inner, _) = cause {
+                cause = inner;
+            }
+            let reason = match cause {
+                rhai::EvalAltResult::ErrorRuntime(thrown, _) => thrown.to_string(),
+                _ => script.remap_error(&e.to_string()),
             };
             rejections.push(Rejection {
                 name: name.as_str().to_owned(),

@@ -43,13 +43,6 @@ pub enum ParamValidationError {
     VolumeNotString { key: String },
     /// A required `kind: "volume"` param was absent.
     VolumeMissing { key: String },
-    /// A `kind: "volume"` value did not parse as a valid site-volume
-    /// name.
-    VolumeInvalidName {
-        key: String,
-        value: String,
-        reason: String,
-    },
     /// A `kind: "volume"` value did not resolve to an existing site
     /// volume.
     VolumeNotFound { key: String, value: String },
@@ -72,10 +65,6 @@ impl std::fmt::Display for ParamValidationError {
             Self::VolumeMissing { key } => {
                 write!(f, "param {key:?}: required volume reference is missing")
             }
-            Self::VolumeInvalidName { key, value, reason } => write!(
-                f,
-                "param {key:?}: invalid site volume name {value:?}: {reason}"
-            ),
             Self::VolumeNotFound { key, value } => {
                 write!(f, "param {key:?}: site volume {value:?} not found")
             }
@@ -179,11 +168,11 @@ pub fn validate_volume_params<L: VolumeLookup>(
                 });
             }
         };
+        // A name the kind's parser refuses is reported as that parser
+        // reports it, so the refusal reads the same whichever check found it.
         let site_name =
-            SiteVolumeName::new(&val).map_err(|e| ParamValidationError::VolumeInvalidName {
-                key: key.to_owned(),
-                value: val.clone(),
-                reason: e.to_string(),
+            SiteVolumeName::new(&val).map_err(|e| ParamValidationError::Requirements {
+                messages: vec![format!("{key}: {e}")],
             })?;
         if !lookup.site_volume_exists(&site_name) {
             return Err(ParamValidationError::VolumeNotFound {
@@ -216,36 +205,25 @@ pub fn run_requirements(
 
     for (field, req_def) in schema {
         let field_str = field.as_str();
-        let raw = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
-
-        if raw.is_empty() {
-            if let Some(default) = &req_def.default_value {
-                filled.insert(field_str.to_owned(), default.clone());
-            } else if req_def.required {
-                errors.push(format!("{field_str}: required field is missing"));
-                continue;
-            } else {
-                continue;
-            }
-        }
-
-        let value = filled.get(field_str).map(|s| s.as_str()).unwrap_or("");
-        match req_def.kind {
-            ParamKind::Email => {
-                if !is_valid_email(value) {
-                    errors.push(format!("{field_str}: invalid email address"));
+        let value = match filled.get(field_str).filter(|v| !v.is_empty()) {
+            Some(value) => value.clone(),
+            None => match &req_def.default_value {
+                Some(default) => {
+                    filled.insert(field_str.to_owned(), default.clone());
+                    default.clone()
                 }
-            }
-            ParamKind::Password => {
-                if !is_strong_password(value) {
-                    errors.push(format!("{field_str}: password is too weak"));
+                None => {
+                    if req_def.required {
+                        errors.push(format!("{field_str}: required field is missing"));
+                    }
+                    continue;
                 }
-            }
-            ParamKind::Text
-            | ParamKind::Multiline
-            | ParamKind::WeakPassword
-            | ParamKind::Random => {}
-            ParamKind::Volume => {}
+            },
+        };
+
+        // spec: ACN#kind-parsers
+        if let Err(reason) = req_def.kind.parse(&value) {
+            errors.push(format!("{field_str}: {reason}"));
         }
     }
 
@@ -254,23 +232,6 @@ pub fn run_requirements(
     } else {
         Err(ParamValidationError::Requirements { messages: errors })
     }
-}
-
-// spec: ACN#param-kinds
-pub(crate) fn is_valid_email(email: &str) -> bool {
-    let mut parts = email.splitn(2, '@');
-    let local = parts.next().unwrap_or("");
-    let domain = parts.next().unwrap_or("");
-    !local.is_empty()
-        && !domain.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-}
-
-// spec: ACN#param-kinds
-pub(crate) fn is_strong_password(password: &str) -> bool {
-    zxcvbn::zxcvbn(password, &[]).score() >= zxcvbn::Score::Three
 }
 
 #[cfg(test)]
@@ -377,5 +338,47 @@ mod tests {
             }),
             "empty and required is missing"
         );
+    }
+
+    fn of_kind(kind: ParamKind) -> ParamDef {
+        ParamDef {
+            kind,
+            required: false,
+            default_value: None,
+            description: None,
+            secret: None,
+        }
+    }
+
+    // spec: ACN#kind-parsers
+    #[test]
+    fn a_text_param_with_a_line_break_is_refused_naming_the_field() {
+        let mut params = serde_json::Map::new();
+        params.insert("note".to_owned(), serde_json::json!("one\ntwo"));
+
+        let err = apply_schema(&schema("note", of_kind(ParamKind::Text)), &mut params)
+            .expect_err("text is a single line");
+        assert_eq!(
+            err,
+            ParamValidationError::Requirements {
+                messages: vec![
+                    "note: contains U+000A, which a single-line value cannot hold".to_owned()
+                ]
+            }
+        );
+
+        apply_schema(&schema("note", of_kind(ParamKind::Multiline)), &mut params)
+            .expect("multiline takes line breaks");
+    }
+
+    // spec: ACN#param-schemas
+    // spec: ACN#kind-parsers
+    #[test]
+    fn an_empty_param_is_absent_rather_than_refused_by_its_kind() {
+        let mut params = serde_json::Map::new();
+        params.insert("contact".to_owned(), serde_json::json!(""));
+
+        apply_schema(&schema("contact", of_kind(ParamKind::Email)), &mut params)
+            .expect("an empty optional email is absent");
     }
 }

@@ -10,7 +10,7 @@ export function initialParamValues(entries: ParamEntries): Record<string, string
 }
 
 /** Default `random` generator output: 32 random bytes as 64 lowercase hex digits. */
-// spec: ACN#param-kinds
+// spec: ACN#presentation-of-kinds
 export function generateRandomHex(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -23,7 +23,8 @@ export function generateRandomHex(): string {
  *  is held back because the runtime would reject it; a `weak-password` value is
  *  never held back for its strength. */
 // spec: ACN#param-schemas
-// spec: ACN#param-kinds
+// spec: ACN#kind-parsers
+// spec: ACN#presentation-of-kinds
 export function paramsBlocker(
   entries: ParamEntries,
   values: Record<string, string>,

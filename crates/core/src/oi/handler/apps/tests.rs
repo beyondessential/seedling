@@ -1654,7 +1654,7 @@ fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_valu
     .unwrap();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "demo", "params": { "api-key": "hunter2hunter2" } }),
+        json!({ "app": "demo", "params": { "api-key": "hunter2-Gravel-Otter-91" } }),
     )
     .unwrap();
 

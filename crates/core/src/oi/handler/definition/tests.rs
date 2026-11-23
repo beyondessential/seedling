@@ -824,7 +824,7 @@ fn a_secret_changed_alongside_a_definition_is_redacted_in_history() {
         .unwrap();
     oi.call(
         "/apps/update",
-        json!({ "app": "web", "script": def, "params": { "api-key": "hunter22" } }),
+        json!({ "app": "web", "script": def, "params": { "api-key": "hunter2-Gravel-Otter-91" } }),
     )
     .unwrap();
     let history = oi
@@ -836,7 +836,7 @@ fn a_secret_changed_alongside_a_definition_is_redacted_in_history() {
         entry["params"],
         json!([{ "name": "api-key", "redacted": true }])
     );
-    assert!(!history.to_string().contains("hunter22"));
+    assert!(!history.to_string().contains("hunter2-Gravel-Otter-91"));
 }
 
 // spec: TPL#template-definitions

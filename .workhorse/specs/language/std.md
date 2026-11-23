@@ -29,6 +29,8 @@ A helper's name MUST consist of lower-case ASCII letters, ASCII digits and under
 A helper MUST check its arguments as the [argument rules](overview.md#arguments) require.
 A helper that parses text MUST raise a script error when the text is not of the form it parses, and MUST NOT return a partial or corrected result in its place.
 
+Each parameter kind has a helper that parses a value of that kind, as [kind parsers](action.md#kind-parsers) specify.
+
 ## Results
 
 A helper that parses compound text, such as a URL or an email address, MUST return an object map from the name of each part to its value.

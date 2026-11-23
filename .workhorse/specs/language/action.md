@@ -121,26 +121,45 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 
 ### Param kinds
 
-| kind | value |
-| --- | --- |
-| `text` | free-form text |
-| `multiline` | free-form text that may span several lines |
-| `email` | an email address |
-| `password` | a strong password |
-| `weak-password` | a password of any strength |
-| `random` | free-form text, usually a generated random value |
-| `volume` | the name of a site volume, as [volume params](#volume-params) specify |
+| kind | value | parser result |
+| --- | --- | --- |
+| `text` | a single line of text | the value |
+| `multiline` | text that may span several lines | the value |
+| `email` | an email address | a map of `local`, the part before the first `@`, and `domain`, the part after it |
+| `password` | a strong password | the value |
+| `weak-password` | a password of any strength | the value |
+| `random` | free-form text, usually a generated random value | the value |
+| `volume` | the name of a site volume, as [volume params](#volume-params) specify | the value |
 
-The runtime MUST accept any string as a `text`, `multiline`, `weak-password` or `random` value.
+### Kind parsers
 
-A presentation layer SHOULD offer a multi-line input for a `multiline` param.
+Every kind MUST have a parser, the [helper](std.md#helper) `std::parse_<kind>`, where `<kind>` is the kind's name with each `-` written as `_`.
+A parser takes the value as its one argument, returns the parser result the kind table gives, and raises a script error for a value the kind does not accept.
+The runtime MUST reject a value that its kind's parser rejects, with the parser's error as the reason.
+The runtime MUST accept a value that its kind's parser accepts, except where [volume params](#volume-params) add a check.
 
-The runtime MUST reject an `email` value that contains no `@`, that has nothing before its first `@`, or whose part after the first `@` contains no `.` or begins or ends with `.`.
-The runtime SHOULD NOT reject any other `email` value.
+> [!NOTE]
+> A validator or action closure calls the same parser to apply the runtime's own check, or to read the parts of a compound value without parsing it again.
+
+Every parser but `std::parse_multiline` MUST reject a value containing any character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp).
+`std::parse_text`, `std::parse_weak_password` and `std::parse_random` MUST accept every other value.
+`std::parse_multiline` MUST accept any string.
+
+> [!NOTE]
+> Every kind but `multiline` is entered as a single line, so a line break or other control character in one is invisible where it is shown and is most often a paste or injection the operator did not mean.
+
+`std::parse_email` MUST also reject a value that contains no `@`, that has nothing before its first `@`, or whose part after the first `@` contains no `.` or begins or ends with `.`.
+`std::parse_email` SHOULD NOT reject any other value.
+
+`std::parse_password` MUST also reject a value it judges weak.
+It SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/usenixsecurity16/technical-sessions/presentation/wheeler) scores it below 3.
+
+`std::parse_volume` MUST reject a value that breaks the [name rules](overview.md#names).
+
+### Presentation of kinds
+
+A presentation layer SHOULD offer a single-line input for a `text` param, and a multi-line input for a `multiline` param.
 A presentation layer MAY warn about an `email` value that is valid but unlikely to be meant, such as `" "@example.org`.
-
-The runtime MUST reject a `password` value it judges weak.
-The runtime SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/usenixsecurity16/technical-sessions/presentation/wheeler) scores it below 3.
 A presentation layer SHOULD indicate the strength of a `weak-password` value as it is entered, and MUST NOT refuse a `weak-password` value for its strength.
 A presentation layer SHOULD offer a generator of strong passwords for `password` and `weak-password` params.
 
