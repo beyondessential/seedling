@@ -82,7 +82,7 @@ When the runtime checks kinds, and which request a rejection refuses, is specifi
 `validate` MUST throw when called in the action context.
 Calling `validate` a second time for the same parameter MUST throw.
 
-The runtime MUST call a validator with two arguments: the parameter's proposed value, and an object map from the name of each parameter that would be set to its proposed value.
+The runtime MUST call a validator with two arguments: the [parser result](action.md#param-kinds) of the parameter's proposed value, and an object map from the name of each parameter that would be set and whose kind accepts its proposed value to the parser result of that value.
 A validator that returns accepts the value.
 A validator that raises a script error rejects the value, whether the script threw deliberately or not.
 Where the script threw a value, that value MUST be the reason reported for the rejection.
