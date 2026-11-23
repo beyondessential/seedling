@@ -30,7 +30,7 @@ A `params` key ending in `_volume` or `_filename` is [reserved](../language/acti
 Where the action declares parameters, the server MUST validate the submitted values as [action parameters](#action-parameters) specifies before the operation is scheduled.
 The value of a declared parameter MUST be of a type [action parameters](#action-parameters) allows, and the server MUST reject a value of any other type with `requirements_invalid` rather than treat the parameter as absent.
 If a declared parameter of kind `volume` names a site volume that does not exist, the server MUST reject the request with `not_found`.
-The server MUST deliver `params`, with defaults filled in, to the action closure as `param`.
+The server MUST deliver `params` to the action closure as [param delivery](../language/action.md#param-delivery) specifies.
 
 The server MUST schedule the operation with the trigger `"operator"`, subject to the [one-operation-at-a-time rules](../runtime/operations.md#concurrency).
 The server MUST reject the request with `operation_in_progress` while an operation for the app is running or a change to the app is being applied.

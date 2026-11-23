@@ -81,7 +81,8 @@ The error MUST name each action on the stack, in call order, followed by the act
 
 The runtime MUST pass an action's or shell's closure the params its invoker supplied, after validation against its param schema, as the param map.
 If the invoker supplies no params, the param map MUST be empty.
-In the param map, a declared param that has a value after validation MUST hold its kind's [parser result](#param-kinds) for that value, and a declared param that has none MUST be absent.
+In the param map, a declared param that has a value after validation MUST hold its kind's [parser result](#param-kinds) for that value, except as [volume params](#volume-params) specify.
+A declared param that has no value after validation MUST be absent from the param map.
 
 Param keys ending in `_volume` or `_filename` are reserved for the runtime.
 The runtime MUST reject any invocation, by an operator, by a shell request or by `invoke`, whose supplied params include a reserved key.
