@@ -110,9 +110,15 @@ A Blob derived value MUST be withheld in each text encoding of it that BSL offer
 
 The runtime MUST withhold the result of a helper that [digests and encodings](../language/encoding.md) specify as a derived value when any of its arguments contains a withheld value.
 An argument contains a withheld value when the string, or the bytes of the Blob, includes that value in any form in which the runtime withholds it.
+No argument contains a withheld value that is empty.
+A [`File`](../language/bundle.md#bundle-files) or [`Directory`](../language/bundle.md#bundle-files) argument contains no withheld value.
 
 > [!NOTE]
 > An encoding can be reversed outright, and a digest or HMAC of a short secret can be recovered by guessing, so neither result is safer to show than the value it was computed from.
+
+> [!NOTE]
+> No minimum length applies, so a short secret value withholds more results than it needs to, which an operator can see, rather than fewer, which an operator could not.
+> A bundle's files come from the definition, not from secret storage or a seed.
 
 A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as [describing an app](../interface/apps.md#parameters) and the [generation history](../interface/apps.md#generation-history) define.
 
