@@ -1,0 +1,89 @@
+---
+id: ENC
+---
+
+# Digests and encodings
+
+Applies to the helpers in the [std module](std.md#the-std-module) through which a [script](overview.md#script) encodes bytes as text and decodes them again, digests bytes, authenticates them under a key, and names them with a UUID.
+
+## Borrowed terms
+
+| term | meaning |
+| --- | --- |
+| SHA-256, SHA-512 | The hash functions defined in [FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final). |
+| BLAKE2b | The hash function defined in [RFC 7693](https://www.rfc-editor.org/rfc/rfc7693). |
+| BLAKE3 | The hash function defined in the [BLAKE3 specification](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf). |
+| HMAC | The keyed-hash message authentication code defined in [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104). |
+| base64, base64url | The encodings defined in [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) sections 4 and 5. |
+| UUID | A 128-bit universally unique identifier, [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562). |
+
+## Byte arguments
+
+Every argument these helpers give the type `bytes` MUST accept a string, read as its UTF-8 encoding, or a Blob, read as its bytes.
+A `bytes` argument of any other type MUST raise a script error, as the [argument rules](overview.md#arguments) require.
+
+## Encodings
+
+The std module MUST offer these helpers.
+
+| helper | returns |
+| --- | --- |
+| `std::encode_hex(data: bytes)` | a string of two lowercase hexadecimal digits per byte of `data` |
+| `std::decode_hex(text: string)` | a Blob of the bytes `text` encodes in hexadecimal |
+| `std::encode_base64(data: bytes)` | a string encoding `data` in base64, with padding |
+| `std::decode_base64(text: string)` | a Blob of the bytes `text` encodes in base64 |
+| `std::encode_base64url(data: bytes)` | a string encoding `data` in base64url, without padding |
+| `std::decode_base64url(text: string)` | a Blob of the bytes `text` encodes in base64url |
+
+Encoding no bytes MUST return the empty string, and decoding the empty string MUST return an empty Blob.
+
+`decode_hex` MUST accept hexadecimal digits in either case.
+It MUST throw when `text` holds an odd number of characters, or any character that is not a hexadecimal digit.
+
+`decode_base64` MUST throw when `text` holds a character outside the base64 alphabet, other than one or two padding characters at its end, or when its length is not a multiple of four.
+`decode_base64url` MUST throw when `text` holds a character outside the base64url alphabet, including padding, or when its length leaves a remainder of one when divided by four.
+Both MUST throw when the last character before any padding encodes bits that are not zero beyond the final byte.
+
+> [!NOTE]
+> A strict decoder gives every byte sequence exactly one encoding, so text that decodes is the text the matching encoder would have written.
+
+## Digests
+
+The std module MUST offer these helpers, each returning a Blob.
+
+| helper | returns |
+| --- | --- |
+| `std::digest_sha256(data: bytes)` | the 32-byte SHA-256 digest of `data` |
+| `std::digest_sha512(data: bytes)` | the 64-byte SHA-512 digest of `data` |
+| `std::digest_blake2b(data: bytes)` | the 64-byte unkeyed BLAKE2b digest of `data` |
+| `std::digest_blake3(data: bytes)` | the 32-byte BLAKE3 digest of `data`, in its default hash mode |
+
+> [!NOTE]
+> A digest returns bytes so that it can be passed on as an HMAC key or a UUID name unchanged.
+> A script that wants text passes it to one of [the encodings](#encodings).
+
+## Message authentication
+
+The std module MUST offer these helpers, each returning a Blob.
+
+| helper | returns |
+| --- | --- |
+| `std::hmac_sha256(key: bytes, message: bytes)` | the 32-byte HMAC over SHA-256 of `message` under `key` |
+| `std::hmac_sha512(key: bytes, message: bytes)` | the 64-byte HMAC over SHA-512 of `message` under `key` |
+
+Both MUST accept a key of any length.
+
+## Name-based UUIDs
+
+The std module MUST offer `std::uuid_v5(namespace: string, name: bytes)`, which returns the version 5 UUID that [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562#section-5.5) defines for `namespace` and `name`.
+
+`uuid_v5` MUST throw when `namespace` is not a UUID written in hyphenated form, as five groups of 8, 4, 4, 4 and 12 hexadecimal digits.
+It MUST accept the digits of `namespace` in either case.
+It MUST write its result in hyphenated form with lowercase hexadecimal digits.
+
+> [!NOTE]
+> A version 5 UUID depends on nothing but its namespace and name, so the same call returns the same UUID in every app and on every host, unlike a [derived](random.md#helpers) version 4 UUID.
+
+## Withheld arguments
+
+A result of one of these helpers computed from a withheld value is itself withheld, as [redaction](../runtime/secrets.md#redaction) specifies.

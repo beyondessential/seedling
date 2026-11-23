@@ -104,6 +104,12 @@ It MUST NOT return a value recorded in the generation history if the parameter i
 The runtime MUST withhold every derived value under the same rules as a secret parameter's value, wherever it would withhold one.
 A Blob derived value MUST be withheld in each text encoding of it that BSL offers a script.
 
+The runtime MUST withhold the result of a [digest or encoding helper](../language/encoding.md) as a derived value when any of its arguments contains a value the runtime withholds.
+An argument contains a withheld value when the string, or the bytes of the Blob, includes that value in any form in which the runtime withholds it.
+
+> [!NOTE]
+> An encoding can be reversed outright, and a digest or HMAC of a short secret can be recovered by guessing, so neither result is safer to show than the value it was computed from.
+
 A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as [describing an app](../interface/apps.md#parameters) and the [generation history](../interface/apps.md#generation-history) define.
 
 ## Migration
