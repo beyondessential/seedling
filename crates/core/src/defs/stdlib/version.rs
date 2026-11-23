@@ -40,10 +40,6 @@ impl Version {
             segments,
         })
     }
-
-    pub fn as_str(&self) -> &str {
-        &self.text
-    }
 }
 
 /// The text a version is ordered and split by: the value without a leading
@@ -165,10 +161,6 @@ impl SemVer {
             text: text.to_owned(),
             version,
         })
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.text
     }
 }
 
