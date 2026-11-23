@@ -113,10 +113,15 @@ A call's encoding is the concatenation of these fields, in order:
 1. the helper's name without its `std::` prefix, which is one of `random_bytes`, `random_string`, `uuid_v4`, `password_argon2id` or `password_bcrypt`, as a string field;
 2. the label, as a string field;
 3. for `random_bytes`, `n` as an integer field;
-4. for `random_string`, `length` as an integer field, then `alphabet` as a string field.
+4. for `random_string`, `length` as an integer field, then `alphabet` as a string field;
+5. for a password hash helper, `password` as a bytes field.
 
 A string field MUST be the length of the string's UTF-8 encoding in bytes, as an unsigned 32-bit big-endian integer, followed by that encoding.
 An integer field MUST be the integer as an unsigned 64-bit big-endian integer.
+A bytes field MUST be the number of bytes as an unsigned 64-bit big-endian integer, followed by the bytes.
+
+> [!NOTE]
+> The password is part of the call, so two calls under the same label that hash different passwords draw different salts, and the salt one hash shows says nothing about another's.
 
 ### Byte stream
 
