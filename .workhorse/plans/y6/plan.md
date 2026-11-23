@@ -8,7 +8,7 @@ Each parameter kind gets a `std::parse_<kind>` helper, and that helper's accepta
 - The runtime's kind check and the `std::parse_<kind>` helpers share one implementation per kind, so the two cannot drift. `run_requirements` in `crates/core/src/runtime/action_params.rs` calls the same functions the `std` module registers.
 - Stored app parameters gain a kind check in the parameter validation path (`/apps/params/set`, `/apps/update`, `/apps/plan` rejections), before each validator; a value its kind rejects skips its validator.
 - The parse lives on `ParamKind` (`ParamKind::parse(self, &str)`), and the `std` module registers a helper for every variant by iterating `ParamKind::ALL`, so a kind added later cannot ship without its helper. The helper's name is derived from `as_str()` with `-` written as `_`.
-- Layout follows card V6's, which is building the `std` module in parallel: `crates/core/src/defs/stdlib.rs` holds `module()`, and each group of helpers is a submodule with a `register(&mut rhai::Module)`. This card adds `defs/stdlib/kinds.rs`. Whichever of the two lands second resolves a one-line conflict in `stdlib.rs`.
+- Layout matches card V6's helpers: `crates/core/src/defs/stdlib.rs` holds `module()`, and each group of helpers is a submodule with a `register(&mut rhai::Module)`. This card adds `defs/stdlib/kinds.rs`, so whichever of the two lands second resolves a one-line conflict in `stdlib.rs`.
 - The runtime check on stored parameters does not skip an empty value, unlike `run_requirements`, which treats an empty action param as absent.
 
 ## Parsers
