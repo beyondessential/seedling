@@ -373,6 +373,33 @@ fn a_derived_value_beyond_the_engine_limits_fails_before_allocating() {
     assert!(err.expect("fails").to_string().contains("too large"));
 }
 
+// spec: LIM#limits
+#[test]
+fn a_multibyte_string_is_held_to_the_engine_limit_in_bytes() {
+    let limits = crate::ScriptLimits {
+        max_string_size: 64,
+        ..Default::default()
+    };
+    let evaluate = |length: usize| {
+        crate::runtime::apps::evaluate(
+            &seedling_protocol::names::AppName::new_unchecked("demo"),
+            &std::sync::Arc::new(crate::runtime::definition::Bundle::from_stored_script(
+                &format!(r#"std::random_string("x", {length}, "aé");"#),
+            )),
+            &std::collections::BTreeMap::new(),
+            &seed(1),
+            &limits,
+        )
+        .1
+    };
+    assert!(
+        evaluate(32).is_none(),
+        "32 two-byte characters fit in 64 bytes"
+    );
+    let err = evaluate(33).expect("33 do not").to_string();
+    assert!(err.contains("too large"), "{err}");
+}
+
 // spec: RND#helpers
 #[test]
 fn a_multibyte_alphabet_is_read_as_characters() {

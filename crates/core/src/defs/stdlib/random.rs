@@ -49,13 +49,15 @@ pub(super) fn register(module: &mut rhai::Module) {
              alphabet: Dynamic|
              -> Result<String, Box<EvalAltResult>> {
                 let label = take_label(label)?;
+                let alphabet = take_alphabet(alphabet)?;
+                // The engine limits a string in UTF-8 bytes, so the most
+                // characters allowed are as many of the widest as fit.
                 let length = take_count(
                     "length",
                     length,
-                    ctx.engine().max_string_size(),
+                    ctx.engine().max_string_size() / widest(&alphabet),
                     "Length of string",
                 )?;
-                let alphabet = take_alphabet(alphabet)?;
                 let seed = seed_for_call()?;
                 let value = random_string(&seed, &label, length, &alphabet)?;
                 record(|| vec![value.clone()]);
@@ -159,6 +161,11 @@ fn take_alphabet(alphabet: Dynamic) -> Result<Vec<char>, Box<EvalAltResult>> {
     Ok(alphabet)
 }
 
+/// The most UTF-8 bytes any character of `alphabet` takes.
+fn widest(alphabet: &[char]) -> usize {
+    alphabet.iter().map(|c| c.len_utf8()).max().unwrap_or(1)
+}
+
 enum Field<'a> {
     Str(&'a str),
     Int(u64),
@@ -236,7 +243,8 @@ fn random_string(
         ],
     );
     let mut out = String::new();
-    out.try_reserve(length).map_err(|_| allocation_failed())?;
+    out.try_reserve(length.saturating_mul(widest(alphabet)))
+        .map_err(|_| allocation_failed())?;
     let mut produced = 0;
     let mut word = [0u8; 4];
     while produced < length {
