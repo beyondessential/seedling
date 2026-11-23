@@ -238,6 +238,7 @@ Each is an array of strings in ascending order.
 ### Redacted environment values
 
 The server MUST report as `null` the value of an environment variable whose value contains the stored value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true.
+It MUST also report as `null` the value of an environment variable whose value contains a [derived value](../runtime/secrets.md#derived-value) that the evaluation declaring the resource returned, in any form the [redaction](../runtime/secrets.md#redaction) of derived values names.
 
 ### Proxy settings
 

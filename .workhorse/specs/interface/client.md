@@ -134,6 +134,11 @@ Each `name=value` argument MUST set the parameter `name` to the string `value`, 
 
 The CLI MUST report an error and send no request when an argument that sets a parameter has no `=`, when one command changes the same parameter more than once, or when `apps params set` is given no change.
 
+## Seed rotation
+
+`apps seed rotate <app>` MUST send a [seed rotation](app-control.md#seed-rotation) request only when given `--yes`.
+Without it, the CLI MUST send no request, and MUST report that every value derived from the app's seed will change and every workload holding one will restart.
+
 ## Definition export
 
 `apps export <app> <folder> [--generation <n>]` MUST write the app's [definition bundle](../overview.md#definition-bundle) at generation `n`, or at the current generation, into `folder`, reproducing the bundle's files exactly.

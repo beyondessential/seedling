@@ -182,6 +182,10 @@ Each call MUST write at most once, including when the action closure is replayed
 > [!NOTE]
 > A file written into a tmpfs volume is lost when the host restarts, and the runtime does not write it again, whereas it reapplies a tmpfs volume's [declared file writes](volume.md#declared-file-writes).
 
+## Derived random values
+
+A runtime handle MUST offer the [derivation methods](random.md#methods), deriving from the seed of the operation or shell session it was passed to.
+
 ## Waiting on resource state
 
 ### Started

@@ -56,7 +56,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) | JSON, under [WIRE](interface/wire.md), [AUD](runtime/audit-log.md), [WEB](web/serving.md) |
 | [JSON Lines](https://jsonlines.org/) | the audit log format, under [AUD](runtime/audit-log.md) |
 | [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | timestamps, under [APPS](interface/apps.md), [EVT](interface/events.md), [FLTS](interface/faults.md), [FWD](interface/port-forwards.md), [IMGM](interface/images.md), [INGM](interface/site-ingresses.md), [LOG](interface/logs.md), [RLY](interface/canopy-relay.md), [SHL](interface/shells.md), [SVCM](interface/services.md), [TPL](interface/templates.md), [VOLM](interface/volumes.md), [WEB](web/serving.md) |
-| [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) | UUIDs, under [IDN](runtime/identity.md) |
+| [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) | UUIDs, under [IDN](runtime/identity.md), [RND](language/random.md) |
 | [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) | HTTP semantics, under [HTTP](language/http-service.md), [ING](language/ingress.md), [PRX](runtime/proxy.md), [SITE](runtime/site-resources.md), [RLY](interface/canopy-relay.md), [WEB](web/serving.md) |
 | [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111) | HTTP caching, under [WEB](web/serving.md) |
 | [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) | HTTP/1.1, under [ING](language/ingress.md), [PRX](runtime/proxy.md), [RLY](interface/canopy-relay.md) |

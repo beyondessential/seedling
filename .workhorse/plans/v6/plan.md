@@ -22,6 +22,8 @@ The app seed is created at registration and discarded at deregistration with the
 It has no import or export: an exported seed would disclose every value the app will ever derive, more than any secret parameter does.
 A host restored from its database and key file keeps its seeds; an app moved to another host gets a new seed, and its operator re-keys any data store holding app-seeded values.
 
+An operator can rotate the app seed (`/apps/seed/rotate`, `apps seed rotate <app> --yes`, a `dangerous`-mode console control). Rotation re-evaluates without bumping the generation, like a host constant change; every consumer restarts, and data stores are re-keyed by hand. Operation seeds need no rotation.
+
 Shell sessions are never persisted or replayed, so a session's seed can live in memory only.
 Validators get no randomness: they judge a proposed value, and randomness has no meaning there.
 
@@ -48,5 +50,5 @@ The redaction gaps secret parameters already have (volume file writes, sub-actio
 A guide in `docs/` covers the pitfalls:
 
 - An operation-seeded value differs in the next operation; anything that must outlive the operation goes into a volume or comes from the app seed.
-- App-seeded values change on re-registration, or when an app moves to another host, while data written to volumes keeps the old ones.
+- App-seeded values change on rotation, on re-registration, or when an app moves to another host, while data written to volumes keeps the old ones.
 - The function, label and every argument enter the derivation: changing a length or alphabet changes the value, and two uses wanting distinct secrets need distinct labels.
