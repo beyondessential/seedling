@@ -71,7 +71,10 @@ The runtime MUST protect a secret parameter's value as [secret storage](../runti
 
 The runtime MUST check a parameter's proposed value with its kind's [parser](action.md#kind-parsers), and MUST reject a value the parser rejects, with the parser's error as the reason.
 The runtime MUST check a value only while its parameter would be set, and an empty stored value is a value it checks.
-The runtime MUST NOT run a parameter's [validator](#validators) on a value its kind rejects.
+The runtime MUST NOT run any [validator](#validators) while any parameter that would be set has a value its kind rejects.
+
+> [!NOTE]
+> Validators then always see every set parameter as its kind's parser result, so none mistakes a rejected value for an unset one.
 
 Once a script's evaluation has run to completion, the runtime MUST check each declared default against its parameter's kind, and MUST fail the evaluation if the kind rejects one, naming the parameter and giving the parser's error.
 
@@ -86,7 +89,7 @@ When the runtime checks kinds, and which request a rejection refuses, is specifi
 `validate` MUST throw when called in the action context.
 Calling `validate` a second time for the same parameter MUST throw.
 
-The runtime MUST call a validator with two arguments: the [parser result](action.md#param-kinds) of the parameter's proposed value, and an object map from the name of each parameter that would be set and whose kind accepts its proposed value to the parser result of that value.
+The runtime MUST call a validator with two arguments: the [parser result](action.md#param-kinds) of the parameter's proposed value, and an object map from the name of each declared parameter that would be set to the parser result of its proposed value.
 A validator that returns accepts the value.
 A validator that raises a script error rejects the value, whether the script threw deliberately or not.
 Where the script threw a value, that value MUST be the reason reported for the rejection.

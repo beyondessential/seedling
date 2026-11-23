@@ -34,7 +34,8 @@ The runtime MUST store it, and it takes effect once the app's definition declare
 
 The server MUST validate a definition update and a parameter change before it persists any part of the change.
 
-Validation [checks the kind](../language/parameter.md#kind-checks) of every parameter that is set in the proposed values, then runs the [validator](../language/parameter.md#validators) of each such parameter whose kind accepts its value, against the proposed values.
+Validation [checks the kind](../language/parameter.md#kind-checks) of every parameter that is set in the proposed values.
+If every kind accepts its value, validation then runs the [validator](../language/parameter.md#validators) of each such parameter against the proposed values.
 The kinds and validators are those the proposed definition declares when evaluated with the proposed values.
 For a parameter change whose proposed values fail to evaluate, the kinds and validators are those of the app's most recent successful evaluation.
 If that evaluation fails too, no kind is checked and no validator runs.
