@@ -5455,7 +5455,6 @@ dependencies = [
  "compact_str",
  "dirs 6.0.0",
  "ed25519-dalek 3.0.0",
- "futures-util",
  "jiff",
  "quinn",
  "rand 0.10.3",
