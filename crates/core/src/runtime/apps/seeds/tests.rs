@@ -119,12 +119,12 @@ fn backfill_seeds_unseeded_apps_once_and_keeps_existing_rows() {
 fn deleting_removes_only_that_apps_seed() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
-    store_app_seed(&db, &cipher, &app("a"), &Seed::draw().unwrap()).unwrap();
-    store_app_seed(&db, &cipher, &app("b"), &Seed::draw().unwrap()).unwrap();
-    delete_app_seed(&db, &app("a")).unwrap();
+    store_app_seed(&db, &cipher, &app("app-a"), &Seed::draw().unwrap()).unwrap();
+    store_app_seed(&db, &cipher, &app("app-b"), &Seed::draw().unwrap()).unwrap();
+    delete_app_seed(&db, &app("app-a")).unwrap();
     assert!(matches!(
-        load_app_seed(&db, &cipher, &app("a")).unwrap(),
+        load_app_seed(&db, &cipher, &app("app-a")).unwrap(),
         AppSeed::Unreadable(_)
     ));
-    ready(&load_app_seed(&db, &cipher, &app("b")).unwrap());
+    ready(&load_app_seed(&db, &cipher, &app("app-b")).unwrap());
 }
