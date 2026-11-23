@@ -77,6 +77,11 @@ impl AppSeed {
         }
     }
 
+    #[cfg(test)]
+    pub fn for_tests() -> Self {
+        Self::Ready(Seed::from_bytes([9; SEED_LEN]))
+    }
+
     /// A seed for an evaluation whose derived values go nowhere, such as a
     /// preview of a definition that is not registered.
     pub fn throwaway() -> Self {

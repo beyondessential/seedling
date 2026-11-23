@@ -333,6 +333,11 @@ async fn main() {
         std::sync::Arc::new(c)
     };
 
+    // spec: SEC#app-seeds — apps registered before seeds existed get theirs
+    // here, once the key that protects them is loaded.
+    seedling_core::runtime::apps::seeds::backfill_app_seeds(&db, &cipher)
+        .unwrap_or_else(|e| fatal!("cannot give registered apps their seeds: {e}"));
+
     // ---------------------------------------------------------------------------
     // System backends
     // ---------------------------------------------------------------------------

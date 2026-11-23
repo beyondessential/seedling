@@ -1302,11 +1302,13 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         None => current_params.clone(),
     };
 
+    let seed = registered_seed(state, &params.app)?;
     let (proposed_app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
         &proposed_bundle,
         &proposed_param_map,
         &proposed_param_map,
+        &seed,
         &state.script_limits,
     );
     let rejections = match evaluation {
@@ -1418,6 +1420,20 @@ pub(crate) fn check_registrable(state: &OiState, app: &AppName) -> Result<(), Oi
     Ok(())
 }
 
+/// The seed a registered app evaluates against.
+// spec: SEC#app-seeds
+pub(crate) fn registered_seed(
+    state: &OiState,
+    app: &AppName,
+) -> Result<crate::runtime::seeds::AppSeed, OiError> {
+    state
+        .registry
+        .read()
+        .get(app.as_str())
+        .map(|entry| entry.seed.clone())
+        .ok_or_else(|| OiError::not_found(format!("app not found: {app}")))
+}
+
 /// Register `app` from a definition already resolved from its source.
 // spec: APPS#registration
 pub(crate) fn register_resolved(
@@ -1436,24 +1452,32 @@ pub(crate) fn register_resolved(
     // so a failed persist leaves nothing for `/apps/list` to show, nothing
     // for a restart to silently drop (load_from_db skips generation-0 rows),
     // and nothing for a retried `/apps/create` to collide with.
+    // spec: SEC#app-seeds — the seed is drawn before the first evaluation,
+    // which derives from it, and committed with the registration.
+    let seed = crate::runtime::seeds::Seed::draw()
+        .map_err(|e| OiError::internal(format!("no seed could be drawn: {e:?}")))?;
+    let app_seed = crate::runtime::seeds::AppSeed::Ready(seed.clone());
     // spec: PRM#validation — registration runs no validators: a newly
     // registered app has no set parameters.
     let (app, script_error) = crate::runtime::apps::evaluate(
         app_name,
         &bundle,
         &std::collections::BTreeMap::new(),
+        &app_seed,
         &state.script_limits,
     );
 
     let name_owned = app_name.clone();
     let bundle_owned = Arc::clone(&bundle);
     let source_owned = source.clone();
+    let cipher = Arc::clone(&state.cipher);
     let generation = state
         .db
         .call(move |db| -> rusqlite::Result<u64> {
             let tx = db.conn.unchecked_transaction()?;
             // The app row first, so the generation rows can FK against it.
             persist_app_fields(db, &name_owned, 0, false, false)?;
+            crate::runtime::apps::seeds::store_app_seed(db, &cipher, &name_owned, &seed)?;
             // spec: GEN#generation-numbers — initial registration creates
             // generation 1.
             let generation = crate::runtime::generations::bump_register(
@@ -1476,6 +1500,7 @@ pub(crate) fn register_resolved(
         script_error,
         Arc::clone(&state.tick_notify),
         generation,
+        app_seed,
     );
 
     {
@@ -1569,6 +1594,8 @@ pub(crate) fn deregister_app(
             db.atomically(|db| {
                 AppRegistry::remove_app(db, &name_owned)?;
                 crate::runtime::apps::delete_app_params(db, &name_owned)?;
+                // spec: SEC#app-seeds
+                crate::runtime::apps::seeds::delete_app_seed(db, &name_owned)?;
                 // spec: GEN#lineage
                 crate::runtime::generations::delete_for_app(db, &name_owned)?;
                 // spec: CNR#applications
@@ -1868,11 +1895,13 @@ pub(crate) fn update_app(
 
     // spec: PRM#validation — the validators are those of the new
     // definition, evaluated with the values the request would produce.
+    let seed = registered_seed(state, &params.app)?;
     let (app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
         &bundle,
         &proposed,
         &proposed,
+        &seed,
         &state.script_limits,
     );
     let rejections = evaluation.map_err(|e| OiError::new(ErrorCode::ScriptError, e.to_string()))?;

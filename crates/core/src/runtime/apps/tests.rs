@@ -81,6 +81,7 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
         current_generation: 0,
         install_seq: None,
+        seed: crate::runtime::seeds::AppSeed::for_tests(),
     }
 }
 
@@ -496,6 +497,7 @@ fn replace_definition_installs_bundle_and_source() {
         &app("myapp"),
         &bundle,
         &BTreeMap::new(),
+        &crate::runtime::seeds::AppSeed::for_tests(),
         &crate::ScriptLimits::default(),
     );
     assert!(err.is_none());

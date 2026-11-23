@@ -409,6 +409,7 @@ fn the_tamanu_definitions_refuse_a_database_or_role_name_that_needs_quoting() {
                 &bundle,
                 &base,
                 &proposed,
+                &crate::runtime::seeds::AppSeed::for_tests(),
                 &crate::ScriptLimits::default(),
             );
             outcome

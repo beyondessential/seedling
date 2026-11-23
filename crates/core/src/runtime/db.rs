@@ -172,6 +172,7 @@ const SQL_V81: &str = include_str!("db/migrations/v81.sql");
 // spec: OPS#initiating-events
 // spec: GRUN#gate-state
 const SQL_V82: &str = include_str!("db/migrations/v82.sql");
+const SQL_V83: &str = include_str!("db/migrations/v83.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -577,6 +578,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 82,
         sql: SQL_V82,
+        custom_run: None,
+    },
+    Migration {
+        version: 83,
+        sql: SQL_V83,
         custom_run: None,
     },
 ];

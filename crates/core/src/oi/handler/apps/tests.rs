@@ -2107,3 +2107,53 @@ fn a_withholding_gate_fault_outranks_installing() {
     });
     assert_eq!(status_of(&oi, "demo"), "faulted");
 }
+
+fn listed_description(oi: &TestOi, app: &str) -> String {
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == app)
+        .and_then(|a| a["description"].as_str())
+        .expect("described")
+        .to_owned()
+}
+
+// spec: SEC#app-seeds
+#[test]
+fn each_registration_has_a_seed_of_its_own() {
+    let oi = TestOi::new();
+    let script = r#"app.description(std::uuid_v4("id"));"#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+    oi.call("/apps/create", json!({ "app": "other", "script": script }))
+        .unwrap();
+    let first = listed_description(&oi, "demo");
+    assert_ne!(
+        first,
+        listed_description(&oi, "other"),
+        "two apps derive apart"
+    );
+
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+    let rows: i64 = oi
+        .state
+        .db
+        .call(|db| {
+            db.conn.query_row(
+                "SELECT count(*) FROM app_seeds WHERE app_name = 'demo'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(rows, 0, "deregistration discards the seed");
+
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+    assert_ne!(
+        first,
+        listed_description(&oi, "demo"),
+        "registering again draws a new seed"
+    );
+}

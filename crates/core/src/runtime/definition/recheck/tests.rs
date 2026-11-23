@@ -64,6 +64,7 @@ impl Harness {
             None,
             Arc::new(Notify::new()),
             1,
+            crate::runtime::seeds::AppSeed::for_tests(),
         );
     }
 

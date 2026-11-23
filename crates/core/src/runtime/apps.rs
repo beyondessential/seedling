@@ -25,6 +25,7 @@ use crate::{
 mod params;
 mod registry_faults;
 pub mod secret_params;
+pub mod seeds;
 pub mod status;
 
 pub use params::{
@@ -213,6 +214,9 @@ pub struct AppEntry {
     /// completed, lower first; `None` before any install has completed.
     // spec: ING#claims-across-apps
     pub install_seq: Option<i64>,
+    /// The seed the app's static and validator contexts derive from.
+    // spec: SEC#app-seeds
+    pub seed: crate::runtime::seeds::AppSeed,
 }
 
 impl AppEntry {
@@ -260,7 +264,7 @@ impl AppRegistry {
         self.entries.contains_key(name)
     }
 
-    // spec: APPS#registration
+    #[cfg(test)]
     pub fn register(
         &mut self,
         name: AppName,
@@ -269,8 +273,18 @@ impl AppRegistry {
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
     ) -> Result<(), ScriptError> {
-        let (app, script_error) = evaluate(&name, &bundle, &BTreeMap::new(), limits);
-        self.insert_registered(name, bundle, source, app, script_error, tick_notify, 0);
+        let seed = crate::runtime::seeds::AppSeed::for_tests();
+        let (app, script_error) = evaluate(&name, &bundle, &BTreeMap::new(), &seed, limits);
+        self.insert_registered(
+            name,
+            bundle,
+            source,
+            app,
+            script_error,
+            tick_notify,
+            0,
+            seed,
+        );
         Ok(())
     }
 
@@ -294,6 +308,7 @@ impl AppRegistry {
         script_error: Option<ScriptError>,
         tick_notify: Arc<Notify>,
         generation: u64,
+        seed: crate::runtime::seeds::AppSeed,
     ) {
         let script_error = script_error.map(|e| {
             tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
@@ -314,6 +329,7 @@ impl AppRegistry {
                 script_error,
                 current_generation: generation,
                 install_seq: None,
+                seed,
             },
         );
     }
@@ -363,14 +379,14 @@ impl AppRegistry {
         // Checked before evaluating: an unregistered app has no definition to
         // replace, and reporting `Applied` for one would tell a caller the
         // registry reflects values it never stored.
-        let Some(bundle) = self
+        let Some((bundle, seed)) = self
             .entries
             .get(name.as_str())
-            .map(|e| Arc::clone(&e.bundle))
+            .map(|e| (Arc::clone(&e.bundle), e.seed.clone()))
         else {
             return ReloadOutcome::NotRegistered;
         };
-        let (app, raw_error) = evaluate(name, &bundle, params, limits);
+        let (app, raw_error) = evaluate(name, &bundle, params, &seed, limits);
         let entry = self
             .entries
             .get_mut(name.as_str())
@@ -488,9 +504,16 @@ impl AppRegistry {
                     continue;
                 }
             };
+            let seed = match seeds::load_app_seed(db, cipher, &name) {
+                Ok(seed) => seed,
+                Err(e) => {
+                    tracing::warn!(app = %name, "failed to load app seed: {e}");
+                    continue;
+                }
+            };
             // spec: APPS#persistence — reload runs no validators: the stored
             // combination was validated when it was written.
-            let (app, raw_error) = evaluate(&name, &bundle, &stored, limits);
+            let (app, raw_error) = evaluate(&name, &bundle, &stored, &seed, limits);
             // spec: SEC#migration — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
             migrate_param_storage(db, cipher, &name, &app, raw_error.is_none());
@@ -521,6 +544,7 @@ impl AppRegistry {
                     script_error,
                     current_generation,
                     install_seq,
+                    seed,
                 },
             );
         }
@@ -785,9 +809,10 @@ pub fn evaluate(
     name: &AppName,
     bundle: &Arc<Bundle>,
     params: &BTreeMap<String, String>,
+    seed: &crate::runtime::seeds::AppSeed,
     limits: &crate::ScriptLimits,
 ) -> (App, Option<ScriptError>) {
-    let (app, result) = run_definition(name, bundle, params, None, limits);
+    let (app, result) = run_definition(name, bundle, params, seed, None, limits);
     (app, result.err())
 }
 
@@ -803,9 +828,10 @@ pub fn evaluate_validated(
     bundle: &Arc<Bundle>,
     params: &BTreeMap<String, String>,
     proposed: &BTreeMap<String, String>,
+    seed: &crate::runtime::seeds::AppSeed,
     limits: &crate::ScriptLimits,
 ) -> (App, Result<Vec<Rejection>, ScriptError>) {
-    run_definition(name, bundle, params, Some(proposed), limits)
+    run_definition(name, bundle, params, seed, Some(proposed), limits)
 }
 
 /// Evaluate a lone script, as a one-file bundle.
@@ -820,11 +846,35 @@ pub fn evaluate_script(
         name,
         &Arc::new(Bundle::from_stored_script(script)),
         params,
+        &crate::runtime::seeds::AppSeed::for_tests(),
         limits,
     )
 }
 
+/// Evaluate a definition against `seed`, recording on its definition what the
+/// evaluation derived from the seed.
+// spec: RND#seeds
 fn run_definition(
+    name: &AppName,
+    bundle: &Arc<Bundle>,
+    params: &BTreeMap<String, String>,
+    seed: &crate::runtime::seeds::AppSeed,
+    validate: Option<&BTreeMap<String, String>>,
+    limits: &crate::ScriptLimits,
+) -> (App, Result<Vec<Rejection>, ScriptError>) {
+    let frame = crate::runtime::seeds::AppSeedFrame::enter(seed);
+    let (mut app, result) = run_seeded_definition(name, bundle, params, validate, limits);
+    app.seed = Some(seed.clone());
+    let derived = frame.derived();
+    app.def.rcu(|d| {
+        let mut d = (**d).clone();
+        d.derived = derived.clone();
+        d
+    });
+    (app, result)
+}
+
+fn run_seeded_definition(
     name: &AppName,
     bundle: &Arc<Bundle>,
     params: &BTreeMap<String, String>,
