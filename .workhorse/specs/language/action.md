@@ -129,6 +129,8 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `password` | a strong password | the value |
 | `weak-password` | a password of any strength | the value |
 | `random` | free-form text, usually a generated random value | the value |
+| `version` | a version of any scheme | a `Version`, as [generic versions](version.md#generic-versions) specify |
+| `version-semver` | a [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version | a `SemVer`, as [SemVer versions](version.md#semver-versions) specify |
 | `volume` | the name of a site volume, as [volume params](#volume-params) specify | the value |
 
 ### Kind parsers
