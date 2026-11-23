@@ -169,7 +169,7 @@ A `resources` entry MUST carry `name`, `type` and `def` as an entry of the `reso
 A deployment's entry MUST also carry `scale`, an object whose `low` and `high` are the declared scale bounds, and `priority`, the deployment's priority.
 An exported volume's entry MUST also carry `export`, an object whose `exported` is `true` and whose `description`, present only if the volume declares one, is the export description.
 
-A `params` entry MUST carry `name`, `kind`, `required`, `description`, `default_value` and `secret`, as the parameter schema of app description does.
+A `params` entry MUST carry `name`, `kind`, `range`, `options`, `required`, `description`, `default_value` and `secret`, as the parameter schema of app description does.
 
 An `actions` entry MUST carry `name`, `description`, `kind`, `params` and `schedules` as an entry of the `actions` member of app description does.
 In each schedule, `last_fired_at` and `next_fire_at` MUST be `null`.
