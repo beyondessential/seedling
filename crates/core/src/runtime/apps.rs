@@ -866,11 +866,14 @@ fn run_definition(
     let (mut app, result) = run_seeded_definition(name, bundle, params, validate, limits);
     app.seed = Some(seed.clone());
     let derived = frame.take_derived();
-    app.def.rcu(|d| {
-        let mut d = (**d).clone();
-        d.derived = derived.clone();
-        d
-    });
+    // Most definitions derive nothing, and their definition is left as it is.
+    if !derived.is_empty() {
+        app.def.rcu(|d| {
+            let mut d = (**d).clone();
+            d.derived = derived.clone();
+            d
+        });
+    }
     (app, result)
 }
 

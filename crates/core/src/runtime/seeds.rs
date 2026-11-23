@@ -113,6 +113,10 @@ thread_local! {
 pub struct DerivedValues(Arc<BTreeSet<String>>);
 
 impl DerivedValues {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(String::as_str)
     }
