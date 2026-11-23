@@ -134,7 +134,9 @@ The runtime MUST resolve each of a handler's parameters from the first of these 
 
 A parameter with no value from any source is unresolved.
 
+The runtime MUST check each resolved value against its parameter's [kind](../language/action.md#kind-parsers), and MUST pass the closure the param map as [param delivery](../language/action.md#param-delivery) specifies.
+
 A probe runs in strict or lenient mode.
-If a handler declares a required parameter that is unresolved, the runtime MUST NOT evaluate the handler's closure.
-In strict mode, the probe MUST report an error for that handler naming the unresolved parameters.
+If a handler declares a required parameter that is unresolved, or a parameter whose resolved value its kind rejects, the runtime MUST NOT evaluate the handler's closure.
+In strict mode, the probe MUST report an error for that handler naming each unresolved or rejected parameter, with the parser's error for a rejected one.
 In lenient mode, the probe MUST report the handler as skipped, with the same detail, and report no images for it.
