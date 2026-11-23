@@ -161,7 +161,7 @@ The runtime MUST reject a value that its kind's parser rejects, with the parser'
 The runtime MUST accept a value that its kind's parser accepts, except where [volume params](#volume-params) add a check.
 
 > [!NOTE]
-> A validator or action closure calls the same parser to apply the runtime's own check, or to read the parts of a compound value without parsing it again.
+> A script calls a parser to apply the runtime's own check to a value the runtime has not checked, such as one it computed or one it read with `param.value()`.
 
 Every parser but `std::parse_multiline` MUST reject a value containing any character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp).
 `std::parse_text`, `std::parse_weak_password` and `std::parse_random` MUST accept every other value.
