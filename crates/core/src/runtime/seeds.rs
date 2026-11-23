@@ -5,7 +5,7 @@
 //! evaluation derives from are installed on its thread for the length of the
 //! evaluation, the way the action-closure and validator flags are.
 
-use std::{cell::RefCell, fmt, sync::Arc};
+use std::{cell::RefCell, collections::BTreeSet, fmt, sync::Arc};
 
 use secrecy::{ExposeSecret, SecretBox, zeroize::Zeroize};
 
@@ -105,9 +105,12 @@ thread_local! {
 
 /// The text forms of the values an evaluation derived from its app seed,
 /// which the runtime withholds wherever it withholds secret parameter values.
+///
+/// Each form is held once however often it was derived, and shared by every
+/// copy of the definition that carries it.
 // spec: SEC#redaction
 #[derive(Clone, Default)]
-pub struct DerivedValues(Vec<String>);
+pub struct DerivedValues(Arc<BTreeSet<String>>);
 
 impl DerivedValues {
     pub fn iter(&self) -> impl Iterator<Item = &str> {
@@ -137,9 +140,14 @@ impl AppSeedFrame {
         }
     }
 
-    /// The values derived from the app seed since the frame was entered.
-    pub fn derived(&self) -> DerivedValues {
-        DERIVED.with(|d| d.borrow().clone().unwrap_or_default())
+    /// Take the values derived from the app seed since the frame was entered.
+    pub fn take_derived(&self) -> DerivedValues {
+        DERIVED.with(|d| {
+            d.borrow_mut()
+                .as_mut()
+                .map(std::mem::take)
+                .unwrap_or_default()
+        })
     }
 }
 
@@ -195,7 +203,7 @@ pub fn operation_seed() -> Result<Seed, String> {
 pub fn record_derived(forms: impl IntoIterator<Item = String>) {
     DERIVED.with(|d| {
         if let Some(values) = d.borrow_mut().as_mut() {
-            values.0.extend(forms.into_iter().filter(|f| !f.is_empty()));
+            Arc::make_mut(&mut values.0).extend(forms.into_iter().filter(|f| !f.is_empty()));
         }
     });
 }

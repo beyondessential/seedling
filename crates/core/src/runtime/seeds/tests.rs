@@ -56,8 +56,17 @@ fn a_nested_frame_restores_its_callers() {
         let inner = AppSeedFrame::enter(&AppSeed::Ready(Seed::from_bytes([2; SEED_LEN])));
         record_derived(["inner".to_owned()]);
         assert_eq!(app_seed().unwrap().expose(), &[2; SEED_LEN]);
-        assert_eq!(inner.derived().iter().collect::<Vec<_>>(), ["inner"]);
+        assert_eq!(inner.take_derived().iter().collect::<Vec<_>>(), ["inner"]);
     }
     assert_eq!(app_seed().unwrap().expose(), outer.expose());
-    assert_eq!(_outer.derived().iter().collect::<Vec<_>>(), ["outer"]);
+    assert_eq!(_outer.take_derived().iter().collect::<Vec<_>>(), ["outer"]);
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_form_derived_twice_is_recorded_once() {
+    let frame = AppSeedFrame::enter(&AppSeed::for_tests());
+    record_derived(["same".to_owned(), "same".to_owned()]);
+    record_derived(["same".to_owned()]);
+    assert_eq!(frame.take_derived().iter().count(), 1);
 }

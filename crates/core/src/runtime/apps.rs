@@ -865,7 +865,7 @@ fn run_definition(
     let frame = crate::runtime::seeds::AppSeedFrame::enter(seed);
     let (mut app, result) = run_seeded_definition(name, bundle, params, validate, limits);
     app.seed = Some(seed.clone());
-    let derived = frame.derived();
+    let derived = frame.take_derived();
     app.def.rcu(|d| {
         let mut d = (**d).clone();
         d.derived = derived.clone();
