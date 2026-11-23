@@ -941,11 +941,16 @@ fn run_validators(
         let result: Result<rhai::Dynamic, _> =
             validator.call(engine, ast, (value.clone(), values.clone()));
         if let Err(e) = result {
-            // A thrown value is the reason; any other failure rejects too,
-            // with the error itself as the reason.
-            let reason = match *e {
-                rhai::EvalAltResult::ErrorRuntime(ref thrown, _) => thrown.to_string(),
-                ref other => script.remap_error(&other.to_string()),
+            // A thrown value is the reason, whether the validator threw it or
+            // a function it called did, as a kind parser does; any other
+            // failure rejects too, with the error itself as the reason.
+            let mut cause = &*e;
+            while let rhai::EvalAltResult::ErrorInFunctionCall(_, _, inner, _) = cause {
+                cause = inner;
+            }
+            let reason = match cause {
+                rhai::EvalAltResult::ErrorRuntime(thrown, _) => thrown.to_string(),
+                _ => script.remap_error(&e.to_string()),
             };
             rejections.push(Rejection {
                 name: name.as_str().to_owned(),
