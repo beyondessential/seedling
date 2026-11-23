@@ -16,6 +16,7 @@ The runtime MUST bound the resources a single evaluation of a BSL script can con
 | function call nesting depth | calls | 64 | `--script-max-call-depth` |
 | expression nesting depth | levels | 64 | `--script-max-expr-depth` |
 | string length | bytes | 1 048 576 (1 MiB) | `--script-max-string-size` |
+| Blob length | bytes | 1 048 576 (1 MiB) | `--script-max-blob-size` |
 | array length | elements | 10 000 | `--script-max-array-size` |
 | object map size | entries | 10 000 | `--script-max-map-size` |
 | derived values | calls to a [derivation helper](../language/random.md#derivation-helper), and helper results [withheld as derived values](secrets.md#redaction) | 1 000 | `--script-max-derived-values` |
@@ -28,7 +29,7 @@ The expression nesting limit MUST apply both at the top level of a script and wi
 Functions in a script's scope MAY NOT pause evaluation for any span of time, other than using the methods of a [runtime handle](../language/rt.md#runtime-handle).
 
 An operator MAY override each limit with its daemon option when the daemon starts.
-Setting the operations, expression nesting, string, array, object map, derived values or password hashes limit to 0 MUST remove that limit.
+Setting the operations, expression nesting, string, Blob, array, object map, derived values or password hashes limit to 0 MUST remove that limit.
 The daemon MUST refuse to start with a function call nesting depth of 0.
 
 > [!NOTE]

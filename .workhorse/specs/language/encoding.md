@@ -33,6 +33,10 @@ A directory's encoding is the concatenation, for each file in the directory in a
 > Every file's path is part of the encoding, so renaming or moving a file within the directory changes a digest of it as surely as changing a file's contents.
 > The order and the length prefixes are fixed so that the same directory has the same encoding in every Seedling version.
 
+## Results
+
+The string length and Blob length [limits](../runtime/engine-limits.md#limits) MUST apply to every result of these helpers.
+
 ## Encodings
 
 The std module MUST offer these helpers.
