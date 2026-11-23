@@ -35,6 +35,8 @@ The same set on `app` and on `rt`, differing only in seed:
 - `random_string(label, length, alphabet)` draws `length` characters from `alphabet`, without bias. The alphabet is required, so a script always states which characters a consumer accepts.
 - `uuid_v4(label)` returns a version 4 UUID, hyphenated and lowercase. Named by version so other UUID versions can be added beside it.
 
+The derivation is pinned in RND (HMAC-SHA-256 over a length-prefixed call encoding, keying a ChaCha20 stream), since changing it would rotate every derived value on upgrade.
+
 A label is any non-empty string.
 The function name, the label and every argument enter the derivation, so no call's value is a prefix of, or otherwise related to, another's.
 

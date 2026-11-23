@@ -47,7 +47,9 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) | ACME renewal information, under [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md) |
 | [ACME Profiles Extension](https://datatracker.ietf.org/doc/draft-ietf-acme-profiles/) (Internet-Draft) | certificate profiles, under [TLS](runtime/tls/certificates.md) |
 | [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) | problem details in Canopy answers, under [TCAN](runtime/tls/canopy.md) |
-| [FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) | SHA-256, under [TRN](interface/transport.md), [DEFN](interface/definitions.md), [INFRA](runtime/infrastructure.md), [WEB](web/serving.md) |
+| [FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) | SHA-256, under [TRN](interface/transport.md), [DEFN](interface/definitions.md), [INFRA](runtime/infrastructure.md), [WEB](web/serving.md), [RND](language/random.md) |
+| [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104) | HMAC, under [RND](language/random.md) |
+| [RFC 8439](https://www.rfc-editor.org/rfc/rfc8439) | ChaCha20, under [RND](language/random.md) |
 | [FIPS 186-5](https://csrc.nist.gov/pubs/fips/186-5/final) | ECDSA P-256, under [WEB](web/serving.md) |
 | [RFC 9106](https://www.rfc-editor.org/rfc/rfc9106) | Argon2 password hashes, under [WEB](web/serving.md) |
 | [PHC string format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md) | password hash encoding, under [WEB](web/serving.md) |
