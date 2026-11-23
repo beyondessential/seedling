@@ -187,6 +187,10 @@ struct ScriptLimitArgs {
     /// Maximum object map size in entries (0 = unlimited)
     #[arg(long, default_value_t = 10_000)]
     script_max_map_size: usize,
+
+    /// Maximum calls to a derivation helper per evaluation (0 = unlimited)
+    #[arg(long, default_value_t = 1_000)]
+    script_max_derived_values: usize,
 }
 
 // spec: LIM#limits
@@ -207,6 +211,7 @@ impl From<ScriptLimitArgs> for seedling_core::ScriptLimits {
             max_string_size: a.script_max_string_size,
             max_array_size: a.script_max_array_size,
             max_map_size: a.script_max_map_size,
+            max_derived_values: a.script_max_derived_values,
         }
     }
 }

@@ -32,7 +32,7 @@ pub(super) fn register(module: &mut rhai::Module) {
             |ctx: NativeCallContext, label: Dynamic, n: INT| -> Result<Blob, Box<EvalAltResult>> {
                 let label = take_label(label)?;
                 let n = take_count("n", n, ctx.engine().max_array_size(), "Size of BLOB")?;
-                let seed = seed_for_call()?;
+                let seed = seed_for_call(&ctx)?;
                 let bytes = random_bytes(&seed, &label, n)?;
                 record(|| blob_forms(&bytes));
                 Ok(bytes)
@@ -58,7 +58,7 @@ pub(super) fn register(module: &mut rhai::Module) {
                     ctx.engine().max_string_size() / widest(&alphabet),
                     "Length of string",
                 )?;
-                let seed = seed_for_call()?;
+                let seed = seed_for_call(&ctx)?;
                 let value = random_string(&seed, &label, length, &alphabet)?;
                 record(|| vec![value.clone()]);
                 Ok(value)
@@ -69,9 +69,9 @@ pub(super) fn register(module: &mut rhai::Module) {
         .with_volatility(true)
         .set_into_module(
             module,
-            |label: Dynamic| -> Result<String, Box<EvalAltResult>> {
+            |ctx: NativeCallContext, label: Dynamic| -> Result<String, Box<EvalAltResult>> {
                 let label = take_label(label)?;
-                let seed = seed_for_call()?;
+                let seed = seed_for_call(&ctx)?;
                 let value = uuid_v4(&seed, &label)?;
                 record(|| vec![value.clone()]);
                 Ok(value)
@@ -82,7 +82,20 @@ pub(super) fn register(module: &mut rhai::Module) {
 // spec: RND#seeds
 /// The seed the calling context derives from: the operation's inside an
 /// action closure, the app's in the static and validator contexts.
-fn seed_for_call() -> Result<Seed, Box<EvalAltResult>> {
+// spec: LIM#limits
+/// Counted against the evaluation's limit on derived values, which its engine
+/// carries as its tag.
+fn seed_for_call(ctx: &NativeCallContext) -> Result<Seed, Box<EvalAltResult>> {
+    let limit = ctx
+        .tag()
+        .and_then(|tag| tag.as_int().ok())
+        .and_then(|n| usize::try_from(n).ok())
+        // An engine not built to the runtime's limits gets their defaults,
+        // never none.
+        .unwrap_or_else(|| crate::ScriptLimits::default().max_derived_values);
+    if !seeds::count_derivation(limit) {
+        return Err(too_large("Number of derived values"));
+    }
     let seed = if is_in_action_closure() {
         seeds::operation_seed()
     } else {

@@ -98,6 +98,7 @@ impl AppSeed {
 }
 
 thread_local! {
+    static DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static APP_SEED: RefCell<Option<AppSeed>> = const { RefCell::new(None) };
     static OPERATION_SEED: RefCell<Option<Seed>> = const { RefCell::new(None) };
     static DERIVED: RefCell<Option<DerivedValues>> = const { RefCell::new(None) };
@@ -134,6 +135,7 @@ impl fmt::Debug for DerivedValues {
 pub struct AppSeedFrame {
     previous_seed: Option<AppSeed>,
     previous_derived: Option<DerivedValues>,
+    previous_derivations: usize,
 }
 
 impl AppSeedFrame {
@@ -141,6 +143,7 @@ impl AppSeedFrame {
         Self {
             previous_seed: APP_SEED.with(|s| s.replace(Some(seed.clone()))),
             previous_derived: DERIVED.with(|d| d.replace(Some(DerivedValues::default()))),
+            previous_derivations: DERIVATIONS.with(|c| c.replace(0)),
         }
     }
 
@@ -159,6 +162,7 @@ impl Drop for AppSeedFrame {
     fn drop(&mut self) {
         APP_SEED.with(|s| *s.borrow_mut() = self.previous_seed.take());
         DERIVED.with(|d| *d.borrow_mut() = self.previous_derived.take());
+        DERIVATIONS.with(|c| c.set(self.previous_derivations));
     }
 }
 
@@ -166,12 +170,14 @@ impl Drop for AppSeedFrame {
 /// whatever it displaced when dropped.
 pub struct OperationSeedFrame {
     previous: Option<Seed>,
+    previous_derivations: usize,
 }
 
 impl OperationSeedFrame {
     pub fn enter(seed: &Seed) -> Self {
         Self {
             previous: OPERATION_SEED.with(|s| s.replace(Some(seed.clone()))),
+            previous_derivations: DERIVATIONS.with(|c| c.replace(0)),
         }
     }
 }
@@ -179,7 +185,22 @@ impl OperationSeedFrame {
 impl Drop for OperationSeedFrame {
     fn drop(&mut self) {
         OPERATION_SEED.with(|s| *s.borrow_mut() = self.previous.take());
+        DERIVATIONS.with(|c| c.set(self.previous_derivations));
     }
+}
+
+// spec: LIM#limits
+/// Count one more derivation in the current frame, saying whether it is
+/// within `limit`, 0 being no limit; one past it is not counted.
+pub fn count_derivation(limit: usize) -> bool {
+    DERIVATIONS.with(|c| {
+        let n = c.get() + 1;
+        let within = limit == 0 || n <= limit;
+        if within {
+            c.set(n);
+        }
+        within
+    })
 }
 
 /// The seed installed for the static and validator contexts.

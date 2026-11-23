@@ -400,6 +400,36 @@ fn a_multibyte_string_is_held_to_the_engine_limit_in_bytes() {
     assert!(err.contains("too large"), "{err}");
 }
 
+// spec: LIM#limits
+#[test]
+fn an_evaluation_is_held_to_its_limit_on_derived_values() {
+    let evaluate = |max_derived_values: usize, calls: usize| {
+        crate::runtime::apps::evaluate(
+            &seedling_protocol::names::AppName::new_unchecked("demo"),
+            &std::sync::Arc::new(crate::runtime::definition::Bundle::from_stored_script(
+                &format!(r#"for i in 0..{calls} {{ std::uuid_v4(`id-${{i}}`); }}"#),
+            )),
+            &std::collections::BTreeMap::new(),
+            &seed(1),
+            &crate::ScriptLimits {
+                max_derived_values,
+                ..Default::default()
+            },
+        )
+        .1
+    };
+    assert!(evaluate(3, 3).is_none(), "three calls fit a limit of three");
+    let err = evaluate(3, 4).expect("a fourth does not").to_string();
+    assert!(err.contains("too large"), "{err}");
+    let err =
+        run_test_script_err(r#"try { for i in 0..2000 { std::uuid_v4(`id-${i}`); } } catch { }"#);
+    assert!(
+        matches!(*err, rhai::EvalAltResult::ErrorDataTooLarge(..)),
+        "the limit is not caught: {err:?}"
+    );
+    assert!(evaluate(0, 2000).is_none(), "0 removes the limit");
+}
+
 // spec: RND#helpers
 #[test]
 fn a_multibyte_alphabet_is_read_as_characters() {
