@@ -73,6 +73,7 @@ unicode-properties = { version = "0.1.5", default-features = false, features = [
 strum = { version = "0.27.2", features = ["derive"] }
 hmac = "0.13.0"
 chacha20 = "0.10.2"
+libversion = "0.3.3"
 
 [dev-dependencies]
 rcgen = { version = "0.14.10", features = ["x509-parser"] }

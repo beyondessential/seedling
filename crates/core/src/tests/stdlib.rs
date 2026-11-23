@@ -116,6 +116,8 @@ fn single_line_kinds_refuse_control_characters_and_separators() {
             "parse_password",
             "parse_weak_password",
             "parse_random",
+            "parse_version",
+            "parse_version_semver",
             "parse_volume",
         ] {
             let reason = refusal(helper, &value);
