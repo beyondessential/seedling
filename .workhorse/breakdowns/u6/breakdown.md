@@ -22,7 +22,7 @@ Add `url`, `url-origin` and `hostname` kinds with `parse_url`, `parse_url_origin
 
 Add a `purl` kind with `std::parse_purl`, accepting a [Package URL](https://github.com/package-url/purl-spec) such as `pkg:docker/library/postgres@16.4` and returning a map of type, namespace, name, version, qualifiers and subpath, so a definition can take a package or image reference in one standard form. To settle: whether the type-specific rules for known types (such as `docker` and `oci`) are checked or only the generic syntax, and how a purl's version relates to the version kind.
 
-## Version parameter kind and requirement matching
+## Version parameter kind and requirement matching · A7
 
 Add a `version` kind with `parse_version`, returning a `Version` with major, minor, patch, pre-release and build getters, ordered by SemVer 2.0.0 precedence... or an alternative design supporting purl's wider version definition (which could also be useful for e.g. handling deb/rpm versions, or python versions, etc) - in which case we'd probably have a `version-semver` kind to opt into the stricter behaviour. `version.matches(requirement)` takes the same requirement syntax as the `seedling` field of `seedling.toml`, such as `~2.71`. A leading `v` is accepted.
 
