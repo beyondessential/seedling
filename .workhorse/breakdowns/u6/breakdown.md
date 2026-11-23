@@ -10,7 +10,7 @@ Built-in helpers for parsing, checking and encoding values in BSL, so definition
 
 Add the `std` module that every standard helper lives in, reachable as `std::name` from every context a script runs in (top-level evaluation, actions, validators and gate bodies), and give it a spec of its own that the helper cards add to. The spec carries the conventions every helper follows: a helper throws a script error on malformed input and never coerces it, its result shapes follow the rule in this breakdown's intro, and it is replicable, reading neither the clock nor the network. The card ships the module with no helpers in it, or with only what is needed to test it. The BSL scripting guide gains a section introducing the module. To settle: whether a script can list the module's helpers.
 
-## Pair every parameter kind with a parse function
+## Pair every parameter kind with a parse function · Y6
 
 Establish the convention the kind cards build on: a `std::parse_k(text)` function for each parameter kind `k`, which the runtime runs to check a value of kind `k`. Builds on the std module card. Apply it to every existing kind without exception, such as `parse_email` returning the local part and domain, and `parse_password` applying the strength check, even where the function returns its input unchanged, as `parse_multiline` does. `text` becomes single-line: `parse_text` refuses a line break, so the runtime refuses one in a `text` value, and multi-line text is what `multiline` is for. The Actions spec's kind table and the Parameters spec carry the rule. To settle: which characters count as a line break, and whether `parse_text` refuses other control characters too.
 
