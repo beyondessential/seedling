@@ -84,8 +84,6 @@ impl ParamKind {
                 }
             }
             // spec: ACN#kind-parsers
-            // No control-character check runs before this one, so the reason
-            // leaves the value out rather than echo whatever it holds.
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|_| {
                     "volume name must be 3 to 63 characters matching \
@@ -99,10 +97,7 @@ impl ParamKind {
 
     // spec: ACN#kind-parsers
     fn is_single_line(self) -> bool {
-        matches!(
-            self,
-            Self::Text | Self::Email | Self::Password | Self::WeakPassword | Self::Random
-        )
+        !matches!(self, Self::Multiline)
     }
 
     pub fn as_str(self) -> &'static str {

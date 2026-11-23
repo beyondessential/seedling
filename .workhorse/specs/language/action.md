@@ -141,7 +141,7 @@ The runtime MUST accept a value that its kind's parser accepts, except where [vo
 > [!NOTE]
 > A validator or action closure calls the same parser to apply the runtime's own check, or to read the parts of a compound value without parsing it again.
 
-The parsers of `text`, `email`, `password`, `weak-password` and `random` MUST reject a value containing any character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp).
+Every parser but `std::parse_multiline` MUST reject a value containing any character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp).
 `std::parse_text`, `std::parse_weak_password` and `std::parse_random` MUST accept every other value.
 `std::parse_multiline` MUST accept any string.
 
