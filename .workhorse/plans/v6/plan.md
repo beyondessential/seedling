@@ -37,6 +37,9 @@ The same set on `app` and on `rt`, differing only in seed:
 
 The derivation is pinned in RND (HMAC-SHA-256 over a length-prefixed call encoding, keying a ChaCha20 stream), since changing it would rotate every derived value on upgrade.
 
+The methods live on `app` and `rt`, not in the `std` module: a `std` helper may read no state its arguments do not carry (STD#replicability), and a derivation reads its seed.
+The app seed counts among the inputs of replicable evaluation (BSL#replicability), beside the bundle, parameter values and host constants.
+
 A label is any non-empty string.
 The function name, the label and every argument enter the derivation, so no call's value is a prefix of, or otherwise related to, another's.
 
@@ -53,4 +56,5 @@ A guide in `docs/` covers the pitfalls:
 
 - An operation-seeded value differs in the next operation; anything that must outlive the operation goes into a volume or comes from the app seed.
 - App-seeded values change on rotation, on re-registration, or when an app moves to another host, while data written to volumes keeps the old ones.
+- The Replicability paragraph of `docs/bsl-scripting.md` lists the app seed among an evaluation's inputs.
 - The function, label and every argument enter the derivation: changing a length or alphabet changes the value, and two uses wanting distinct secrets need distinct labels.
