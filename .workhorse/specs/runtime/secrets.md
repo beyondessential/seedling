@@ -14,7 +14,7 @@ A parameter whose effective [`secret` flag](../language/parameter.md#secret-para
 
 ### App seed
 
-The secret from which [derivation helpers](../language/random.md#derivation-helper) called in the static context of an [app](../overview.md#app)'s definition derive their values, held for as long as the app is registered.
+The secret from which [derivation helpers](../language/random.md#derivation-helper) called in the static or validator context of an [app](../overview.md#app)'s definition derive their values, held for as long as the app is registered.
 
 ### Operation seed
 
@@ -53,7 +53,7 @@ The runtime MUST create an app's seed when it registers the app, and MUST persis
 Every registered app MUST have exactly one app seed.
 The runtime MUST discard the app seed when it [deregisters](app-teardown.md#deregistration) the app.
 
-If the runtime cannot read an app's seed, every evaluation of the app's definition that calls a derivation helper in the static context MUST fail.
+If the runtime cannot read an app's seed, every evaluation of the app's definition that calls a derivation helper in the static or validator context MUST fail.
 The runtime MUST NOT create a replacement seed for an app that has one it cannot read.
 
 > [!NOTE]

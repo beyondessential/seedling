@@ -26,7 +26,7 @@ One of the [helpers](std.md#helper) that [the helpers](#helpers) list.
 
 ## Seeds
 
-A derivation helper called in the [static context](app.md#static-context) MUST derive its value from the app's [app seed](../runtime/secrets.md#app-seed).
+A derivation helper called in the [static context](app.md#static-context) or the [validator context](app.md#validator-context) MUST derive its value from the app's [app seed](../runtime/secrets.md#app-seed).
 A derivation helper called in the [action context](app.md#action-context) MUST derive its value from the [operation seed](../runtime/secrets.md#operation-seed) of the lifecycle operation or shell session whose [action closure](action.md#action-closure) is running.
 
 Two calls deriving from the same seed, through the same helper, with the same label and the same other arguments, MUST return the same value.

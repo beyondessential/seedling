@@ -6,7 +6,7 @@ Password hashing formats are a later card; this card provides the derivation the
 
 The script sees one set of `std::` helpers; the runtime picks the seed by where the call runs:
 
-- In the static context, a per-registration app seed.
+- In the static and validator contexts, a per-registration app seed. Validators run only on parameter changes to a registered app, so the seed always exists.
 - In an action closure (action, shell, gate body), a per-operation seed. Gate checks run a Job, not a closure, so every action closure has an operation or shell session behind it.
 
 Lifetimes considered:
