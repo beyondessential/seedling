@@ -58,7 +58,7 @@ Given an empty string or no bytes, each of these helpers MUST return an empty st
 It MUST throw when `text` holds an odd number of characters, or any character outside the base16 alphabet in either case.
 
 `decode_base64` MUST throw when `text` holds a character outside the base64 alphabet, other than one or two padding characters at its end, or when its length is not a multiple of four.
-`decode_base64url` MUST throw when `text` holds a character outside the base64url alphabet, including padding, or when its length leaves a remainder of one when divided by four.
+`decode_base64url` MUST throw when `text` holds a padding character or any other character outside the base64url alphabet, or when its length leaves a remainder of one when divided by four.
 Both MUST throw when the last character before any padding encodes bits that are not zero beyond the final byte.
 
 `decode_utf8` MUST throw when `data` is not valid UTF-8.
