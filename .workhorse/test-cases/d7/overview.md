@@ -18,7 +18,8 @@
 ## Provenance
 
 - [x] Pushed and fetched definitions report the table, `{}` without one (verifies spec: DEFN#provenance-reporting)
-- [x] An unsupported template whose metadata breaks the rules reports `metadata: null` (verifies spec: DEFN#provenance-reporting)
+- [x] An unsupported template whose metadata table breaks the rules reports `metadata: null` (verifies spec: DEFN#provenance-reporting)
+- [x] An unsupported template with a field this Seedling does not know, or a missing script file, still reports its readable table (verifies spec: DEFN#provenance-reporting)
 - [x] The generation history reports the same table as the app detail (verifies spec: DEFN#provenance-reporting)
 
 ## Web console
