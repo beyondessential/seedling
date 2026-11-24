@@ -38,7 +38,7 @@ Add a `duration` kind with `parse_duration`, for timeouts, intervals and retenti
 
 Add `byte-size` and `bit-size` kinds with `parse_byte_size` and `parse_bit_size`, returning integers of bytes and bits, comparable with `AVAILABLE_MEMORY`. To settle: SI (`MB`, 1000) and IEC (`MiB`, 1024) suffixes and their case, and whether container memory limits, which read `512m` as mebibytes, move to the same syntax.
 
-## IP address, subnet and range parameter kinds
+## IP address, subnet and range parameter kinds · L7
 
 Add `ip-address`, `ip-subnet` and `ip-range` kinds with their parse functions, for allow-lists, trusted proxies and address pools. Parsed values tell their family and test containment of an address or another subnet. To settle: whether a subnet with host bits set is refused or masked, the syntax of a range, and whether IPv4-mapped IPv6 addresses and zones are accepted.
 
