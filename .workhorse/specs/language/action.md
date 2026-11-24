@@ -66,8 +66,13 @@ A `name` naming no declared action MUST throw.
 The runtime MUST call the invoked closure with the caller's runtime handle.
 How the invoked closure shares the caller's operation is specified by [action composition](../runtime/operations.md#action-composition).
 
-Every value in `params` MUST be representable in JSON: a unit, a boolean, an integer, a finite floating-point number, a string, or an array or map of such values.
+Every value in `params` MUST be a unit, a boolean, an integer, a finite floating-point number, a string, a `Version`, a `SemVer`, or an array or map of such values.
 Any other value MUST make `invoke` throw.
+A `Version` or `SemVer` MUST be taken as its [text](version.md#text-of-a-version).
+
+> [!NOTE]
+> A closure can pass the param map it received to `invoke` unchanged.
+
 Before running the closure, the runtime MUST validate `params` against the action's param schema exactly as it validates an operator's invocation of the action.
 If validation fails, `invoke` MUST throw without running the closure.
 
