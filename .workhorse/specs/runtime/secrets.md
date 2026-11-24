@@ -30,7 +30,7 @@ A secret parameter's value, a derived value, or a helper result the runtime with
 
 ### Sensitive value
 
-A non-empty value that is the stored value of a secret parameter, the value supplied for an action or shell param whose [`secret`](../language/action.md#param-schemas) is `true`, or a derived value.
+A non-empty value that is the stored value of a secret parameter, the value of an action or shell param whose [`secret`](../language/action.md#param-schemas) is `true`, whether supplied or defaulted, or a derived value.
 
 ## Secret key
 
@@ -130,6 +130,11 @@ The runtime MUST relay the output of a workload container or a shell session unc
 > [!NOTE]
 > A workload's output is the app's own, and the runtime cannot tell a value the app chose to print from one it leaked.
 > Masking it would also corrupt output that happens to contain a short sensitive value, such as a binary stream or a terminal session.
+
+### Matching
+
+The runtime MUST match a value against the sensitive values of the app it concerns: the stored values of its secret parameters, and the derived values the evaluation of its current definition returned.
+It MUST also match a value a lifecycle operation or a shell session records against that operation's or session's sensitive values: the values of its own secret params and of the secret params of every action it has invoked, and the derived values its action closures returned.
 
 A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as describing an app's [parameters](../interface/apps.md#parameters) and [redacted values](../interface/apps.md#redacted-values), and the [generation history](../interface/apps.md#generation-history) define.
 
