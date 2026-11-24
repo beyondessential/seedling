@@ -30,7 +30,7 @@ Add a `version` kind with `parse_version`, returning a `Version` with major, min
 
 Add a `version` field to `seedling.toml` and expose it to scripts as a constant holding a `Version`, so a definition can default its image tag to the release it was published for and refuse versions outside a compatible range. Builds on the version kind card. To settle: the constant's name and its value when the field is absent; whether build metadata (such as a commit tag for an unreleased build) carries the image tag, or the tag is declared separately.
 
-## Duration parameter kind
+## Duration parameter kind · J7
 
 Add a `duration` kind with `parse_duration`, for timeouts, intervals and retention parameters. To settle: the accepted syntax (single unit like `90s`, or compound like `1h30m`), the units, and what it returns (Seedling's existing duration options take a number of seconds). Probably use the friendly format from jiff.
 
