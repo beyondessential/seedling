@@ -11,6 +11,7 @@ const fetched: DefinitionProvenance = {
   digest: "sha256:4f1c9a02",
   content_hash: "sha256:aaaa",
   seedling_versions: ">=0.12",
+  metadata: {},
 };
 
 const pushed: DefinitionProvenance = {
@@ -22,6 +23,7 @@ const pushed: DefinitionProvenance = {
   },
   content_hash: "sha256:0d9e77b4",
   seedling_versions: null,
+  metadata: {},
 };
 
 const moved: FaultRecord = {
@@ -65,6 +67,32 @@ describe("DefinitionSection", () => {
     expect(screen.getByText("ghcr.io/org/central-def:v2.11.3")).toBeTruthy();
     expect(screen.getByText("sha256:4f1c9a02")).toBeTruthy();
     expect(screen.getByText(">=0.12")).toBeTruthy();
+  });
+
+  // spec: UI#app-definitions
+  it("shows each top-level metadata key, nested values as JSON", () => {
+    mount({
+      ...fetched,
+      metadata: {
+        version: "2.11.3",
+        build: 42,
+        stable: true,
+        images: { tag: "v2.11.3" },
+        arches: ["x86_64", "aarch64"],
+      },
+    });
+    expect(screen.getByText("Metadata")).toBeTruthy();
+    expect(screen.getByText("version: 2.11.3")).toBeTruthy();
+    expect(screen.getByText("build: 42")).toBeTruthy();
+    expect(screen.getByText("stable: true")).toBeTruthy();
+    expect(screen.getByText('images: {"tag":"v2.11.3"}')).toBeTruthy();
+    expect(screen.getByText('arches: ["x86_64","aarch64"]')).toBeTruthy();
+  });
+
+  // spec: UI#app-definitions
+  it("shows no metadata row for an empty table", () => {
+    mount(fetched);
+    expect(screen.queryByText("Metadata")).toBeNull();
   });
 
   // spec: UI#app-status

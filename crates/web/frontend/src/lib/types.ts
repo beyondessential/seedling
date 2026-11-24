@@ -325,6 +325,8 @@ export type DefinitionProvenance = (
 ) & {
   content_hash: string;
   seedling_versions: string | null;
+  /** The bundle's metadata table; null where this Seedling cannot read it. */
+  metadata: Record<string, unknown> | null;
 };
 
 export type GenerationKind = "register" | "script_update" | "param_change";

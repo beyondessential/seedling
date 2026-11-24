@@ -27,6 +27,14 @@ function actorLabel(actor: DefinitionActor | null): string {
   return actor.kind ? `${who} (${actor.kind})` : who;
 }
 
+/** A metadata value: a string as written, any other scalar as text, and an
+ *  array or table as JSON. */
+function metadataText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && value !== null) return JSON.stringify(value);
+  return String(value);
+}
+
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <TableRow>
@@ -123,6 +131,16 @@ export function DefinitionSection({
                 <Box component="span" sx={mono}>
                   {definition.seedling_versions}
                 </Box>
+              </Row>
+            )}
+            {/* spec: UI#app-definitions */}
+            {definition.metadata && Object.keys(definition.metadata).length > 0 && (
+              <Row label="Metadata">
+                {Object.entries(definition.metadata).map(([key, value]) => (
+                  <Box key={key} sx={mono}>
+                    {key}: {metadataText(value)}
+                  </Box>
+                ))}
               </Row>
             )}
             {/* spec: UI#app-status */}
