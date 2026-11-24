@@ -31,15 +31,26 @@ impl Version {
                  and {c:?} is not one"
             ));
         }
-        if !text.bytes().any(|b| b.is_ascii_digit()) {
-            return Err(format!("{text:?} is not a version: it holds no digit"));
+        if text.is_empty() {
+            return Err("a version cannot be empty".to_owned());
         }
-        let segments = split_segments(ordering_text(text))?;
+        let segments = split_segments(ordering_text(text), is_numbered(text))?;
         Ok(Self {
             text: text.to_owned(),
             segments,
         })
     }
+
+    fn is_numbered(&self) -> bool {
+        is_numbered(&self.text)
+    }
+}
+
+/// Whether `text` begins with a digit, or with a `v` or `V` directly before
+/// one.
+// spec: VER#numbered-version
+fn is_numbered(text: &str) -> bool {
+    ordering_text(text).starts_with(|c: char| c.is_ascii_digit())
 }
 
 /// The text a version is ordered and split by: the value without a leading
@@ -53,9 +64,11 @@ fn ordering_text(text: &str) -> &str {
 }
 
 /// The runs of ASCII letters and of ASCII digits that libversion splits a
-/// version into, every other character separating them.
+/// version into, every other character separating them. A digit run too
+/// large for an integer is refused in a numbered version and kept as a word
+/// in any other.
 // spec: VER#generic-versions
-fn split_segments(text: &str) -> Result<Vec<Segment>, String> {
+fn split_segments(text: &str, numbered: bool) -> Result<Vec<Segment>, String> {
     let mut segments = Vec::new();
     let mut rest = text;
     while let Some(start) = rest.find(|c: char| c.is_ascii_alphanumeric()) {
@@ -71,10 +84,14 @@ fn split_segments(text: &str) -> Result<Vec<Segment>, String> {
             })
             .unwrap_or(rest.len());
         let run = &rest[..end];
-        segments.push(if digits {
-            Segment::Number(run.parse().map_err(|_| {
-                format!("the number {run} in a version is too large for an integer")
-            })?)
+        segments.push(if !digits {
+            Segment::Word(run.to_owned())
+        } else if let Ok(n) = run.parse() {
+            Segment::Number(n)
+        } else if numbered {
+            return Err(format!(
+                "the number {run} in a version is too large for an integer"
+            ));
         } else {
             Segment::Word(run.to_owned())
         });
@@ -86,7 +103,14 @@ fn split_segments(text: &str) -> Result<Vec<Segment>, String> {
 impl Ord for Version {
     // spec: VER#generic-versions
     fn cmp(&self, other: &Self) -> Ordering {
-        libversion::version_compare2(ordering_text(&self.text), ordering_text(&other.text))
+        match (self.is_numbered(), other.is_numbered()) {
+            (true, true) => {
+                libversion::version_compare2(ordering_text(&self.text), ordering_text(&other.text))
+            }
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => self.text.as_bytes().cmp(other.text.as_bytes()),
+        }
     }
 }
 

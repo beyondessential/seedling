@@ -16,13 +16,13 @@ Both land in `crates/core/src/defs/`, next to the version types A7 added; the we
 
 ## Versions
 
-- [ ] `crates/core/src/defs/version.rs`: drop the digit requirement from `Version::parse`, and reject the empty string.
-- [ ] Add `Version::is_numbered` (text starts with a digit, or `v`/`V` then a digit), and make `Ord` branch on it as the tech notes describe.
-- [ ] `split_segments`: in a non-numbered version, keep a digit run too large for `INT` as `Segment::Word` holding the digits; still reject it in a numbered version.
-- [ ] Update the `// spec:` citations on the changed code (`VER#generic-versions`, `VER#terminology` for `is_numbered` where it names the term).
-- [ ] `crates/core/src/tests/version.rs`: replace the "holds no digit" refusals with acceptance of `latest`, `main`, `v`, `sha256:…`; keep `""` refused.
-- [ ] Add ordering cases: numbered below `latest`; `latest` vs `main` by bytes; `Latest` vs `latest` unequal; `v2.0 == 2.0` still holds; a digest with a 20-digit run parses and its `segments()` gives that run as a string; `1.99999999999999999999` is refused.
-- [ ] `crates/core/src/runtime/action_params.rs` (`a_version_param_is_checked_by_its_kind`): replace `latest` as the `version` refusal with a value that is still refused (one containing a space).
+- [x] `crates/core/src/defs/version.rs`: drop the digit requirement from `Version::parse`, and reject the empty string.
+- [x] Add `Version::is_numbered` (text starts with a digit, or `v`/`V` then a digit), and make `Ord` branch on it as the tech notes describe.
+- [x] `split_segments`: in a non-numbered version, keep a digit run too large for `INT` as `Segment::Word` holding the digits; still reject it in a numbered version.
+- [x] Update the `// spec:` citations on the changed code (`VER#generic-versions`, `VER#terminology` for `is_numbered` where it names the term).
+- [x] `crates/core/src/tests/version.rs`: replace the "holds no digit" refusals with acceptance of `latest`, `main`, `v`, `sha256:…`; keep `""` refused.
+- [x] Add ordering cases: numbered below `latest`; `latest` vs `main` by bytes; `Latest` vs `latest` unequal; `v2.0 == 2.0` still holds; a digest with a 20-digit run parses and its `segments()` gives that run as a string; `1.99999999999999999999` is refused.
+- [x] `crates/core/src/runtime/action_params.rs` (`a_version_param_is_checked_by_its_kind`): replace `latest` as the `version` refusal with a value that is still refused (one containing a space).
 
 ## Purl parser
 

@@ -1040,8 +1040,8 @@ fn a_version_its_kind_refuses_is_not_stored() {
     for (param, value, reason) in [
         (
             "base",
-            "latest",
-            "base: \"latest\" is not a version: it holds no digit",
+            "16.4 bookworm",
+            "base: a version holds only printable ASCII characters other than space",
         ),
         (
             "release",

@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn a_version_param_is_checked_by_its_kind() {
         for (kind, refused, accepted) in [
-            (ParamKind::Version, "latest", "16.4"),
+            (ParamKind::Version, "16.4 bookworm", "16.4"),
             (ParamKind::VersionSemver, "2.71", "v2.71.3"),
         ] {
             let mut params = serde_json::Map::new();

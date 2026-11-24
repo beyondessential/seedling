@@ -408,13 +408,14 @@ app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 
 There are two version kinds. `version` takes a version of any scheme: a Debian package version, a partial image tag such as `16.4`, or a release tag. `version-semver` takes only a full [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version, so `2.71` is refused, and adds its parts and requirement matching. Both accept a leading `v` or `V`.
 
-`std::parse_version` returns a `Version`. A value must be printable ASCII with no spaces and hold at least one digit, so floating tags such as `latest` are refused. Versions compare with `<`, `<=`, `>`, `>=`, `==` and `!=` using [libversion](https://github.com/repology/libversion/blob/master/doc/ALGORITHM.md)'s ordering, which ignores the separators and leading zeros, puts `alpha`, `beta`, `rc` and `pre` before the release and `patch`, `post` and `pl` after it, and ignores a leading `v` before a digit. `segments()` splits the version into its runs of digits, as integers, and of letters, as strings:
+`std::parse_version` returns a `Version`. A value must be non-empty printable ASCII with no spaces, so floating tags such as `latest` and digests are accepted. Versions compare with `<`, `<=`, `>`, `>=`, `==` and `!=`. A version starting with a digit, or with a `v` or `V` before a digit, is _numbered_, and two numbered versions compare using [libversion](https://github.com/repology/libversion/blob/master/doc/ALGORITHM.md)'s ordering, which ignores the separators and leading zeros, puts `alpha`, `beta`, `rc` and `pre` before the release and `patch`, `post` and `pl` after it, and ignores a leading `v` before a digit. Every other version, such as `latest`, `main` or `sha256:244fd47e07d10`, sorts above all numbered ones, and two of them compare by their text, byte by byte. `segments()` splits the version into its runs of digits, as integers, and of letters, as strings; in a version that is not numbered, a run of digits too large for an integer is a string:
 
 ```rhai
 let pg = std::parse_version("16.4-bookworm");
 pg.segments()                                         // [16, 4, "bookworm"]
 std::parse_version("1.0rc1") < std::parse_version("1.0")    // true
 std::parse_version("v2.0") == std::parse_version("2.0.0")   // true
+std::parse_version("99.0") < std::parse_version("latest")   // true
 ```
 
 `std::parse_version_semver` returns a `SemVer`, with `major()`, `minor()` and `patch()` as integers and `pre_release()` and `build()` as strings, empty when absent. SemVers compare by SemVer precedence, which ignores build metadata. `matches(requirement)` takes the same requirement syntax as the `seedling` field of the [bundle metadata](#definition-bundles), and a pre-release only matches a requirement that names a pre-release of the same version:
