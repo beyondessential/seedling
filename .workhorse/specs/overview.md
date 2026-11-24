@@ -17,8 +17,11 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) and [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) | the requirement keywords above |
 | [Rhai](https://rhai.rs/book/) | the scripting language BSL is written in, under [BSL](language/overview.md) |
 | [TOML 1.0.0](https://toml.io/en/v1.0.0) | the bundle metadata file and web interface configuration, under [BND](language/bundle.md), [WEB](web/serving.md) |
-| [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) | Seedling versions, under [BND](language/bundle.md), [STS](interface/status.md) |
+| [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) | Seedling versions and `version-semver` parameters, under [BND](language/bundle.md), [STS](interface/status.md), [VER](language/version.md) |
 | [Cargo version requirement syntax](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#version-requirement-syntax) | version requirements, under [BND](language/bundle.md) |
+| [Repology version comparison algorithm](https://github.com/repology/libversion/blob/master/doc/ALGORITHM.md) | the order of `version` parameters, under [VER](language/version.md) |
+| [ECMA-427, 2nd edition](https://ecma-tc54.github.io/ECMA-427/) | Package URLs, under [PURL](language/purl.md) |
+| [purl specification](https://github.com/package-url/purl-spec/tree/v1.1.1/docs/specification), v1.1.1 | the lenient Package URL grammar and how to parse a Package URL, under [PURL](language/purl.md) |
 | [gitignore](https://git-scm.com/docs/gitignore) | patterns in `.seedignore` files, under [CLI](interface/client.md) |
 | [POSIX `crontab`](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/crontab.html), Issue 8 | schedule expressions, under [ACN](language/action.md) |
 | [IANA Time Zone Database](https://www.iana.org/time-zones) | time zone names, under [ACN](language/action.md), [CONST](language/constants.md) |
