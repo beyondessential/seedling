@@ -18,20 +18,24 @@ Applies to the `purl` [param kind](action.md#param-kinds), its [parser](action.m
 ## Accepted values
 
 `std::parse_purl(text)` MUST return an object map for a value it accepts.
-It MUST accept a value that matches the lenient PURL grammar, with its scheme in any case, and that the parsing procedure splits into components without error.
+It MUST accept a value that matches the lenient PURL grammar and that the parsing procedure splits into components without error, except where the rules below reject it, and MUST reject every other value.
 It MUST accept a purl of any type, whether or not the purl specification defines that type.
 
 > [!NOTE]
 > Operators paste purls from SBOMs and other tools, which often write them in a form other than the canonical one, such as `pkg://npm/foo` or a type in upper case.
 > The parameter's value stays as the operator entered it, so a workload receiving it gets the operator's text.
 
-`std::parse_purl` MUST also reject a value:
+`std::parse_purl` MUST reject a value:
 
 - whose name is empty once percent-decoded;
+- in which the text before its version, qualifiers and subpath ends in `/`;
 - in which any percent-decoded component is not valid UTF-8;
 - in which any percent-decoded component holds a character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp);
 - holding a namespace or subpath segment that contains a `/` once percent-decoded;
-- holding two qualifiers with non-empty values whose keys are equal once in lower case;
+- holding a qualifier without a `=`, or an empty qualifier such as a trailing `?` or a doubled `&` leaves;
+- holding two qualifiers whose keys are equal once in lower case;
+- holding a `checksum` qualifier with a non-empty value that, once percent-decoded, is not a list of entries separated by `,`, each a non-empty algorithm name, a `:` and a non-empty, even-length run of hexadecimal digits;
+- holding a `checksum` qualifier that names the same algorithm twice, ignoring case;
 - holding a non-empty version that, once percent-decoded, [`std::parse_version`](version.md#generic-versions) rejects.
 
 > [!NOTE]
@@ -54,7 +58,7 @@ It MUST accept a purl of any type, whether or not the purl specification defines
 
 `std::parse_purl` MUST return every component as the parsing procedure gives it, without the procedure's type-specific normalisation steps.
 
-The value of a `checksum` qualifier MUST be an array of the non-empty strings its percent-decoded value holds between `,` separators, in order.
+The value of a `checksum` qualifier MUST be an array of its entries, each with its algorithm name and digits in lower case, in the byte order of their algorithm names.
 Every other qualifier's value MUST be a string.
 
 > [!NOTE]

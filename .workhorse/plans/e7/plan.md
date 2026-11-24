@@ -5,9 +5,12 @@ Both land in `crates/core/src/defs/`, next to the version types A7 added; the we
 
 ## Tech notes
 
-- **Own parser, not the `packageurl` crate.** `packageurl` 0.7.1 applies type-specific rules in its constructor (lower-casing `github` and `pypi` names, rewriting `_` to `-` for `pypi`), which PURL#components forbids.
-- **Shape of the parser.** The spec fixes component boundaries by the purl-spec v1.1.1 parsing procedure, which splits right to left (`#`, then `?`, then `@`, then the last `/`). The parser follows that procedure step for step with string splits, then checks the lenient grammar's character classes for the type and qualifier keys.
-- **Percent-decoding** uses the `percent-encoding` crate (already in the lock at 2.3.2, added as a direct dependency of `seedling-core`), decoding each component to bytes and then to UTF-8 so invalid UTF-8 is a rejection.
+- **Parsing builds on the `purl` crate** (0.1.6, phylum-dev, default features off, leaving `hex`, `percent-encoding` and `thiserror` as dependencies), through `GenericPurl<String>`, which parses any type without type-specific rules. The PURL spec's rejections were fitted to it: lower-case scheme only, bare and empty qualifiers rejected, a trailing `/` before the version rejected, and `checksum` validated and normalised.
+- **Checks on top of the crate**, because it is more lenient than the spec in places:
+  - before parsing, a scan of the raw qualifier string for any repeated key (lower-cased), since the crate rejects `arch=x64&arch=` but accepts `arch=&arch=x64`;
+  - after parsing, the type against `ALPHA *(ALPHA / DIGIT / "." / "-")` (the crate also allows `+`), each qualifier key against `ALPHA *(ALPHA / DIGIT / "." / "-" / "_")` (the crate allows a leading digit), and each `checksum` entry for a non-empty algorithm and digits (the crate accepts `:ab` and `sha1:`);
+  - after parsing, every decoded component for Cc, Zl and Zp characters, and the version through `Version::parse`.
+- **Ruled out: `packageurl` 0.7.1**, which applies type-specific rules in its constructor (lower-casing `github` and `pypi` names, rewriting `_` to `-` for `pypi`) and keeps the last of two repeated qualifiers.
 - **Result type.** `Purl` is a plain Rust struct in `defs/purl.rs`, converted to a Rhai object map in `stdlib/kinds.rs`, so the map rule in STD#results holds and absent keys are simply not inserted. `version` goes in as a `Dynamic::from(Version)`.
 - **Version ordering.** `Version::cmp` branches on whether each side is a numbered version: both numbered uses libversion as now; one numbered sorts below; neither compares `text` bytewise. Equality follows from `cmp`, as today.
 
@@ -23,16 +26,14 @@ Both land in `crates/core/src/defs/`, next to the version types A7 added; the we
 
 ## Purl parser
 
-- [ ] `cargo add -p seedling-core percent-encoding@2.3.2`.
-- [ ] `crates/core/src/defs/purl.rs`: `Purl` struct (`ty`, `namespace: Option<String>`, `name`, `version: Option<Version>`, `qualifiers: Vec<(String, QualifierValue)>` in input order, `subpath: Option<String>`), with `QualifierValue::{Text(String), Checksums(Vec<String>)}`.
-- [ ] `Purl::parse` following the parsing procedure:
-  - [ ] split off the subpath on the last `#`; decode each segment, drop empty, `.` and `..`, reject a decoded `/`;
-  - [ ] split off the qualifiers on the last `?`; split on `&`, split each pair on the first `=`, check the key against `ALPHA *(ALPHA / DIGIT / "." / "-" / "_")`, lower-case it, decode the value, drop empty values, reject a repeated key among the kept ones, split a `checksum` value on `,` after decoding and drop empty entries;
-  - [ ] split the scheme on the first `:`, require it to equal `pkg` ignoring case, strip leading `/`;
-  - [ ] split the type on the first `/`, check it against `ALPHA *(ALPHA / DIGIT / "." / "-")`, lower-case it;
-  - [ ] split the version on the last `@`; when non-empty after decoding, parse it with `Version::parse` and carry its error;
-  - [ ] strip trailing `/`, split the name on the last `/`, decode it, reject it when empty;
-  - [ ] split the rest on `/`, drop empty segments, decode each, reject a decoded `/`, join with `/`, leave it out when nothing remains.
+- [ ] `cargo add -p seedling-core purl@0.1.6 --no-default-features`.
+- [ ] `crates/core/src/defs/purl.rs`: `Purl` struct (`ty`, `namespace: Option<String>`, `name`, `version: Option<Version>`, `qualifiers: Vec<(String, QualifierValue)>`, `subpath: Option<String>`), with `QualifierValue::{Text(String), Checksums(Vec<String>)}`.
+- [ ] `Purl::parse`:
+  - [ ] take the qualifier string (split off `#` from the right, then `?` from the right) and reject a key repeated once lower-cased;
+  - [ ] parse with `purl::GenericPurl::<String>::from_str`, mapping its errors to messages naming the problem;
+  - [ ] check the type and qualifier keys against the lenient grammar's character classes;
+  - [ ] split the normalised `checksum` value on `,`, and reject an entry with an empty algorithm or empty digits;
+  - [ ] parse a present version with `Version::parse`, carrying its error.
 - [ ] Reject any decoded component holding a Cc, Zl or Zp character, reusing the category check `param_def.rs` already has for single-line kinds (lift it into a shared function rather than copying it).
 - [ ] Cite `PURL#accepted-values` and `PURL#components` at the statements implementing each rule.
 - [ ] `crates/core/src/defs.rs`: declare `pub mod purl;`.
@@ -46,13 +47,13 @@ Both land in `crates/core/src/defs/`, next to the version types A7 added; the we
 ## Tests
 
 - [ ] `crates/core/src/tests/purl.rs` (registered in `tests.rs`): BSL-level cases through `std::parse_purl`:
-  - [ ] the full map for `pkg:npm/%40scope/foo@1.2.0?arch=x64&checksum=sha1:a,,sha256:b#lib/util`;
+  - [ ] the full map for `pkg:npm/%40scope/foo@1.2.0?arch=x64&checksum=SHA256:BB,sha1:aa#lib/util`, with `checksum` as `["sha1:aa", "sha256:bb"]`;
   - [ ] absent keys for `pkg:cargo/serde`, and for `pkg:npm/foo@` (no `version`);
-  - [ ] lenient input accepted as the procedure reads it: `PKG://NPM/foo`, `pkg:npm//ns//foo/`, `?arch=&arch=x64`, `?FOO&bar=1`, a subpath with `.`, `..` and empty segments;
+  - [ ] lenient input accepted as the procedure reads it: `pkg://NPM/foo`, `pkg:npm//ns//foo`, `?arch=&bar=1` (no `arch`), `?FOO=1` (key `foo`), a subpath with `.`, `..`, `%2E%2E` and empty segments;
   - [ ] a type the purl spec does not define, and type-specific normalisation not applied (`pkg:pypi/Foo_Bar` keeps its name);
-  - [ ] refusals, each naming its reason: no scheme, wrong scheme, bad type character, empty name (`pkg:npm/@1.0`), `%2F` in a namespace and in a subpath segment, invalid UTF-8 (`%FF`), `%0A` in a name, repeated key (`arch=x64&ARCH=arm64`), a version `parse_version` refuses (`%20` in it);
+  - [ ] refusals, each naming its reason: no scheme, `PKG:` scheme, wrong scheme, `+` in the type, a qualifier key starting with a digit, empty name (`pkg:npm/@1.0`), a trailing `/` (`pkg:npm/foo/`, `pkg:npm/foo/@1.0`), `%2F` in a namespace and in a subpath segment, invalid UTF-8 (`%FF`), `%0A` in a name and in a qualifier value, `?FOO`, a trailing `?`, `&&`, repeated keys (`arch=x64&ARCH=arm64`, `arch=&arch=x64`, `arch=x64&arch=`), checksum entries that are odd-length, non-hex, missing the algorithm or digits, or naming an algorithm twice, a version `parse_version` refuses (`%20` in it);
   - [ ] `version` is a `Version` that compares with `std::parse_version` results.
-- [ ] Port the parse cases of purl-spec v1.1.1's `tests/spec/specification-test.json` into that file as Rust cases, adjusting any whose expected output relies on type-specific normalisation.
+- [ ] Port the parse cases of purl-spec v1.1.1's `tests/spec/specification-test.json` into that file as Rust cases, adjusting any whose expected output relies on type-specific normalisation or on input the PURL spec rejects beyond the procedure.
 - [ ] `crates/core/src/tests/stdlib.rs`: add `parse_purl` to the single-line control-character test and to the helper list.
 - [ ] `crates/core/src/tests/param.rs`: `"purl"` in the kind round-trip table and the action-schema case.
 - [ ] `crates/core/src/oi/handler/params/tests.rs`: a stored `purl` parameter refused with the parser's reason and accepted unchanged.
