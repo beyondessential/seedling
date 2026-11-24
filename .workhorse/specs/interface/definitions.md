@@ -141,10 +141,13 @@ The server MUST store each definition's provenance with it, and MUST report it a
 | `"pushed"` | `reported_origin` | object or null | the `origin` the client reported, or `null` where it reported none |
 | either | `content_hash` | string | the bundle's [content hash](#content-hash-computation) |
 | either | `seedling_versions` | string or null | the bundle's declared Seedling version requirement, or `null` where it declares none |
-| either | `metadata` | object | the bundle's [metadata table](../language/bundle.md#metadata-table), converted to JSON |
+| either | `metadata` | object or null | the bundle's [metadata table](../language/bundle.md#metadata-table), converted to JSON, or `null` where the bundle's metadata breaks the [bundle rules](#bundle-rules) |
 
 The `metadata` member MUST hold each value of the metadata table as the JSON value of the BSL value [`app.metadata()`](../language/bundle.md#metadata-table) converts it to, with a map as an object and an array as an array.
 A bundle whose metadata has no `metadata` field MUST report an empty object.
+
+> [!NOTE]
+> Only a [template](templates.md#template-definitions) stored while the running Seedling did not support it can hold metadata that breaks the bundle rules, since every other stored definition was held to them.
 
 > [!NOTE]
 > A publisher's convention, such as a `version` key, reaches operators this way without the server interpreting it.

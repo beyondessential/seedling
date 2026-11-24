@@ -4,6 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bytes::Bytes;
 use seedling_protocol::error::{ErrorCode, OiError};
 use semver::Version;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::version::VersionRequirement;
@@ -196,13 +197,28 @@ impl Script {
 ///
 /// The requirement is read on its own before the rest of the metadata, so a
 /// bundle written for a newer Seedling can still be held and reported as
-/// unsupported; the strict reading of everything else lives in `script`.
+/// unsupported; the strict reading of everything else lives in `contents`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
     files: BTreeMap<String, Bytes>,
     hash: String,
     seedling: Option<VersionRequirement>,
-    script: Result<Script, BundleError>,
+    contents: Result<Contents, BundleError>,
+}
+
+/// What the strict reading of a bundle's metadata yields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Contents {
+    script: Script,
+    metadata: Map<String, Value>,
+}
+
+/// What a stored bundle's metadata file declares, read without rebuilding
+/// the bundle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declared {
+    pub seedling_versions: Option<VersionRequirement>,
+    pub metadata: Map<String, Value>,
 }
 
 impl Default for Bundle {
@@ -268,13 +284,13 @@ impl Bundle {
             }
         }
         let seedling = read_requirement(out.get(METADATA_FILE).map(|b| b.as_ref()))?;
-        let script = read_script(&out);
+        let contents = read_contents(&out);
         let hash = content_hash(&out);
         Ok(Self {
             files: out,
             hash,
             seedling,
-            script,
+            contents,
         })
     }
 
@@ -429,30 +445,19 @@ impl Bundle {
         Self::from_stored(files)
     }
 
-    /// The Seedling version requirement a stored bundle declares, read
-    /// straight out of the canonical encoding.
+    /// The Seedling version requirement and metadata table a stored bundle
+    /// declares, read straight out of the canonical encoding.
     ///
-    /// A generation history page reports the requirement of every definition
-    /// it lists; rebuilding each bundle to read one field would hash
-    /// megabytes per row for a value that is one file long.
+    /// A generation history page reports both for every definition it lists;
+    /// rebuilding each bundle to read them would hash megabytes per row for
+    /// values that are one file long.
     // spec: DEFN#provenance-reporting
-    pub fn requirement_of_canonical(
-        data: &[u8],
-    ) -> Result<Option<VersionRequirement>, BundleError> {
-        let mut rest = data
-            .strip_prefix(CANONICAL_MAGIC)
-            .ok_or_else(|| invalid("stored bundle has an unknown encoding"))?;
-        while !rest.is_empty() {
-            let path = take_chunk(&mut rest)?;
-            let contents = take_chunk(&mut rest)?;
-            match path.cmp(METADATA_FILE.as_bytes()) {
-                std::cmp::Ordering::Less => {}
-                // Files are encoded in path order, so it is not here.
-                std::cmp::Ordering::Greater => break,
-                std::cmp::Ordering::Equal => return read_requirement(Some(contents)),
-            }
-        }
-        Ok(None)
+    pub fn declared_of_canonical(data: &[u8]) -> Result<Declared, BundleError> {
+        let file = metadata_file_of_canonical(data)?;
+        Ok(Declared {
+            seedling_versions: read_requirement(file)?,
+            metadata: read_metadata(file)?,
+        })
     }
 
     // spec: DEFN#content-hash-computation
@@ -493,7 +498,20 @@ impl Bundle {
     /// The concatenated script, or why the metadata or script files break
     /// the bundle rules.
     pub fn script(&self) -> Result<&Script, BundleError> {
-        self.script.as_ref().map_err(Clone::clone)
+        self.contents
+            .as_ref()
+            .map(|c| &c.script)
+            .map_err(Clone::clone)
+    }
+
+    /// The metadata table, or why the metadata or script files break the
+    /// bundle rules.
+    // spec: BND#metadata-table
+    pub fn metadata(&self) -> Result<&Map<String, Value>, BundleError> {
+        self.contents
+            .as_ref()
+            .map(|c| &c.metadata)
+            .map_err(Clone::clone)
     }
 
     /// Everything a definition must pass before it is evaluated for an app:
@@ -548,10 +566,44 @@ fn read_requirement(file: Option<&[u8]>) -> Result<Option<VersionRequirement>, B
     }
 }
 
+/// The metadata file's contents, read out of a canonical encoding.
+fn metadata_file_of_canonical(data: &[u8]) -> Result<Option<&[u8]>, BundleError> {
+    let mut rest = data
+        .strip_prefix(CANONICAL_MAGIC)
+        .ok_or_else(|| invalid("stored bundle has an unknown encoding"))?;
+    while !rest.is_empty() {
+        let path = take_chunk(&mut rest)?;
+        let contents = take_chunk(&mut rest)?;
+        match path.cmp(METADATA_FILE.as_bytes()) {
+            std::cmp::Ordering::Less => {}
+            // Files are encoded in path order, so it is not here.
+            std::cmp::Ordering::Greater => break,
+            std::cmp::Ordering::Equal => return Ok(Some(contents)),
+        }
+    }
+    Ok(None)
+}
+
+/// The metadata table alone, from a metadata file the bundle already holds.
+fn read_metadata(file: Option<&[u8]>) -> Result<Map<String, Value>, BundleError> {
+    let Some(bytes) = file else {
+        return Ok(Map::new());
+    };
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| invalid(format!("{METADATA_FILE} is not valid UTF-8")))?;
+    let mut table: toml::Table = toml::from_str(text)
+        .map_err(|e| invalid(format!("{METADATA_FILE} cannot be parsed: {e}")))?;
+    match table.remove("metadata") {
+        None => Ok(Map::new()),
+        Some(value) => metadata_table(value),
+    }
+}
+
 // spec: BND#metadata-file
 // spec: DEFN#bundle-rules
-fn read_script(files: &BTreeMap<String, Bytes>) -> Result<Script, BundleError> {
+fn read_contents(files: &BTreeMap<String, Bytes>) -> Result<Contents, BundleError> {
     let mut names = vec![DEFAULT_SCRIPT.to_owned()];
+    let mut metadata = Map::new();
     if let Some(bytes) = files.get(METADATA_FILE) {
         // Already known to be UTF-8 and TOML by `read_requirement`.
         let text = std::str::from_utf8(bytes).unwrap_or_default();
@@ -561,6 +613,7 @@ fn read_script(files: &BTreeMap<String, Bytes>) -> Result<Script, BundleError> {
                 // Read, and checked, by `read_requirement`.
                 "seedling" => {}
                 "script" => names = script_list(value)?,
+                "metadata" => metadata = metadata_table(value)?,
                 other => {
                     return Err(invalid(format!(
                         "{METADATA_FILE} field `{other}` is not defined"
@@ -599,7 +652,59 @@ fn read_script(files: &BTreeMap<String, Bytes>) -> Result<Script, BundleError> {
             .map_err(|_| invalid(format!("script file {path:?} is not valid UTF-8")))?;
         texts.push((path.as_str(), text));
     }
-    Ok(Script::concatenate(texts))
+    Ok(Contents {
+        script: Script::concatenate(texts),
+        metadata,
+    })
+}
+
+// spec: BND#metadata-table
+fn metadata_table(value: toml::Value) -> Result<Map<String, Value>, BundleError> {
+    match value {
+        toml::Value::Table(table) => metadata_map(table, "metadata"),
+        other => Err(invalid(format!(
+            "{METADATA_FILE} field `metadata` must be a table, got {}",
+            other.type_str()
+        ))),
+    }
+}
+
+fn metadata_map(table: toml::Table, at: &str) -> Result<Map<String, Value>, BundleError> {
+    table
+        .into_iter()
+        .map(|(key, item)| {
+            let converted = metadata_value(item, &format!("{at}.{key}"))?;
+            Ok((key, converted))
+        })
+        .collect()
+}
+
+/// One value of the metadata table, as the JSON value `app.metadata()` and
+/// provenance both start from. `at` names where it sits, for the error.
+// spec: BND#metadata-table
+fn metadata_value(value: toml::Value, at: &str) -> Result<Value, BundleError> {
+    Ok(match value {
+        toml::Value::String(s) => Value::String(s),
+        toml::Value::Integer(i) => Value::from(i),
+        // spec: DEFN#bundle-rules
+        toml::Value::Float(f) => serde_json::Number::from_f64(f)
+            .map(Value::Number)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "{METADATA_FILE} field `{at}` is {f}, which is not a finite number"
+                ))
+            })?,
+        toml::Value::Boolean(b) => Value::Bool(b),
+        toml::Value::Datetime(d) => Value::String(d.to_string()),
+        toml::Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .enumerate()
+                .map(|(i, item)| metadata_value(item, &format!("{at}[{i}]")))
+                .collect::<Result<_, _>>()?,
+        ),
+        toml::Value::Table(table) => Value::Object(metadata_map(table, at)?),
+    })
 }
 
 fn script_list(value: toml::Value) -> Result<Vec<String>, BundleError> {

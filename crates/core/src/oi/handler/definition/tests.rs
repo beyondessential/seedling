@@ -71,6 +71,39 @@ fn a_fetched_definition_registers_with_its_reference_and_digest() {
     assert_eq!(def["reference"], format!("{REPO}:1"));
     assert_eq!(def["digest"], digest);
     assert!(def["content_hash"].as_str().unwrap().starts_with("sha256:"));
+    assert_eq!(def["metadata"], json!({}));
+}
+
+// spec: DEFN#provenance-reporting
+// spec: APPS#generation-history
+#[test]
+fn the_metadata_table_is_reported_alike_by_the_app_and_its_history() {
+    let oi = TestOi::new();
+    publish(
+        &oi,
+        "2.71.4",
+        &[
+            ("app.seed.rhai", MINIMAL_SCRIPT.as_bytes()),
+            (
+                "seedling.toml",
+                b"[metadata]\nversion = \"2.71.4\"\nreleased = 2026-11-24\nimages = { tag = \"2.71.4\" }",
+            ),
+        ],
+    );
+    oi.call(
+        "/apps/create",
+        json!({ "app": "web", "reference": format!("{REPO}:2.71.4") }),
+    )
+    .unwrap();
+    let def = &show(&oi, "web")["definition"];
+    assert_eq!(
+        def["metadata"],
+        json!({ "version": "2.71.4", "released": "2026-11-24", "images": { "tag": "2.71.4" } })
+    );
+    let history = oi
+        .call("/apps/generations", json!({ "app": "web" }))
+        .unwrap();
+    assert_eq!(history[0]["definition"], *def);
 }
 
 // spec: DEFN#fetching
@@ -196,6 +229,11 @@ fn a_pushed_bundle_breaking_the_rules_is_refused() {
     let code = err_code(oi.call(
         "/apps/create",
         json!({ "app": "web", "bundle": wire(&[("seedling.toml", b"surprise = 1"), ("app.seed.rhai", b"")]) }),
+    ));
+    assert_eq!(code, "bundle_invalid");
+    let code = err_code(oi.call(
+        "/apps/create",
+        json!({ "app": "web", "bundle": wire(&[("seedling.toml", b"[metadata]\nratio = nan"), ("app.seed.rhai", b"")]) }),
     ));
     assert_eq!(code, "bundle_invalid");
 }
@@ -892,6 +930,10 @@ fn an_unsupported_template_is_stored_but_not_instantiated() {
     .unwrap();
     let list = oi.call("/templates/list", json!({})).unwrap();
     assert_eq!(list[0]["supported"], false);
+    let shown = oi
+        .call("/templates/show", json!({ "name": "future" }))
+        .unwrap();
+    assert_eq!(shown["provenance"]["metadata"], Value::Null);
     let code = err_code(oi.call(
         "/templates/instantiate",
         json!({ "template": "future", "app": "web" }),

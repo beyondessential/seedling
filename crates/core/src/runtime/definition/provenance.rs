@@ -1,6 +1,6 @@
 use seedling_protocol::actor::Actor;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::bundle::Bundle;
 
@@ -64,21 +64,30 @@ impl Source {
         self.to_json_with(
             bundle.hash(),
             bundle.seedling_versions().map(|r| r.as_str()),
+            // Only a template stored while unsupported can break the
+            // metadata rules, and its table is then unknown, not empty.
+            bundle.metadata().ok(),
         )
     }
 
-    /// The same, for a caller holding the two bundle-derived fields without
-    /// the bundle: a history page already has the content hash in the row it
-    /// is listing, and reads the requirement on its own rather than
+    /// The same, for a caller holding the bundle-derived fields without the
+    /// bundle: a history page already has the content hash in the row it is
+    /// listing, and reads the metadata file on its own rather than
     /// materialising every definition it names.
     // spec: DEFN#provenance-reporting
-    pub fn to_json_with(&self, content_hash: &str, seedling_versions: Option<&str>) -> Value {
+    pub fn to_json_with(
+        &self,
+        content_hash: &str,
+        seedling_versions: Option<&str>,
+        metadata: Option<&Map<String, Value>>,
+    ) -> Value {
         let mut obj = match serde_json::to_value(self).expect("provenance serialises") {
             Value::Object(map) => map,
             _ => unreachable!("an internally tagged enum serialises as an object"),
         };
         obj.insert("content_hash".into(), json!(content_hash));
         obj.insert("seedling_versions".into(), json!(seedling_versions));
+        obj.insert("metadata".into(), json!(metadata));
         Value::Object(obj)
     }
 }
@@ -94,7 +103,7 @@ mod tests {
             ("app.seed.rhai".to_owned(), b"app;".to_vec()),
             (
                 "seedling.toml".to_owned(),
-                b"seedling = \">=0.12\"".to_vec(),
+                b"seedling = \">=0.12\"\n[metadata]\nversion = \"2.71.4\"".to_vec(),
             ),
         ])
         .unwrap();
@@ -116,6 +125,7 @@ mod tests {
         assert_eq!(v["reported_origin"]["revision"], "abc123");
         assert_eq!(v["content_hash"], bundle.hash());
         assert_eq!(v["seedling_versions"], ">=0.12");
+        assert_eq!(v["metadata"], json!({ "version": "2.71.4" }));
         assert_eq!(Source::from_db(&source.to_db()).unwrap(), source);
     }
 
@@ -132,6 +142,22 @@ mod tests {
         assert_eq!(v["reference"], "ghcr.io/o/app-def:1.2");
         assert_eq!(v["digest"], "sha256:abc");
         assert_eq!(v["seedling_versions"], Value::Null);
+        assert_eq!(v["metadata"], json!({}));
+    }
+
+    // spec: DEFN#provenance-reporting
+    #[test]
+    fn metadata_breaking_the_rules_is_reported_as_unknown() {
+        let bundle = Bundle::from_files([
+            ("app.seed.rhai".to_owned(), b"app;".to_vec()),
+            (
+                "seedling.toml".to_owned(),
+                b"seedling = \">=99\"\nmetadata = 1".to_vec(),
+            ),
+        ])
+        .expect("an unsupported bundle is still holdable");
+        let v = Source::unknown_push().to_json(&bundle);
+        assert_eq!(v["metadata"], Value::Null);
     }
 
     // spec: RCK#resolution
