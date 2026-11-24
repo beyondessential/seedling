@@ -327,8 +327,8 @@ fn an_evaluation_records_what_it_derived() {
     let (pw, raw) = description.split_once(' ').unwrap();
     assert_eq!(
         def.derived.len(),
-        3,
-        "the string, and the Blob's UTF-8 and hex forms"
+        7,
+        "the string, and the Blob's bytes, UTF-8 reading, string form, hex, base64 and base64url"
     );
     assert!(def.derived.found_in(&format!("password={pw};")));
     assert!(
@@ -508,4 +508,314 @@ fn an_invoked_action_derives_from_its_callers_operation_seed() {
             .to_owned()
     };
     assert_eq!(uuid(&invoked), uuid(&direct));
+}
+
+fn evaluate_bundle(
+    bundle: crate::runtime::definition::Bundle,
+    params: &[(&str, &str)],
+    limits: &crate::ScriptLimits,
+) -> (
+    crate::defs::app::App,
+    Option<crate::runtime::apps::ScriptError>,
+) {
+    crate::runtime::apps::evaluate(
+        &seedling_protocol::names::AppName::new_unchecked("demo"),
+        &std::sync::Arc::new(bundle),
+        &params
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect(),
+        &seed(1),
+        limits,
+    )
+}
+
+/// The description `script` gives, and whether the evaluation withholds it.
+fn withheld(script: &str, params: &[(&str, &str)]) -> (String, bool) {
+    let (app, err) = evaluate_bundle(
+        crate::runtime::definition::Bundle::from_stored_script(script),
+        params,
+        &crate::ScriptLimits::default(),
+    );
+    assert!(err.is_none(), "script error: {err:?}");
+    let def = app.def.load();
+    let description = def.description.clone().expect("described");
+    let found = def.derived.found_in(&description);
+    (description, found)
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_result_computed_from_a_derived_value_is_withheld() {
+    let (header, found) = withheld(
+        r#"
+            let pw = std::random_string("pw", 12, "abcdef");
+            app.description("Basic " + std::encode_base64("admin:" + pw));
+        "#,
+        &[],
+    );
+    assert!(found, "{header}");
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_result_computed_from_a_secret_parameter_is_withheld_however_late_it_is_declared_secret() {
+    let (_, found) = withheld(
+        r#"
+            let token = app.param("token");
+            let hex = std::encode_hex(token.value());
+            token.secret(true);
+            app.description(`token=${hex}`);
+        "#,
+        &[("token", "s3cret")],
+    );
+    assert!(found);
+    let (_, found) = withheld(
+        r#"app.description(std::encode_hex(app.param("token").value()));"#,
+        &[("token", "s3cret")],
+    );
+    assert!(!found, "a parameter that is not secret is shown");
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_chain_of_helpers_stays_withheld() {
+    let (_, found) = withheld(
+        r#"
+            let token = app.param("token").secret(true);
+            let digest = std::digest_sha256(std::encode_hex(token.value()));
+            app.description(std::encode_base64url(std::hmac_sha256("k", digest)));
+        "#,
+        &[("token", "s3cret")],
+    );
+    assert!(found);
+}
+
+// spec: SEC#redaction
+#[test]
+fn an_empty_secret_value_withholds_nothing() {
+    let (_, found) = withheld(
+        r#"
+            let token = app.param("token").secret(true);
+            app.description(std::encode_hex("abc" + token.value()));
+        "#,
+        &[("token", "")],
+    );
+    assert!(!found);
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_bundle_file_holds_no_withheld_value() {
+    let bundle = crate::runtime::definition::Bundle::from_files([
+        (
+            "app.seed.rhai".to_owned(),
+            br#"
+                let token = app.param("token").secret(true);
+                token.value();
+                app.description(std::encode_hex(app.file("conf.txt")));
+            "#
+            .to_vec(),
+        ),
+        ("conf.txt".to_owned(), b"s3cret".to_vec()),
+    ])
+    .unwrap();
+    let (app, err) = evaluate_bundle(bundle, &[("token", "s3cret")], &Default::default());
+    assert!(err.is_none(), "{err:?}");
+    let def = app.def.load();
+    assert!(!def.derived.found_in(def.description.as_deref().unwrap()));
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_derived_blob_is_withheld_in_every_encoding_bsl_offers() {
+    let (app, err) = evaluate_bundle(
+        crate::runtime::definition::Bundle::from_stored_script(
+            r#"app.description(std::random_bytes("raw", 9).to_string());"#,
+        ),
+        &[],
+        &Default::default(),
+    );
+    assert!(err.is_none(), "{err:?}");
+    let def = app.def.load();
+    let rendered = def.description.clone().unwrap();
+    let bytes: Vec<u8> = rendered
+        .trim_matches(|c| c == '[' || c == ']')
+        .split(' ')
+        .flat_map(|group| hex::decode(group).unwrap())
+        .collect();
+    use base64::Engine as _;
+    for form in [
+        hex::encode(&bytes),
+        base64::engine::general_purpose::STANDARD.encode(&bytes),
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes),
+    ] {
+        assert!(def.derived.found_in(&format!("x{form}x")), "{form}");
+    }
+}
+
+// spec: LIM#limits
+// spec: SEC#redaction
+#[test]
+fn withheld_results_count_toward_the_derived_values_limit() {
+    let evaluate = |max_derived_values: usize, script: &str| {
+        evaluate_bundle(
+            crate::runtime::definition::Bundle::from_stored_script(script),
+            &[("token", "s3cret")],
+            &crate::ScriptLimits {
+                max_derived_values,
+                ..Default::default()
+            },
+        )
+        .1
+    };
+    let derived = r#"let pw = std::uuid_v4("pw"); std::encode_hex(pw); std::encode_hex(pw);"#;
+    assert!(evaluate(3, derived).is_none());
+    let err = evaluate(2, derived)
+        .expect("a third does not fit")
+        .to_string();
+    assert!(err.contains("too large"), "{err}");
+
+    let from_param = r#"
+        let token = app.param("token");
+        std::encode_hex(token.value());
+        std::encode_base64(token.value());
+        token.secret(true);
+    "#;
+    assert!(evaluate(2, from_param).is_none());
+    let err = evaluate(1, from_param)
+        .expect("counted once the flag is settled")
+        .to_string();
+    assert!(err.contains("too large"), "{err}");
+    let not_secret = from_param.replace("token.secret(true);", "");
+    assert!(evaluate(1, &not_secret).is_none(), "nothing is withheld");
+}
+
+// spec: RND#password-hashes
+#[test]
+fn a_password_hash_checks_its_password() {
+    for (source, expected) in [
+        (
+            r#"std::password_argon2id("x", "")"#,
+            "`password` must not be empty",
+        ),
+        (
+            r#"std::password_bcrypt("x", "")"#,
+            "`password` must not be empty",
+        ),
+        (
+            r#"std::password_argon2id("", "pw")"#,
+            "`label` must not be empty",
+        ),
+        (
+            r#"std::password_bcrypt("x", std::random_string("pw", 73, "ab"))"#,
+            "at most 72 bytes",
+        ),
+        (
+            r#"std::password_bcrypt("x", std::decode_hex("610062"))"#,
+            "zero byte",
+        ),
+        (
+            r#"std::password_argon2id("x", 1)"#,
+            "`password` must be a string, Blob",
+        ),
+    ] {
+        let (_, err) = evaluate_with(&format!("{source};"), &seed(1));
+        let err = err.expect(source).to_string();
+        assert!(err.contains(expected), "{source}: {err}");
+    }
+    let (_, err) = evaluate_with(
+        r#"std::password_bcrypt("x", std::random_string("pw", 72, "ab"));"#,
+        &seed(1),
+    );
+    assert!(err.is_none(), "72 bytes fit: {err:?}");
+}
+
+// spec: RND#password-hashes
+// spec: SEC#redaction
+#[test]
+fn a_password_hash_is_derived_and_withheld() {
+    let script = r#"app.description(std::password_argon2id("admin", "hunter2"));"#;
+    assert_eq!(
+        description_with(script, &seed(1)),
+        description_with(script, &seed(1))
+    );
+    assert_ne!(
+        description_with(script, &seed(1)),
+        description_with(script, &seed(2))
+    );
+    let (hash, found) = withheld(script, &[]);
+    assert!(
+        hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"),
+        "{hash}"
+    );
+    assert!(found);
+}
+
+// spec: LIM#limits
+#[test]
+fn an_evaluation_is_held_to_its_limit_on_password_hashes() {
+    let evaluate = |limits: crate::ScriptLimits, script: &str| {
+        evaluate_bundle(
+            crate::runtime::definition::Bundle::from_stored_script(script),
+            &[],
+            &limits,
+        )
+        .1
+    };
+    let two = r#"std::password_argon2id("a", "pw"); std::password_argon2id("b", "pw");"#;
+    let hashes = |max_password_hashes| crate::ScriptLimits {
+        max_password_hashes,
+        ..Default::default()
+    };
+    assert!(evaluate(hashes(2), two).is_none());
+    let err = evaluate(hashes(1), two)
+        .expect("a second does not fit")
+        .to_string();
+    assert!(err.contains("too large"), "{err}");
+    assert!(evaluate(hashes(0), two).is_none(), "0 removes the limit");
+    let err = evaluate(
+        crate::ScriptLimits {
+            max_derived_values: 1,
+            ..Default::default()
+        },
+        two,
+    )
+    .expect("a password hash is a derived value too")
+    .to_string();
+    assert!(err.contains("too large"), "{err}");
+}
+
+// spec: ENC#byte-arguments
+#[test]
+fn a_bytes_argument_takes_a_bundle_file_and_directory() {
+    let bundle = crate::runtime::definition::Bundle::from_files([
+        (
+            "app.seed.rhai".to_owned(),
+            br#"app.description(
+                std::encode_hex(std::digest_sha256(app.file("conf/a.txt")))
+                + " " + std::encode_hex(std::digest_sha256(app.dir("conf")))
+            );"#
+            .to_vec(),
+        ),
+        ("conf/a.txt".to_owned(), b"abc".to_vec()),
+    ])
+    .unwrap();
+    let (app, err) = evaluate_bundle(bundle, &[], &Default::default());
+    assert!(err.is_none(), "{err:?}");
+    let description = app.def.load().description.clone().unwrap();
+    let (file, dir) = description.split_once(' ').unwrap();
+    assert_eq!(
+        file,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    use sha2::Digest as _;
+    let encoding = [
+        &[0, 0, 0, 5][..],
+        b"a.txt",
+        &[0, 0, 0, 0, 0, 0, 0, 3],
+        b"abc",
+    ]
+    .concat();
+    assert_eq!(dir, hex::encode(sha2::Sha256::digest(&encoding)));
 }
