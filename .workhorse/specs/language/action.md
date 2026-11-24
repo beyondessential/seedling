@@ -131,6 +131,7 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `random` | free-form text, usually a generated random value | the value |
 | `version` | a version of any scheme | a `Version`, as [generic versions](version.md#generic-versions) specify |
 | `version-semver` | a [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version | a `SemVer`, as [SemVer versions](version.md#semver-versions) specify |
+| `purl` | a [Package URL](https://ecma-tc54.github.io/ECMA-427/) | a map of its components, as [Package URLs](purl.md#components) specify |
 | `volume` | the name of a site volume, as [volume params](#volume-params) specify | the value |
 
 ### Kind parsers
@@ -160,7 +161,7 @@ It SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/use
 
 ### Presentation of kinds
 
-A presentation layer SHOULD offer a single-line input for a `text`, `version` or `version-semver` param, and a multi-line input for a `multiline` param.
+A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver` or `purl` param, and a multi-line input for a `multiline` param.
 A presentation layer MAY warn about an `email` value that is valid but unlikely to be meant, such as `" "@example.org`.
 A presentation layer SHOULD indicate the strength of a `weak-password` value as it is entered, and MUST NOT refuse a `weak-password` value for its strength.
 A presentation layer SHOULD offer a generator of strong passwords for `password` and `weak-password` params.

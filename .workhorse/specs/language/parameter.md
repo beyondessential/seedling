@@ -47,7 +47,7 @@ A schema method MUST throw when called in the [action context](app.md#action-con
 | `description(description: string)` | a human-readable description | none |
 | `secret(secret: bool)` | whether the value is [secret](#secret-parameters) | implied by `kind` |
 
-`kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"`, `"random"`, `"version"` and `"version-semver"`, each with the meaning [param kinds](action.md#param-kinds) give it.
+`kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"`, `"random"`, `"version"`, `"version-semver"` and `"purl"`, each with the meaning [param kinds](action.md#param-kinds) give it.
 `kind` MUST throw when given `"volume"`, which only action and shell [params](action.md#param-schemas) accept, or any value it does not define.
 
 ## Secret parameters
