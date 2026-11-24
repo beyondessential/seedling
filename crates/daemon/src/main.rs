@@ -191,6 +191,10 @@ struct ScriptLimitArgs {
     /// Maximum calls to a derivation helper per evaluation (0 = unlimited)
     #[arg(long, default_value_t = 1_000)]
     script_max_derived_values: usize,
+
+    /// Maximum calls to a password hash helper per evaluation (0 = unlimited)
+    #[arg(long, default_value_t = 16)]
+    script_max_password_hashes: usize,
 }
 
 // spec: LIM#limits
@@ -212,6 +216,7 @@ impl From<ScriptLimitArgs> for seedling_core::ScriptLimits {
             max_array_size: a.script_max_array_size,
             max_map_size: a.script_max_map_size,
             max_derived_values: a.script_max_derived_values,
+            max_password_hashes: a.script_max_password_hashes,
         }
     }
 }
@@ -1619,9 +1624,12 @@ mod tests {
             "0",
             "--script-max-expr-depth",
             "0",
+            "--script-max-password-hashes",
+            "0",
         ])
         .unwrap();
         assert_eq!(args.script_limits.script_max_operations, 0);
+        assert_eq!(args.script_limits.script_max_password_hashes, 0);
     }
 
     fn iface(name: &str, ip: [u8; 4]) -> Interface {

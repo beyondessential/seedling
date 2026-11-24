@@ -11,7 +11,7 @@ use sha2::Sha256;
 
 use super::{
     fields::{Field, encode},
-    too_large,
+    helper_limits, too_large,
 };
 use crate::{
     defs::take::take_string,
@@ -87,17 +87,9 @@ pub(super) fn register(module: &mut rhai::Module) {
 /// The seed the calling context derives from: the operation's inside an
 /// action closure, the app's in the static and validator contexts.
 // spec: LIM#limits
-/// Counted against the evaluation's limit on derived values, which its engine
-/// carries as its tag.
+/// Counted against the evaluation's limit on derived values.
 fn seed_for_call(ctx: &NativeCallContext) -> Result<Seed, Box<EvalAltResult>> {
-    // The tag is the runtime's, never the script's: an engine that does not
-    // carry a limit was not built by `setup_language`, and derives nothing
-    // rather than deriving without one.
-    let limit = match ctx.tag().map(rhai::Dynamic::as_int) {
-        Some(Ok(n)) => usize::try_from(n).map_err(|_| no_limit())?,
-        _ => return Err(no_limit()),
-    };
-    if !seeds::count_derivation(limit) {
+    if !seeds::count_derivation(helper_limits(ctx)?.derived_values) {
         return Err(too_large("Number of derived values"));
     }
     let seed = if is_in_action_closure() {
@@ -155,10 +147,6 @@ fn take_count(
         return Err(too_large(limit_name));
     }
     Ok(n)
-}
-
-fn no_limit() -> Box<EvalAltResult> {
-    "this evaluation carries no limit on derived values, so it derives none".into()
 }
 
 // spec: RND#helpers
