@@ -44,7 +44,7 @@ It MUST accept a URL of any scheme, including one with no host, such as `file://
 | key | present | value |
 | --- | --- | --- |
 | `scheme` | always | the scheme, in lower case |
-| `host` | when the URL has a host | the host, as [hosts](#hosts) specify |
+| `host` | when the URL's host is neither null nor the empty host | the host, as [hosts](#hosts) specify |
 | `port` | when the URL gives a port or its scheme has a default port | the port, as [ports](#ports) specify |
 | `path` | always | the path as the URL parser leaves it, possibly empty |
 | `query` | when the URL has a non-empty query | the query as the URL parser leaves it, without its leading `?` |
