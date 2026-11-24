@@ -384,11 +384,13 @@ mod tests {
 
     // spec: ACN#kind-parsers
     // spec: VER#semver-versions
+    // spec: PURL#accepted-values
     #[test]
-    fn a_version_param_is_checked_by_its_kind() {
+    fn a_version_or_purl_param_is_checked_by_its_kind() {
         for (kind, refused, accepted) in [
             (ParamKind::Version, "16.4 bookworm", "16.4"),
             (ParamKind::VersionSemver, "2.71", "v2.71.3"),
+            (ParamKind::Purl, "pkg:npm/foo/", "pkg://NPM/foo@1.0"),
         ] {
             let mut params = serde_json::Map::new();
             params.insert("target".to_owned(), serde_json::json!(refused));

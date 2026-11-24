@@ -168,7 +168,7 @@ let vol = app.volume("data")
 
 ```rhai
 let version = app.param("version")
-    .kind("text")           // text (one line) | multiline | email | password | weak-password | random | version | version-semver
+    .kind("text")           // text (one line) | multiline | email | password | weak-password | random | version | version-semver | purl
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -392,7 +392,7 @@ Calling a helper that does not exist throws, like any unknown function. Which he
 
 ### Parsing a kind
 
-Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_version`, `std::parse_version_semver` and `std::parse_volume`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl` and `std::parse_volume`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
 
 ```rhai
 let contact = std::parse_email("ops@example.org");
@@ -402,7 +402,7 @@ contact.domain  // "example.org"
 app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
-`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_version` and `std::parse_version_semver` return a version, described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_version` and `std::parse_version_semver` return a version, and `std::parse_purl` the components of a Package URL, both described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
 
 ### Versions
 
@@ -432,6 +432,25 @@ app.param("version").kind("version-semver").validate(|v, all| {
 ```
 
 A version prints exactly as it was written, `v` included, so `` `ghcr.io/org/app:${release}` `` gives back the operator's tag. Comparing a version with anything but a version of the same type throws, including a string or the other version type. Sort a list of versions with a closure: `versions.sort(|a, b| a <= b)`.
+
+### Package URLs
+
+The `purl` kind takes a [Package URL](https://ecma-tc54.github.io/ECMA-427/), a reference to a package in any ecosystem, such as `pkg:npm/%40angular/core@17.0.0` or `pkg:cargo/serde@1.0.200`, for a script to pass on to a workload. Any type is accepted, and no type's own naming rules are applied, so `pkg:pypi/Foo_Bar` keeps its name as written. Input in a form other than the canonical one is read as the [purl specification](https://github.com/package-url/purl-spec/blob/v1.1.1/docs/specification/how-to-parse.md) reads it: `pkg://NPM/foo` is type `npm`, empty qualifiers and `.` subpath segments are dropped. The scheme must be lower-case `pkg:`, and a purl is refused when a qualifier has no `=`, a qualifier key appears twice, a decoded component holds a control character or line break, or a non-empty version is not a valid `version`.
+
+`std::parse_purl` returns a map of the components, percent-decoded. `type` and `name` are always present; `namespace`, `version`, `qualifiers` and `subpath` only when the purl has them. `version` is a `Version`, so it compares like any other. `qualifiers` maps each lower-cased key to its value, except `checksum`, which is an array of its `algorithm:digits` entries, lower-cased and sorted by algorithm:
+
+```rhai
+let purl = std::parse_purl("pkg:npm/%40scope/foo@1.2.0?arch=x64&checksum=SHA256:BB,sha1:aa#lib");
+// #{ type: "npm", namespace: "@scope", name: "foo", version: 1.2.0,
+//    qualifiers: #{ arch: "x64", checksum: ["sha1:aa", "sha256:bb"] }, subpath: "lib" }
+purl.version >= std::parse_version("1.0")    // true
+
+app.param("dependency").kind("purl").validate(|v, all| {
+    if std::parse_purl(v).type != "npm" { throw "an npm package is needed"; }
+});
+```
+
+A parameter's value stays as the operator entered it, so a workload given `dependency.value()` receives their text, not a normalised form.
 
 ### Derived random values
 
