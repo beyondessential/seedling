@@ -11,6 +11,7 @@ Applies to the `url`, `url-origin` and `hostname` [param kinds](action.md#param-
 | term | meaning |
 | --- | --- |
 | A-label | the ASCII form of an internationalised domain name label, as defined by [RFC 5890](https://www.rfc-editor.org/rfc/rfc5890) section 2.3.2.1 |
+| URL parser, host, host serialiser | as defined by the [URL Standard](https://url.spec.whatwg.org/) |
 | IDNA processing | the domain name to ASCII conversion of [Unicode Technical Standard #46](https://www.unicode.org/reports/tr46/), nontransitional, with `CheckHyphens`, `CheckBidi` and `CheckJoiners` set, `UseSTD3ASCIIRules` set, and `VerifyDnsLength` set |
 
 ## Hostnames
@@ -31,20 +32,32 @@ The result MUST be the value as converted, in lower case.
 
 ## URLs
 
+`std::parse_url(text)` MUST parse the value with the URL parser, with no base URL, and MUST reject a value the URL parser fails on.
+
+> [!NOTE]
+> The URL parser is the one browsers use, so a URL an operator copies from a browser's address bar parses as the browser read it.
+
 ### Hosts
 
-The `host` a parsed URL carries MUST be in ASCII and in lower case.
-An internationalised domain name MUST be converted by IDNA processing, and the URL MUST be rejected if that conversion fails.
-An IPv6 address MUST be carried enclosed in `[` and `]`, as it is written in a URL.
+The `host` a parsed URL carries MUST be its host as the host serialiser writes it.
+
+> [!NOTE]
+> The host serialiser writes a domain in ASCII and in lower case, with each internationalised label as an A-label, and an IPv6 address enclosed in `[` and `]`.
 
 ### Query
 
-The `query` a parsed URL carries MUST be the URL's query as written, without its leading `?`, and MUST NOT be decoded.
+The `query` a parsed URL carries MUST be the URL's query as the URL parser leaves it, without its leading `?`, and MUST NOT be percent-decoded.
 
 > [!NOTE]
 > A decoded map would lose repeated keys and their order, so the query comes back whole and a script that needs its pairs splits them itself.
 
 ## URL origins
+
+`std::parse_url_origin(text)` MUST parse the value as [`std::parse_url`](#urls) does, and MUST reject it where `std::parse_url` would.
+It MUST then reject a URL whose scheme is not `http` or `https`, that has a username, a password, a query or a fragment, even an empty one, or whose path is anything but `/`.
+
+> [!NOTE]
+> The URL parser gives an `http` or `https` URL written with no path the path `/`, so `https://example.org` and `https://example.org/` are both accepted.
 
 The `host` of a parsed URL origin MUST meet what [`std::parse_hostname`](#hostnames) accepts, and MUST be what it returns for that host.
 A URL origin whose host is an IP address MUST be rejected.
