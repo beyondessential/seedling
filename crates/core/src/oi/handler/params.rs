@@ -257,7 +257,12 @@ pub(crate) fn current_sensitive(
     else {
         return Ok(Default::default());
     };
-    Ok(def.sensitive(&load_current_values(state, app)?))
+    let stored = load_current_values(state, app)?;
+    let (app, cipher) = (app.clone(), Arc::clone(&state.cipher));
+    state
+        .db
+        .call(move |db| crate::runtime::apps::sensitive_values(db, &cipher, &app, &def, &stored))
+        .map_err(|e| OiError::internal(format!("cannot read the app's sensitive values: {e}")))
 }
 
 fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {

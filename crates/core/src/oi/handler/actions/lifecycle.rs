@@ -639,7 +639,25 @@ pub(crate) fn run_operation_loop(
     };
 
     // spec: SEC#matching
-    let sensitive = crate::runtime::redact::Scope::new(app.sensitive());
+    let sensitive = {
+        let (name, cipher, def, stored) = (
+            app_name.clone(),
+            Arc::clone(&cipher),
+            app.def.load_full(),
+            app.stored.lock().clone(),
+        );
+        match db.call(move |db| {
+            crate::runtime::apps::sensitive_values(db, &cipher, &name, &def, &stored)
+        }) {
+            Ok(values) => crate::runtime::redact::Scope::new(values),
+            Err(e) => {
+                tracing::error!(app = %app_name, action = %action_name, "{action_name} not run: cannot read the app's sensitive values: {e}");
+                return OperationEnd::NotRun(format!(
+                    "{action_name} not run: the app's sensitive values cannot be read: {e}"
+                ));
+            }
+        }
+    };
     if let Some(action) = target.action() {
         let def = app.def.load();
         let schema = def.actions.get(action.as_str()).map(|a| &a.params);

@@ -530,7 +530,19 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let sensitive = {
         let mut stored = plain_params.clone();
         stored.extend(secret_params.iter().map(|(k, v)| (k.clone(), v.clone())));
-        entry.app.def.load().sensitive(&stored)
+        let (app, cipher, def) = (
+            params.app.clone(),
+            Arc::clone(&state.cipher),
+            entry.app.def.load_full(),
+        );
+        state
+            .db
+            .call(move |db| {
+                crate::runtime::apps::sensitive_values(db, &cipher, &app, &def, &stored)
+            })
+            .map_err(|e| {
+                OiError::internal(format!("cannot read the app's sensitive values: {e}"))
+            })?
     };
     let secret_param_names: std::collections::BTreeSet<String> =
         secret_params.into_keys().collect();

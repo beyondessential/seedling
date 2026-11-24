@@ -686,6 +686,29 @@ pub fn load_all_params_for_app(
     Ok(merged)
 }
 
+// spec: SEC#matching
+/// The sensitive values of the app `app_name` holding `stored` under `def`:
+/// those the definition and the stored values give, and every earlier value
+/// of its secrets that its generation history records.
+pub fn sensitive_values(
+    db: &Db,
+    cipher: &Cipher,
+    app_name: &AppName,
+    def: &crate::defs::app::AppDef,
+    stored: &BTreeMap<String, String>,
+) -> Result<crate::runtime::redact::SensitiveValues, generations::Error> {
+    let mut values = def.sensitive(stored);
+    let earlier = generations::earlier_secret_values(db, app_name, cipher, |name| {
+        def.params
+            .iter()
+            .any(|(param, schema)| param.as_str() == name && schema.is_secret())
+    })?;
+    for value in &earlier {
+        values.insert(value);
+    }
+    Ok(values)
+}
+
 /// Store or clear one parameter value, in whichever table its secrecy puts
 /// it, leaving no copy in the other.
 ///

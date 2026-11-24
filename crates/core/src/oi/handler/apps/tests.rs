@@ -2041,6 +2041,53 @@ fn a_fault_quoting_a_value_that_became_sensitive_is_masked_when_served() {
     }
 }
 
+// spec: SEC#matching
+#[test]
+fn a_secrets_earlier_value_stays_withheld_after_it_changes() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("db-password").kind("password").required(false);
+                app.param("db-url").required(false);
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": {
+            "db-password": "Pukeko-Ember-24",
+            "db-url": "postgres://app:Pukeko-Ember-24@db/app",
+        } }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "db-password": "Takahe-Cinder-88" } }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let url = shown["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "db-url")
+        .unwrap();
+    assert_eq!(url["value"], json!(null), "{url}");
+    let generations = oi
+        .call("/apps/generations", json!({ "app": "demo" }))
+        .unwrap();
+    assert!(
+        !generations.to_string().contains("Pukeko-Ember-24"),
+        "{generations}"
+    );
+}
+
 // spec: SEC#withheld-values
 #[test]
 fn a_validator_rejection_masks_a_secret_value_it_quotes() {

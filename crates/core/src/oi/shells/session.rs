@@ -739,7 +739,26 @@ pub(super) async fn run_app_shell(
             }
         };
         // spec: SEC#matching
-        let sensitive = crate::runtime::redact::Scope::new(app.sensitive());
+        let sensitive = {
+            let (name, cipher, def, stored) = (
+                app_name_for_task.clone(),
+                Arc::clone(&cipher),
+                app.def.load_full(),
+                app.stored.lock().clone(),
+            );
+            match db.call(move |db| {
+                crate::runtime::apps::sensitive_values(db, &cipher, &name, &def, &stored)
+            }) {
+                Ok(values) => crate::runtime::redact::Scope::new(values),
+                Err(e) => {
+                    tracing::error!(
+                        app = %app_name_for_task, shell = %shell_name_for_task,
+                        "the app's sensitive values cannot be read: {e}"
+                    );
+                    return ScriptEnd::Failed("the app's sensitive values cannot be read".into());
+                }
+            }
+        };
         {
             let def = app.def.load();
             let schema = def.shells.get(&shell_name_for_task).map(|s| &s.params);
