@@ -89,10 +89,7 @@ The runtime MUST write a call's breadcrumb when the call first executes, and MUS
 The runtime MUST write one `replay` breadcrumb at the start of each replay pass.
 
 A breadcrumb MUST NOT carry a [sensitive value](secrets.md#sensitive-value) of the app, or of the lifecycle operation or shell session whose closure made the call, as [matching](secrets.md#matching) defines them.
-Where a value a breadcrumb records, such as an `rt.exec` argument or an invoked action's parameter, contains one, the runtime MUST record the value with each stretch of it that an occurrence of a sensitive value covers replaced by `<redacted>`, and the rest of the value as it is.
-
-> [!NOTE]
-> Masking each occurrence rather than the whole value keeps a command or parameter readable enough to debug from, and leaks no more than replacing it entirely.
+The runtime MUST mask a value a breadcrumb records that contains one, such as an `rt.exec` argument or an invoked action's parameter, as [withheld values](secrets.md#withheld-values) specifies for free text.
 
 ## Volume storage
 

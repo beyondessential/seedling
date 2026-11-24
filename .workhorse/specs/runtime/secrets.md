@@ -141,7 +141,14 @@ It MUST match a value it reports from an earlier record, such as a generation hi
 > A short sensitive value, such as a one-character weak password, withholds every value that contains it.
 > This fails safe, and a longer secret is the operator's remedy.
 
-A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as describing an app's [parameters](../interface/apps.md#parameters) and [redacted values](../interface/apps.md#redacted-values), and the [generation history](../interface/apps.md#generation-history) define.
+### Withheld values
+
+A response or event withholding a structured value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as describing an app's [parameters](../interface/apps.md#parameters) and [redacted values](../interface/apps.md#redacted-values), and the [generation history](../interface/apps.md#generation-history) define.
+
+In free text, such as a log line, a breadcrumb, a fault description or an error message, the runtime MUST replace each stretch of the text that an occurrence of a sensitive value covers with `<redacted>`, and keep the rest as it is.
+
+> [!NOTE]
+> Masking each occurrence rather than the whole text keeps a command or message readable enough to debug from, and leaks no more than withholding it entirely.
 
 ## Migration
 
