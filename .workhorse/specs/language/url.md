@@ -94,7 +94,7 @@ Where that succeeds, `host` MUST be the host it gives, as the host serialiser wr
 
 `std::parse_url_origin(text)` MUST return an object map of `scheme`, `host` and `port` for a value it accepts, each as [`std::parse_url`](#components) gives it.
 It MUST reject a value `std::parse_url` rejects.
-It MUST also reject a URL whose scheme is not `http` or `https`, that has a username, a password, a query or a fragment, even an empty one, or whose path is anything but `/`.
+It MUST also reject a URL whose scheme is not `http` or `https`, in which a `@` precedes the host, even with nothing before it, that has a query or a fragment, even an empty one, or whose path is anything but `/`.
 
 > [!NOTE]
 > The URL parser gives an `http` or `https` URL written with no path the path `/`, so `https://example.org` and `https://example.org/` are both accepted.
