@@ -6,9 +6,13 @@ use std::collections::HashSet;
 
 use chacha20::{ChaCha20, KeyIvInit, cipher::StreamCipher};
 use hmac::{Hmac, KeyInit, Mac};
-use rhai::{Blob, Dynamic, EvalAltResult, FuncRegistration, INT, NativeCallContext, Position};
+use rhai::{Blob, Dynamic, EvalAltResult, FuncRegistration, INT, NativeCallContext};
 use sha2::Sha256;
 
+use super::{
+    fields::{Field, encode},
+    too_large,
+};
 use crate::{
     defs::take::take_string,
     runtime::{
@@ -157,10 +161,6 @@ fn no_limit() -> Box<EvalAltResult> {
     "this evaluation carries no limit on derived values, so it derives none".into()
 }
 
-fn too_large(what: &str) -> Box<EvalAltResult> {
-    EvalAltResult::ErrorDataTooLarge(what.into(), Position::NONE).into()
-}
-
 // spec: RND#helpers
 fn take_alphabet(alphabet: Dynamic) -> Result<Vec<char>, Box<EvalAltResult>> {
     let alphabet: Vec<char> = take_string("alphabet", alphabet)?.chars().collect();
@@ -181,29 +181,6 @@ fn take_alphabet(alphabet: Dynamic) -> Result<Vec<char>, Box<EvalAltResult>> {
 /// The most UTF-8 bytes any character of `alphabet` takes.
 fn widest(alphabet: &[char]) -> usize {
     alphabet.iter().map(|c| c.len_utf8()).max().unwrap_or(1)
-}
-
-enum Field<'a> {
-    Str(&'a str),
-    Int(u64),
-}
-
-// spec: RND#call-encoding
-/// The call's encoding, or an error where a string is too long for its
-/// length to be written, as an engine with no string limit allows.
-fn encode(fields: &[Field<'_>]) -> Result<Vec<u8>, Box<EvalAltResult>> {
-    let mut out = Vec::new();
-    for field in fields {
-        match field {
-            Field::Str(s) => {
-                let len = u32::try_from(s.len()).map_err(|_| too_large("Length of string"))?;
-                out.extend_from_slice(&len.to_be_bytes());
-                out.extend_from_slice(s.as_bytes());
-            }
-            Field::Int(n) => out.extend_from_slice(&n.to_be_bytes()),
-        }
-    }
-    Ok(out)
 }
 
 // spec: RND#byte-stream

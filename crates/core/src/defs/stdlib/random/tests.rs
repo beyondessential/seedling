@@ -45,6 +45,15 @@ fn a_string_field_is_its_length_then_its_utf8() {
     );
 }
 
+// spec: RND#call-encoding
+#[test]
+fn a_bytes_field_is_its_64_bit_length_then_its_bytes() {
+    assert_eq!(
+        encode(&[Field::Bytes(&[0, 0xff])]).unwrap(),
+        [0, 0, 0, 0, 0, 0, 0, 2, 0, 0xff],
+    );
+}
+
 // spec: RND#values
 #[test]
 fn random_bytes_known_answer() {
