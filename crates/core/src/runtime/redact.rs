@@ -379,7 +379,8 @@ pub fn is_identifier(member: &str) -> bool {
 
 // spec: SEC#responses-and-events
 /// Mask, in place, each string and member name in `document` that contains a
-/// sensitive value of the app it concerns, other than an identifier. `app` is the app the
+/// sensitive value of the app it concerns, other than an identifier, and
+/// replace each number or boolean that contains one with its masked text. `app` is the app the
 /// whole concerns, if any; an object with an `app` member concerns that app
 /// instead. `values_for` gives an app's sensitive values.
 pub fn mask_document<E>(
@@ -422,7 +423,16 @@ pub fn mask_document<E>(
                 }
             }
         }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        Value::Bool(_) | Value::Number(_) => {
+            if let Some(app) = app {
+                let text = document.to_string();
+                let values = values_for(app)?;
+                if values.found_in(&text) {
+                    *document = Value::String(values.mask(&text).into_owned());
+                }
+            }
+        }
+        Value::Null => {}
     }
     Ok(())
 }

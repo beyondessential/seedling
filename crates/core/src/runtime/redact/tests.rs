@@ -162,6 +162,20 @@ fn a_document_masks_a_member_name_holding_a_value() {
 
 // spec: SEC#responses-and-events
 #[test]
+fn a_document_replaces_a_number_holding_a_value_with_its_masked_text() {
+    let mut document = serde_json::json!({ "port": 15432, "replicas": 2, "generation": 5432 });
+    mask_document(&mut document, Some("demo"), &mut |_: &str| {
+        Ok::<_, ()>(holding(&["5432"]))
+    })
+    .unwrap();
+    assert_eq!(
+        document,
+        serde_json::json!({ "port": "1<redacted>", "replicas": 2, "generation": 5432 })
+    );
+}
+
+// spec: SEC#responses-and-events
+#[test]
 fn a_document_about_no_app_is_left_as_it_is() {
     let mut document = serde_json::json!({ "note": "hunter2" });
     mask_document(&mut document, None, &mut |_: &str| {
