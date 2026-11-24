@@ -79,8 +79,8 @@ Where that succeeds, `host` MUST be the host it gives, as the host serialiser wr
 > A password holding `@`, `:` or `/` can only be written percent-encoded in a URL, and a script passing it on needs the password itself.
 
 > [!NOTE]
-> A `url` parameter is stored and listed in clear unless the script declares it secret.
-> A script that takes a URL carrying a password, such as a database connection string, sets `secret(true)` on it, so the password is kept in protected storage and withheld wherever values are shown.
+> Seedling never marks a `url` parameter secret by itself.
+> Where a URL can carry a password, such as a database connection string, the script has to call `secret(true)` on the parameter, or the whole value, password included, is stored and shown in clear.
 
 ### Ports
 
