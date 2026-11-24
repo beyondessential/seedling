@@ -580,7 +580,7 @@ mod tests {
         sensitive.insert(r#"Tok"en\99"#);
 
         let split = split_secret_params(None, &validated, &sensitive);
-        assert!(split.plain.is_empty(), "{:?}", split.plain);
+        assert!(split.plain.is_empty(), "the param is not recorded readable");
         assert_eq!(split.secret["conn"]["password"], r#"Tok"en\99"#);
         assert_eq!(
             split.journal["conn"],
