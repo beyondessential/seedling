@@ -1716,6 +1716,180 @@ fn an_env_value_containing_a_derived_value_is_null() {
     assert_eq!(env["PLAIN"], json!("visible"));
 }
 
+// spec: APPS#redacted-values
+#[test]
+fn every_string_in_a_description_holding_a_sensitive_value_is_null_on_its_own() {
+    let oi = TestOi::new();
+    let script = r#"
+        let key = app.param("api-key").kind("password").required(false);
+        let pw = std::random_string("db-password", 24, "abcdefghijklmnopqrstuvwxyz0123456789");
+        let secret = if key.is_set() { key.value() } else { "unset" };
+        let data = app.volume("data")
+            .write("/conf/key", "key=" + secret)
+            .write("/conf/pw", pw)
+            .write("/conf/plain", "visible");
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .command(["nginx", "--key=" + secret])
+            .arg(["--pw", pw, "--plain"])
+            .healthcheck(#{ kind: "command", cmd: ["check", "--key=" + secret] })
+            .mount("/data", data);
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "api-key": "hunter2-Gravel-Otter-91" } }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let def_of = |name: &str| {
+        shown["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap()["def"]
+            .clone()
+    };
+    let writes = &def_of("data")["writes"];
+    assert_eq!(writes["/conf/key"], json!(null), "{writes}");
+    assert_eq!(writes["/conf/pw"], json!(null), "{writes}");
+    assert_eq!(writes["/conf/plain"], json!("visible"));
+
+    let container = &def_of("web")["container"];
+    assert_eq!(container["command"], json!(["nginx", null]), "{container}");
+    assert_eq!(
+        container["args"],
+        json!(["--pw", null, "--plain"]),
+        "{container}"
+    );
+    assert_eq!(
+        container["healthcheck"]["cmd"],
+        json!(["check", null]),
+        "{container}"
+    );
+    assert!(
+        !shown.to_string().contains("hunter2-Gravel-Otter-91"),
+        "{shown}"
+    );
+}
+
+// spec: APPS#parameters
+// spec: APPS#generation-history
+// spec: SEC#matching
+#[test]
+fn a_plain_parameter_holding_a_secret_value_is_withheld_once_the_secret_is_set() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("db-password").kind("password").required(false);
+                app.param("db-url").required(false);
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    let url = "postgres://app:Quokka-Ledger-77@db/app";
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "db-url": url } }),
+    )
+    .unwrap();
+    let url_value = |oi: &TestOi| {
+        let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+        shown["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "db-url")
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(url_value(&oi), json!(url));
+
+    let mut rx = oi.state.event_tx.subscribe();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "db-password": "Quokka-Ledger-77", "db-url": url.to_owned() + "?sslmode=require" } }),
+    )
+    .unwrap();
+
+    assert_eq!(url_value(&oi), json!(null));
+
+    let generations = oi
+        .call("/apps/generations", json!({ "app": "demo" }))
+        .unwrap();
+    for entry in generations.as_array().unwrap() {
+        for change in entry["params"].as_array().into_iter().flatten() {
+            if change["name"] == "db-url" {
+                assert_eq!(change["redacted"], true, "{entry}");
+            }
+        }
+    }
+    assert!(
+        !generations.to_string().contains("Quokka-Ledger-77"),
+        "an entry recorded before the secret was set is withheld now: {generations}"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(serde_json::to_value(&event).unwrap());
+    }
+    let changed = events
+        .iter()
+        .find(|e| e["type"] == "ParamsChanged")
+        .expect("a ParamsChanged event");
+    let url_change = changed["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "db-url")
+        .unwrap();
+    assert_eq!(url_change["redacted"], true, "{changed}");
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains("Quokka-Ledger-77")
+    );
+}
+
+// spec: SEC#withheld-values
+#[test]
+fn a_validator_rejection_masks_a_secret_value_it_quotes() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("token").kind("password").required(false).validate(|v, all| {
+                    if v.len() < 30 { throw `token ${v} is too short`; }
+                });
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+
+    let (code, message) = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "params": { "token": "Kea-Basin-31" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "validation_failed", "{message}");
+    assert!(
+        message.contains("token <redacted> is too short"),
+        "{message}"
+    );
+    assert!(!message.contains("Kea-Basin-31"), "{message}");
+}
+
 // spec: APPS#resources
 #[test]
 fn an_instance_reports_the_state_of_its_health_check() {
