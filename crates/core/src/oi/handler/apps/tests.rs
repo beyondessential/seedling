@@ -1708,7 +1708,11 @@ fn an_env_value_containing_a_derived_value_is_null() {
         "a helper result computed from a derived value: {env}"
     );
     assert_eq!(env["RAW_HEX"], json!(null), "a Blob's hex: {env}");
-    assert_ne!(env["DIGEST"], json!(null), "computed from nothing withheld: {env}");
+    assert_ne!(
+        env["DIGEST"],
+        json!(null),
+        "computed from nothing withheld: {env}"
+    );
     assert_eq!(env["PLAIN"], json!("visible"));
 }
 
