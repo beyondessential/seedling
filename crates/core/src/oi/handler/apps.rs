@@ -505,8 +505,9 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     })?;
 
     // Names come from AppDef; values come from the params table. A value in
-    // secret storage is never read here, only the names of the params it
-    // holds.
+    // secret storage is never returned: it is read only to match against, by
+    // `current_sensitive` below, and the listing keeps the names of the params
+    // that hold one.
     // spec: SEC#redaction
     let name_owned = params.app.clone();
     let (plain_params, secret_param_names) = state
