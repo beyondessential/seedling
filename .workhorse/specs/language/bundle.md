@@ -4,7 +4,7 @@ id: BND
 
 # Definition bundles
 
-Applies to the files of a [definition bundle](../overview.md#definition-bundle): their paths, the metadata file, how they form an app's [script](overview.md#script), and how a script reads them.
+Applies to the files of a [definition bundle](../overview.md#definition-bundle): their paths, the metadata file and its metadata table, how they form an app's [script](overview.md#script), and how a script reads them.
 
 ## Terminology
 
@@ -38,16 +38,49 @@ The metadata file MUST be a [TOML](https://toml.io/en/) document holding only th
 | --- | --- | --- | --- |
 | `seedling` | string | no | a [Seedling version requirement](#seedling-version-requirement) naming the Seedling versions the definition supports |
 | `script` | array of strings | no | the bundle paths of the script files, in concatenation order |
+| `metadata` | table | no | the [metadata table](#metadata-table), free-form values for the script to read |
 
 A definition whose metadata has no `seedling` field supports every Seedling version.
 If the metadata has no `script` field, the script files MUST be taken to be `["app.seed.rhai"]`.
-A bundle without a metadata file MUST be treated as one whose metadata has neither field.
+A bundle without a metadata file MUST be treated as one whose metadata has none of these fields.
 
 The `script` array MUST name at least one file.
 It MUST NOT name the same file twice once its entries are normalised, and MUST NOT name `seedling.toml`.
 Each file it names MUST be present in the bundle and MUST be valid UTF-8.
 
 When an app is registered with a definition or updated to one, the server MUST refuse a definition whose metadata file breaks these rules with [`bundle_invalid`](../interface/wire.md#error-codes), as [bundle rules](../interface/definitions.md#bundle-rules) specifies.
+
+## Metadata table
+
+The metadata table holds values the publisher of a definition chooses, under keys the publisher chooses.
+The runtime MUST NOT interpret the metadata table, other than to check its values and convert them as below.
+
+> [!NOTE]
+> A publisher records the release a definition was published for as, say, `version = "2.71.4"`, and the script parses it with whichever [version parser](version.md) fits the release scheme.
+
+The metadata table MUST NOT hold a floating-point number that is not finite, at any depth, and the server refuses a bundle whose table holds one, as [bundle rules](../interface/definitions.md#bundle-rules) specifies.
+
+`app.metadata()` MUST return a map holding the metadata table, with each value converted as follows.
+
+| TOML type | BSL value |
+| --- | --- |
+| string | string |
+| integer | integer |
+| float | floating-point number |
+| boolean | boolean |
+| offset date-time, local date-time, local date, local time | string holding the value in the form TOML gives for its type, with `T` between a date and a time |
+| array | array of the converted elements |
+| table, inline table | map of the converted values |
+
+A bundle whose metadata has no `metadata` field MUST yield an empty map.
+`app.metadata()` MUST return a new map on each call, so that a script changing the map changes nothing else.
+
+A script MAY call `app.metadata` in any context.
+It MUST read the metadata of the bundle the app was evaluated from.
+Within a [gate's body](gate.md#body), `last.metadata` MUST read the metadata of the bundle of the gate's last success.
+
+> [!NOTE]
+> Reading a key the table does not hold gives the unit value, so a script tells an absent `version` apart from a present one by comparing it with `()`.
 
 ## Seedling version requirement
 

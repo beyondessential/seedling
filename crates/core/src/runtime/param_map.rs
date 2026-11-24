@@ -114,7 +114,7 @@ impl ParamMap {
         for (key, value) in &self.values {
             let value = match self.versions.get(key) {
                 Some(version) => restore_version(key, *version, value)?,
-                None => json_value_to_rhai_dynamic(value),
+                None => crate::defs::json::to_dynamic(value),
             };
             map.insert(key.as_str().into(), value);
         }
@@ -139,32 +139,4 @@ fn restore_version(key: &str, version: VersionType, value: &Value) -> Result<Dyn
         VersionType::SemVer => SemVer::parse(text).map(Dynamic::from),
     };
     restored.map_err(|e| format!("param {key:?} cannot be restored as a version: {e}"))
-}
-
-pub fn json_value_to_rhai_dynamic(v: &Value) -> Dynamic {
-    match v {
-        Value::String(s) => Dynamic::from(s.clone()),
-        Value::Bool(b) => Dynamic::from(*b),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Dynamic::from(i)
-            } else if let Some(f) = n.as_f64() {
-                Dynamic::from(f)
-            } else {
-                Dynamic::UNIT
-            }
-        }
-        Value::Null => Dynamic::UNIT,
-        Value::Object(map) => {
-            let rhai_map: rhai::Map = map
-                .iter()
-                .map(|(k, v)| (k.as_str().into(), json_value_to_rhai_dynamic(v)))
-                .collect();
-            Dynamic::from(rhai_map)
-        }
-        Value::Array(arr) => {
-            let rhai_arr: rhai::Array = arr.iter().map(json_value_to_rhai_dynamic).collect();
-            Dynamic::from(rhai_arr)
-        }
-    }
 }

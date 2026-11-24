@@ -87,6 +87,7 @@ On receiving an `EventsDropped` event, the console MUST read afresh every view i
 The app detail view MUST show the source of the app's current definition, from its [definition provenance](../interface/definitions.md#provenance-reporting).
 For a fetched definition, it MUST show the reference and digest.
 For a pushed definition, it MUST show the content hash and the actor who pushed it, with any origin the client reported, marked as reported by the client.
+Where the definition's [metadata table](../language/bundle.md#metadata-table) holds any keys, the view MUST show each top-level key with its value, showing an array or a table as JSON.
 
 The console MUST let the operator update an app's definition from a registry.
 For an app whose definition was fetched, it MUST offer the [tags](../interface/definitions.md#repository-tags) of the recorded reference's repository to pick from, and the operator MAY instead enter a complete reference.

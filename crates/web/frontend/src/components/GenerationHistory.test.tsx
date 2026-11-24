@@ -30,7 +30,7 @@ describe("GenerationHistory", () => {
           entry(1, {
             kind: "register",
             script_changed: true,
-            definition: { kind: "fetched", reference: "reg.example/shop:1", digest: "sha256:x", content_hash: "h", seedling_versions: null },
+            definition: { kind: "fetched", reference: "reg.example/shop:1", digest: "sha256:x", content_hash: "h", seedling_versions: null, metadata: {} },
           }),
         ],
       },

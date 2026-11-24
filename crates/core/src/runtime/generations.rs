@@ -8,7 +8,7 @@ use crate::{
     runtime::{
         apps,
         db::Db,
-        definition::{Bundle, Source},
+        definition::{Bundle, Declared, Source},
         secrets::Cipher,
     },
 };
@@ -188,10 +188,10 @@ pub fn load_bundle(db: &Db, hash: &str) -> Result<Arc<Bundle>, Error> {
     Ok(Arc::new(bundle))
 }
 
-/// The Seedling version requirement a stored bundle declares, read without
-/// materialising the bundle or re-hashing it.
+/// The Seedling version requirement and metadata table a stored bundle
+/// declares, read without materialising the bundle or re-hashing it.
 // spec: GEN#bundle-storage
-pub fn bundle_requirement(db: &Db, hash: &str) -> Result<Option<String>, Error> {
+pub fn bundle_declared(db: &Db, hash: &str) -> Result<Declared, Error> {
     let mut stmt = db
         .conn
         .prepare("SELECT contents FROM definition_bundles WHERE hash = ?1")?;
@@ -202,9 +202,7 @@ pub fn bundle_requirement(db: &Db, hash: &str) -> Result<Option<String>, Error> 
         }
         Err(e) => return Err(e.into()),
     };
-    Bundle::requirement_of_canonical(&contents)
-        .map(|r| r.map(|r| r.as_str().to_owned()))
-        .map_err(|e| Error::CorruptBundle(e.to_string()))
+    Bundle::declared_of_canonical(&contents).map_err(|e| Error::CorruptBundle(e.to_string()))
 }
 
 /// Delete stored bundles no generation or template references.

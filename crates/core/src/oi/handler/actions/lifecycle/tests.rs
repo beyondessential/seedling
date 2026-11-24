@@ -877,6 +877,50 @@ fn last_is_the_app_at_the_last_success_and_the_unit_value_where_there_is_none() 
     ));
 }
 
+// spec: BND#metadata-table
+#[test]
+fn last_metadata_reads_the_bundle_of_the_last_success() {
+    let script = r#"
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.gate("gated").key(1).run(|rt, last| {
+            if app.metadata().version != "2.0" { throw "app reads the current bundle"; }
+            if last.metadata().version != "1.0" { throw "last reads its own bundle"; }
+        });
+    "#;
+    let evaluated_with = |version: &str| {
+        let bundle = Arc::new(
+            crate::runtime::definition::Bundle::from_files([
+                ("app.seed.rhai".to_owned(), script.as_bytes().to_vec()),
+                (
+                    "seedling.toml".to_owned(),
+                    format!("[metadata]\nversion = \"{version}\"").into_bytes(),
+                ),
+            ])
+            .unwrap(),
+        );
+        let (app, err) = crate::runtime::apps::evaluate(
+            &AppName::new("demo").unwrap(),
+            &bundle,
+            &Default::default(),
+            &crate::runtime::seeds::AppSeed::for_tests(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "the script evaluates: {err:?}");
+        app
+    };
+    let (earlier, current) = (evaluated_with("1.0"), evaluated_with("2.0"));
+    let db = DbHandle::open_in_memory().unwrap();
+    let end = run_gate_body(&current, script, "gated", Some(&earlier), &db, "op");
+    assert!(
+        matches!(end, OperationEnd::Completed),
+        "{}",
+        match end {
+            OperationEnd::Failed(why) | OperationEnd::NotRun(why) => why,
+            _ => String::new(),
+        }
+    );
+}
+
 // spec: RT#resources-a-gate-holds
 #[test]
 fn rt_start_leaves_out_what_a_gate_holds_and_what_waits_on_it_except_in_that_gates_body() {

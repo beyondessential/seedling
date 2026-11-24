@@ -13,7 +13,7 @@ use crate::{
     runtime::{
         AppPhase,
         apps::{AppEntry, AppRegistry, AppStatus, status as app_status},
-        definition::{Bundle, Source, version},
+        definition::{Bundle, Declared, Source, version},
         desired::{DynamicCreator, list_dynamic_resources_for_app},
         faults,
         health::{InstanceHealth, declares_healthcheck, read_health},
@@ -1092,9 +1092,10 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
             let mut definitions: std::collections::BTreeMap<u64, Value> =
                 std::collections::BTreeMap::new();
             // Provenance needs the content hash, which the row carries, and
-            // the bundle's declared requirement, which is one file; a page
-            // of 200 distinct definitions must not load 200 bundles.
-            let mut requirements: std::collections::HashMap<String, Option<String>> =
+            // the bundle's declared requirement and metadata table, which are
+            // one file; a page of 200 distinct definitions must not load 200
+            // bundles.
+            let mut declared: std::collections::HashMap<String, Declared> =
                 std::collections::HashMap::new();
             for entry in &entries {
                 let prior = if entry.generation > 1 {
@@ -1106,12 +1107,10 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                 let changed = installs || prior.as_deref() != Some(entry.bundle_hash.as_str());
                 script_changed_for.insert(entry.generation, changed);
                 if installs {
-                    let requirement = match requirements.get(&entry.bundle_hash) {
-                        Some(r) => r.clone(),
-                        None => {
-                            let r = gens::bundle_requirement(db, &entry.bundle_hash)?;
-                            requirements.insert(entry.bundle_hash.clone(), r.clone());
-                            r
+                    let bundle_declared = match declared.entry(entry.bundle_hash.clone()) {
+                        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            e.insert(gens::bundle_declared(db, &entry.bundle_hash)?)
                         }
                     };
                     let source = entry
@@ -1120,7 +1119,14 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                         .unwrap_or_else(Source::unknown_push);
                     definitions.insert(
                         entry.generation,
-                        source.to_json_with(&entry.bundle_hash, requirement.as_deref()),
+                        source.to_json_with(
+                            &entry.bundle_hash,
+                            bundle_declared
+                                .seedling_versions
+                                .as_ref()
+                                .map(|r| r.as_str()),
+                            Some(&bundle_declared.metadata),
+                        ),
                     );
                 }
             }
