@@ -216,7 +216,7 @@ A `container` object has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `image` | string or null | the image reference |
-| `command`, `args` | array of strings or null | the entrypoint and its arguments |
+| `command`, `args` | array or null | the entrypoint and its arguments, each a string, or `null` where [redacted](#redacted-values) |
 | `env` | object | each environment variable's name and value, or `null` for a [redacted](#redacted-values) value |
 | `volume_mounts` | object | for each mount path, `{ "kind": "volume", "name": <string or null> }` or `{ "kind": "external_volume", "name": <string> }` |
 | `on_exit` | string | `"default"`, `"restart"`, `"terminate"` or `"restart_on_failure"` |
@@ -226,7 +226,7 @@ A `container` object has these members.
 | `writable_rootfs` | boolean | whether the root filesystem is writable |
 | `pids_limit` | integer or null | the process limit |
 | `workdir`, `user` | string or null | the working directory and user |
-| `healthcheck` | object or null | `kind` (`"command"`), `cmd` (array of strings), `interval_secs`, `timeout_secs`, `retries`, `start_period_secs`, and `on_failure` (`"replace"` or `"monitor"`) |
+| `healthcheck` | object or null | `kind` (`"command"`), `cmd` (array, each element a string or `null` where [redacted](#redacted-values)), `interval_secs`, `timeout_secs`, `retries`, `start_period_secs`, and `on_failure` (`"replace"` or `"monitor"`) |
 | `stop_signal` | string or null | the stop signal |
 | `stop_timeout_secs` | integer or null | the stop timeout |
 
@@ -237,7 +237,8 @@ Each is an array of strings in ascending order.
 
 ### Redacted values
 
-The server MUST report as `null` the value of an environment variable, and the contents of a declared file write, that contain a [sensitive value](../runtime/secrets.md#sensitive-value).
+The server MUST report as `null` each string in `def` that contains a [sensitive value](../runtime/secrets.md#sensitive-value), whatever type the tables above give it.
+This covers an environment variable's value, a declared file write's contents, and each element of a container's `command`, `args` and health check `cmd`, as well as every other string member.
 The server MUST match them against the app's sensitive values as [matching](../runtime/secrets.md#matching) specifies.
 
 ### Proxy settings
