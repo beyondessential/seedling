@@ -11,5 +11,5 @@ Adds the `url`, `url-origin` and `hostname` kinds and their `std::parse_*` helpe
   - `port_or_known_default` knows only http, https, ws, wss and ftp;
   - port `0` is accepted;
   - username is always a string (empty when absent), and username and password come back percent-encoded;
-  - a host-less URL (`file:///x`, `foo://`) and an opaque one (`mailto:`, `data:`) both parse;
+  - a host-less URL (`file:///x`, `foo://`) and an opaque one (`mailto:`, `data:`) both parse, which we keep: the kind is for any URL a definition might take, not only network endpoints;
   - `idna::domain_to_ascii_strict` accepts `1.2.3.4`, so the all-digit last label check is ours.

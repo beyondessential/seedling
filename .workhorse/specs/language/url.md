@@ -39,7 +39,8 @@ The result MUST be the value as converted, in lower case.
 
 ### Hosts
 
-The `host` a parsed URL carries MUST be its host as the host serialiser writes it.
+`std::parse_url` MUST accept a URL that has no host, such as `file:///etc/hosts` or `mailto:someone@example.org`, and its result then carries no `host`.
+Where the URL has a host, the `host` its result carries MUST be that host as the host serialiser writes it.
 
 > [!NOTE]
 > The host serialiser writes a domain in ASCII and in lower case, with each internationalised label as an A-label, and an IPv6 address enclosed in `[` and `]`.
