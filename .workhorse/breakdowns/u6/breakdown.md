@@ -34,7 +34,7 @@ Add a `version` field to `seedling.toml` and expose it to scripts as a constant 
 
 Add a `duration` kind with `parse_duration`, for timeouts, intervals and retention parameters. To settle: the accepted syntax (single unit like `90s`, or compound like `1h30m`), the units, and what it returns (Seedling's existing duration options take a number of seconds). Probably use the friendly format from jiff.
 
-## Byte-size and bit-size parameter kinds
+## Byte-size and bit-size parameter kinds · K7
 
 Add `byte-size` and `bit-size` kinds with `parse_byte_size` and `parse_bit_size`, returning integers of bytes and bits, comparable with `AVAILABLE_MEMORY`. To settle: SI (`MB`, 1000) and IEC (`MiB`, 1024) suffixes and their case, and whether container memory limits, which read `512m` as mebibytes, move to the same syntax.
 
