@@ -1020,6 +1020,47 @@ fn a_value_its_kind_refuses_is_not_stored() {
 }
 
 // spec: PARAM#kind-checks
+// spec: PURL#accepted-values
+#[test]
+fn a_purl_its_kind_refuses_is_not_stored() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("package").kind("purl").required(false);
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    let (code, message) = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "params": { "package": "pkg:npm/foo?arch=x64&ARCH=arm" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "validation_failed", "{message}");
+    assert!(
+        message.contains("package: the qualifier \"arch\" appears more than once"),
+        "{message}"
+    );
+    assert_eq!(stored_values(&oi), vec![]);
+
+    let written = "pkg://NPM/%40scope/foo@1.0#lib";
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "package": written } }),
+    )
+    .unwrap();
+    assert_eq!(
+        stored_values(&oi),
+        vec![("package".to_owned(), written.to_owned())]
+    );
+}
+
+// spec: PARAM#kind-checks
 // spec: VER#generic-versions
 // spec: VER#semver-versions
 #[test]
@@ -1040,8 +1081,8 @@ fn a_version_its_kind_refuses_is_not_stored() {
     for (param, value, reason) in [
         (
             "base",
-            "latest",
-            "base: \"latest\" is not a version: it holds no digit",
+            "16.4 bookworm",
+            "base: a version holds only printable ASCII characters other than space",
         ),
         (
             "release",

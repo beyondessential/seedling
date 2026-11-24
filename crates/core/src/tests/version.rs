@@ -49,7 +49,7 @@ fn sv(value: &str) -> String {
 
 // spec: VER#generic-versions
 #[test]
-fn version_accepts_printable_ascii_with_a_digit() {
+fn version_accepts_printable_ascii() {
     for value in [
         "16.4",
         "16.4-bookworm",
@@ -57,6 +57,10 @@ fn version_accepts_printable_ascii_with_a_digit() {
         "sha-3f2a1c",
         "v2.71.3",
         "1:2.3~rc1+dfsg",
+        "latest",
+        "main",
+        "v",
+        "sha256:244fd47e07d10",
     ] {
         assert_eq!(text(&format!("{}.to_string()", v(value))), value);
     }
@@ -64,11 +68,9 @@ fn version_accepts_printable_ascii_with_a_digit() {
 
 // spec: VER#generic-versions
 #[test]
-fn version_refuses_a_value_without_a_digit() {
-    for value in ["latest", "stable", "v", ""] {
-        let reason = refusal(&v(value));
-        assert!(reason.contains("holds no digit"), "{value}: {reason}");
-    }
+fn version_refuses_an_empty_value() {
+    let reason = refusal(&v(""));
+    assert!(reason.contains("cannot be empty"), "{reason}");
 }
 
 // spec: VER#generic-versions
@@ -83,12 +85,26 @@ fn version_refuses_space_and_non_ascii() {
 // spec: VER#generic-versions
 #[test]
 fn version_refuses_a_number_too_large_for_an_integer() {
-    let reason = refusal(&v("1.99999999999999999999"));
-    assert!(reason.contains("too large"), "{reason}");
+    for value in ["1.99999999999999999999", "v1.99999999999999999999"] {
+        let reason = refusal(&v(value));
+        assert!(reason.contains("too large"), "{value}: {reason}");
+    }
     assert_eq!(
         int(&format!("{}.segments()[1]", v("1.9223372036854775807"))),
         rhai::INT::MAX
     );
+}
+
+// spec: VER#generic-versions
+#[test]
+fn a_large_number_in_a_non_numbered_version_is_a_word() {
+    let digest = v("sha256:99999999999999999999ab");
+    assert_eq!(
+        text(&format!("{digest}.segments()[2]")),
+        "99999999999999999999"
+    );
+    assert_eq!(text(&format!("{digest}.segments()[3]")), "ab");
+    assert_eq!(int(&format!("{}.segments()[2]", v("sha256:12"))), 12);
 }
 
 // spec: VER#generic-versions
@@ -138,8 +154,40 @@ fn versions_equal_under_libversion_are_equal() {
 fn a_leading_v_before_a_digit_is_disregarded_in_ordering() {
     assert!(truth(&format!("{} > {}", v("v2.0"), v("1.0"))));
     assert!(truth(&format!("{} > {}", v("v2.0"), v("0.1"))));
-    // Only a `v` directly before a digit is a prefix; `ver` is a word.
-    assert!(truth(&format!("{} < {}", v("ver2.0"), v("0.1"))));
+}
+
+// spec: VER#numbered-version
+// spec: VER#generic-versions
+#[test]
+fn non_numbered_versions_sort_above_numbered_ones() {
+    // Only a `v` directly before a digit is a prefix, so `ver2.0` is not numbered.
+    for name in [
+        "latest",
+        "main",
+        "ver2.0",
+        "v",
+        "sha256:244fd47e07d10",
+        "Latest",
+    ] {
+        for numbered in ["0.1", "99999.0", "v3.0", "V1"] {
+            let (a, b) = (v(numbered), v(name));
+            assert!(truth(&format!("{a} < {b}")), "{numbered} < {name}");
+            assert!(truth(&format!("{b} > {a}")), "{name} > {numbered}");
+            assert!(truth(&format!("{a} != {b}")), "{numbered} != {name}");
+        }
+    }
+}
+
+// spec: VER#generic-versions
+#[test]
+fn non_numbered_versions_order_by_their_bytes() {
+    let ascending = ["Latest", "latest", "main", "next", "sha256:0a", "sha256:a0"];
+    for pair in ascending.windows(2) {
+        let (a, b) = (v(pair[0]), v(pair[1]));
+        assert!(truth(&format!("{a} < {b}")), "{} < {}", pair[0], pair[1]);
+        assert!(!truth(&format!("{a} == {b}")), "{} == {}", pair[0], pair[1]);
+    }
+    assert!(truth(&format!("{} == {}", v("latest"), v("latest"))));
 }
 
 // spec: VER#generic-versions

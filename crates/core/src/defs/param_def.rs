@@ -2,7 +2,10 @@ use seedling_protocol::names::SiteVolumeName;
 use strum::VariantArray;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
-use super::version::{SemVer, Version};
+use super::{
+    purl::Purl,
+    version::{SemVer, Version},
+};
 
 // spec: ACN#param-schemas
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +50,8 @@ pub enum ParamKind {
     Version,
     // spec: ACN#param-kinds
     VersionSemver,
+    // spec: ACN#param-kinds
+    Purl,
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -91,6 +96,7 @@ impl ParamKind {
             }
             Self::Version => return Version::parse(value).map(ParsedValue::Version),
             Self::VersionSemver => return SemVer::parse(value).map(ParsedValue::SemVer),
+            Self::Purl => return Purl::parse(value).map(ParsedValue::Purl),
             // spec: ACN#kind-parsers
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|e| e.to_string())?;
@@ -114,6 +120,7 @@ impl ParamKind {
             Self::Random => "random",
             Self::Version => "version",
             Self::VersionSemver => "version-semver",
+            Self::Purl => "purl",
             Self::Volume => "volume",
         }
     }
@@ -132,6 +139,7 @@ impl std::str::FromStr for ParamKind {
             "random" => Ok(Self::Random),
             "version" => Ok(Self::Version),
             "version-semver" => Ok(Self::VersionSemver),
+            "purl" => Ok(Self::Purl),
             "volume" => Ok(Self::Volume),
             _ => Err(()),
         }
@@ -149,24 +157,31 @@ pub enum ParsedValue {
     },
     Version(Version),
     SemVer(SemVer),
+    Purl(Purl),
 }
 
 // spec: ACN#kind-parsers
 fn reject_control_characters(value: &str) -> Result<(), String> {
-    match value.chars().find(|c| {
-        matches!(
-            c.general_category(),
-            GeneralCategory::Control
-                | GeneralCategory::LineSeparator
-                | GeneralCategory::ParagraphSeparator
-        )
-    }) {
+    match line_breaking_character(value) {
         Some(c) => Err(format!(
             "contains U+{:04X}, which a single-line value cannot hold",
             u32::from(c)
         )),
         None => Ok(()),
     }
+}
+
+/// The first character in `value` whose general category is Control, Line
+/// Separator or Paragraph Separator.
+pub(super) fn line_breaking_character(value: &str) -> Option<char> {
+    value.chars().find(|c| {
+        matches!(
+            c.general_category(),
+            GeneralCategory::Control
+                | GeneralCategory::LineSeparator
+                | GeneralCategory::ParagraphSeparator
+        )
+    })
 }
 
 /// The local part and domain of an email address, split at the first `@`.

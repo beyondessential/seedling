@@ -13,17 +13,29 @@ Applies to the `version` and `version-semver` [param kinds](action.md#param-kind
 | libversion order | the ordering of the [Repology version comparison algorithm](https://github.com/repology/libversion/blob/master/doc/ALGORITHM.md), with none of its flags set |
 | SemVer version, precedence | as defined by [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) |
 
+## Terminology
+
+### Numbered version
+
+A `Version` whose text begins with an ASCII digit, or with a `v` or `V` directly followed by an ASCII digit.
+
 ## Generic versions
 
 `std::parse_version(text)` MUST return a `Version` for a value it accepts.
-It MUST accept a value made only of printable ASCII characters other than space, holding at least one ASCII digit, and MUST reject every other value.
+It MUST accept a non-empty value made only of printable ASCII characters other than space, and MUST reject every other value.
 
 > [!NOTE]
-> The `version` kind is for values whose scheme Seedling does not know, such as a Debian package version or a partial image tag like `16.4`.
-> Requiring a digit rejects floating tags such as `latest` or `stable`, which libversion order would otherwise place below every numbered release.
+> The `version` kind is for values whose scheme Seedling does not know, such as a Debian package version, a partial image tag like `16.4`, or a floating name like `latest`.
 
-Two `Version` values MUST compare by libversion order through `<`, `<=`, `>`, `>=`, `==` and `!=`.
-A leading `v` or `V` directly followed by an ASCII digit MUST be disregarded when ordering, so that `v2.0` and `2.0` are equal.
+Two `Version` values MUST compare through `<`, `<=`, `>`, `>=`, `==` and `!=` as follows:
+
+- Two numbered versions MUST compare by libversion order, disregarding a leading `v` or `V`, so that `v2.0` and `2.0` are equal.
+- A numbered version MUST compare below every `Version` that is not a numbered version.
+- Two `Version` values that are not numbered versions MUST compare by the byte order of their text.
+
+> [!NOTE]
+> A floating name such as `latest`, `main` or `next` usually tracks the newest work, so it sorts above every numbered release, where plain libversion order would place it below them.
+> A digest such as `sha256:244fd47e07d10` is not a numbered version either, and sorts with the floating names, though the order of two digests means nothing.
 
 > [!NOTE]
 > libversion order is the ordering the [VERS specification](https://github.com/package-url/vers-spec) names as the likely basis of its `generic` type.
@@ -32,7 +44,8 @@ A leading `v` or `V` directly followed by an ASCII digit MUST be disregarded whe
 
 `version.segments()` MUST return the components libversion order splits the value into, in order, without a leading `v` or `V` that ordering disregards.
 Each run of digits MUST be an integer, and each run of letters MUST be a string as written.
-`std::parse_version` MUST reject a value holding a run of digits too large for a BSL integer.
+In a `Version` that is not a numbered version, a run of digits too large for a BSL integer MUST be a string as written.
+`std::parse_version` MUST reject a numbered version holding a run of digits too large for a BSL integer.
 
 > [!NOTE]
 > `v1.0a1` has the segments `1`, `0`, `"a"` and `1`.
