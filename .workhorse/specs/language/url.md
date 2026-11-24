@@ -80,7 +80,7 @@ Where that succeeds, `host` MUST be the host it gives, as the host serialiser wr
 
 > [!NOTE]
 > Seedling never marks a `url` parameter secret by itself.
-> Where a URL can carry a password, such as a database connection string, the script has to call `secret(true)` on the parameter, or the whole value, password included, is stored and shown in clear.
+> Where a URL can carry a password, such as a database connection string, the script should call `secret(true)` on the parameter, otherwise the whole value, password included, will be stored and shown in clear.
 
 ### Ports
 
