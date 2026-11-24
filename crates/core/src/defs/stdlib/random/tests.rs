@@ -16,6 +16,11 @@ fn seed() -> Seed {
 //         key = hmac.new(seed, enc, hashlib.sha256).digest()
 //         c = Cipher(algorithms.ChaCha20(key, b'\0' * 16), mode=None).encryptor()
 //         return c.update(b'\0' * n)
+//
+// The password hashes come from the same stream, with the password as a
+// bytes field (`struct.pack('>Q', len(b)) + b`), hashed by the `argon2-cffi`
+// package's `hash_secret_raw` and the `bcrypt` package's `hashpw` under the
+// first 16 bytes as the salt.
 
 // spec: RND#byte-stream
 /// The crate's nonce and counter layout is RFC 8439's: the keystream from
@@ -42,6 +47,15 @@ fn a_string_field_is_its_length_then_its_utf8() {
     assert_eq!(
         encode(&[Field::Str("αb"), Field::Int(258)]).unwrap(),
         [0, 0, 0, 3, 0xce, 0xb1, b'b', 0, 0, 0, 0, 0, 0, 1, 2],
+    );
+}
+
+// spec: RND#call-encoding
+#[test]
+fn a_bytes_field_is_its_64_bit_length_then_its_bytes() {
+    assert_eq!(
+        encode(&[Field::Bytes(&[0, 0xff])]).unwrap(),
+        [0, 0, 0, 0, 0, 0, 0, 2, 0, 0xff],
     );
 }
 
@@ -118,4 +132,30 @@ fn values_differ_by_seed_label_and_argument() {
     assert_ne!(base, random_bytes(&other, "x", 16).unwrap());
     assert_ne!(base, random_bytes(&seed(), "y", 16).unwrap());
     assert_ne!(base[..], random_bytes(&seed(), "x", 17).unwrap()[..16]);
+}
+
+// spec: RND#values
+#[test]
+fn password_argon2id_known_answers() {
+    assert_eq!(
+        password_argon2id(&seed(), "admin", b"hunter2").unwrap(),
+        "$argon2id$v=19$m=19456,t=2,p=1$eA0bGYG8g5SThaHCG1szuA$zrYbxG4HKiUttKZEh43MF5UvSTwR24s6GL65LvBySBA",
+    );
+    assert_eq!(
+        password_argon2id(&seed(), "admin", b"hunter3").unwrap(),
+        "$argon2id$v=19$m=19456,t=2,p=1$XsDmAk0t7utsvf6V3PbJ/g$eMcb2vyif9g0DEy/w5G4BMEYZhRsoCQuoLksii8MZKM",
+    );
+}
+
+// spec: RND#values
+#[test]
+fn password_bcrypt_known_answers() {
+    assert_eq!(
+        password_bcrypt(&seed(), "admin", b"hunter2").unwrap(),
+        "$2b$12$1FdLI3rHvsI3XK1YulgECOMUv/W689tQBwC4Nd2HLyYMbj2QtJs/C",
+    );
+    assert_eq!(
+        password_bcrypt(&seed(), "admin", b"hunter3").unwrap(),
+        "$2b$12$XRSAwOVVNs1A8CPUJ7V5P.D5HWlFoeeUVW8VVCgJLMohHCFc9h5w.",
+    );
 }

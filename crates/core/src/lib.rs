@@ -28,6 +28,8 @@ pub struct ScriptLimits {
     pub max_map_size: usize,
     // spec: LIM#limits
     pub max_derived_values: usize,
+    // spec: LIM#limits
+    pub max_password_hashes: usize,
 }
 
 impl Default for ScriptLimits {
@@ -40,6 +42,7 @@ impl Default for ScriptLimits {
             max_array_size: 10_000,
             max_map_size: 10_000,
             max_derived_values: 1_000,
+            max_password_hashes: 16,
         }
     }
 }
@@ -58,9 +61,10 @@ pub fn setup_language(
     engine.set_max_string_size(limits.max_string_size);
     engine.set_max_array_size(limits.max_array_size);
     engine.set_max_map_size(limits.max_map_size);
-    // The engine has no limit of its own for derived values, so the helpers
-    // read theirs from the tag every evaluation of this engine starts with.
-    engine.set_default_tag(limits.max_derived_values as rhai::INT);
+    engine.set_default_tag(rhai::Dynamic::from(defs::stdlib::HelperLimits {
+        derived_values: limits.max_derived_values,
+        password_hashes: limits.max_password_hashes,
+    }));
 
     defs::register(&mut engine);
     let (scope, app) = defs::scope(bundle)?;

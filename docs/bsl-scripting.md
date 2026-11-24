@@ -472,6 +472,53 @@ Pitfalls:
 - **App-seeded values change when the seed does:** when an operator rotates it, when the app is deregistered and registered again, and when an app is moved to another host, which registers it there afresh. Data written with the old values keeps them, so a database whose password came from the seed needs its password changed to match.
 - **Derived values are withheld like secret parameters.** An environment value that holds one reads as `null` when an operator describes the app.
 
+#### Password hashes
+
+A service that stores a password hash rather than the password, such as a basic-auth user list, takes one from a password hash helper. Its salt is derived from the seed under the label, so the hash is the same on every evaluation:
+
+```rhai
+let admin_password = std::random_string("admin-password", 24, alphanumeric);
+let admin_hash = std::password_argon2id("admin-password", admin_password);
+```
+
+| helper | returns |
+| --- | --- |
+| `std::password_argon2id(label, password)` | an Argon2id hash, as a PHC string (`$argon2id$v=19$m=19456,t=2,p=1$...`) |
+| `std::password_bcrypt(label, password)` | a bcrypt hash (`$2b$12$...`) |
+
+The work factors are fixed, so a hash is cheap enough to compute on every evaluation, and one evaluation computes at most 16 hashes unless the operator raises the limit. Both throw on an empty password, which most often means a value that was never set. `std::password_bcrypt` also throws on a password longer than 72 bytes or holding a zero byte, because bcrypt would silently ignore everything from that point on. Inside a closure the operation's seed gives a different hash each operation; every one of them verifies the same password. A password hash is withheld like any other derived value.
+
+### Digests and encodings
+
+These helpers turn bytes into text and back, digest them, authenticate them under a key, and name them with a UUID. Each one that takes bytes accepts a string (its UTF-8 bytes), a Blob, a [bundle file](#definition-bundles) (its contents) or a bundle directory (every file's path and contents, in a fixed order).
+
+| helper | returns |
+| --- | --- |
+| `std::encode_hex(data)` / `std::decode_hex(text)` | lowercase hexadecimal / a Blob |
+| `std::encode_base64(data)` / `std::decode_base64(text)` | base64 with padding / a Blob |
+| `std::encode_base64url(data)` / `std::decode_base64url(text)` | URL-safe base64 without padding / a Blob |
+| `std::encode_utf8(text)` / `std::decode_utf8(data)` | a Blob / a string |
+| `std::digest_sha256(data)`, `std::digest_sha512(data)` | a 32 or 64 byte Blob |
+| `std::digest_blake2b(data)`, `std::digest_blake3(data)` | a 64 or 32 byte Blob |
+| `std::hmac_sha256(key, message)`, `std::hmac_sha512(key, message)` | a 32 or 64 byte Blob |
+| `std::uuid_v5(namespace, name)` | a version 5 UUID, hyphenated and lowercase |
+
+```rhai
+// A basic-auth header.
+let auth = "Basic " + std::encode_base64("admin:" + admin_password);
+
+// An environment value that changes when the config file does, restarting the workload with it.
+let config_rev = std::encode_hex(std::digest_sha256(app.file("nginx.conf")));
+let configs_rev = std::encode_hex(std::digest_blake3(app.dir("config")));
+
+// An identifier that is the same for the same name in every app, on every host.
+let tenant_id = std::uuid_v5("6ba7b811-9dad-11d1-80b4-00c04fd430c8", "https://example.org/tenant/a");
+```
+
+Decoders are strict: whitespace, wrong padding, a stray character or invalid UTF-8 throws rather than being skipped or repaired. To read bytes as text with invalid sequences replaced instead, use the Blob's own `as_string()`, which substitutes U+FFFD for each one.
+
+A result computed from a secret parameter or a derived value is withheld like the value itself, so the header above reads as `null` when an operator describes the app.
+
 ## Gates
 
 An app comes up from its resource graph alone: the runtime starts every static resource and keeps it running. Some changes need a step the graph cannot express, such as migrating a database before a new version serves. A _gate_ is such a step. The runtime keeps each gate satisfied by running its body whenever the gate's _key_ moves from the key of its last success, and holds back the workloads that depend on it until it is.

@@ -27,6 +27,10 @@ impl CustomType for Param {
             "value",
             |this: &mut Self| -> Result<String, Box<EvalAltResult>> {
                 if let Some(v) = &this.value {
+                    // spec: SEC#redaction
+                    if !crate::runtime::barrier::runtime::is_in_action_closure() {
+                        crate::runtime::seeds::record_param_value(this.name.as_str(), v);
+                    }
                     return Ok(v.clone());
                 }
                 if let Some(default) = this
