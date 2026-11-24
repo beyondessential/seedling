@@ -13,3 +13,4 @@ Adds the `url`, `url-origin` and `hostname` kinds and their `std::parse_*` helpe
   - username is always a string (empty when absent), and username and password come back percent-encoded, which we decode with `percent-encoding`, refusing invalid UTF-8 and the single-line kinds' banned categories;
   - a host-less URL (`file:///x`, `foo://`) and an opaque one (`mailto:`, `data:`) both parse, which we keep: the kind is for any URL a definition might take, not only network endpoints;
   - `idna::domain_to_ascii_strict` accepts `1.2.3.4`, so the all-digit last label check is ours.
+- **Fits alongside `purl`.** E7 added `ParsedValue::Purl` and `defs/purl.rs`, with the struct converted to a Rhai map in `stdlib/kinds.rs` and absent keys not inserted. `url` and `url-origin` follow the same shape. The decoded userinfo check reuses `line_breaking_character` in `param_def.rs` rather than copying it.
