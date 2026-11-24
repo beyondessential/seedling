@@ -139,7 +139,6 @@ pub enum Dependence {
     Params(BTreeSet<String>),
 }
 
-
 /// Installs an app seed for the static and validator contexts of one
 /// evaluation, and records what they derive; restores whatever it displaced
 /// when dropped, so a nested evaluation leaves its caller's frame intact.
@@ -325,10 +324,7 @@ pub fn operation_scope() -> Option<Scope> {
 pub fn record_param_value(name: &str, value: &str) {
     WITHHOLDING.with(|w| {
         if let Some(w) = w.borrow_mut().as_mut() {
-            w.params
-                .entry(name.to_owned())
-                .or_default()
-                .insert(value);
+            w.params.entry(name.to_owned()).or_default().insert(value);
         }
     });
 }

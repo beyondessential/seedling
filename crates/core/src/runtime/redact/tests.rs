@@ -139,3 +139,30 @@ fn a_document_about_no_app_is_left_as_it_is() {
     .unwrap();
     assert_eq!(document, serde_json::json!({ "note": "hunter2" }));
 }
+
+// spec: SEC#redaction
+#[test]
+fn a_value_is_found_wherever_it_sits() {
+    let mut values = SensitiveValues::default();
+    values.insert(b"\0secret");
+    values.insert(b"x");
+    for text in [&b"\0secret"[..], b"a\0secret", b"\0secretb", b"..x.."] {
+        assert!(values.found_in_bytes(text), "{text:?}");
+    }
+    for text in [&b"secret"[..], b"\0secre", b"\0\0secre", b"", b"yz"] {
+        assert!(!values.found_in_bytes(text), "{text:?}");
+    }
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_long_value_is_found_in_a_long_text_in_one_pass() {
+    let form: Vec<u8> = (0..1 << 19).map(|i: u32| (i * 7 % 251) as u8).collect();
+    let mut text = vec![b'.'; 1 << 19];
+    text.extend(&form);
+    let mut values = SensitiveValues::default();
+    values.insert(&form);
+    assert!(values.found_in_bytes(&text));
+    text.pop();
+    assert!(!values.found_in_bytes(&text));
+}

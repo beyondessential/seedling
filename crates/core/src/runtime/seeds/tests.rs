@@ -72,30 +72,3 @@ fn a_form_derived_twice_is_recorded_once() {
     record_derived(["same".to_owned()]);
     assert_eq!(frame.take_derived(|_| false, 0).unwrap().len(), 1);
 }
-
-// spec: SEC#redaction
-#[test]
-fn a_form_is_found_wherever_it_sits() {
-    let mut forms = Forms::default();
-    forms.insert(b"\0secret");
-    forms.insert(b"x");
-    for text in [&b"\0secret"[..], b"a\0secret", b"\0secretb", b"..x.."] {
-        assert!(forms.found_in(text), "{text:?}");
-    }
-    for text in [&b"secret"[..], b"\0secre", b"\0\0secre", b"", b"yz"] {
-        assert!(!forms.found_in(text), "{text:?}");
-    }
-}
-
-// spec: SEC#redaction
-#[test]
-fn a_long_form_is_found_in_a_long_text_in_one_pass() {
-    let form: Vec<u8> = (0..1 << 19).map(|i: u32| (i * 7 % 251) as u8).collect();
-    let mut text = vec![b'.'; 1 << 19];
-    text.extend(&form);
-    let mut forms = Forms::default();
-    forms.insert(&form);
-    assert!(forms.found_in(&text));
-    text.pop();
-    assert!(!forms.found_in(&text));
-}

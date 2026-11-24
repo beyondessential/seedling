@@ -5,6 +5,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
     fmt,
+    ops::ControlFlow,
     sync::{Arc, OnceLock},
 };
 
@@ -17,21 +18,94 @@ pub const REDACTED: &str = "<redacted>";
 
 /// A set of sensitive values, held only to find them in other text.
 ///
-/// Each is held as its length and a keyed hash of its bytes: a fixed size
-/// however long the value, and nothing a value could be read back from. A hash
-/// that collides only withholds text that held no sensitive value. Copies of
-/// a set share its storage until one is changed.
+/// Each is held by its length, as a keyed hash of its bytes and a keyed hash
+/// of its rolling hash: a fixed size however long the value, and nothing a
+/// value could be read back from. A hash that collides only withholds text
+/// that held no sensitive value. Copies of a set share its storage until one
+/// is changed.
 // spec: SEC#sensitive-value
 #[derive(Clone, Default)]
-pub struct SensitiveValues(Arc<BTreeMap<usize, HashSet<u64>>>);
+pub struct SensitiveValues(Arc<BTreeMap<usize, Hashes>>);
 
-/// The key the runtime hashes sensitive values under, drawn once per process.
-fn redaction_hasher() -> &'static SipHasher13 {
-    static HASHER: OnceLock<SipHasher13> = OnceLock::new();
-    HASHER.get_or_init(|| {
+#[derive(Clone, Default)]
+struct Hashes {
+    rolling: HashSet<u64>,
+    bytes: HashSet<u64>,
+}
+
+/// The modulus of the rolling hash, the Mersenne prime 2^61 - 1.
+const ROLLING_MODULUS: u64 = (1 << 61) - 1;
+
+/// The keys the runtime hashes sensitive values under, drawn once per process.
+struct RedactionKeys {
+    sip: SipHasher13,
+    /// The base of the rolling hash, a polynomial in it modulo
+    /// [`ROLLING_MODULUS`].
+    base: u64,
+}
+
+impl RedactionKeys {
+    fn rolling(&self, bytes: &[u8]) -> u64 {
+        bytes
+            .iter()
+            .fold(0, |h, &b| add_mod(mul_mod(h, self.base), digit(b)))
+    }
+
+    /// The base raised to `exp`, the weight of a window's first byte.
+    fn power(&self, exp: usize) -> u64 {
+        (0..exp).fold(1, |p, _| mul_mod(p, self.base))
+    }
+
+    /// The rolling hash of the window one byte on, dropping `out` from its
+    /// front, whose weight is `top`, and taking `next` on at its end.
+    fn slide(&self, rolling: u64, top: u64, out: u8, next: u8) -> u64 {
+        let dropped = add_mod(rolling, ROLLING_MODULUS - mul_mod(digit(out), top));
+        add_mod(mul_mod(dropped, self.base), digit(next))
+    }
+
+    /// A rolling hash under the keyed hash, so a short value cannot be read
+    /// back from it.
+    fn seal(&self, rolling: u64) -> u64 {
+        self.sip.hash(&rolling.to_le_bytes())
+    }
+}
+
+/// A byte's digit in the rolling hash, never zero, so leading zero bytes
+/// still count.
+fn digit(b: u8) -> u64 {
+    u64::from(b) + 1
+}
+
+/// `x` reduced once by the modulus: enough below twice the modulus.
+fn reduce(x: u64) -> u64 {
+    if x >= ROLLING_MODULUS {
+        x - ROLLING_MODULUS
+    } else {
+        x
+    }
+}
+
+fn add_mod(a: u64, b: u64) -> u64 {
+    reduce(a + b)
+}
+
+fn mul_mod(a: u64, b: u64) -> u64 {
+    let product = u128::from(a) * u128::from(b);
+    let low = u64::try_from(product & u128::from(ROLLING_MODULUS)).expect("61 bits");
+    let high = u64::try_from(product >> 61).expect("below 2^61 for reduced operands");
+    // Each part is at most the modulus, so the sum is at most twice it.
+    reduce(reduce(low + high))
+}
+
+fn redaction_keys() -> &'static RedactionKeys {
+    static KEYS: OnceLock<RedactionKeys> = OnceLock::new();
+    KEYS.get_or_init(|| {
         use rand::Rng;
         let mut rng = rand::rng();
-        SipHasher13::new_with_keys(rng.next_u64(), rng.next_u64())
+        RedactionKeys {
+            sip: SipHasher13::new_with_keys(rng.next_u64(), rng.next_u64()),
+            base: 256 + rng.next_u64() % (ROLLING_MODULUS - 256),
+        }
     })
 }
 
@@ -42,7 +116,7 @@ impl SensitiveValues {
 
     /// How many distinct values are held.
     pub fn len(&self) -> usize {
-        self.0.values().map(HashSet::len).sum()
+        self.0.values().map(|h| h.bytes.len()).sum()
     }
 
     // spec: SEC#sensitive-value
@@ -52,11 +126,10 @@ impl SensitiveValues {
         if value.is_empty() {
             return;
         }
-        let hash = redaction_hasher().hash(value);
-        Arc::make_mut(&mut self.0)
-            .entry(value.len())
-            .or_default()
-            .insert(hash);
+        let keys = redaction_keys();
+        let hashes = Arc::make_mut(&mut self.0).entry(value.len()).or_default();
+        hashes.rolling.insert(keys.seal(keys.rolling(value)));
+        hashes.bytes.insert(keys.sip.hash(value));
     }
 
     /// Hold every value `other` holds.
@@ -70,61 +143,101 @@ impl SensitiveValues {
         }
         let ours = Arc::make_mut(&mut self.0);
         for (len, hashes) in other.0.iter() {
-            ours.entry(*len).or_default().extend(hashes);
+            let held = ours.entry(*len).or_default();
+            held.rolling.extend(&hashes.rolling);
+            held.bytes.extend(&hashes.bytes);
         }
     }
 
-    /// The byte ranges of `text` that an occurrence of a held value covers.
+    /// Call `found` with the byte range of each occurrence of a held value in
+    /// `bytes`, until it breaks.
     ///
-    /// A held value is valid UTF-8, so its bytes start and end on character
-    /// boundaries wherever they occur; a range that does not can only come
-    /// from a hash collision and is passed over. So is one that overlaps a
-    /// [`REDACTED`] marker already in the text, so that masking text twice
-    /// leaves it as masking it once did, however short a held value is.
-    fn occurrences<'t>(&'t self, text: &'t str) -> impl Iterator<Item = (usize, usize)> + 't {
-        let hasher = redaction_hasher();
-        let bytes = text.as_bytes();
+    /// Each length is one pass over `bytes`: the rolling hash moves along a
+    /// window at a time, and only a window it matches is hashed in full.
+    fn scan(&self, bytes: &[u8], mut found: impl FnMut(usize, usize) -> ControlFlow<()>) {
+        let keys = redaction_keys();
+        for (&len, hashes) in self.0.iter() {
+            let Some(first) = bytes.get(..len) else {
+                return;
+            };
+            let top = keys.power(len - 1);
+            let mut rolling = keys.rolling(first);
+            let mut start = 0;
+            loop {
+                if hashes.rolling.contains(&keys.seal(rolling))
+                    && hashes
+                        .bytes
+                        .contains(&keys.sip.hash(&bytes[start..start + len]))
+                    && found(start, start + len).is_break()
+                {
+                    return;
+                }
+                let Some(&next) = bytes.get(start + len) else {
+                    break;
+                };
+                rolling = keys.slide(rolling, top, bytes[start], next);
+                start += 1;
+            }
+        }
+    }
+
+    /// The byte ranges of `text` that an occurrence of a held value covers,
+    /// until `found` breaks.
+    ///
+    /// A range that does not start and end on character boundaries is passed
+    /// over: a held value that is valid UTF-8 always does wherever it occurs,
+    /// so such a range is a Blob's bytes or a hash collision. So is one that
+    /// overlaps a [`REDACTED`] marker already in the text, so that masking
+    /// text twice leaves it as masking it once did, however short a held
+    /// value is.
+    fn occurrences(&self, text: &str, mut found: impl FnMut(usize, usize) -> ControlFlow<()>) {
         let markers: Vec<(usize, usize)> = text
             .match_indices(REDACTED)
             .map(|(at, m)| (at, at + m.len()))
             .collect();
-        self.0.iter().flat_map(move |(len, hashes)| {
-            let markers = markers.clone();
-            bytes
-                .windows(*len)
-                .enumerate()
-                .filter(move |(_, window)| hashes.contains(&hasher.hash(window)))
-                .map(move |(start, _)| (start, start + len))
-                .filter(|(start, end)| text.is_char_boundary(*start) && text.is_char_boundary(*end))
-                .filter(move |(start, end)| {
-                    !markers
-                        .iter()
-                        .any(|(m_start, m_end)| start < m_end && m_start < end)
-                })
-        })
+        self.scan(text.as_bytes(), |start, end| {
+            let on_boundaries = text.is_char_boundary(start) && text.is_char_boundary(end);
+            let in_marker = markers
+                .iter()
+                .any(|(m_start, m_end)| start < *m_end && *m_start < end);
+            if on_boundaries && !in_marker {
+                found(start, end)
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
     }
 
     // spec: SEC#redaction
     /// Whether `text` contains any held value.
     pub fn found_in(&self, text: &str) -> bool {
-        self.occurrences(text).next().is_some()
+        let mut any = false;
+        self.occurrences(text, |_, _| {
+            any = true;
+            ControlFlow::Break(())
+        });
+        any
     }
 
     /// Whether `bytes` contain any held value, wherever it starts.
     pub fn found_in_bytes(&self, bytes: &[u8]) -> bool {
-        let hasher = redaction_hasher();
-        self.0.iter().any(|(len, hashes)| {
-            bytes
-                .windows(*len)
-                .any(|window| hashes.contains(&hasher.hash(window)))
-        })
+        let mut any = false;
+        self.scan(bytes, |_, _| {
+            any = true;
+            ControlFlow::Break(())
+        });
+        any
     }
 
     // spec: SEC#withheld-values
     /// `text` with each stretch an occurrence of a held value covers replaced
     /// by [`REDACTED`], and the rest as it is.
     pub fn mask<'t>(&self, text: &'t str) -> Cow<'t, str> {
-        let mut ranges: Vec<(usize, usize)> = self.occurrences(text).collect();
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        self.occurrences(text, |start, end| {
+            ranges.push((start, end));
+            ControlFlow::Continue(())
+        });
         if ranges.is_empty() {
             return Cow::Borrowed(text);
         }
@@ -328,7 +441,7 @@ impl Scope {
             if is_secret(name) {
                 match value {
                     serde_json::Value::String(s) => values.insert(s),
-                    other => values.insert(&other.to_string()),
+                    other => values.insert(other.to_string()),
                 }
             }
         }
