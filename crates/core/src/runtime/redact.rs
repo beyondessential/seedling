@@ -206,6 +206,87 @@ impl SensitiveValues {
     }
 }
 
+// spec: SEC#responses-and-events
+/// Whether `member` is an identifier: a member that names or identifies
+/// something rather than describing it, which the check of a whole response
+/// or event leaves as it is.
+pub fn is_identifier(member: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "name",
+        "app",
+        "id",
+        "kind",
+        "type",
+        "status",
+        "state",
+        "phase",
+        "lifecycle",
+        "health",
+        "code",
+        "trigger",
+        "priority",
+        "gate",
+        "unit",
+        "method",
+        "timestamp",
+        "generation",
+    ];
+    const SUFFIXES: &[&str] = &[
+        "_id",
+        "_name",
+        "_kind",
+        "_type",
+        "_state",
+        "_at",
+        "_time",
+        "_generation",
+        "_hash",
+        "_fingerprint",
+    ];
+    NAMES.contains(&member) || SUFFIXES.iter().any(|suffix| member.ends_with(suffix))
+}
+
+// spec: SEC#responses-and-events
+/// Mask, in place, each string in `document` that contains a sensitive value
+/// of the app it concerns, other than an identifier. `app` is the app the
+/// whole concerns, if any; an object with an `app` member concerns that app
+/// instead. `values_for` gives an app's sensitive values.
+pub fn mask_document<E>(
+    document: &mut serde_json::Value,
+    app: Option<&str>,
+    values_for: &mut impl FnMut(&str) -> Result<SensitiveValues, E>,
+) -> Result<(), E> {
+    use serde_json::Value;
+    match document {
+        Value::String(s) => {
+            if let Some(app) = app
+                && let Cow::Owned(masked) = values_for(app)?.mask(s)
+            {
+                *s = masked;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                mask_document(item, app, values_for)?;
+            }
+        }
+        Value::Object(members) => {
+            let named = members
+                .get("app")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let app = named.as_deref().or(app);
+            for (member, value) in members.iter_mut() {
+                if !is_identifier(member) {
+                    mask_document(value, app, values_for)?;
+                }
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+    Ok(())
+}
+
 impl fmt::Debug for SensitiveValues {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SensitiveValues({} withheld)", self.len())

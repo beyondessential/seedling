@@ -3,6 +3,7 @@ pub mod canopy;
 pub mod forwards;
 pub mod handler;
 pub mod logs;
+pub(crate) mod redaction;
 pub mod server;
 pub mod shells;
 pub mod state;

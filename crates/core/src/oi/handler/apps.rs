@@ -550,7 +550,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // Fetch all active faults for this app once, then split by level.
 
     let name_owned = params.app.clone();
-    let mut all_faults_for_app = state
+    let all_faults_for_app = state
         .db
         .call(move |db| faults::list_active_faults(db, Some(&name_owned)))
         .map_err(|e| {
@@ -559,11 +559,6 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 format!("could not read the app's faults: {e}"),
             )
         })?;
-    // spec: SEC#matching
-    // A fault filed before a value it quotes became sensitive is masked now.
-    for fault in &mut all_faults_for_app {
-        fault.description = sensitive.mask(&fault.description).into_owned();
-    }
 
     // spec: APPS#description — app-level faults from the DB.
     let app_faults_json: Vec<Value> = all_faults_for_app

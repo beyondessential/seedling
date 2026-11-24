@@ -471,7 +471,7 @@ async fn handle_bidi_stream(
         };
 
         let rx = state.event_tx.subscribe();
-        tokio::spawn(event_stream_task(uni, rx));
+        tokio::spawn(event_stream_task(Arc::clone(&state), uni, rx));
         return;
     }
 
@@ -697,18 +697,29 @@ async fn read_json_line(
 // spec: WIRE#subscription-requests
 // spec: EVT#ordering
 async fn event_stream_task(
+    state: Arc<OiState>,
     mut send: quinn::SendStream,
     rx: tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
 ) {
-    pump_events(&mut send, rx).await;
+    // spec: SEC#responses-and-events
+    let mut sensitive = super::redaction::SensitiveByApp::new(&state);
+    pump_events(&mut send, rx, |event| {
+        tokio::task::block_in_place(|| {
+            super::redaction::withhold_event(&mut sensitive, &state, event)
+        })
+    })
+    .await;
     let _ = send.finish();
 }
 
 /// Write events from `rx` to `send` as newline-delimited JSON until the bus
-/// closes or the write fails.
+/// closes or the write fails, each as `withhold` gives it. An event
+/// `withhold` gives nothing for is not sent, and a gap marker stands in for
+/// it.
 async fn pump_events(
     send: &mut (impl tokio::io::AsyncWrite + Unpin),
     mut rx: tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
+    mut withhold: impl FnMut(&seedling_protocol::events::OiEvent) -> Option<serde_json::Value>,
 ) {
     use tokio::io::AsyncWriteExt as _;
 
@@ -722,7 +733,12 @@ async fn pump_events(
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         };
-        let mut bytes = match serde_json::to_vec(&event) {
+        let sent = withhold(&event).map_or_else(
+            // spec: EVT#gaps
+            || serde_json::to_vec(&seedling_protocol::events::OiEvent::events_dropped(None)),
+            |value| serde_json::to_vec(&value),
+        );
+        let mut bytes = match sent {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!("event serialisation error: {e}");
@@ -758,7 +774,7 @@ mod event_stream_tests {
         drop(tx);
 
         let mut out = Vec::new();
-        pump_events(&mut out, rx).await;
+        pump_events(&mut out, rx, |event| serde_json::to_value(event).ok()).await;
         let lines: Vec<serde_json::Value> = String::from_utf8(out)
             .unwrap()
             .lines()
@@ -770,6 +786,62 @@ mod event_stream_tests {
         assert_eq!(lines[0]["skipped"], 3);
         assert_eq!(lines[1]["reason"], "busy-3");
         assert_eq!(lines[2]["reason"], "busy-4");
+    }
+
+    // spec: SEC#responses-and-events
+    #[test]
+    fn an_event_is_masked_against_its_apps_sensitive_values() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"
+                    app.param("db-password").kind("password").required(false);
+                    app.deployment("web").image("docker.io/library/nginx:1.29");
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.call(
+            "/apps/params/set",
+            serde_json::json!({ "app": "demo", "params": { "db-password": "Kaka-Lagoon-19" } }),
+        )
+        .unwrap();
+        let (tx, rx) = tokio::sync::broadcast::channel(4);
+        tx.send(OiEvent::FaultFiled {
+            timestamp: jiff::Timestamp::now(),
+            id: "f1".into(),
+            app: "demo".parse().unwrap(),
+            resource_type: None,
+            resource_name: None,
+            instance_id: None,
+            kind: "operation_failed".into(),
+            description: "cannot reach postgres://app:Kaka-Lagoon-19@db".into(),
+            actor: None,
+        })
+        .unwrap();
+        drop(tx);
+
+        let state = std::sync::Arc::clone(&oi.state);
+        let out = oi.block_on(async move {
+            let mut out = Vec::new();
+            let mut sensitive = crate::oi::redaction::SensitiveByApp::new(&state);
+            pump_events(&mut out, rx, |event| {
+                tokio::task::block_in_place(|| {
+                    crate::oi::redaction::withhold_event(&mut sensitive, &state, event)
+                })
+            })
+            .await;
+            out
+        });
+        let line: serde_json::Value =
+            serde_json::from_str(String::from_utf8(out).unwrap().trim()).unwrap();
+        assert_eq!(
+            line["description"],
+            "cannot reach postgres://app:<redacted>@db"
+        );
+        assert_eq!(line["app"], "demo");
     }
 }
 

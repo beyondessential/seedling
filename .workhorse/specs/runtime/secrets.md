@@ -153,6 +153,22 @@ In free text, such as a log line, a breadcrumb, a fault description or an error 
 > [!NOTE]
 > Masking each occurrence rather than the whole text keeps a command or message readable enough to debug from, and leaks no more than withholding it entirely.
 
+### Responses and events
+
+The runtime MUST check each response the [Operator Interface](../overview.md#operator-interface) returns, and each [event](../interface/events.md) it emits, as a whole before sending it.
+Each string in it that contains a sensitive value of the app it concerns MUST be masked as free text is, unless the string is an identifier.
+A response concerns the app its request names, and an event the app it names.
+Within either, an object that names an app concerns that app.
+
+An identifier is a member that names or identifies something rather than describing it: a name, an id, a kind or type, a state or status, a code, or a time.
+
+A definition or template retrieved through [definition retrieval](../interface/apps.md#definition-retrieval) or [template inspection](../interface/templates.md#inspection) is returned as stored.
+
+> [!NOTE]
+> The check catches a sensitive value in a member no rule above names, so that a new member cannot leak one by being left out of them.
+> A name is how a client refers to what the runtime reports, so masking one would break the reference while protecting only what a script chose to put there.
+> A definition is the operator's own text, and returning it altered would corrupt the next update made from it.
+
 ## Migration
 
 When a parameter becomes secret, the runtime MUST move its stored value from non-secret storage to secret storage without operator action.

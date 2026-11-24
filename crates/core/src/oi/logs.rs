@@ -1,16 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use serde::Deserialize;
 
-use seedling_protocol::{
-    error::{ErrorCode, OiError},
-    events::OiEvent,
-    names::AppName,
-};
-use tokio::sync::broadcast::{Receiver, error::TryRecvError};
+use seedling_protocol::error::{ErrorCode, OiError};
 
 use crate::{
-    oi::state::OiState,
+    oi::{redaction::SensitiveByApp, state::OiState},
     runtime::redact::SensitiveValues,
     system::journal::{InfraComponent, LogEntry, LogStreamOptions, LogTarget},
 };
@@ -98,58 +93,6 @@ pub(crate) fn validate_params(
         // spec: LOG#entry-selection
         tail: params.tail,
     })
-}
-
-/// The sensitive values of each app whose breadcrumbs a log stream serves,
-/// read again once a change to the app's parameters, definition or seed is
-/// announced, so that a follow picks up a value that became sensitive.
-struct SensitiveByApp {
-    values: HashMap<String, SensitiveValues>,
-    changes: Receiver<OiEvent>,
-}
-
-impl SensitiveByApp {
-    fn new(state: &OiState) -> Self {
-        Self {
-            values: HashMap::new(),
-            changes: state.event_tx.subscribe(),
-        }
-    }
-
-    /// Forget the values of every app whose sensitive values a change since
-    /// the last call may have moved, and of every app where changes were
-    /// missed.
-    fn forget_changed(&mut self) {
-        loop {
-            match self.changes.try_recv() {
-                Ok(
-                    OiEvent::ParamsChanged { app, .. }
-                    | OiEvent::AppUpdated { app, .. }
-                    | OiEvent::AppSeedRotated { app, .. }
-                    | OiEvent::AppRegistered { app, .. },
-                ) => {
-                    self.values.remove(app.as_str());
-                }
-                Ok(_) => {}
-                Err(TryRecvError::Lagged(_)) => self.values.clear(),
-                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-            }
-        }
-    }
-
-    fn of(&mut self, state: &OiState, app: &str) -> Result<&SensitiveValues, OiError> {
-        self.forget_changed();
-        if !self.values.contains_key(app) {
-            let values = match AppName::new(app) {
-                Ok(name) => tokio::task::block_in_place(|| {
-                    crate::oi::handler::current_sensitive(state, &name)
-                })?,
-                Err(_) => SensitiveValues::default(),
-            };
-            self.values.insert(app.to_owned(), values);
-        }
-        Ok(&self.values[app])
-    }
 }
 
 // spec: SEC#matching

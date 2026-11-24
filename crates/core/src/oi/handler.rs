@@ -433,6 +433,13 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
 
+    // spec: SEC#responses-and-events
+    let app = serde_json::from_str::<Value>(params.0)
+        .ok()
+        .and_then(|p| p.get("app").and_then(Value::as_str).map(str::to_owned));
+    let result =
+        crate::oi::redaction::withhold_response(state, &req.method, app.as_deref(), result);
+
     match &result {
         Ok(_) => tracing::info!(method = %req.method, "ok"),
         Err(e) => tracing::info!(

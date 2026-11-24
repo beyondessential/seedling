@@ -98,3 +98,44 @@ fn a_scope_holds_secret_params_as_text() {
     assert!(values.found_in("t0ken") && values.found_in("4321"));
     assert!(!values.found_in("plain"));
 }
+
+// spec: SEC#responses-and-events
+#[test]
+fn a_document_masks_each_strings_value_except_identifiers() {
+    let mut document = serde_json::json!({
+        "name": "web-hunter2",
+        "note": "built with hunter2",
+        "items": [{ "detail": "hunter2 again", "instance_id": "hunter2-1" }],
+        "elsewhere": { "app": "other", "detail": "hunter2 kept", "secret": "Kea-7" },
+    });
+    let mut asked = Vec::new();
+    mask_document(&mut document, Some("demo"), &mut |app: &str| {
+        asked.push(app.to_owned());
+        Ok::<_, ()>(match app {
+            "demo" => holding(&["hunter2"]),
+            _ => holding(&["Kea-7"]),
+        })
+    })
+    .unwrap();
+    assert_eq!(
+        document,
+        serde_json::json!({
+            "name": "web-hunter2",
+            "note": "built with <redacted>",
+            "items": [{ "detail": "<redacted> again", "instance_id": "hunter2-1" }],
+            "elsewhere": { "app": "other", "detail": "hunter2 kept", "secret": "<redacted>" },
+        })
+    );
+    assert!(asked.iter().any(|a| a == "other"));
+}
+
+// spec: SEC#responses-and-events
+#[test]
+fn a_document_about_no_app_is_left_as_it_is() {
+    let mut document = serde_json::json!({ "note": "hunter2" });
+    mask_document(&mut document, None, &mut |_: &str| {
+        Ok::<_, ()>(holding(&["hunter2"]))
+    })
+    .unwrap();
+    assert_eq!(document, serde_json::json!({ "note": "hunter2" }));
+}
