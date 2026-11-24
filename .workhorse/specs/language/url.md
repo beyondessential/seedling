@@ -78,6 +78,10 @@ Where that succeeds, `host` MUST be the host it gives, as the host serialiser wr
 > [!NOTE]
 > A password holding `@`, `:` or `/` can only be written percent-encoded in a URL, and a script passing it on needs the password itself.
 
+> [!NOTE]
+> A `url` parameter is stored and listed in clear unless the script declares it secret.
+> A script that takes a URL carrying a password, such as a database connection string, sets `secret(true)` on it, so the password is kept in protected storage and withheld wherever values are shown.
+
 ### Ports
 
 `port` MUST be the URL's port, as an integer, where it gives one, and otherwise the [default port](https://url.spec.whatwg.org/#default-port) of its scheme.
