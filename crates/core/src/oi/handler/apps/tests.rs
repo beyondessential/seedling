@@ -1992,6 +1992,55 @@ fn a_one_character_secret_withholds_every_string_holding_it() {
     assert_eq!(env["WITHOUT"], json!("abc"), "{env}");
 }
 
+// spec: SEC#matching
+#[test]
+fn a_fault_quoting_a_value_that_became_sensitive_is_masked_when_served() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("db-password").kind("password").required(false);
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.state.db.call(|db| {
+        crate::runtime::faults::file_fault(
+            db,
+            &seedling_protocol::names::AppName::new("demo").unwrap(),
+            None,
+            None,
+            None,
+            "operation_failed",
+            "migrate failed: cannot reach postgres://app:Kiwi-Anchor-63@db",
+        )
+        .unwrap();
+    });
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "db-password": "Kiwi-Anchor-63" } }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let listed = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+    for (from, served) in [("describe", &shown["faults"]), ("listing", &listed)] {
+        let fault = served
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["kind"] == "operation_failed")
+            .unwrap_or_else(|| panic!("{from}: {served}"));
+        assert_eq!(
+            fault["description"], "migrate failed: cannot reach postgres://app:<redacted>@db",
+            "{from}"
+        );
+    }
+}
+
 // spec: SEC#withheld-values
 #[test]
 fn a_validator_rejection_masks_a_secret_value_it_quotes() {

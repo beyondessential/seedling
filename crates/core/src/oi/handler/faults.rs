@@ -43,10 +43,18 @@ pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerR
         .db
         .call(move |db| faults::list_active_faults(db, app.as_ref()))
         .map_err(|e| OiError::internal(format!("db query: {e}")))?;
+    // spec: SEC#matching
+    // A fault filed before a value it quotes became sensitive is masked now.
+    let mut sensitive = std::collections::HashMap::new();
     let result: Vec<serde_json::Value> = records
         .into_iter()
         .map(|f| {
-            json!({
+            if !sensitive.contains_key(&f.app) {
+                let values = super::current_sensitive(state, &f.app)?;
+                sensitive.insert(f.app.clone(), values);
+            }
+            let description = sensitive[&f.app].mask(&f.description).into_owned();
+            Ok(json!({
                 "id": f.id,
                 "app": f.app,
                 "resource_type": f.resource_type,
@@ -54,10 +62,10 @@ pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerR
                 "instance_id": f.instance_id,
                 "kind": f.kind,
                 "timestamp": f.timestamp.to_string(),
-                "description": f.description,
-            })
+                "description": description,
+            }))
         })
-        .collect();
+        .collect::<Result<_, OiError>>()?;
     Ok(json!(result))
 }
 

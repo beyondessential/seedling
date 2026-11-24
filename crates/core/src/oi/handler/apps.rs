@@ -522,8 +522,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to read params: {e}")))?;
 
     // Fetch all active faults for this app once, then split by level.
+    // spec: SEC#matching
+    let sensitive = super::params::current_sensitive(state, &params.app)?;
+
     let name_owned = params.app.clone();
-    let all_faults_for_app = state
+    let mut all_faults_for_app = state
         .db
         .call(move |db| faults::list_active_faults(db, Some(&name_owned)))
         .map_err(|e| {
@@ -532,6 +535,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 format!("could not read the app's faults: {e}"),
             )
         })?;
+    // spec: SEC#matching
+    // A fault filed before a value it quotes became sensitive is masked now.
+    for fault in &mut all_faults_for_app {
+        fault.description = sensitive.mask(&fault.description).into_owned();
+    }
 
     // spec: APPS#description — app-level faults from the DB.
     let app_faults_json: Vec<Value> = all_faults_for_app
@@ -566,8 +574,6 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     };
 
     let def = entry.app.def.load();
-    // spec: SEC#matching
-    let sensitive = super::params::current_sensitive(state, &params.app)?;
 
     // spec: APPS#gates
     let gate_standing = gate_surface::read(
