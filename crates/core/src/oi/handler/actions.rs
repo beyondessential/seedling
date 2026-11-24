@@ -14,6 +14,7 @@ use crate::{
     runtime::{
         AppPhase,
         action_params::{self, ParamValidationError, VolumeLookup},
+        param_map::ParamMap,
         scheduler::{CancelOutcome, RejectReason},
     },
 };
@@ -105,7 +106,7 @@ fn validate_action_params(
 fn validate_volume_params(
     state: &OiState,
     schema: &BTreeMap<ParamName, ParamDef>,
-    params: &serde_json::Map<String, serde_json::Value>,
+    params: &ParamMap,
 ) -> Result<(), OiError> {
     action_params::validate_volume_params(schema, params, &StateVolumeLookup(state))
         .map_err(validation_error_to_oi)
@@ -114,8 +115,8 @@ fn validate_volume_params(
 // spec: ACI#invoking-an-action
 fn apply_action_param_schema(
     action_params_schema: &BTreeMap<ParamName, ParamDef>,
-    params: &mut serde_json::Map<String, serde_json::Value>,
-) -> Result<(), OiError> {
+    params: serde_json::Map<String, serde_json::Value>,
+) -> Result<ParamMap, OiError> {
     action_params::apply_schema(action_params_schema, params).map_err(validation_error_to_oi)
 }
 
@@ -155,10 +156,10 @@ pub(crate) fn invoke_action(
 ) -> HandlerResult {
     let app_name = &params.app;
     let action_name = &params.name;
-    let mut action_params = params.params.unwrap_or_default();
-    validate_action_params(&action_params)?;
+    let supplied_params = params.params.unwrap_or_default();
+    validate_action_params(&supplied_params)?;
 
-    let phase_handle = {
+    let (phase_handle, action_params) = {
         let reg = state.registry.read();
         let entry = reg
             .get(app_name.as_str())
@@ -189,11 +190,11 @@ pub(crate) fn invoke_action(
             .ok_or_else(|| OiError::not_found(format!("action not found: {action_name}")))?;
 
         // spec: ACI#invoking-an-action
-        apply_action_param_schema(&action_def.params, &mut action_params)?;
+        let action_params = apply_action_param_schema(&action_def.params, supplied_params)?;
         // spec: ACN#volume-params
         validate_volume_params(state, &action_def.params, &action_params)?;
 
-        Arc::clone(&entry.phase)
+        (Arc::clone(&entry.phase), action_params)
     };
 
     // Operator-invoked action: source and target generation are equal to the

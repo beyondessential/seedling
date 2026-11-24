@@ -79,9 +79,9 @@ fn accepts(helper: &str, value: &str) -> String {
 fn every_kind_has_a_parser_named_for_it() {
     use strum::VariantArray;
 
-    use crate::defs::param_def::ParamKind;
+    use crate::defs::param_def::ParamKindName;
 
-    for &kind in ParamKind::VARIANTS {
+    for &kind in ParamKindName::VARIANTS {
         let name = crate::defs::stdlib::kinds::helper_name(kind);
         let err = eval(&format!("std::{name}(())")).expect_err("a unit is not a value");
         assert!(

@@ -42,7 +42,7 @@ pub struct QueuedOperation {
     /// Action params passed by the invoker. Empty map for actions with no
     /// params, and for a gate run.
     // spec: OPS#persistence
-    pub params: serde_json::Map<String, serde_json::Value>,
+    pub params: crate::runtime::param_map::ParamMap,
     // spec: OPS#initiating-events
     pub generation: u64,
     // spec: EVT#event-types
@@ -248,7 +248,7 @@ impl Scheduler {
         &mut self,
         app: &AppName,
         target: &OperationTarget,
-        params: serde_json::Map<String, serde_json::Value>,
+        params: crate::runtime::param_map::ParamMap,
         generation: u64,
         trigger: &str,
         phase: &Mutex<AppPhase>,
@@ -273,7 +273,7 @@ impl Scheduler {
         &mut self,
         app: &AppName,
         target: &OperationTarget,
-        params: serde_json::Map<String, serde_json::Value>,
+        params: crate::runtime::param_map::ParamMap,
         generation: u64,
         trigger: &str,
         actor: Option<Arc<seedling_protocol::actor::Actor>>,
@@ -300,7 +300,7 @@ impl Scheduler {
         &mut self,
         app: &AppName,
         target: &OperationTarget,
-        params: serde_json::Map<String, serde_json::Value>,
+        params: crate::runtime::param_map::ParamMap,
         generation: u64,
         trigger: &str,
         operation_id: OperationId,

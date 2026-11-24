@@ -268,7 +268,7 @@ pub(crate) fn run_gate(
         state,
         app_name,
         OperationTarget::Gate(gate_name.clone()),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         generation,
         "operator",
         &phase,

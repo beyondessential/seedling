@@ -242,34 +242,6 @@ pub enum OperationResult {
 // run_operation
 // ---------------------------------------------------------------------------
 
-pub(super) fn json_value_to_rhai_dynamic(v: &serde_json::Value) -> rhai::Dynamic {
-    match v {
-        serde_json::Value::String(s) => Dynamic::from(s.clone()),
-        serde_json::Value::Bool(b) => Dynamic::from(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Dynamic::from(i)
-            } else if let Some(f) = n.as_f64() {
-                Dynamic::from(f)
-            } else {
-                Dynamic::UNIT
-            }
-        }
-        serde_json::Value::Null => Dynamic::UNIT,
-        serde_json::Value::Object(map) => {
-            let rhai_map: rhai::Map = map
-                .iter()
-                .map(|(k, v)| (k.as_str().into(), json_value_to_rhai_dynamic(v)))
-                .collect();
-            Dynamic::from(rhai_map)
-        }
-        serde_json::Value::Array(arr) => {
-            let rhai_arr: rhai::Array = arr.iter().map(json_value_to_rhai_dynamic).collect();
-            Dynamic::from(rhai_arr)
-        }
-    }
-}
-
 /// What one run of the runtime executes: an action's closure, a shell's, or
 /// a gate's body.
 // spec: OPS#operation
@@ -322,10 +294,9 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub registry: Arc<dyn InstanceRegistry>,
     pub active_progress: Option<Arc<RwLock<Option<OperationProgress>>>>,
     pub tick_notify: Option<Arc<Notify>>,
-    /// Action params passed by the invoker. For install actions, contains the
-    /// validated requirements. Empty map for actions with no params.
+    /// The param map the closure receives. Empty for actions with no params.
     // spec: OPS#persistence
-    pub params: serde_json::Map<String, serde_json::Value>,
+    pub params: crate::runtime::param_map::ParamMap,
     /// DB handle for persisting dynamic resources created during the operation.
     pub db: Option<crate::runtime::db::DbHandle>,
     /// Cipher for sealing and opening the secret parameters of a recorded
@@ -538,10 +509,15 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     };
     scope.push("__bsl_rt", rt);
     scope.push("__bsl_closure", closure);
-    let param_map: rhai::Map = params
-        .iter()
-        .map(|(k, v)| (k.as_str().into(), json_value_to_rhai_dynamic(v)))
-        .collect();
+    let param_map = match params.to_rhai() {
+        Ok(param_map) => param_map,
+        Err(e) => {
+            return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                e.into(),
+                rhai::Position::NONE,
+            )));
+        }
+    };
     scope.push("__bsl_param", param_map);
     if is_shell {
         scope.push("__bsl_shell", super::shell::ShellControl::new());

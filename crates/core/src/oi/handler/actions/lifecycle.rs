@@ -257,19 +257,19 @@ pub(crate) fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::b
 /// The params an operation starts with.
 pub enum OperationParams {
     /// As requested: volume params name site volumes and are bound at dispatch.
-    Requested(serde_json::Map<String, serde_json::Value>),
+    Requested(crate::runtime::param_map::ParamMap),
     /// As persisted by an interrupted operation, with the bindings its
     /// `<key>_volume` params name, which are established again as they were.
     // spec: OPS#operation-scoped-volumes
     Replayed {
-        params: serde_json::Map<String, serde_json::Value>,
+        params: crate::runtime::param_map::ParamMap,
         bindings: crate::runtime::history::OperationVolumeBindings,
     },
 }
 
 /// A dispatch's params with its volume params bound, and the bindings made.
 pub(crate) struct BoundParams {
-    pub params: serde_json::Map<String, serde_json::Value>,
+    pub params: crate::runtime::param_map::ParamMap,
     pub bindings: HashMap<String, OperationVolumeBinding>,
 }
 
@@ -290,7 +290,7 @@ pub(crate) fn bind_volume_params(
         seedling_protocol::names::ParamName,
         crate::defs::param_def::ParamDef,
     >,
-    mut params: serde_json::Map<String, serde_json::Value>,
+    mut params: crate::runtime::param_map::ParamMap,
     operation_id: &str,
 ) -> Result<BoundParams, String> {
     use crate::defs::param_def::ParamKind;
@@ -1040,7 +1040,7 @@ pub(crate) fn admit_and_spawn(
     state: &Arc<OiState>,
     app: &AppName,
     target: OperationTarget,
-    params: serde_json::Map<String, serde_json::Value>,
+    params: crate::runtime::param_map::ParamMap,
     generation: u64,
     trigger: &str,
     phase: &Arc<parking_lot::Mutex<AppPhase>>,

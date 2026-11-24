@@ -20,7 +20,10 @@ use std::collections::BTreeMap;
 
 use seedling_protocol::names::{ParamName, SiteVolumeName};
 
-use crate::defs::param_def::{ParamDef, ParamKind};
+use crate::{
+    defs::param_def::{ParamDef, ParamKind, ParsedValue, SuppliedValue},
+    runtime::param_map::ParamMap,
+};
 
 /// Validation outcome carrying enough structure for the caller to
 /// either reject the call or surface a precise error message.
@@ -32,13 +35,14 @@ pub enum ParamValidationError {
     /// One or more schema fields failed the requirements check
     /// (missing-required / invalid-email / weak-password / ...).
     Requirements { messages: Vec<String> },
-    /// A schema-declared param was supplied as something other than a
-    /// string (a JSON number or bool, say).
+    /// A schema-declared param was supplied as a type its kind does not
+    /// take: anything but a string, or a boolean or integer for a kind that
+    /// is not one.
     ///
-    /// It used to be skipped as though absent, so the value was either
-    /// silently replaced by the field's default or reported as a missing
-    /// required field — in both cases naming the wrong problem.
-    NotAString { key: String },
+    /// It is an error rather than an absence, so the value is never silently
+    /// replaced by the field's default or reported as a missing required
+    /// field.
+    WrongType { key: String, reason: String },
     /// A `kind: "volume"` param's value was not a string.
     VolumeNotString { key: String },
     /// A required `kind: "volume"` param was absent.
@@ -56,9 +60,7 @@ impl std::fmt::Display for ParamValidationError {
                 "param key {key:?} is reserved (keys ending in _volume or _filename are reserved)"
             ),
             Self::Requirements { messages } => write!(f, "{}", messages.join("; ")),
-            Self::NotAString { key } => {
-                write!(f, "param {key:?}: value must be a string")
-            }
+            Self::WrongType { key, reason } => write!(f, "param {key:?}: {reason}"),
             Self::VolumeNotString { key } => {
                 write!(f, "param {key:?}: volume reference must be a string")
             }
@@ -93,41 +95,57 @@ pub fn reject_reserved<'a>(
     }
 }
 
-/// Run the same field-by-field requirements check the install path
-/// uses (defaults, required-field enforcement, kind-specific
-/// validation), and write the resulting filled-in values back into
-/// `params`.
+/// Validate supplied params against `schema` and give the param map the
+/// closure receives: each declared param that has a value as its kind's
+/// parser result, each declared param without one left out, and every
+/// undeclared param as supplied.
+// spec: ACN#param-schemas
+// spec: ACN#param-delivery
 pub fn apply_schema(
     schema: &BTreeMap<ParamName, ParamDef>,
-    params: &mut serde_json::Map<String, serde_json::Value>,
-) -> Result<(), ParamValidationError> {
-    if schema.is_empty() {
-        return Ok(());
-    }
-
-    // A schema field supplied as a non-string is an error, not an absence.
-    // Skipping it here meant a submitted JSON number or bool was either
-    // overwritten by the field's default or reported as "required field is
-    // missing" — the caller was told the value was absent when it was
-    // present and merely the wrong type.
-    let mut submitted: BTreeMap<String, String> = BTreeMap::new();
-    for k in schema.keys() {
-        let Some(value) = params.get(k.as_str()) else {
+    mut params: serde_json::Map<String, serde_json::Value>,
+) -> Result<ParamMap, ParamValidationError> {
+    let mut supplied = BTreeMap::new();
+    for (name, def) in schema {
+        let key = name.as_str();
+        let Some(value) = params.get(key) else {
             continue;
         };
-        let Some(s) = value.as_str() else {
-            return Err(ParamValidationError::NotAString {
-                key: k.as_str().to_owned(),
-            });
+        let wrong_type = |reason| ParamValidationError::WrongType {
+            key: key.to_owned(),
+            reason,
         };
-        submitted.insert(k.as_str().to_owned(), s.to_owned());
+        let value = SuppliedValue::from_json(value).ok_or_else(|| {
+            wrong_type(format!(
+                "{} is not a value a param takes",
+                json_type_name(value)
+            ))
+        })?;
+        def.kind.check_type(&value).map_err(wrong_type)?;
+        supplied.insert(key.to_owned(), value);
     }
 
-    let filled = run_requirements(schema, &submitted)?;
-    for (k, v) in filled {
-        params.insert(k, serde_json::Value::String(v));
+    let parsed = run_requirements(schema, &supplied)?;
+    for name in schema.keys() {
+        params.remove(name.as_str());
     }
-    Ok(())
+    let mut map = ParamMap::from_values(params);
+    for (key, value) in parsed {
+        map.insert_parsed(key, value);
+    }
+    Ok(map)
+}
+
+/// What a JSON value is, for an error refusing it.
+fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number that is not a signed 64-bit integer",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
 }
 
 // spec: ACN#volume-params
@@ -136,7 +154,7 @@ pub fn apply_schema(
 /// a real site volume.
 pub fn validate_volume_params<L: VolumeLookup>(
     schema: &BTreeMap<ParamName, ParamDef>,
-    params: &serde_json::Map<String, serde_json::Value>,
+    params: &ParamMap,
     lookup: &L,
 ) -> Result<(), ParamValidationError> {
     let volume_names: Vec<&ParamName> = schema
@@ -191,27 +209,23 @@ pub trait VolumeLookup {
     fn site_volume_exists(&self, name: &SiteVolumeName) -> bool;
 }
 
+/// Fill in defaults, enforce required params, and parse each declared
+/// param that has a value with its kind, giving the parser results.
+// spec: ACN#param-schemas
 // spec: OPS#sub-action-parameters
-/// Run the schema check used by [`apply_schema`]. Extracted so the
-/// existing OI install path (which validates a `BTreeMap<String,
-/// String>` directly without going through a `serde_json::Map`) can
-/// reuse the same field-level logic.
 pub fn run_requirements(
     schema: &BTreeMap<ParamName, ParamDef>,
-    submitted: &BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>, ParamValidationError> {
-    let mut filled = submitted.clone();
+    supplied: &BTreeMap<String, SuppliedValue>,
+) -> Result<BTreeMap<String, ParsedValue>, ParamValidationError> {
+    let mut parsed = BTreeMap::new();
     let mut errors: Vec<String> = Vec::new();
 
     for (field, req_def) in schema {
         let field_str = field.as_str();
-        let value = match filled.get(field_str).filter(|v| !v.is_empty()) {
+        let value = match supplied.get(field_str).filter(|v| !v.is_empty()) {
             Some(value) => value.clone(),
             None => match &req_def.default_value {
-                Some(default) => {
-                    filled.insert(field_str.to_owned(), default.clone());
-                    default.clone()
-                }
+                Some(default) => default.clone(),
                 None => {
                     if req_def.required {
                         errors.push(format!("{field_str}: required field is missing"));
@@ -222,13 +236,16 @@ pub fn run_requirements(
         };
 
         // spec: ACN#kind-parsers
-        if let Err(reason) = req_def.kind.parse(&value) {
-            errors.push(format!("{field_str}: {reason}"));
+        match req_def.kind.parse_supplied(&value) {
+            Ok(value) => {
+                parsed.insert(field_str.to_owned(), value);
+            }
+            Err(reason) => errors.push(format!("{field_str}: {reason}")),
         }
     }
 
     if errors.is_empty() {
-        Ok(filled)
+        Ok(parsed)
     } else {
         Err(ParamValidationError::Requirements { messages: errors })
     }

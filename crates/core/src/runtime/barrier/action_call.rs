@@ -24,9 +24,11 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::defs::app::{SubActionFrame, action_call_lookup, action_call_stack};
 use crate::defs::param_def::ParamDef;
+use crate::defs::version::{SemVer, Version};
 use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
 use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
+use crate::runtime::param_map::ParamMap;
 use crate::runtime::secrets::Cipher;
 
 /// What the journal shows in place of a secret param's value.
@@ -86,7 +88,9 @@ pub fn call_action(
     let _frame = SubActionFrame::enter(action_name.clone());
 
     let rt_dyn = Dynamic::from(rt);
-    let params_dyn = json_to_rhai_map(&call_params);
+    let params_dyn = call_params
+        .to_rhai()
+        .map_err(|e| -> Box<EvalAltResult> { format!("Action.invoke: {e}").into() })?;
 
     let _result = fnptr.call_within_context::<Dynamic>(ctx, (rt_dyn, params_dyn))?;
     Ok(())
@@ -99,18 +103,18 @@ fn validate_call_params(
     rt: &RuntimeInstance,
     schema: Option<&Schema>,
     params: Map,
-) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
-    let mut json_params = rhai_map_to_json(params)?;
+) -> Result<ParamMap, Box<EvalAltResult>> {
+    let json_params = rhai_map_to_json(params)?;
     action_params::reject_reserved_keys(&json_params).map_err(validation_to_eval)?;
 
     let Some(schema) = schema else {
-        return Ok(json_params);
+        return Ok(ParamMap::from_values(json_params));
     };
 
-    action_params::apply_schema(schema, &mut json_params).map_err(validation_to_eval)?;
-    action_params::validate_volume_params(schema, &json_params, &RtVolumeLookup(rt))
+    let params = action_params::apply_schema(schema, json_params).map_err(validation_to_eval)?;
+    action_params::validate_volume_params(schema, &params, &RtVolumeLookup(rt))
         .map_err(validation_to_eval)?;
-    Ok(json_params)
+    Ok(params)
 }
 
 /// Pull the action's param schema out of the runtime context's frozen
@@ -154,7 +158,7 @@ fn resolve_call_params(
     rt: &RuntimeInstance,
     action_name: &ActionName,
     params: Map,
-) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
+) -> Result<ParamMap, Box<EvalAltResult>> {
     let schema = action_schema(rt, action_name)?;
     let Some(ctx) = rt.ctx.as_ref() else {
         // Stub / language-only context — nothing to record and nothing to
@@ -195,6 +199,11 @@ fn resolve_call_params(
         "action": action_name.as_str(),
         "params": &plain,
     });
+    // spec: OPS#persistence
+    if !validated.versions().is_empty() {
+        payload["versions"] = serde_json::to_value(validated.versions())
+            .expect("version types serialise as strings");
+    }
     if !secret.is_empty() {
         let cipher = g.cipher.clone().ok_or_else(|| -> Box<EvalAltResult> {
             "Action.invoke: no secret key to protect the call's secret params"
@@ -235,7 +244,7 @@ fn recover_recorded_params(
     action_name: &ActionName,
     entry: &ActionLogEntry,
     cipher: Option<&Cipher>,
-) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
+) -> Result<ParamMap, Box<EvalAltResult>> {
     let payload: JsonValue = entry
         .extra
         .as_deref()
@@ -325,7 +334,23 @@ fn recover_recorded_params(
             .into());
         }
     }
-    Ok(params)
+
+    // spec: OPS#persistence
+    let versions = payload
+        .get("versions")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| -> Box<EvalAltResult> {
+            format!(
+                "replay diverged at call {}: the log records version params that cannot be \
+                 read ({e})",
+                entry.call_index
+            )
+            .into()
+        })?
+        .unwrap_or_default();
+    Ok(ParamMap::with_versions(params, versions))
 }
 
 /// A call's validated params, divided for recording.
@@ -340,13 +365,10 @@ struct SplitParams {
 
 // spec: SEC#storage
 // spec: SEC#redaction
-fn split_secret_params(
-    schema: Option<&Schema>,
-    validated: &JsonMap<String, JsonValue>,
-) -> SplitParams {
-    let mut plain = validated.clone();
+fn split_secret_params(schema: Option<&Schema>, validated: &ParamMap) -> SplitParams {
+    let mut plain = validated.values().clone();
     let mut secret = JsonMap::new();
-    let mut journal = validated.clone();
+    let mut journal = validated.values().clone();
     for (name, _) in schema
         .into_iter()
         .flatten()
@@ -434,6 +456,12 @@ fn rhai_dynamic_to_json(v: Dynamic) -> Result<JsonValue, Box<EvalAltResult>> {
             .ok_or_else(|| format!("Action.invoke: param value {f} is not a finite number").into())
     } else if v.is_string() {
         Ok(JsonValue::String(v.into_string().unwrap_or_default()))
+    } else if let Some(version) = v.clone().try_cast::<Version>() {
+        // spec: ACN#action-invocation
+        Ok(JsonValue::String(version.to_string()))
+    } else if let Some(version) = v.clone().try_cast::<SemVer>() {
+        // spec: ACN#action-invocation
+        Ok(JsonValue::String(version.to_string()))
     } else if v.is_array() {
         let arr: rhai::Array = v.cast();
         let mut out = Vec::with_capacity(arr.len());
@@ -451,17 +479,6 @@ fn rhai_dynamic_to_json(v: Dynamic) -> Result<JsonValue, Box<EvalAltResult>> {
         )
         .into())
     }
-}
-
-fn json_to_rhai_map(map: &JsonMap<String, JsonValue>) -> Map {
-    map.iter()
-        .map(|(k, v)| {
-            (
-                k.as_str().into(),
-                super::replay::json_value_to_rhai_dynamic(v),
-            )
-        })
-        .collect()
 }
 
 // spec: ACN#volume-params
