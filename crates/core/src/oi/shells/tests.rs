@@ -987,3 +987,36 @@ fn a_shell_closure_leaves_out_what_a_gate_came_to_hold_after_the_session_opened(
         "api is held by a gate that held it only after the session opened"
     );
 }
+
+// spec: SHL#opening-an-app-shell
+// spec: ACN#param-delivery
+#[test]
+fn a_shell_param_takes_its_native_json_type_and_reaches_the_closure_parsed() {
+    use crate::defs::param_def::{ParamDef, ParamKind};
+
+    let oi = TestOi::new();
+    let schema = std::collections::BTreeMap::from([(
+        seedling_protocol::names::ParamName::new("verbose").unwrap(),
+        ParamDef {
+            kind: ParamKind::Boolean,
+            required: true,
+            default_value: None,
+            description: None,
+            secret: None,
+        },
+    )]);
+    let mut submitted = serde_json::Map::new();
+    submitted.insert("verbose".to_owned(), serde_json::json!(true));
+    let params = super::session::validate_shell_params(&oi.state, &schema, submitted).unwrap();
+    assert!(params.to_rhai().unwrap()["verbose"].as_bool().unwrap());
+
+    let mut submitted = serde_json::Map::new();
+    submitted.insert("verbose".to_owned(), serde_json::json!(1));
+    let err = super::session::validate_shell_params(&oi.state, &schema, submitted)
+        .expect_err("an integer is not a boolean");
+    assert!(
+        err.message.contains("an integer is given"),
+        "{}",
+        err.message
+    );
+}

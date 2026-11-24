@@ -354,6 +354,66 @@ mod tests {
         assert_eq!(result["schedule"], "accepted");
     }
 
+    // spec: ACI#invoking-an-action
+    // spec: ACN#param-delivery
+    #[test]
+    fn an_operator_invocation_delivers_parser_results_to_the_closure() {
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({
+                "app": "demo",
+                "script": r#"
+                    app.deployment("web").image("docker.io/library/nginx:1.29");
+                    app.on_action("tune", |rt, p| {
+                        if p.flag != true { throw `flag is ${type_of(p.flag)}`; }
+                        if p.count != 3 { throw `count is ${type_of(p.count)}`; }
+                        if p.tier != "large" { throw "tier"; }
+                    }, #{ params: #{
+                        flag: #{ kind: "boolean" },
+                        count: #{ kind: #{ name: "integer", range: 1..=9 } },
+                        tier: #{ kind: #{ name: "choice", options: ["small", "large"] } },
+                    } });
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+
+        let (code, message) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "tune", "params": { "flag": 1, "count": 3, "tier": "large" } }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{message}");
+
+        let mut events = oi.state.event_tx.subscribe();
+        oi.call(
+            "/apps/action/invoke",
+            json!({ "app": "demo", "name": "tune", "params": { "flag": true, "count": 3, "tier": "large" } }),
+        )
+        .unwrap();
+        oi.block_on(async {
+            let ended = async {
+                while oi.state.scheduler.lock().active().is_some() {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(10), ended)
+                .await
+                .expect("the operation ends");
+        });
+        let mut kinds = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            kinds.push(serde_json::to_value(&event).unwrap());
+        }
+        assert!(
+            kinds.iter().any(|e| e["type"] == "OperationCompleted"),
+            "{kinds:?}"
+        );
+    }
+
     // spec: ACI#cancellation
     #[test]
     fn cancel_without_active_operation_is_not_found() {

@@ -238,3 +238,30 @@ fn template_instantiate_registers_app() {
     assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("already registered"), "{msg}");
 }
+
+// spec: TPL#preview
+#[test]
+fn a_template_preview_reports_each_param_range_and_options() {
+    let oi = TestOi::new();
+    let body = r#"
+        app.param("port").kind(#{ name: "integer", range: 1..=65535 }).required(false);
+        app.param("tier").kind(#{ name: "choice", options: ["small", "large"] }).required(false);
+        app.volume("data");
+    "#;
+    let preview = oi
+        .call("/templates/preview", json!({ "body": body }))
+        .unwrap();
+    let param = |name: &str| {
+        preview["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("{name} previewed"))
+            .clone()
+    };
+    assert_eq!(param("port")["range"], json!({ "min": 1, "max": 65535 }));
+    assert_eq!(param("port")["options"], json!(null));
+    assert_eq!(param("tier")["options"], json!(["small", "large"]));
+    assert_eq!(param("tier")["range"], json!(null));
+}
