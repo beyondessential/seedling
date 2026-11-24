@@ -1128,6 +1128,7 @@ impl RuntimeInstance {
                 };
                 (g.operation_id.0.clone(), creator)
             };
+            let sensitive = crate::runtime::seeds::operation_scope().map(|scope| scope.values());
             for (instance, maybe_def) in &resources_with_defs {
                 // spec: RT#starting-resources
                 // A shell leaves the declared resources of its selection to
@@ -1142,7 +1143,14 @@ impl RuntimeInstance {
                     let recorded = instance.clone();
                     let op_id = op_id.clone();
                     // spec: BSL#descriptions
-                    let description = resource.description();
+                    // spec: APPS#redacted-values
+                    // spec: SEC#matching
+                    // A description quoting one of the operation's or
+                    // session's sensitive values is recorded as none, which
+                    // describing the app reports as null.
+                    let description = resource
+                        .description()
+                        .filter(|d| !sensitive.as_ref().is_some_and(|s| s.found_in(d)));
                     if let Err(e) = db.call(move |db| {
                         crate::runtime::desired::insert_dynamic_resource(
                             db,

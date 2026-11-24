@@ -695,6 +695,35 @@ fn what_a_shell_closure_starts_is_desired_and_recorded_against_the_session() {
     );
 }
 
+// spec: APPS#redacted-values
+// spec: SEC#matching
+#[test]
+fn a_dynamic_resource_description_quoting_a_secret_param_is_recorded_as_none() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{
+            shell.attach(tools);
+            rt.start(app.job().image("{SHELL_JOB}").command("true").description(`migrate with ${{p.token}}`));
+            rt.start(app.job().image("{SHELL_JOB}").command("true").description("plain"));
+        }}, #{{
+            params: #{{ "token": #{{ kind: "text", secret: true }} }},
+        }});"#
+    );
+    let ran = run_shell_session(
+        &script,
+        serde_json::json!({ "token": "Tui-Harbour-58" }),
+        &FakeHost::answering(Ok(ShellExit::exited(0))),
+        None,
+        |_| {},
+    );
+    assert_eq!(ran.outcome.reason, None);
+    let mut descriptions: Vec<_> = session_records(&ran)
+        .into_iter()
+        .map(|r| r.description)
+        .collect();
+    descriptions.sort();
+    assert_eq!(descriptions, [None, Some("plain".to_owned())]);
+}
+
 // spec: RT#starting-resources
 #[test]
 fn a_shell_closure_starting_a_declared_resource_leaves_the_desired_state_alone() {
