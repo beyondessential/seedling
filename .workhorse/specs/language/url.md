@@ -100,4 +100,6 @@ It MUST also reject a URL whose scheme is not `http` or `https`, in which a `@` 
 > The URL parser gives an `http` or `https` URL written with no path the path `/`, so `https://example.org` and `https://example.org/` are both accepted.
 
 `host` MUST meet what [`std::parse_hostname`](#hostnames) accepts, and MUST be what it returns for that host.
-A URL origin whose host is an IP address MUST be rejected.
+
+> [!NOTE]
+> `std::parse_hostname` refuses IP addresses, so a URL origin naming one is rejected.
