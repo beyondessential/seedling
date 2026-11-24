@@ -124,6 +124,13 @@ Each result withheld this way MUST count toward the derived values [limit](engin
 > No minimum length applies, so a short secret value withholds more results than it needs to, which an operator can see, rather than fewer, which an operator could not.
 > A bundle's files come from the definition, not from secret storage or a seed.
 
+Redaction applies to what the runtime records and reports itself, such as definition summaries, parameter values, history, events, breadcrumbs, fault descriptions, error messages and its own log lines.
+The runtime MUST relay the output of a workload container or a shell session unchanged.
+
+> [!NOTE]
+> A workload's output is the app's own, and the runtime cannot tell a value the app chose to print from one it leaked.
+> Masking it would also corrupt output that happens to contain a short sensitive value, such as a binary stream or a terminal session.
+
 A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as describing an app's [parameters](../interface/apps.md#parameters) and [redacted values](../interface/apps.md#redacted-values), and the [generation history](../interface/apps.md#generation-history) define.
 
 ## Migration
