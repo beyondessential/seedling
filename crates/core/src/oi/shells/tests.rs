@@ -602,6 +602,27 @@ fn a_shell_whose_volume_param_cannot_be_bound_does_not_run_its_closure() {
     assert!(!reason.contains("the closure ran"), "{reason}");
 }
 
+// spec: SEC#withheld-values
+// spec: SEC#matching
+#[test]
+fn a_shell_failure_masks_a_secret_param_it_quotes() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{ throw `bad token ${{p.token}}`; }}, #{{
+            params: #{{ "token": #{{ kind: "text", secret: true }} }},
+        }});"#
+    );
+    let reason = run_shell(
+        &script,
+        serde_json::json!({ "token": "Tui-Harbour-58" }),
+        &FakeHost::answering(Ok(ShellExit::ended())),
+        None,
+    )
+    .reason
+    .expect("the session fails");
+    assert!(reason.contains("bad token <redacted>"), "{reason}");
+    assert!(!reason.contains("Tui-Harbour-58"), "{reason}");
+}
+
 // spec: ACN#param-delivery
 #[test]
 fn params_a_shell_declares_no_schema_for_still_reach_its_closure() {

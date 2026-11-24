@@ -1858,6 +1858,38 @@ fn a_plain_parameter_holding_a_secret_value_is_withheld_once_the_secret_is_set()
     );
 }
 
+// spec: SEC#matching
+#[test]
+fn a_one_character_secret_withholds_every_string_holding_it() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("pin").kind("weak-password").required(false);
+                app.deployment("web")
+                    .image("docker.io/library/nginx:1.29")
+                    .env("WITH", "seven")
+                    .env("WITHOUT", "abc");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "pin": "e" } }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let web = &shown["resources"][0];
+    assert_eq!(web["name"], "web");
+    let env = &web["def"]["container"]["env"];
+    assert_eq!(env["WITH"], json!(null), "{env}");
+    assert_eq!(env["WITHOUT"], json!("abc"), "{env}");
+}
+
 // spec: SEC#withheld-values
 #[test]
 fn a_validator_rejection_masks_a_secret_value_it_quotes() {
