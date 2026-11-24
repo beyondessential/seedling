@@ -31,7 +31,7 @@ It MUST accept a purl of any type, whether or not the purl specification defines
 - in which any percent-decoded component is not valid UTF-8;
 - in which any percent-decoded component holds a character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp);
 - holding a namespace or subpath segment that contains a `/` once percent-decoded;
-- holding two qualifiers whose keys are equal once in lower case;
+- holding two qualifiers with non-empty values whose keys are equal once in lower case;
 - holding a non-empty version that, once percent-decoded, [`std::parse_version`](version.md#generic-versions) rejects.
 
 > [!NOTE]
