@@ -12,6 +12,10 @@ Build the redaction the X6 spec edits describe. Sensitive values are secret para
   - OI handlers compute the app's values per request with `params::current_sensitive`. It reads stored values from the database rather than the running definition, because a change the definition could not take is stored all the same.
 - **Free text is masked where it is produced, not at the fault store.** The only free text that can hold a sensitive value is an evaluation error, a validator rejection, an operation's or shell's failure, or a probe error. Each is masked at its source, so a fault, event or log line built from it is already masked, and every value applies exactly as [Secret storage](../../specs/runtime/secrets.md#matching) scopes it.
 
+- **One check over every response and event (added after three review rounds).** Each round found another member that leaked a value. Each OI response and event is now checked as a whole before it leaves (`oi/redaction.rs`, called from the dispatcher and the event pump). Every string other than an identifier is masked against the sensitive values of the app it concerns. The per-field rules stay where the specs give a `null` marker, and the check catches what they leave out. Identifiers are recognised by member name. Definition and template retrieval are exempt, as the operator's own text.
+- **Earlier secret values stay sensitive (decided after review).** An app's sensitive values include every value its generation history records for a parameter that is secret now, or records protected. So a changed password is still masked wherever an older record quotes it.
+- **Masking is idempotent.** An occurrence overlapping an existing `<redacted>` marker is passed over, so text masked at its source and again by the whole-response check reads as if masked once, however short the secret.
+
 ## Matching and masking
 
 - [x] Create `crates/core/src/runtime/redact.rs`, and move `DerivedValues` there as `SensitiveValues`
@@ -57,6 +61,12 @@ Build the redaction the X6 spec edits describe. Sensitive values are secret para
 - [x] Mask operation and gate run failures in `run_operation_loop`, before the log line, the `operation_failed` fault and `OperationFailed`
 - [x] Mask shell closure failures in the session runner
 - [x] Tests: a validator `throw` quoting a secret masks the rejection reason, and a closure `throw` quoting a derived value is masked in the failure
+
+## Review follow-ups
+
+- [x] Earlier values of secret parameters join the app's sensitive values (`runtime::apps::sensitive_values`, `generations::earlier_secret_values`)
+- [x] Masking leaves an existing marker alone
+- [x] Check every OI response and event as a whole, except definition and template retrieval; drop the per-field fault masking it subsumes
 
 ## Finish
 

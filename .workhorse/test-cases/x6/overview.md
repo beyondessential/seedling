@@ -24,3 +24,11 @@
 - [x] An action that throws a message quoting a value it derived: the failure reads `<redacted>` in its place (verifies spec: SEC)
 - [x] A shell session whose closure throws a message quoting a secret shell param: the error the client receives reads `<redacted>` in its place (verifies spec: SEC)
 - [x] Set a weak-password param to a single character: every described string holding that character reads `null`, and the rest read as declared (verifies spec: SEC)
+
+## Whole responses and events
+
+- [x] Change a secret after a plain param quoted it: the plain param and its history stay withheld (verifies spec: SEC)
+- [x] A fault quoting a value that later became secret is masked in `/apps/show` and `/faults/list` (verifies spec: SEC)
+- [x] An event quoting an app's secret is masked as the event stream sends it, while its `app` and other identifiers are left as they are (verifies spec: SEC)
+- [x] An error message quoting the requested app's secret is masked (verifies spec: SEC)
+- [x] Retrieving an app's script returns a secret default written in it as stored (verifies spec: SEC)

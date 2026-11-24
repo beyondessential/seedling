@@ -345,8 +345,15 @@ builders enumerated in the [language specs](../.workhorse/specs/language/).
   sensitive. Any describe field, parameter value, history entry or event
   value that contains one reads as withheld, and each occurrence is masked
   in breadcrumbs, fault descriptions, error messages and the daemon's log
-  lines. Output from workloads and shell sessions is passed through as it is
+  lines. A secret's earlier values stay sensitive after it changes. Output
+  from workloads and shell sessions is passed through as it is
   ([SEC#redaction](../.workhorse/specs/runtime/secrets.md#redaction)).
+- **Every OI response and event is checked as a whole** before it is sent,
+  and any string other than an identifier that holds a sensitive value is
+  masked, so a member no narrower rule names cannot leak one. Names, ids,
+  kinds, states and times are never withheld, and a retrieved definition is
+  returned as the operator wrote it
+  ([SEC#responses-and-events](../.workhorse/specs/runtime/secrets.md#responses-and-events)).
 - **The action log seals sub-action params** that are secret or hold a
   sensitive value
   ([HIST#action-calls](../.workhorse/specs/runtime/history.md#action-calls)).
