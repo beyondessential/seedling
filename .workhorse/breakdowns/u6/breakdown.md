@@ -14,7 +14,7 @@ Add the `std` module that every standard helper lives in, reachable as `std::nam
 
 Establish the convention the kind cards build on: a `std::parse_k(text)` function for each parameter kind `k`, which the runtime runs to check a value of kind `k`. Builds on the std module card. Apply it to every existing kind without exception, such as `parse_email` returning the local part and domain, and `parse_password` applying the strength check, even where the function returns its input unchanged, as `parse_multiline` does. `text` becomes single-line: `parse_text` refuses a line break, so the runtime refuses one in a `text` value, and multi-line text is what `multiline` is for. The Actions spec's kind table and the Parameters spec carry the rule. To settle: which characters count as a line break, and whether `parse_text` refuses other control characters too.
 
-## URL and hostname parameter kinds
+## URL and hostname parameter kinds · H7
 
 Add `url`, `url-origin` and `hostname` kinds with `parse_url`, `parse_url_origin` and `parse_hostname`. `parse_url` returns a map of scheme, host, port, path, query, fragment, username and password, with the port filled from the scheme's default when the URL gives none. `url-origin` accepts an `http` or `https` URL with a host and an optional port and nothing else (a single trailing `/` allowed), which is what an ingress is declared from. `hostname` accepts a name valid as an ingress hostname and returns it in lower case. To settle: IPv6 literals and internationalised hostnames in `url`, given an ingress hostname is ASCII letters, digits and hyphens (could add IDN/punycode handling, or teach ingress about it); and whether the query comes back as a raw string or decoded into a map.
 
