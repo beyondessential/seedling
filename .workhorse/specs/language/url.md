@@ -11,7 +11,7 @@ Applies to the `url`, `url-origin` and `hostname` [param kinds](action.md#param-
 | term | meaning |
 | --- | --- |
 | A-label | the ASCII form of an internationalised domain name label, as defined by [RFC 5890](https://www.rfc-editor.org/rfc/rfc5890) section 2.3.2.1 |
-| URL parser, host, host parser, host serialiser, opaque host, special scheme, ends-in-a-number checker | as defined by the [URL Standard](https://url.spec.whatwg.org/) |
+| URL parser, host, host parser, host serialiser, opaque host, special scheme, default port, ends-in-a-number checker, percent-decode | as defined by the [URL Standard](https://url.spec.whatwg.org/) |
 | IDNA processing | the domain name to ASCII conversion of [Unicode Technical Standard #46](https://www.unicode.org/reports/tr46/), nontransitional, with `CheckHyphens`, `CheckBidi` and `CheckJoiners` set, `UseSTD3ASCIIRules` set, and `VerifyDnsLength` set |
 
 > [!NOTE]
@@ -84,7 +84,7 @@ Where that succeeds, `host` MUST be the host it gives, as the host serialiser wr
 
 ### Ports
 
-`port` MUST be the URL's port, as an integer, where it gives one, and otherwise the [default port](https://url.spec.whatwg.org/#default-port) of its scheme.
+`port` MUST be the URL's port, as an integer, where it gives one, and otherwise the default port of its scheme.
 `std::parse_url` MUST reject a URL whose port is 0, as the [port rules](overview.md#ports) require.
 
 > [!NOTE]
