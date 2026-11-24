@@ -48,7 +48,8 @@ pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
 /// with live `instances`, `faults`, `stopped`, and a `scale.current`.
 /// Report as null each string in the described resources' `def` that holds
 /// a sensitive value: every object member's value and every array element,
-/// at any depth, whatever the member.
+/// at any depth, whatever the member. A key, such as a declared write's path,
+/// cannot be null, so each occurrence in it is masked instead.
 // spec: APPS#redacted-values
 pub(crate) fn redact_def_strings(
     resources: &mut [Value],
@@ -58,7 +59,15 @@ pub(crate) fn redact_def_strings(
         match value {
             Value::String(s) if sensitive.found_in(s) => *value = Value::Null,
             Value::Array(items) => items.iter_mut().for_each(|v| walk(v, sensitive)),
-            Value::Object(members) => members.values_mut().for_each(|v| walk(v, sensitive)),
+            Value::Object(members) => {
+                if members.keys().any(|k| sensitive.found_in(k)) {
+                    *members = std::mem::take(members)
+                        .into_iter()
+                        .map(|(k, v)| (sensitive.mask(&k).into_owned(), v))
+                        .collect();
+                }
+                members.values_mut().for_each(|v| walk(v, sensitive));
+            }
             _ => {}
         }
     }

@@ -239,6 +239,7 @@ Each is an array of strings in ascending order.
 
 The server MUST report as `null` each string in `def` that contains a [sensitive value](../runtime/secrets.md#sensitive-value), whatever type the tables above give it.
 This covers an environment variable's value, a declared file write's contents, and each element of a container's `command`, `args` and health check `cmd`, as well as every other string member.
+A member's name that contains a sensitive value, such as a declared file write's path, MUST be reported with each occurrence masked as [withheld values](../runtime/secrets.md#withheld-values) specifies for free text.
 The server MUST likewise report as `null` each description and each parameter's `default_value` that `/apps/list` or `/apps/show` reports anywhere else, including in `dynamic_resources`, `params` and `actions`, where it contains a sensitive value.
 The server MUST match them against the app's sensitive values as [matching](../runtime/secrets.md#matching) specifies.
 

@@ -1726,6 +1726,7 @@ fn every_string_in_a_description_holding_a_sensitive_value_is_null_on_its_own() 
         let secret = if key.is_set() { key.value() } else { "unset" };
         let data = app.volume("data")
             .write("/conf/key", "key=" + secret)
+            .write("/keys/" + pw + ".pem", "public")
             .write("/conf/pw", pw)
             .write("/conf/plain", "visible");
         app.deployment("web")
@@ -1757,6 +1758,7 @@ fn every_string_in_a_description_holding_a_sensitive_value_is_null_on_its_own() 
     assert_eq!(writes["/conf/key"], json!(null), "{writes}");
     assert_eq!(writes["/conf/pw"], json!(null), "{writes}");
     assert_eq!(writes["/conf/plain"], json!("visible"));
+    assert_eq!(writes["/keys/<redacted>.pem"], json!("public"), "{writes}");
 
     let container = &def_of("web")["container"];
     assert_eq!(container["command"], json!(["nginx", null]), "{container}");
