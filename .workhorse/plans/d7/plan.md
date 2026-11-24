@@ -36,6 +36,8 @@ Adds the `[metadata]` table to the bundle's metadata file, readable by scripts t
 ## Web console
 
 - [ ] `crates/web/frontend/src/lib/types.ts`: add `metadata: Record<string, unknown>` to `DefinitionProvenance`, and update `AppDetail.fixtures.ts` and the component tests' fixtures
+- [ ] `crates/web/frontend/src/components/DefinitionSection.tsx`: a "Metadata" row beside "Seedling", shown only when the table has keys, listing each top-level key with its value in the section's monospace style, arrays and tables as JSON, cited `UI#app-definitions`
+- [ ] `DefinitionSection.test.tsx`: the row is absent for `{}`, and shows scalars as written and nested values as JSON
 
 ## Docs
 
