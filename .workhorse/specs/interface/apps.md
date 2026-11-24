@@ -238,7 +238,7 @@ Each is an array of strings in ascending order.
 ### Redacted values
 
 The server MUST report as `null` the value of an environment variable, and the contents of a declared file write, that contain a [sensitive value](../runtime/secrets.md#sensitive-value).
-For a declared resource, the sensitive values to match are the stored values of [secret parameters](../runtime/secrets.md#secret-parameter), and the [derived values](../runtime/secrets.md#derived-value) the evaluation declaring the resource returned, in any form the [redaction](../runtime/secrets.md#redaction) of derived values names.
+The server MUST match them against the app's sensitive values as [matching](../runtime/secrets.md#matching) specifies.
 
 ### Proxy settings
 
