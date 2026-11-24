@@ -54,7 +54,7 @@ It MUST accept a purl of any type, whether or not the purl specification defines
 
 `std::parse_purl` MUST return every component as the parsing procedure gives it, without the procedure's type-specific normalisation steps.
 
-The value of a `checksum` qualifier MUST be an array of the strings its percent-decoded value holds between `,` separators, in order.
+The value of a `checksum` qualifier MUST be an array of the non-empty strings its percent-decoded value holds between `,` separators, in order.
 Every other qualifier's value MUST be a string.
 
 > [!NOTE]
