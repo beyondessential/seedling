@@ -158,7 +158,7 @@ In free text, such as a log line, a breadcrumb, a fault description or an error 
 
 The runtime MUST check each response the [Operator Interface](../overview.md#operator-interface) returns, and each [event](../interface/events.md) it emits, as a whole before sending it.
 Each string in it that contains a sensitive value of the app it concerns MUST be masked as free text is, unless the string is an identifier.
-Each number or boolean in it that contains a sensitive value, other than an identifier, MUST be replaced by its text masked as free text is.
+Each number in it that contains a sensitive value, other than an identifier, MUST be replaced by its text masked as free text is.
 A response concerns the app its request names, and an event the app it names.
 Within either, an object that names an app concerns that app.
 

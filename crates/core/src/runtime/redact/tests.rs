@@ -162,6 +162,20 @@ fn a_document_replaces_a_number_holding_a_value_with_its_masked_text() {
 
 // spec: SEC#responses-and-events
 #[test]
+fn a_document_leaves_a_boolean_as_it_is() {
+    let mut document = serde_json::json!({ "redacted": true, "ready": false });
+    mask_document(&mut document, Some("demo"), &mut |_: &str| {
+        Ok::<_, ()>(holding(&["e"]))
+    })
+    .unwrap();
+    assert_eq!(
+        document,
+        serde_json::json!({ "redacted": true, "ready": false })
+    );
+}
+
+// spec: SEC#responses-and-events
+#[test]
 fn a_document_about_no_app_is_left_as_it_is() {
     let mut document = serde_json::json!({ "note": "hunter2" });
     mask_document(&mut document, None, &mut |_: &str| {
