@@ -506,24 +506,36 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     })?;
 
     // Names come from AppDef; values come from the params table. A value in
-    // secret storage is never returned: it is read only to match against, by
-    // `current_sensitive` below, and the listing keeps the names of the params
-    // that hold one.
+    // secret storage is never returned: it is read only to match against, and
+    // the listing keeps the names of the params that hold one.
     // spec: SEC#redaction
     let name_owned = params.app.clone();
-    let (plain_params, secret_param_names) = state
+    let cipher = Arc::clone(&state.cipher);
+    let (plain_params, secret_params) = state
         .db
         .call(move |db| {
             Ok::<_, rusqlite::Error>((
                 crate::runtime::apps::load_params_for_app(db, &name_owned)?,
-                crate::runtime::apps::secret_params::secret_param_names(db, &name_owned)?,
+                crate::runtime::apps::secret_params::load_secret_params_for_app(
+                    db,
+                    &cipher,
+                    &name_owned,
+                )?,
             ))
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to read params: {e}")))?;
+    // spec: SEC#matching
+    // The app's sensitive values as they stand: what is stored now, under the
+    // running definition, as `current_sensitive` reads them.
+    let sensitive = {
+        let mut stored = plain_params.clone();
+        stored.extend(secret_params.iter().map(|(k, v)| (k.clone(), v.clone())));
+        entry.app.def.load().sensitive(&stored)
+    };
+    let secret_param_names: std::collections::BTreeSet<String> =
+        secret_params.into_keys().collect();
 
     // Fetch all active faults for this app once, then split by level.
-    // spec: SEC#matching
-    let sensitive = super::params::current_sensitive(state, &params.app)?;
 
     let name_owned = params.app.clone();
     let mut all_faults_for_app = state
