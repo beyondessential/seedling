@@ -1256,3 +1256,53 @@ fn an_unreadable_operation_seed_is_not_replaced() {
     assert!(load_operation_seed(&db, &cipher, &id).is_err());
     assert!(load_operation_seed(&db, &cipher, &id).is_err());
 }
+
+// spec: OPS#persistence
+#[test]
+fn a_persisted_version_param_is_restored_as_a_version() {
+    use crate::{
+        defs::{
+            param_def::ParsedValue,
+            version::{SemVer, Version},
+        },
+        runtime::{param_map::ParamMap, secrets::Cipher},
+    };
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("upgrade-op".into()),
+        app: app_name("myapp"),
+        target: action_name("upgrade").into(),
+        generation: 1,
+    };
+    let mut params = ParamMap::default();
+    params.insert_parsed(
+        "base".into(),
+        ParsedValue::Version(Version::parse("v16.4").unwrap()),
+    );
+    params.insert_parsed(
+        "release".into(),
+        ParsedValue::SemVer(SemVer::parse("2.1.0").unwrap()),
+    );
+    params.insert_parsed("canary".into(), ParsedValue::Bool(true));
+
+    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
+    let restored = load_current_operation_params(&db, &cipher)
+        .unwrap()
+        .expect("params on record");
+    assert_eq!(restored, params);
+
+    let delivered = restored.to_rhai().unwrap();
+    let base = delivered["base"]
+        .clone()
+        .try_cast::<Version>()
+        .expect("a Version");
+    assert_eq!(base.to_string(), "v16.4");
+    let release = delivered["release"]
+        .clone()
+        .try_cast::<SemVer>()
+        .expect("a SemVer");
+    assert_eq!(release.to_string(), "2.1.0");
+    assert!(delivered["canary"].as_bool().unwrap());
+}

@@ -646,6 +646,12 @@ mod tests {
             Some((1, installed(), Arc::clone(&schemas)))
         });
         assert_eq!(fired.len(), 1, "the declared default satisfies the schema");
+        // spec: ACN#param-delivery
+        assert_eq!(
+            fired[0].params.get("target"),
+            Some(&serde_json::json!("all")),
+            "the run's closure receives the default"
+        );
         assert!(
             faults::list_active_faults(&db, Some(&app_name("myapp")))
                 .unwrap()

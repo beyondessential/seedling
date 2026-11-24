@@ -766,6 +766,80 @@ mod tests {
     }
 
     // spec: IMG#probe-parameters
+    // spec: ACN#param-delivery
+    #[test]
+    fn a_probe_passes_parser_results_and_checks_kinds() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("deploy", |rt, param| {
+                if type_of(param.major) != "i64" { throw `major is ${type_of(param.major)}`; }
+                if param.canary != true { throw "canary is not a boolean"; }
+                rt.start(app.deployment().image(`registry.example.com/api:${param.major}`)).ready();
+            }, #{ params: #{
+                major: #{ kind: #{ name: "integer", range: 1..=99 } },
+                canary: #{ kind: "boolean", default_value: true },
+            } });
+        "#,
+        );
+        let request = |major: serde_json::Value, lenient| ProbeRequest {
+            action_params: HashMap::from([(
+                "action".to_owned(),
+                HashMap::from([(
+                    "deploy".to_owned(),
+                    serde_json::Map::from_iter([("major".to_owned(), major)]),
+                )]),
+            )]),
+            lenient,
+        };
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+
+        let response = probe(
+            &engine,
+            &ast,
+            &app,
+            Arc::clone(&registry),
+            &request(serde_json::json!(16), false),
+        )
+        .expect("probe");
+        assert!(
+            response.all_images.contains("registry.example.com/api:16"),
+            "{response:?}"
+        );
+
+        let response = probe(
+            &engine,
+            &ast,
+            &app,
+            Arc::clone(&registry),
+            &request(serde_json::json!("100"), false),
+        )
+        .expect("probe");
+        let error = response.per_handler[0]
+            .error
+            .as_deref()
+            .expect("strict errs");
+        assert!(error.contains("major: must be between 1 and 99"), "{error}");
+
+        let response = probe(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &request(serde_json::json!("100"), true),
+        )
+        .expect("probe");
+        let deploy = &response.per_handler[0];
+        assert!(deploy.error.is_none());
+        assert!(
+            deploy
+                .skipped_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("major: must be between 1 and 99")),
+            "{deploy:?}"
+        );
+    }
+
+    // spec: IMG#probe-parameters
     #[test]
     fn strict_reports_missing_required_param_as_error() {
         let (engine, ast, app) = setup_engine_and_app(
