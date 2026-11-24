@@ -1,7 +1,10 @@
 use rhai::{EvalAltResult, TypeBuilder};
 
 use super::{
-    super::file::{Directory, File},
+    super::{
+        file::{Directory, File},
+        json,
+    },
     App,
 };
 use crate::runtime::definition::bundle::normalise_path;
@@ -26,6 +29,17 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 path: normalised,
                 contents: contents.clone(),
             })
+        },
+    );
+
+    // spec: BND#metadata-table
+    builder.with_fn(
+        "metadata",
+        |this: &mut App| -> Result<rhai::Map, Box<EvalAltResult>> {
+            let table = this.bundle.metadata().map_err(|e| -> Box<EvalAltResult> {
+                format!("the definition's metadata cannot be read: {e}").into()
+            })?;
+            Ok(json::to_map(table))
         },
     );
 

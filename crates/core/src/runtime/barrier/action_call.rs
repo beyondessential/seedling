@@ -86,7 +86,7 @@ pub fn call_action(
     let _frame = SubActionFrame::enter(action_name.clone());
 
     let rt_dyn = Dynamic::from(rt);
-    let params_dyn = json_to_rhai_map(&call_params);
+    let params_dyn = crate::defs::json::to_map(&call_params);
 
     let _result = fnptr.call_within_context::<Dynamic>(ctx, (rt_dyn, params_dyn))?;
     Ok(())
@@ -451,17 +451,6 @@ fn rhai_dynamic_to_json(v: Dynamic) -> Result<JsonValue, Box<EvalAltResult>> {
         )
         .into())
     }
-}
-
-fn json_to_rhai_map(map: &JsonMap<String, JsonValue>) -> Map {
-    map.iter()
-        .map(|(k, v)| {
-            (
-                k.as_str().into(),
-                super::replay::json_value_to_rhai_dynamic(v),
-            )
-        })
-        .collect()
 }
 
 // spec: ACN#volume-params

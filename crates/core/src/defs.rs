@@ -101,6 +101,7 @@ pub mod file;
 pub mod gate;
 pub mod ingress;
 pub mod job;
+pub mod json;
 pub mod param;
 pub mod param_def;
 pub mod pod;

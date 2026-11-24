@@ -194,3 +194,66 @@ fn rt_write_with_a_file_writes_its_bytes() {
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].contents, PNG);
 }
+
+const METADATA: &[u8] =
+    b"[metadata]\nversion = \"2.71.4\"\nimages = { tag = \"2.71.4-dev.abc1234\" }";
+
+// spec: BND#metadata-table
+#[test]
+fn metadata_reads_the_table_and_gives_unit_for_a_missing_key() {
+    run_test_script_in(
+        r#"
+        let m = app.metadata();
+        if m.version != "2.71.4" { throw `version is ${m.version}`; }
+        if m.images.tag != "2.71.4-dev.abc1234" { throw "nested tables are maps"; }
+        if m.missing != () { throw "a missing key is not the unit value"; }
+        "#,
+        &[("seedling.toml", METADATA)],
+    )
+    .unwrap();
+    run_test_script_in(
+        r#"if app.metadata().len() != 0 { throw "the table is not empty"; }"#,
+        &[],
+    )
+    .unwrap();
+}
+
+// spec: BND#metadata-table
+#[test]
+fn changing_the_returned_map_changes_nothing_else() {
+    run_test_script_in(
+        r#"
+        let m = app.metadata();
+        m.version = "changed";
+        m.images.tag = "changed";
+        let again = app.metadata();
+        if again.version != "2.71.4" || again.images.tag != "2.71.4-dev.abc1234" {
+            throw "the table changed";
+        }
+        "#,
+        &[("seedling.toml", METADATA)],
+    )
+    .unwrap();
+}
+
+// spec: BND#metadata-table
+#[test]
+fn metadata_is_readable_in_the_action_and_validator_contexts() {
+    let (engine, mut scope, app, _) =
+        run_test_script_in("", &[("seedling.toml", METADATA)]).unwrap();
+    let read = |engine: &rhai::Engine, scope: &mut rhai::Scope| {
+        engine
+            .eval_with_scope::<String>(scope, "app.metadata().version")
+            .unwrap()
+    };
+    {
+        let _guard = crate::runtime::barrier::runtime::ActionClosureGuard::new(
+            Arc::clone(&app.def),
+            "op".to_owned(),
+            Default::default(),
+        );
+        assert_eq!(read(&engine, &mut scope), "2.71.4");
+    }
+    let _frame = crate::defs::app::ValidatorFrame::enter();
+    assert_eq!(read(&engine, &mut scope), "2.71.4");
+}

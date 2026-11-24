@@ -22,9 +22,9 @@ Adds the `[metadata]` table to the bundle's metadata file, readable by scripts t
 
 ## Script access
 
-- [ ] Make `json_value_to_rhai_dynamic` reachable from `defs` (move it beside the other boundary conversions in `defs` rather than widening `replay`'s visibility, and update its callers)
-- [ ] `crates/core/src/defs/app/file.rs`: register `metadata` on `App`, returning a fresh map converted from `this.bundle.metadata()`, cited `BND#metadata-table`
-- [ ] Tests in `crates/core/src/tests/`: `app.metadata()` in static, action and validator contexts; a missing key reads as `()`; mutating the returned map leaves a second call unchanged; `last.metadata()` in a gate body reads the last success's bundle after an update changed the table
+- [x] Make `json_value_to_rhai_dynamic` reachable from `defs`: moved to `defs::json` as `to_dynamic`, with a `to_map` that replaces `action_call`'s private copy
+- [x] `crates/core/src/defs/app/file.rs`: register `metadata` on `App`, returning a fresh map converted from `this.bundle.metadata()`, cited `BND#metadata-table`
+- [x] Tests in `crates/core/src/tests/` and the gate lifecycle tests: `app.metadata()` in static, action and validator contexts; a missing key reads as `()`; mutating the returned map leaves a second call unchanged; `last.metadata()` in a gate body reads the last success's bundle after an update changed the table
 
 ## Provenance
 
