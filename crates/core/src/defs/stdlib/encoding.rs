@@ -75,14 +75,14 @@ pub(super) fn register(module: &mut rhai::Module) {
     unary(module, "encode_utf8", |ctx, text| {
         let text = take_text(text)?;
         within(text.bytes.len(), max_blob(ctx), BLOB)?;
-        let bytes = text.bytes.clone();
+        let bytes = text.bytes.to_vec();
         blob_result(ctx, &[&text], bytes)
     });
     // spec: ENC#encodings
     unary(module, "decode_utf8", |ctx, data| {
         let data = take_byte_arg("data", data)?;
         within(data.bytes.len(), max_string(ctx), STRING)?;
-        let text = String::from_utf8(data.bytes.clone())
+        let text = String::from_utf8(data.bytes.to_vec())
             .map_err(|e| -> Box<EvalAltResult> { format!("`data` is not UTF-8: {e}").into() })?;
         text_result(ctx, &[&data], text)
     });
@@ -140,7 +140,7 @@ pub(super) fn register(module: &mut rhai::Module) {
         let namespace = take_string("namespace", namespace)?;
         let name = take_byte_arg("name", name)?;
         let uuid = uuid::Uuid::new_v5(&parse_hyphenated(&namespace)?, &name.bytes);
-        let namespace = ByteArg::text(&namespace);
+        let namespace = ByteArg::text(namespace);
         text_result(ctx, &[&namespace, &name], uuid.hyphenated().to_string())
     });
 }
@@ -166,7 +166,7 @@ fn binary(
 }
 
 fn take_text(text: Dynamic) -> Result<ByteArg, Box<EvalAltResult>> {
-    Ok(ByteArg::text(&take_string("text", text)?))
+    Ok(ByteArg::text(take_string("text", text)?))
 }
 
 // spec: SEC#redaction

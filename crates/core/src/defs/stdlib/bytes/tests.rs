@@ -39,7 +39,7 @@ fn a_bytes_argument_takes_strings_blobs_and_bundle_files() {
         take_byte_arg("d", Dynamic::from_blob(vec![0, 255]))
             .unwrap()
             .bytes,
-        [0, 255]
+        [0, 255][..]
     );
     let file = take_byte_arg(
         "d",
@@ -49,7 +49,7 @@ fn a_bytes_argument_takes_strings_blobs_and_bundle_files() {
         }),
     )
     .unwrap();
-    assert_eq!(file.bytes, b"hi");
+    assert_eq!(file.bytes, b"hi"[..]);
     assert!(file.withholdable().is_none());
     let err = take_byte_arg("d", Dynamic::from(1_i64)).err().unwrap();
     assert!(

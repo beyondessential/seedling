@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 
+use bytes::Bytes;
 use chacha20::{ChaCha20, KeyIvInit, cipher::StreamCipher};
 use hmac::{Hmac, KeyInit, Mac};
 use rhai::{Blob, Dynamic, EvalAltResult, FuncRegistration, INT, NativeCallContext};
@@ -137,7 +138,7 @@ pub(super) fn register(module: &mut rhai::Module) {
 }
 
 // spec: RND#password-hashes
-fn take_password(password: Dynamic) -> Result<Vec<u8>, Box<EvalAltResult>> {
+fn take_password(password: Dynamic) -> Result<Bytes, Box<EvalAltResult>> {
     let password = take_byte_arg("password", password)?.bytes;
     if password.is_empty() {
         return Err("`password` must not be empty".into());

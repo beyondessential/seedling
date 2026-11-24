@@ -1,5 +1,6 @@
 //! The `bytes` arguments of the `std` helpers.
 
+use bytes::Bytes;
 use rhai::{Dynamic, EvalAltResult};
 
 use super::fields::{Field, encode};
@@ -7,16 +8,16 @@ use crate::defs::file::{Directory, File};
 
 /// The bytes a script passed for a `bytes` argument.
 pub(super) struct ByteArg {
-    pub(super) bytes: Vec<u8>,
+    pub(super) bytes: Bytes,
     /// Whether they came from the definition bundle.
     bundle: bool,
 }
 
 impl ByteArg {
     /// A string argument, read as its UTF-8 encoding.
-    pub(super) fn text(text: &str) -> Self {
+    pub(super) fn text(text: String) -> Self {
         Self {
-            bytes: text.as_bytes().to_vec(),
+            bytes: text.into(),
             bundle: false,
         }
     }
@@ -25,7 +26,7 @@ impl ByteArg {
     /// The bytes to look for a withheld value in: none for a bundle file or
     /// directory, which hold only what the definition holds.
     pub(super) fn withholdable(&self) -> Option<&[u8]> {
-        (!self.bundle).then_some(self.bytes.as_slice())
+        (!self.bundle).then_some(&self.bytes[..])
     }
 }
 
@@ -37,26 +38,26 @@ pub(super) fn take_byte_arg(what: &str, value: Dynamic) -> Result<ByteArg, Box<E
     // take: dispatch
     if value.is_string() {
         let text = value.into_immutable_string()?;
-        return Ok(ByteArg::text(&text));
+        return Ok(ByteArg::text(text.into_owned()));
     }
     // take: dispatch
     if value.is_blob() {
         return Ok(ByteArg {
-            bytes: value.into_blob()?,
+            bytes: value.into_blob()?.into(),
             bundle: false,
         });
     }
     // take: dispatch
     if let Some(file) = value.clone().try_cast::<File>() {
         return Ok(ByteArg {
-            bytes: file.contents.to_vec(),
+            bytes: file.contents,
             bundle: true,
         });
     }
     // take: dispatch
     if let Some(dir) = value.try_cast::<Directory>() {
         return Ok(ByteArg {
-            bytes: directory_encoding(&dir)?,
+            bytes: directory_encoding(&dir)?.into(),
             bundle: true,
         });
     }
