@@ -1,15 +1,13 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use serde::Deserialize;
 
 use seedling_protocol::{
     error::{ErrorCode, OiError},
+    events::OiEvent,
     names::AppName,
 };
+use tokio::sync::broadcast::{Receiver, error::TryRecvError};
 
 use crate::{
     oi::state::OiState,
@@ -102,31 +100,55 @@ pub(crate) fn validate_params(
     })
 }
 
-/// How long a stream holds an app's sensitive values before reading them
-/// again, so that a long follow picks up a value that became sensitive.
-const SENSITIVE_REFRESH: Duration = Duration::from_secs(5);
-
 /// The sensitive values of each app whose breadcrumbs a log stream serves,
-/// as they stood when last read.
-#[derive(Default)]
-struct SensitiveByApp(HashMap<String, (Instant, SensitiveValues)>);
+/// read again once a change to the app's parameters, definition or seed is
+/// announced, so that a follow picks up a value that became sensitive.
+struct SensitiveByApp {
+    values: HashMap<String, SensitiveValues>,
+    changes: Receiver<OiEvent>,
+}
 
 impl SensitiveByApp {
+    fn new(state: &OiState) -> Self {
+        Self {
+            values: HashMap::new(),
+            changes: state.event_tx.subscribe(),
+        }
+    }
+
+    /// Forget the values of every app whose sensitive values a change since
+    /// the last call may have moved, and of every app where changes were
+    /// missed.
+    fn forget_changed(&mut self) {
+        loop {
+            match self.changes.try_recv() {
+                Ok(
+                    OiEvent::ParamsChanged { app, .. }
+                    | OiEvent::AppUpdated { app, .. }
+                    | OiEvent::AppSeedRotated { app, .. }
+                    | OiEvent::AppRegistered { app, .. },
+                ) => {
+                    self.values.remove(app.as_str());
+                }
+                Ok(_) => {}
+                Err(TryRecvError::Lagged(_)) => self.values.clear(),
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            }
+        }
+    }
+
     fn of(&mut self, state: &OiState, app: &str) -> Result<&SensitiveValues, OiError> {
-        let stale = self
-            .0
-            .get(app)
-            .is_none_or(|(read, _)| read.elapsed() >= SENSITIVE_REFRESH);
-        if stale {
+        self.forget_changed();
+        if !self.values.contains_key(app) {
             let values = match AppName::new(app) {
                 Ok(name) => tokio::task::block_in_place(|| {
                     crate::oi::handler::current_sensitive(state, &name)
                 })?,
                 Err(_) => SensitiveValues::default(),
             };
-            self.0.insert(app.to_owned(), (Instant::now(), values));
+            self.values.insert(app.to_owned(), values);
         }
-        Ok(&self.0[app].1)
+        Ok(&self.values[app])
     }
 }
 
@@ -152,7 +174,7 @@ pub(crate) async fn log_stream_task(
     mut send: quinn::SendStream,
     mut rx: tokio::sync::mpsc::Receiver<LogEntry>,
 ) {
-    let mut sensitive = SensitiveByApp::default();
+    let mut sensitive = SensitiveByApp::new(&state);
     while let Some(mut entry) = rx.recv().await {
         if entry.rt_call.is_some()
             && let Some(app) = entry.app.clone()
@@ -216,6 +238,43 @@ mod tests {
         mask_breadcrumb(&mut crumb, &sensitive);
         assert_eq!(
             crumb.message,
+            "rt.exec(db, [psql, postgres://app:<redacted>@db])"
+        );
+    }
+
+    // spec: SEC#matching
+    #[test]
+    fn a_value_that_becomes_sensitive_mid_stream_is_masked_from_then_on() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"
+                    app.param("db-password").kind("password").required(false);
+                    app.deployment("web").image("docker.io/library/nginx:1.29");
+                "#,
+            }),
+        )
+        .unwrap();
+        let mut sensitive = SensitiveByApp::new(&oi.state);
+        let line = "rt.exec(db, [psql, postgres://app:Kiwi-Anchor-63@db])";
+        let served = |sensitive: &mut SensitiveByApp| {
+            oi.block_on(async {
+                let mut crumb = entry(line, Some("exec"));
+                mask_breadcrumb(&mut crumb, sensitive.of(&oi.state, "demo").unwrap());
+                crumb.message
+            })
+        };
+        assert_eq!(served(&mut sensitive), line);
+
+        oi.call(
+            "/apps/params/set",
+            serde_json::json!({ "app": "demo", "params": { "db-password": "Kiwi-Anchor-63" } }),
+        )
+        .unwrap();
+        assert_eq!(
+            served(&mut sensitive),
             "rt.exec(db, [psql, postgres://app:<redacted>@db])"
         );
     }
