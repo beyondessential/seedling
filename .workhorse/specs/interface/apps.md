@@ -303,7 +303,7 @@ Each entry of `params` has these members.
 | --- | --- | --- |
 | `name` | string | the parameter's name |
 | `kind` | string | the name of its [kind](../language/action.md#param-kinds) |
-| `range` | object or null | for an `integer` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values, and `null` otherwise |
+| `range` | object or null | for an `integer` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values or `null` as the rule below gives, and `null` otherwise |
 | `options` | array of strings or null | for a `choice` kind, its options in the order the script declared them, and `null` otherwise |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
