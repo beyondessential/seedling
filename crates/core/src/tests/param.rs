@@ -347,6 +347,38 @@ fn param_schema_kind_version() {
     }
 }
 
+// spec: PARAM#schema
+// spec: ACN#param-kinds
+#[test]
+fn param_schema_kind_purl() {
+    let app = run_test_script_app(r#"app.param("package").kind("purl");"#);
+    let def = app.def.load();
+    let schema = def.params.get("package").expect("param declared");
+    assert_eq!(schema.kind, crate::defs::param_def::ParamKind::Purl);
+    assert!(!schema.is_secret());
+}
+
+// spec: ACN#param-kinds
+#[test]
+fn action_param_kind_purl_accepted() {
+    let app = run_test_script_app(
+        r#"
+        app.on_action("fetch", |rt, _param| {}, #{
+            params: #{ dependency: #{ kind: "purl" } }
+        });
+    "#,
+    );
+    let def = app.def.load();
+    let action = def.actions.get("fetch").expect("fetch action");
+    let param = action
+        .params
+        .get(&seedling_protocol::names::ParamName::new_unchecked(
+            "dependency".to_owned(),
+        ))
+        .expect("param declared");
+    assert_eq!(param.kind, crate::defs::param_def::ParamKind::Purl);
+}
+
 // spec: ACN#param-kinds
 #[test]
 fn action_param_kind_version_accepted() {

@@ -13,7 +13,8 @@ use crate::defs::{
 };
 
 /// The param map: each value as JSON, with a version parser result held as
-/// its text and its type kept beside the map.
+/// its text, and its type kept beside the map. A purl's components are held
+/// as a map whose version is likewise its text.
 ///
 /// The types are kept apart from the values because an undeclared param is
 /// passed as supplied, so no shape of JSON value can be reserved to mark a
@@ -27,12 +28,17 @@ pub struct ParamMap {
     versions: BTreeMap<String, VersionType>,
 }
 
-/// Which version parser result a param's text stands for.
+/// Which parser result holding a version a param's value stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum VersionType {
+    /// A `Version`, held as its text.
     Version,
+    /// A `SemVer`, held as its text.
     SemVer,
+    /// A purl's components, whose `version`, where it has one, is a
+    /// `Version` held as its text.
+    Purl,
 }
 
 impl ParamMap {
@@ -95,6 +101,11 @@ impl ParamMap {
             ParsedValue::Int(n) => (Value::from(n), None),
             ParsedValue::Version(v) => (Value::String(v.to_string()), Some(VersionType::Version)),
             ParsedValue::SemVer(v) => (Value::String(v.to_string()), Some(VersionType::SemVer)),
+            purl @ ParsedValue::Purl(_) => (
+                crate::defs::json::from_dynamic(purl.into_dynamic())
+                    .expect("a purl's components are strings, arrays, maps and a Version"),
+                Some(VersionType::Purl),
+            ),
         };
         self.insert(key.clone(), value);
         if let Some(version) = version {
@@ -129,14 +140,36 @@ impl ParamMap {
 
 // spec: OPS#persistence
 fn restore_version(key: &str, version: VersionType, value: &Value) -> Result<Dynamic, String> {
+    match version {
+        VersionType::Version => restore_text(key, value, Version::parse),
+        VersionType::SemVer => restore_text(key, value, SemVer::parse),
+        VersionType::Purl => {
+            let Value::Object(components) = value else {
+                return Err(format!(
+                    "param {key:?} is recorded as a purl but is not a map"
+                ));
+            };
+            let mut purl = crate::defs::json::to_map(components);
+            if let Some(text) = components.get("version") {
+                purl.insert("version".into(), restore_text(key, text, Version::parse)?);
+            }
+            Ok(purl.into())
+        }
+    }
+}
+
+/// Restore a version from the text `value` holds.
+fn restore_text<T: Clone + Send + Sync + 'static>(
+    key: &str,
+    value: &Value,
+    parse: fn(&str) -> Result<T, String>,
+) -> Result<Dynamic, String> {
     let Value::String(text) = value else {
         return Err(format!(
             "param {key:?} is recorded as a version but is not text"
         ));
     };
-    let restored = match version {
-        VersionType::Version => Version::parse(text).map(Dynamic::from),
-        VersionType::SemVer => SemVer::parse(text).map(Dynamic::from),
-    };
-    restored.map_err(|e| format!("param {key:?} cannot be restored as a version: {e}"))
+    parse(text)
+        .map(Dynamic::from)
+        .map_err(|e| format!("param {key:?} cannot be restored as a version: {e}"))
 }

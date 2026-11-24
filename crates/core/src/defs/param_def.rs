@@ -10,6 +10,7 @@ use strum::VariantArray;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use super::{
+    purl::{Purl, QualifierValue},
     take::{reject_unknown_keys, take_map, take_string, take_string_array},
     version::{SemVer, Version},
 };
@@ -68,6 +69,7 @@ pub enum ParamKindName {
     Choice,
     Version,
     VersionSemver,
+    Purl,
     Volume,
 }
 
@@ -85,6 +87,7 @@ impl ParamKindName {
             Self::Choice => "choice",
             Self::Version => "version",
             Self::VersionSemver => "version-semver",
+            Self::Purl => "purl",
             Self::Volume => "volume",
         }
     }
@@ -141,6 +144,8 @@ pub enum ParamKind {
     Version,
     // spec: ACN#param-kinds
     VersionSemver,
+    // spec: ACN#param-kinds
+    Purl,
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -162,6 +167,7 @@ impl ParamKind {
             Self::Choice { .. } => ParamKindName::Choice,
             Self::Version => ParamKindName::Version,
             Self::VersionSemver => ParamKindName::VersionSemver,
+            Self::Purl => ParamKindName::Purl,
             Self::Volume => ParamKindName::Volume,
         }
     }
@@ -244,6 +250,7 @@ impl ParamKind {
             }
             Self::Version => return Version::parse(value).map(ParsedValue::Version),
             Self::VersionSemver => return SemVer::parse(value).map(ParsedValue::SemVer),
+            Self::Purl => return Purl::parse(value).map(ParsedValue::Purl),
             // spec: ACN#kind-parsers
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|e| e.to_string())?;
@@ -337,6 +344,7 @@ fn kind_with(
         },
         ParamKindName::Version => ParamKind::Version,
         ParamKindName::VersionSemver => ParamKind::VersionSemver,
+        ParamKindName::Purl => ParamKind::Purl,
         ParamKindName::Volume => ParamKind::Volume,
     }
 }
@@ -525,6 +533,7 @@ pub enum ParsedValue {
     Int(i64),
     Version(Version),
     SemVer(SemVer),
+    Purl(Purl),
 }
 
 impl ParsedValue {
@@ -543,26 +552,69 @@ impl ParsedValue {
             Self::Int(n) => n.into(),
             Self::Version(version) => Dynamic::from(version),
             Self::SemVer(version) => Dynamic::from(version),
+            Self::Purl(purl) => purl_map(purl),
         }
     }
 }
 
+/// A Package URL's components as a map, leaving out those it does not have.
+// spec: PURL#components
+fn purl_map(purl: Purl) -> Dynamic {
+    let mut map = rhai::Map::new();
+    map.insert("type".into(), purl.ty.into());
+    if let Some(namespace) = purl.namespace {
+        map.insert("namespace".into(), namespace.into());
+    }
+    map.insert("name".into(), purl.name.into());
+    if let Some(version) = purl.version {
+        map.insert("version".into(), Dynamic::from(version));
+    }
+    if !purl.qualifiers.is_empty() {
+        let qualifiers: rhai::Map = purl
+            .qualifiers
+            .into_iter()
+            .map(|(key, value)| {
+                let value = match value {
+                    QualifierValue::Text(text) => text.into(),
+                    QualifierValue::Checksums(entries) => entries
+                        .into_iter()
+                        .map(Dynamic::from)
+                        .collect::<rhai::Array>()
+                        .into(),
+                };
+                (key.into(), value)
+            })
+            .collect();
+        map.insert("qualifiers".into(), qualifiers.into());
+    }
+    if let Some(subpath) = purl.subpath {
+        map.insert("subpath".into(), subpath.into());
+    }
+    map.into()
+}
+
 // spec: ACN#kind-parsers
 fn reject_control_characters(value: &str) -> Result<(), String> {
-    match value.chars().find(|c| {
-        matches!(
-            c.general_category(),
-            GeneralCategory::Control
-                | GeneralCategory::LineSeparator
-                | GeneralCategory::ParagraphSeparator
-        )
-    }) {
+    match line_breaking_character(value) {
         Some(c) => Err(format!(
             "contains U+{:04X}, which a single-line value cannot hold",
             u32::from(c)
         )),
         None => Ok(()),
     }
+}
+
+/// The first character in `value` whose general category is Control, Line
+/// Separator or Paragraph Separator.
+pub(super) fn line_breaking_character(value: &str) -> Option<char> {
+    value.chars().find(|c| {
+        matches!(
+            c.general_category(),
+            GeneralCategory::Control
+                | GeneralCategory::LineSeparator
+                | GeneralCategory::ParagraphSeparator
+        )
+    })
 }
 
 /// The local part and domain of an email address, split at the first `@`.

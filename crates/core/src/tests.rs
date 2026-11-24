@@ -39,6 +39,7 @@ mod ingress;
 mod job;
 mod param;
 mod pod;
+mod purl;
 mod runtime;
 mod service;
 mod stdlib;

@@ -48,7 +48,7 @@
 
 ## Persistence and replay
 
-- [x] A persisted operation's params round-trip with `Version` and `SemVer` restored as their types (verifies spec: OPS)
+- [x] A persisted operation's params round-trip with `Version` and `SemVer` restored as their types, and a purl's version restored as a `Version` (verifies spec: OPS)
 - [x] A recorded `invoke` with a version param replays with the recorded version, not the value the script now supplies (verifies spec: OPS)
 
 ## Probes

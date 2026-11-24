@@ -1263,6 +1263,7 @@ fn a_persisted_version_param_is_restored_as_a_version() {
     use crate::{
         defs::{
             param_def::ParsedValue,
+            purl::Purl,
             version::{SemVer, Version},
         },
         runtime::{param_map::ParamMap, secrets::Cipher},
@@ -1286,6 +1287,10 @@ fn a_persisted_version_param_is_restored_as_a_version() {
         ParsedValue::SemVer(SemVer::parse("2.1.0").unwrap()),
     );
     params.insert_parsed("canary".into(), ParsedValue::Bool(true));
+    params.insert_parsed(
+        "package".into(),
+        ParsedValue::Purl(Purl::parse("pkg:npm/foo@1.0?arch=x64").unwrap()),
+    );
 
     save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
     let restored = load_current_operation_params(&db, &cipher)
@@ -1305,4 +1310,18 @@ fn a_persisted_version_param_is_restored_as_a_version() {
         .expect("a SemVer");
     assert_eq!(release.to_string(), "2.1.0");
     assert!(delivered["canary"].as_bool().unwrap());
+    let package = delivered["package"].clone().cast::<rhai::Map>();
+    let version = package["version"]
+        .clone()
+        .try_cast::<Version>()
+        .expect("a purl's version is a Version");
+    assert_eq!(version.to_string(), "1.0");
+    assert_eq!(package["name"].clone().into_string().unwrap(), "foo");
+    assert_eq!(
+        package["qualifiers"].clone().cast::<rhai::Map>()["arch"]
+            .clone()
+            .into_string()
+            .unwrap(),
+        "x64"
+    );
 }

@@ -169,7 +169,7 @@ let vol = app.volume("data")
 ```rhai
 let version = app.param("version")
     .kind("text")           // text (one line) | multiline | email | password | weak-password | random
-                            // | boolean | integer | choice | version | version-semver
+                            // | boolean | integer | choice | version | version-semver | purl
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -415,7 +415,7 @@ Calling a helper that does not exist throws, like any unknown function. Which he
 
 ### Parsing a kind
 
-Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, and `std::parse_choice(v, ["small", "large"])`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, and `std::parse_choice(v, ["small", "large"])`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
 
 ```rhai
 let contact = std::parse_email("ops@example.org");
@@ -425,19 +425,20 @@ contact.domain  // "example.org"
 app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
-`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean and `std::parse_integer` an integer. `std::parse_version` and `std::parse_version_semver` return a version, described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean and `std::parse_integer` an integer. `std::parse_version` and `std::parse_version_semver` return a version, and `std::parse_purl` the components of a Package URL, both described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
 
 ### Versions
 
 There are two version kinds. `version` takes a version of any scheme: a Debian package version, a partial image tag such as `16.4`, or a release tag. `version-semver` takes only a full [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version, so `2.71` is refused, and adds its parts and requirement matching. Both accept a leading `v` or `V`.
 
-`std::parse_version` returns a `Version`. A value must be printable ASCII with no spaces and hold at least one digit, so floating tags such as `latest` are refused. Versions compare with `<`, `<=`, `>`, `>=`, `==` and `!=` using [libversion](https://github.com/repology/libversion/blob/master/doc/ALGORITHM.md)'s ordering, which ignores the separators and leading zeros, puts `alpha`, `beta`, `rc` and `pre` before the release and `patch`, `post` and `pl` after it, and ignores a leading `v` before a digit. `segments()` splits the version into its runs of digits, as integers, and of letters, as strings:
+`std::parse_version` returns a `Version`. A value must be non-empty printable ASCII with no spaces, so floating tags such as `latest` and digests are accepted. Versions compare with `<`, `<=`, `>`, `>=`, `==` and `!=`. A version starting with a digit, or with a `v` or `V` before a digit, is _numbered_, and two numbered versions compare using [libversion](https://github.com/repology/libversion/blob/master/doc/ALGORITHM.md)'s ordering, which ignores the separators and leading zeros, puts `alpha`, `beta`, `rc` and `pre` before the release and `patch`, `post` and `pl` after it, and ignores a leading `v` before a digit. Every other version, such as `latest`, `main` or `sha256:244fd47e07d10`, sorts above all numbered ones, and two of them compare by their text, byte by byte. `segments()` splits the version into its runs of digits, as integers, and of letters, as strings; in a version that is not numbered, a run of digits too large for an integer is a string:
 
 ```rhai
 let pg = std::parse_version("16.4-bookworm");
 pg.segments()                                         // [16, 4, "bookworm"]
 std::parse_version("1.0rc1") < std::parse_version("1.0")    // true
 std::parse_version("v2.0") == std::parse_version("2.0.0")   // true
+std::parse_version("99.0") < std::parse_version("latest")   // true
 ```
 
 `std::parse_version_semver` returns a `SemVer`, with `major()`, `minor()` and `patch()` as integers and `pre_release()` and `build()` as strings, empty when absent. SemVers compare by SemVer precedence, which ignores build metadata. `matches(requirement)` takes the same requirement syntax as the `seedling` field of the [bundle metadata](#definition-bundles), and a pre-release only matches a requirement that names a pre-release of the same version:
@@ -454,6 +455,25 @@ app.param("version").kind("version-semver").validate(|v, all| {
 ```
 
 A version prints exactly as it was written, `v` included, so `` `ghcr.io/org/app:${release}` `` gives back the operator's tag. Comparing a version with anything but a version of the same type throws, including a string or the other version type. Sort a list of versions with a closure: `versions.sort(|a, b| a <= b)`.
+
+### Package URLs
+
+The `purl` kind takes a [Package URL](https://ecma-tc54.github.io/ECMA-427/), a reference to a package in any ecosystem, such as `pkg:npm/%40angular/core@17.0.0` or `pkg:cargo/serde@1.0.200`, for a script to pass on to a workload. Any type is accepted, and no type's own naming rules are applied, so `pkg:pypi/Foo_Bar` keeps its name as written. Input in a form other than the canonical one is read as the [purl specification](https://github.com/package-url/purl-spec/blob/v1.1.1/docs/specification/how-to-parse.md) reads it: `pkg://NPM/foo` is type `npm`, empty qualifiers and `.` subpath segments are dropped. The scheme must be lower-case `pkg:`, and a purl is refused when a qualifier has no `=`, a qualifier key appears twice, a decoded component holds a control character or line break, or a non-empty version is not a valid `version`.
+
+`std::parse_purl` returns a map of the components, percent-decoded. `type` and `name` are always present; `namespace`, `version`, `qualifiers` and `subpath` only when the purl has them. `version` is a `Version`, so it compares like any other. `qualifiers` maps each lower-cased key to its value, except `checksum`, which is an array of its `algorithm:digits` entries, lower-cased and sorted by algorithm:
+
+```rhai
+let purl = std::parse_purl("pkg:npm/%40scope/foo@1.2.0?arch=x64&checksum=SHA256:BB,sha1:aa#lib");
+// #{ type: "npm", namespace: "@scope", name: "foo", version: 1.2.0,
+//    qualifiers: #{ arch: "x64", checksum: ["sha1:aa", "sha256:bb"] }, subpath: "lib" }
+purl.version >= std::parse_version("1.0")    // true
+
+app.param("dependency").kind("purl").validate(|v, all| {
+    if v.type != "npm" { throw "an npm package is needed"; }
+});
+```
+
+A parameter's value stays as the operator entered it, so a workload given `dependency.value()` receives their text, not a normalised form.
 
 ### Derived random values
 

@@ -24,7 +24,6 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::defs::app::{SubActionFrame, action_call_lookup, action_call_stack};
 use crate::defs::param_def::ParamDef;
-use crate::defs::version::{SemVer, Version};
 use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
 use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
@@ -104,7 +103,8 @@ fn validate_call_params(
     schema: Option<&Schema>,
     params: Map,
 ) -> Result<ParamMap, Box<EvalAltResult>> {
-    let json_params = rhai_map_to_json(params)?;
+    let json_params = crate::defs::json::from_map(params)
+        .map_err(|e| -> Box<EvalAltResult> { format!("Action.invoke: param {e}").into() })?;
     action_params::reject_reserved_keys(&json_params).map_err(validation_to_eval)?;
 
     let Some(schema) = schema else {
@@ -429,56 +429,6 @@ fn validation_to_eval(e: ParamValidationError) -> Box<EvalAltResult> {
         Dynamic::from(e.to_string()),
         Position::NONE,
     ))
-}
-
-fn rhai_map_to_json(map: Map) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
-    let mut out = JsonMap::new();
-    for (k, v) in map {
-        out.insert(k.to_string(), rhai_dynamic_to_json(v)?);
-    }
-    Ok(out)
-}
-
-fn rhai_dynamic_to_json(v: Dynamic) -> Result<JsonValue, Box<EvalAltResult>> {
-    if v.is_unit() {
-        Ok(JsonValue::Null)
-    } else if v.is_bool() {
-        Ok(JsonValue::Bool(v.cast::<bool>()))
-    } else if v.is_int() {
-        Ok(JsonValue::from(v.cast::<i64>()))
-    } else if v.is_float() {
-        // spec: BSL#arguments
-        // A non-finite number has no form in the param map; null would be a
-        // different value than the script passed.
-        let f = v.cast::<f64>();
-        serde_json::Number::from_f64(f)
-            .map(JsonValue::Number)
-            .ok_or_else(|| format!("Action.invoke: param value {f} is not a finite number").into())
-    } else if v.is_string() {
-        Ok(JsonValue::String(v.into_string().unwrap_or_default()))
-    } else if let Some(version) = v.clone().try_cast::<Version>() {
-        // spec: ACN#action-invocation
-        Ok(JsonValue::String(version.to_string()))
-    } else if let Some(version) = v.clone().try_cast::<SemVer>() {
-        // spec: ACN#action-invocation
-        Ok(JsonValue::String(version.to_string()))
-    } else if v.is_array() {
-        let arr: rhai::Array = v.cast();
-        let mut out = Vec::with_capacity(arr.len());
-        for item in arr {
-            out.push(rhai_dynamic_to_json(item)?);
-        }
-        Ok(JsonValue::Array(out))
-    } else if v.is_map() {
-        let map: Map = v.cast();
-        Ok(JsonValue::Object(rhai_map_to_json(map)?))
-    } else {
-        Err(format!(
-            "Action.invoke: param value is of unsupported type {}",
-            v.type_name()
-        )
-        .into())
-    }
 }
 
 // spec: ACN#volume-params

@@ -4277,6 +4277,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "purl"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60ebe4262ae91ddd28c8721111a0a6e9e58860e211fc92116c4bb85c98fd96ad"
+dependencies = [
+ "hex",
+ "percent-encoding",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4997,6 +5008,7 @@ dependencies = [
  "parking_lot",
  "pem 4.0.0",
  "podman-rest-client",
+ "purl",
  "quinn",
  "rand 0.10.3",
  "rcgen",

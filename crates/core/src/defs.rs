@@ -105,6 +105,7 @@ pub mod json;
 pub mod param;
 pub mod param_def;
 pub mod pod;
+pub mod purl;
 pub mod resource;
 pub mod service;
 pub mod stdlib;
