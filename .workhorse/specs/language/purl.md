@@ -31,7 +31,7 @@ It MUST accept a purl of any type, whether or not the purl specification defines
 - in which any percent-decoded component holds a character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp);
 - holding a namespace or subpath segment that contains a `/` once percent-decoded;
 - holding two qualifiers whose keys are equal once in lower case;
-- whose version, once percent-decoded, [`std::parse_version`](version.md#generic-versions) rejects.
+- holding a non-empty version that, once percent-decoded, [`std::parse_version`](version.md#generic-versions) rejects.
 
 > [!NOTE]
 > The decoded components are what a script passes on to a workload, so a line break encoded as `%0A` carries the same risk the [single-line rule](action.md#kind-parsers) guards the raw text against.
