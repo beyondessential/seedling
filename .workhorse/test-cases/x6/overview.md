@@ -33,3 +33,8 @@
 - [x] An event quoting an app's secret is masked as the event stream sends it, while its `app` and other identifiers are left as they are (verifies spec: SEC)
 - [x] An error message quoting the requested app's secret is masked (verifies spec: SEC)
 - [x] Retrieving an app's script returns a secret default written in it as stored (verifies spec: SEC)
+- [x] A number in a response whose text holds a sensitive value reads as its masked text, and a boolean is left as it is (verifies spec: SEC)
+- [x] A sensitive value that overlaps a `<redacted>` marker, or that a marker forms with its neighbours, is masked (verifies spec: SEC)
+- [x] An event quoting an app's secret is written to the audit log masked, and an event whose app's sensitive values cannot be read files `audit_log_unavailable` (verifies spec: AUD)
+- [x] A parameter change committed while the app's sensitive values cannot be read still emits `ParamsChanged`, with every entry `redacted` (verifies spec: SEC)
+- [x] A dynamic resource a shell starts with a description quoting a secret shell param is recorded with no description (verifies spec: APPS)

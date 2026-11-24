@@ -68,6 +68,12 @@ Build the redaction the X6 spec edits describe. Sensitive values are secret para
 - [x] Masking leaves an existing marker alone
 - [x] Check every OI response and event as a whole, except definition and template retrieval; drop the per-field fault masking it subsumes
 - [x] After rebasing onto C7: a helper result an action closure computes from one of the operation's sensitive values joins the operation's scope
+- [x] Masking leaves alone only an occurrence lying wholly inside a marker, widens one that overlaps it, and repeats until nothing is left to mask
+- [x] The whole-document check masks numbers as their text; member names and booleans stay as they are, since masking them rewrites the response's structure for a short secret
+- [x] Write audit log entries through the whole-event check; the audit task starts once the state exists, keeping its early subscription
+- [x] A dynamic resource description quoting the operation's or session's sensitive value is recorded as none
+- [x] A committed parameter or definition change is announced with every value withheld when the app's sensitive values cannot be read
+- [x] An earlier secret value whose history row cannot be decrypted keeps failing the app's sensitive values closed, by decision
 
 ## Finish
 
