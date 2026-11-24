@@ -10,6 +10,7 @@ use rhai::{Blob, Dynamic, EvalAltResult, FuncRegistration, INT, NativeCallContex
 use sha2::Sha256;
 
 use super::{
+    BLOB, STRING, blob_forms,
     fields::{Field, encode},
     helper_limits, too_large,
 };
@@ -35,7 +36,7 @@ pub(super) fn register(module: &mut rhai::Module) {
             module,
             |ctx: NativeCallContext, label: Dynamic, n: INT| -> Result<Blob, Box<EvalAltResult>> {
                 let label = take_label(label)?;
-                let n = take_count("n", n, ctx.engine().max_array_size(), "Size of BLOB")?;
+                let n = take_count("n", n, ctx.engine().max_array_size(), BLOB)?;
                 let seed = seed_for_call(&ctx)?;
                 let bytes = random_bytes(&seed, &label, n)?;
                 record(|| blob_forms(&bytes));
@@ -60,7 +61,7 @@ pub(super) fn register(module: &mut rhai::Module) {
                     "length",
                     length,
                     ctx.engine().max_string_size() / widest(&alphabet),
-                    "Length of string",
+                    STRING,
                 )?;
                 let seed = seed_for_call(&ctx)?;
                 let value = random_string(&seed, &label, length, &alphabet)?;
@@ -102,22 +103,10 @@ fn seed_for_call(ctx: &NativeCallContext) -> Result<Seed, Box<EvalAltResult>> {
 
 /// Record a value derived from the app seed. Values derived inside an action
 /// closure come from the operation seed and are the operation's own.
-fn record(forms: impl FnOnce() -> Vec<String>) {
+fn record<F: AsRef<[u8]>>(forms: impl FnOnce() -> Vec<F>) {
     if !is_in_action_closure() {
         seeds::record_derived(forms());
     }
-}
-
-// spec: SEC#redaction
-/// The text forms BSL offers of a Blob: its UTF-8 reading, and the hex digits
-/// of its string form, which runs them together in groups of eight bytes.
-fn blob_forms(bytes: &[u8]) -> Vec<String> {
-    let rendered = Dynamic::from_blob(bytes.to_vec()).to_string();
-    let digits = rendered.trim_start_matches('[').trim_end_matches(']');
-    vec![
-        String::from_utf8_lossy(bytes).into_owned(),
-        digits.to_owned(),
-    ]
 }
 
 // spec: RND#helpers

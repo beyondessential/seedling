@@ -242,8 +242,7 @@ impl AppSeedFrame {
         Self {
             previous_seed: APP_SEED.with(|s| s.replace(Some(seed.clone()))),
             previous_derived: DERIVED.with(|d| d.replace(Some(DerivedValues::default()))),
-            previous_withholding: WITHHOLDING
-                .with(|w| w.replace(Some(Withholding::default()))),
+            previous_withholding: WITHHOLDING.with(|w| w.replace(Some(Withholding::default()))),
             previous_derivations: DERIVATIONS.with(|c| c.replace(0)),
             previous_password_hashes: PASSWORD_HASHES.with(|c| c.replace(0)),
         }

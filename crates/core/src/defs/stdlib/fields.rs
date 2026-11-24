@@ -3,7 +3,7 @@
 
 use rhai::EvalAltResult;
 
-use super::too_large;
+use super::{STRING, too_large};
 
 pub(super) enum Field<'a> {
     Str(&'a str),
@@ -19,7 +19,7 @@ pub(super) fn encode(fields: &[Field<'_>]) -> Result<Vec<u8>, Box<EvalAltResult>
     for field in fields {
         match field {
             Field::Str(s) => {
-                let len = u32::try_from(s.len()).map_err(|_| too_large("Length of string"))?;
+                let len = u32::try_from(s.len()).map_err(|_| too_large(STRING))?;
                 out.extend_from_slice(&len.to_be_bytes());
                 out.extend_from_slice(s.as_bytes());
             }
