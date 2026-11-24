@@ -1,6 +1,6 @@
-//! Derived random values: bytes, strings and UUIDs a script draws from a seed
-//! the runtime holds, so the same call returns the same value wherever the
-//! seed is the same.
+//! Derived random values: bytes, strings, UUIDs and salted password hashes a
+//! script draws from a seed the runtime holds, so the same call returns the
+//! same value wherever the seed is the same.
 
 use std::collections::HashSet;
 
@@ -11,6 +11,7 @@ use sha2::Sha256;
 
 use super::{
     BLOB, STRING, blob_forms,
+    bytes::take_byte_arg,
     fields::{Field, encode},
     helper_limits, too_large,
 };
@@ -25,6 +26,8 @@ use crate::{
 const RANDOM_BYTES: &str = "random_bytes";
 const RANDOM_STRING: &str = "random_string";
 const UUID_V4: &str = "uuid_v4";
+const PASSWORD_ARGON2ID: &str = "password_argon2id";
+const PASSWORD_BCRYPT: &str = "password_bcrypt";
 
 // spec: RND#helpers
 pub(super) fn register(module: &mut rhai::Module) {
@@ -82,6 +85,75 @@ pub(super) fn register(module: &mut rhai::Module) {
                 Ok(value)
             },
         );
+
+    // spec: RND#password-hashes
+    FuncRegistration::new(PASSWORD_ARGON2ID)
+        .with_volatility(true)
+        .set_into_module(
+            module,
+            |ctx: NativeCallContext,
+             label: Dynamic,
+             password: Dynamic|
+             -> Result<String, Box<EvalAltResult>> {
+                let label = take_label(label)?;
+                let password = take_password(password)?;
+                let seed = seed_for_password_hash(&ctx)?;
+                let value = password_argon2id(&seed, &label, &password)?;
+                record(|| vec![value.clone()]);
+                Ok(value)
+            },
+        );
+
+    // spec: RND#password-hashes
+    FuncRegistration::new(PASSWORD_BCRYPT)
+        .with_volatility(true)
+        .set_into_module(
+            module,
+            |ctx: NativeCallContext,
+             label: Dynamic,
+             password: Dynamic|
+             -> Result<String, Box<EvalAltResult>> {
+                let label = take_label(label)?;
+                let password = take_password(password)?;
+                // bcrypt reads a password only up to its 72nd byte or its
+                // first zero byte, so it would verify every password sharing
+                // that much of this one.
+                if password.len() > 72 {
+                    return Err(format!(
+                        "`password` must be at most 72 bytes for bcrypt, got {}",
+                        password.len()
+                    )
+                    .into());
+                }
+                if password.contains(&0) {
+                    return Err("`password` must not hold a zero byte for bcrypt".into());
+                }
+                let seed = seed_for_password_hash(&ctx)?;
+                let value = password_bcrypt(&seed, &label, &password)?;
+                record(|| vec![value.clone()]);
+                Ok(value)
+            },
+        );
+}
+
+// spec: RND#password-hashes
+fn take_password(password: Dynamic) -> Result<Vec<u8>, Box<EvalAltResult>> {
+    let password = take_byte_arg("password", password)?.bytes;
+    if password.is_empty() {
+        return Err("`password` must not be empty".into());
+    }
+    Ok(password)
+}
+
+// spec: LIM#limits
+/// The seed a password hash derives from, counted against the evaluation's
+/// limits on both derived values and password hashes.
+fn seed_for_password_hash(ctx: &NativeCallContext) -> Result<Seed, Box<EvalAltResult>> {
+    let seed = seed_for_call(ctx)?;
+    if !seeds::count_password_hash(helper_limits(ctx)?.password_hashes) {
+        return Err(too_large("Number of password hashes"));
+    }
+    Ok(seed)
 }
 
 // spec: RND#seeds
@@ -248,6 +320,62 @@ fn uuid_v4(seed: &Seed, label: &str) -> Result<String, Box<EvalAltResult>> {
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     Ok(uuid::Uuid::from_bytes(bytes).hyphenated().to_string())
+}
+
+// spec: RND#values
+/// A password hash helper's salt: the first 16 bytes of its call's byte
+/// stream, whose call encoding holds the password.
+fn password_salt(
+    seed: &Seed,
+    helper: &str,
+    label: &str,
+    password: &[u8],
+) -> Result<[u8; 16], Box<EvalAltResult>> {
+    let mut stream = byte_stream(
+        seed,
+        &[
+            Field::Str(helper),
+            Field::Str(label),
+            Field::Bytes(password),
+        ],
+    )?;
+    let mut salt = [0u8; 16];
+    take_bytes(&mut stream, &mut salt);
+    Ok(salt)
+}
+
+// spec: RND#values
+fn password_argon2id(
+    seed: &Seed,
+    label: &str,
+    password: &[u8],
+) -> Result<String, Box<EvalAltResult>> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
+
+    let salt = password_salt(seed, PASSWORD_ARGON2ID, label, password)?;
+    let params = Params::new(19_456, 2, 1, Some(32)).expect("the parameters are within Argon2's");
+    let mut tag = [0u8; 32];
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+        .hash_password_into(password, &salt, &mut tag)
+        .map_err(|e| -> Box<EvalAltResult> { format!("cannot hash `password`: {e}").into() })?;
+    Ok(format!(
+        "$argon2id$v=19$m=19456,t=2,p=1${}${}",
+        STANDARD_NO_PAD.encode(salt),
+        STANDARD_NO_PAD.encode(tag),
+    ))
+}
+
+// spec: RND#values
+fn password_bcrypt(
+    seed: &Seed,
+    label: &str,
+    password: &[u8],
+) -> Result<String, Box<EvalAltResult>> {
+    let salt = password_salt(seed, PASSWORD_BCRYPT, label, password)?;
+    let hash = bcrypt::hash_with_salt_bytes(password, 12, salt)
+        .map_err(|e| -> Box<EvalAltResult> { format!("cannot hash `password`: {e}").into() })?;
+    Ok(String::from_utf8(hash.to_vec()).expect("a bcrypt hash is ASCII"))
 }
 
 #[cfg(test)]
