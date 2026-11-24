@@ -7,9 +7,8 @@ The BSL guide (`docs/bsl-scripting.md`) already documents the helpers.
 
 ### Blob length limit
 
-Rhai 1.25.1 has no Blob limit: after every native call, `check_data_size` counts a Blob's bytes against `max_array_size` (`eval/data_check.rs`), and so do the Blob built-ins (`packages/blob_basic.rs`).
-On stock Rhai, a 1 MiB Blob limit beside a 10 000-element array limit can't be enforced.
-**Pending decision**; see the open question in the conversation.
+Rhai 1.25.1 counts a Blob's bytes against `max_array_size` after every native call (`eval/data_check.rs`) and in its Blob built-ins (`packages/blob_basic.rs`), so a separate Blob limit would need a patched Rhai.
+Decided instead: a Blob's length counts against the array length limit, and LIM says so; no new option.
 
 ### Withheld results
 
@@ -49,12 +48,10 @@ The directory encoding and the password helpers' call encoding both use them.
 - [ ] Move `Field`/`encode` from `defs/stdlib/random.rs` into `defs/stdlib/fields.rs`, and add `Field::Bytes`.
 - [ ] Add `take_bytes(what, Dynamic)` to `defs/take.rs`, returning the bytes of a string, Blob, `File` or `Directory` (the last through the directory encoding).
   Any other type gets the usual "must be …" error. Cite ENC#byte-arguments and ENC#directory-encoding.
-- [ ] Add a pre-allocation check helper that fails with `ErrorDataTooLarge` when a result would exceed the string or Blob limit (ENC#results).
-  `random_bytes` moves to the Blob limit as well.
+- [ ] Add a pre-allocation check helper that fails with `ErrorDataTooLarge` when a result would exceed the string or array limit (ENC#results).
 
 ### Limits
 
-- [ ] Blob length limit, as the decision lands: `ScriptLimits.max_blob_size`, `--script-max-blob-size` in `crates/daemon/src/main.rs`, and its `From` conversion and parse test.
 - [ ] Password hash limit: `ScriptLimits.max_password_hashes`, `--script-max-password-hashes` (default 16, 0 removes it), and its `From` conversion and parse test.
 - [ ] The engine default tag carries both helper limits. Update `seed_for_call` and `setup_language` to match.
 - [ ] Add a password hash counter to the seed frames (`runtime/seeds.rs`), reset on entry and restored on drop.
@@ -108,7 +105,7 @@ The directory encoding and the password helpers' call encoding both use them.
 - [ ] Script-level tests in `crates/core/src/tests/stdlib.rs`:
   - each helper is reachable as `std::…`;
   - bytes arguments accept a string, Blob, `app.file` and `app.dir`, and refuse an int;
-  - results over the string or Blob limit fail before allocating;
+  - results over the string or array limit fail before allocating;
   - the password hash limit is enforced and counts toward the derived values limit too.
 - [ ] Redaction tests:
   - a basic-auth env value built from a derived password is withheld;

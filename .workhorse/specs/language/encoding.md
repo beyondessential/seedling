@@ -37,7 +37,7 @@ String fields and bytes fields are those of the [call encoding](random.md#call-e
 
 ## Results
 
-The string length and Blob length [limits](../runtime/engine-limits.md#limits) MUST apply to every result of these helpers.
+The string length and array length [limits](../runtime/engine-limits.md#limits) MUST apply to every result of these helpers.
 
 ## Encodings
 
