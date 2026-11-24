@@ -197,20 +197,16 @@ impl Script {
 ///
 /// The requirement is read on its own before the rest of the metadata, so a
 /// bundle written for a newer Seedling can still be held and reported as
-/// unsupported; the strict reading of everything else lives in `contents`.
+/// unsupported; the strict reading of everything else lives in `script`.
+/// The metadata table is read on its own too, so that a field or script file
+/// this Seedling cannot read does not hide a table it can.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bundle {
     files: BTreeMap<String, Bytes>,
     hash: String,
     seedling: Option<VersionRequirement>,
-    contents: Result<Contents, BundleError>,
-}
-
-/// What the strict reading of a bundle's metadata yields.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Contents {
-    script: Script,
-    metadata: Map<String, Value>,
+    metadata: Result<Map<String, Value>, BundleError>,
+    script: Result<Script, BundleError>,
 }
 
 /// What a stored bundle's metadata file declares, read without rebuilding
@@ -283,14 +279,17 @@ impl Bundle {
                 return Err(invalid(format!("path {path:?} appears twice")));
             }
         }
-        let seedling = read_requirement(out.get(METADATA_FILE).map(|b| b.as_ref()))?;
-        let contents = read_contents(&out);
+        let table = read_metadata_file(out.get(METADATA_FILE).map(|b| b.as_ref()))?;
+        let seedling = read_requirement(&table)?;
+        let metadata = read_metadata(&table);
+        let script = read_script(&out, table, &metadata);
         let hash = content_hash(&out);
         Ok(Self {
             files: out,
             hash,
             seedling,
-            contents,
+            metadata,
+            script,
         })
     }
 
@@ -453,10 +452,10 @@ impl Bundle {
     /// values that are one file long.
     // spec: DEFN#provenance-reporting
     pub fn declared_of_canonical(data: &[u8]) -> Result<Declared, BundleError> {
-        let file = metadata_file_of_canonical(data)?;
+        let table = read_metadata_file(metadata_file_of_canonical(data)?)?;
         Ok(Declared {
-            seedling_versions: read_requirement(file)?,
-            metadata: read_metadata(file)?,
+            seedling_versions: read_requirement(&table)?,
+            metadata: read_metadata(&table)?,
         })
     }
 
@@ -498,20 +497,13 @@ impl Bundle {
     /// The concatenated script, or why the metadata or script files break
     /// the bundle rules.
     pub fn script(&self) -> Result<&Script, BundleError> {
-        self.contents
-            .as_ref()
-            .map(|c| &c.script)
-            .map_err(Clone::clone)
+        self.script.as_ref().map_err(Clone::clone)
     }
 
-    /// The metadata table, or why the metadata or script files break the
-    /// bundle rules.
+    /// The metadata table, or why it breaks the bundle rules.
     // spec: BND#metadata-table
     pub fn metadata(&self) -> Result<&Map<String, Value>, BundleError> {
-        self.contents
-            .as_ref()
-            .map(|c| &c.metadata)
-            .map_err(Clone::clone)
+        self.metadata.as_ref().map_err(Clone::clone)
     }
 
     /// Everything a definition must pass before it is evaluated for an app:
@@ -545,15 +537,19 @@ fn overlapping<'a>(out: &'a BTreeMap<String, Bytes>, path: &str) -> Option<&'a S
     None
 }
 
+/// The metadata file parsed as TOML, or an empty table where there is none.
 // spec: BND#metadata-file
-fn read_requirement(file: Option<&[u8]>) -> Result<Option<VersionRequirement>, BundleError> {
+fn read_metadata_file(file: Option<&[u8]>) -> Result<toml::Table, BundleError> {
     let Some(bytes) = file else {
-        return Ok(None);
+        return Ok(toml::Table::new());
     };
     let text = std::str::from_utf8(bytes)
         .map_err(|_| invalid(format!("{METADATA_FILE} is not valid UTF-8")))?;
-    let table: toml::Table = toml::from_str(text)
-        .map_err(|e| invalid(format!("{METADATA_FILE} cannot be parsed: {e}")))?;
+    toml::from_str(text).map_err(|e| invalid(format!("{METADATA_FILE} cannot be parsed: {e}")))
+}
+
+// spec: BND#metadata-file
+fn read_requirement(table: &toml::Table) -> Result<Option<VersionRequirement>, BundleError> {
     match table.get("seedling") {
         None => Ok(None),
         Some(toml::Value::String(s)) => VersionRequirement::parse(s)
@@ -584,41 +580,41 @@ fn metadata_file_of_canonical(data: &[u8]) -> Result<Option<&[u8]>, BundleError>
     Ok(None)
 }
 
-/// The metadata table alone, from a metadata file the bundle already holds.
-fn read_metadata(file: Option<&[u8]>) -> Result<Map<String, Value>, BundleError> {
-    let Some(bytes) = file else {
-        return Ok(Map::new());
-    };
-    let text = std::str::from_utf8(bytes)
-        .map_err(|_| invalid(format!("{METADATA_FILE} is not valid UTF-8")))?;
-    let mut table: toml::Table = toml::from_str(text)
-        .map_err(|e| invalid(format!("{METADATA_FILE} cannot be parsed: {e}")))?;
-    match table.remove("metadata") {
+// spec: BND#metadata-table
+fn read_metadata(table: &toml::Table) -> Result<Map<String, Value>, BundleError> {
+    match table.get("metadata") {
         None => Ok(Map::new()),
-        Some(value) => metadata_table(value),
+        Some(toml::Value::Table(table)) => metadata_map(table, "metadata"),
+        Some(other) => Err(invalid(format!(
+            "{METADATA_FILE} field `metadata` must be a table, got {}",
+            other.type_str()
+        ))),
     }
 }
 
+/// The strict reading of the metadata file and the script files it names.
+/// `metadata` is the table as [`read_metadata`] read it, so that its error
+/// fails this reading too.
 // spec: BND#metadata-file
 // spec: DEFN#bundle-rules
-fn read_contents(files: &BTreeMap<String, Bytes>) -> Result<Contents, BundleError> {
+fn read_script(
+    files: &BTreeMap<String, Bytes>,
+    table: toml::Table,
+    metadata: &Result<Map<String, Value>, BundleError>,
+) -> Result<Script, BundleError> {
     let mut names = vec![DEFAULT_SCRIPT.to_owned()];
-    let mut metadata = Map::new();
-    if let Some(bytes) = files.get(METADATA_FILE) {
-        // Already known to be UTF-8 and TOML by `read_requirement`.
-        let text = std::str::from_utf8(bytes).unwrap_or_default();
-        let table: toml::Table = toml::from_str(text).unwrap_or_default();
-        for (key, value) in table {
-            match key.as_str() {
-                // Read, and checked, by `read_requirement`.
-                "seedling" => {}
-                "script" => names = script_list(value)?,
-                "metadata" => metadata = metadata_table(value)?,
-                other => {
-                    return Err(invalid(format!(
-                        "{METADATA_FILE} field `{other}` is not defined"
-                    )));
-                }
+    for (key, value) in table {
+        match key.as_str() {
+            // Read, and checked, by `read_requirement`.
+            "seedling" => {}
+            "script" => names = script_list(value)?,
+            "metadata" => {
+                metadata.as_ref().map_err(Clone::clone)?;
+            }
+            other => {
+                return Err(invalid(format!(
+                    "{METADATA_FILE} field `{other}` is not defined"
+                )));
             }
         }
     }
@@ -652,29 +648,15 @@ fn read_contents(files: &BTreeMap<String, Bytes>) -> Result<Contents, BundleErro
             .map_err(|_| invalid(format!("script file {path:?} is not valid UTF-8")))?;
         texts.push((path.as_str(), text));
     }
-    Ok(Contents {
-        script: Script::concatenate(texts),
-        metadata,
-    })
+    Ok(Script::concatenate(texts))
 }
 
-// spec: BND#metadata-table
-fn metadata_table(value: toml::Value) -> Result<Map<String, Value>, BundleError> {
-    match value {
-        toml::Value::Table(table) => metadata_map(table, "metadata"),
-        other => Err(invalid(format!(
-            "{METADATA_FILE} field `metadata` must be a table, got {}",
-            other.type_str()
-        ))),
-    }
-}
-
-fn metadata_map(table: toml::Table, at: &str) -> Result<Map<String, Value>, BundleError> {
+fn metadata_map(table: &toml::Table, at: &str) -> Result<Map<String, Value>, BundleError> {
     table
-        .into_iter()
+        .iter()
         .map(|(key, item)| {
             let converted = metadata_value(item, &format!("{at}.{key}"))?;
-            Ok((key, converted))
+            Ok((key.clone(), converted))
         })
         .collect()
 }
@@ -682,23 +664,23 @@ fn metadata_map(table: toml::Table, at: &str) -> Result<Map<String, Value>, Bund
 /// One value of the metadata table, as the JSON value `app.metadata()` and
 /// provenance both start from. `at` names where it sits, for the error.
 // spec: BND#metadata-table
-fn metadata_value(value: toml::Value, at: &str) -> Result<Value, BundleError> {
+fn metadata_value(value: &toml::Value, at: &str) -> Result<Value, BundleError> {
     Ok(match value {
-        toml::Value::String(s) => Value::String(s),
-        toml::Value::Integer(i) => Value::from(i),
+        toml::Value::String(s) => Value::String(s.clone()),
+        toml::Value::Integer(i) => Value::from(*i),
         // spec: DEFN#bundle-rules
-        toml::Value::Float(f) => serde_json::Number::from_f64(f)
+        toml::Value::Float(f) => serde_json::Number::from_f64(*f)
             .map(Value::Number)
             .ok_or_else(|| {
                 invalid(format!(
                     "{METADATA_FILE} field `{at}` is {f}, which is not a finite number"
                 ))
             })?,
-        toml::Value::Boolean(b) => Value::Bool(b),
+        toml::Value::Boolean(b) => Value::Bool(*b),
         toml::Value::Datetime(d) => Value::String(d.to_string()),
         toml::Value::Array(items) => Value::Array(
             items
-                .into_iter()
+                .iter()
                 .enumerate()
                 .map(|(i, item)| metadata_value(item, &format!("{at}[{i}]")))
                 .collect::<Result<_, _>>()?,

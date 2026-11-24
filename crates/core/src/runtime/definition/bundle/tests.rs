@@ -387,6 +387,21 @@ fn unrepresentable_metadata_is_refused_by_where_it_sits() {
     }
 }
 
+// spec: BND#metadata-table
+// spec: DEFN#provenance-reporting
+#[test]
+fn a_readable_table_survives_the_rest_of_the_metadata_breaking_the_rules() {
+    for meta in [
+        &b"future_field = true\n[metadata]\nversion = \"1.0\""[..],
+        b"script = [\"missing.rhai\"]\n[metadata]\nversion = \"1.0\"",
+    ] {
+        let b =
+            Bundle::from_files(files(&[("seedling.toml", meta), ("app.seed.rhai", b"")])).unwrap();
+        assert!(b.script().is_err());
+        assert_eq!(b.metadata().unwrap()["version"], "1.0");
+    }
+}
+
 // spec: DEFN#seedling-version-support
 #[test]
 fn an_unsupported_bundle_with_unreadable_metadata_is_reported_unsupported() {

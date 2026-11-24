@@ -923,17 +923,18 @@ fn an_unsupported_template_is_stored_but_not_instantiated() {
     oi.call(
         "/templates/create",
         json!({ "name": "future", "bundle": wire(&[
-            ("seedling.toml", b"seedling = \">=99\"\nnew_field = 1"),
+            ("seedling.toml", b"seedling = \">=99\"\nnew_field = 1\n[metadata]\nversion = \"9.0\""),
             ("app.seed.rhai", b""),
         ]) }),
     )
     .unwrap();
     let list = oi.call("/templates/list", json!({})).unwrap();
     assert_eq!(list[0]["supported"], false);
+    // A field this Seedling does not know leaves a table it can read.
     let shown = oi
         .call("/templates/show", json!({ "name": "future" }))
         .unwrap();
-    assert_eq!(shown["provenance"]["metadata"], Value::Null);
+    assert_eq!(shown["provenance"]["metadata"], json!({ "version": "9.0" }));
     let code = err_code(oi.call(
         "/templates/instantiate",
         json!({ "template": "future", "app": "web" }),
