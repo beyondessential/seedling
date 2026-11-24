@@ -456,6 +456,11 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let result: Vec<Value> = standings
         .into_iter()
         .map(|(name, standing, description)| {
+            // spec: APPS#redacted-values
+            let description = match description {
+                Some(d) if super::params::current_sensitive(state, &name)?.found_in(&d) => None,
+                d => d,
+            };
             let mut obj = json!({
                 "name": name,
                 "status": standing.status.name(),
@@ -475,9 +480,9 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                     OperationTarget::Gate(gate) => obj["gate"] = json!(gate),
                 }
             }
-            obj
+            Ok(obj)
         })
-        .collect();
+        .collect::<Result<_, OiError>>()?;
     Ok(json!(result))
 }
 
@@ -606,6 +611,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             };
             obj["value"] = value;
             obj["is_set"] = json!(is_set);
+            super::appdef_json::redact_definition_text(&mut obj, &sensitive);
             obj
         })
         .collect();
@@ -802,6 +808,9 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         })?;
 
     super::appdef_json::redact_def_strings(&mut resources_json, &sensitive);
+    for entry in &mut actions_json {
+        super::appdef_json::redact_definition_text(entry, &sensitive);
+    }
 
     // Dynamic resources (created inside action closures, not in AppDef).
     // Returned as a separate top-level field so consumers can choose whether
@@ -917,12 +926,18 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             })?
     };
 
+    let mut dynamic_resources_json = dynamic_resources_json;
+    for entry in &mut dynamic_resources_json {
+        super::appdef_json::redact_definition_text(entry, &sensitive);
+    }
+
     let mut desc = json!({
         "status": status.name(),
         "generation": generation,
         // spec: DEFN#provenance-reporting
         "definition": entry.source.to_json(&entry.bundle),
-        "description": def.description,
+        // spec: APPS#redacted-values
+        "description": def.description.as_deref().filter(|d| !sensitive.found_in(d)),
         // spec: APPS#description
         "canopy_type": def.canopy_type,
         "priority": app_priority.as_str(),

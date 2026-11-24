@@ -69,6 +69,33 @@ pub(crate) fn redact_def_strings(
         if let Some(def) = resource.get_mut("def") {
             walk(def, sensitive);
         }
+        redact_member(resource.pointer_mut("/export/description"), sensitive);
+    }
+}
+
+/// Report as null the description and default value a definition gives
+/// anything described outside a resource's `def`: an app, a dynamic
+/// resource, a parameter, or an action or shell and its params.
+// spec: APPS#redacted-values
+pub(crate) fn redact_definition_text(
+    entry: &mut Value,
+    sensitive: &crate::runtime::redact::SensitiveValues,
+) {
+    redact_member(entry.get_mut("description"), sensitive);
+    redact_member(entry.get_mut("default_value"), sensitive);
+    if let Some(Value::Object(params)) = entry.get_mut("params") {
+        for param in params.values_mut() {
+            redact_member(param.get_mut("description"), sensitive);
+            redact_member(param.get_mut("default_value"), sensitive);
+        }
+    }
+}
+
+fn redact_member(member: Option<&mut Value>, sensitive: &crate::runtime::redact::SensitiveValues) {
+    if let Some(value) = member
+        && value.as_str().is_some_and(|s| sensitive.found_in(s))
+    {
+        *value = Value::Null;
     }
 }
 

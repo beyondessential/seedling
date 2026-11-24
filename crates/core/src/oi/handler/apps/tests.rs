@@ -1776,6 +1776,56 @@ fn every_string_in_a_description_holding_a_sensitive_value_is_null_on_its_own() 
     );
 }
 
+// spec: APPS#redacted-values
+#[test]
+fn descriptions_and_defaults_outside_def_holding_a_sensitive_value_are_null() {
+    let oi = TestOi::new();
+    let script = r#"
+        let pw = std::random_string("db-password", 24, "abcdefghijklmnopqrstuvwxyz0123456789");
+        app.description("seeded with " + pw);
+        app.param("seed").required(false).default_value(pw).description("defaults to " + pw);
+        app.param("plain").required(false).default_value("visible").description("shown");
+        app.on_action("rotate", |rt, p| {}, #{
+            description: "rotates " + pw,
+            params: #{ "target": #{ kind: "text", default_value: pw, description: "kept" } },
+        });
+        app.deployment("web").image("docker.io/library/nginx:1.29");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(shown["description"], json!(null), "{shown}");
+    let param = |name: &str| {
+        shown["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(param("seed")["default_value"], json!(null));
+    assert_eq!(param("seed")["description"], json!(null));
+    assert_eq!(param("plain")["default_value"], json!("visible"));
+    assert_eq!(param("plain")["description"], json!("shown"));
+    let action = &shown["actions"][0];
+    assert_eq!(action["description"], json!(null), "{action}");
+    assert_eq!(
+        action["params"]["target"]["default_value"],
+        json!(null),
+        "{action}"
+    );
+    assert_eq!(
+        action["params"]["target"]["description"],
+        json!("kept"),
+        "{action}"
+    );
+
+    let listed = oi.call("/apps/list", json!({})).unwrap();
+    assert_eq!(listed[0]["description"], json!(null), "{listed}");
+}
+
 // spec: APPS#parameters
 // spec: APPS#generation-history
 // spec: SEC#matching
@@ -2355,6 +2405,8 @@ fn a_withholding_gate_fault_outranks_installing() {
     assert_eq!(status_of(&oi, "demo"), "faulted");
 }
 
+/// The app's listed description, which the scripts below set to the first
+/// part of a derived value: the value itself is withheld.
 fn listed_description(oi: &TestOi, app: &str) -> String {
     let list = oi.call("/apps/list", json!({})).unwrap();
     list.as_array()
@@ -2370,7 +2422,7 @@ fn listed_description(oi: &TestOi, app: &str) -> String {
 #[test]
 fn each_registration_has_a_seed_of_its_own() {
     let oi = TestOi::new();
-    let script = r#"app.description(std::uuid_v4("id"));"#;
+    let script = r#"app.description(std::uuid_v4("id").sub_string(0, 8));"#;
     oi.call("/apps/create", json!({ "app": "demo", "script": script }))
         .unwrap();
     oi.call("/apps/create", json!({ "app": "other", "script": script }))
@@ -2426,7 +2478,7 @@ fn rotating_the_seed_changes_derived_values_at_the_same_generation() {
     use seedling_protocol::events::OiEvent;
 
     let oi = TestOi::new();
-    let script = r#"app.description(std::uuid_v4("id"));"#;
+    let script = r#"app.description(std::uuid_v4("id").sub_string(0, 8));"#;
     oi.call("/apps/create", json!({ "app": "demo", "script": script }))
         .unwrap();
     let before = listed_description(&oi, "demo");
