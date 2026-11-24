@@ -11,7 +11,7 @@ Applies to the `url`, `url-origin` and `hostname` [param kinds](action.md#param-
 | term | meaning |
 | --- | --- |
 | A-label | the ASCII form of an internationalised domain name label, as defined by [RFC 5890](https://www.rfc-editor.org/rfc/rfc5890) section 2.3.2.1 |
-| URL parser, host, host parser, host serialiser, opaque host, special scheme | as defined by the [URL Standard](https://url.spec.whatwg.org/) |
+| URL parser, host, host parser, host serialiser, opaque host, special scheme, ends-in-a-number checker | as defined by the [URL Standard](https://url.spec.whatwg.org/) |
 | IDNA processing | the domain name to ASCII conversion of [Unicode Technical Standard #46](https://www.unicode.org/reports/tr46/), nontransitional, with `CheckHyphens`, `CheckBidi` and `CheckJoiners` set, `UseSTD3ASCIIRules` set, and `VerifyDnsLength` set |
 
 > [!NOTE]
@@ -23,7 +23,7 @@ Applies to the `url`, `url-origin` and `hostname` [param kinds](action.md#param-
 
 `std::parse_hostname` MUST first convert the value by IDNA processing, and MUST reject it if that conversion fails.
 The value, so converted, MUST then meet the rules for an [ingress hostname](ingress.md#hostnames), and MUST be rejected otherwise.
-`std::parse_hostname` MUST also reject a value whose last label is made only of ASCII digits.
+`std::parse_hostname` MUST also reject a value, so converted, that the ends-in-a-number checker accepts.
 
 The result MUST be the value as converted, in lower case.
 
@@ -31,7 +31,7 @@ The result MUST be the value as converted, in lower case.
 > Every label of an internationalised name comes back as an A-label, which is ASCII letters, digits and `-`, so the result can be given to `service.ingress` as it is.
 
 > [!NOTE]
-> A name whose last label is all digits is read as an IPv4 address by URL parsers, and no top-level domain is all digits, so refusing it keeps IP addresses out of ingress hostnames.
+> A URL parser reads a name ending in a number, such as `10.0.0.5` or `app.0x1f`, as an IPv4 address, and no top-level domain is a number, so refusing it keeps IP addresses out of ingress hostnames and keeps every hostname usable in a [URL origin](#url-origins).
 
 ## URLs
 
