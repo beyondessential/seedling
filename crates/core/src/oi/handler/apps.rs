@@ -2074,13 +2074,16 @@ pub(crate) fn update_app(
     // spec: EVT#app-events
     // spec: SEC#generation-history
     // spec: SEC#matching
-    let sensitive = super::params::current_sensitive(state, &params.app)?;
+    let sensitive = super::params::sensitive_after_change(state, &params.app);
     ctx.events.app_updated(
         &params.app,
         generation,
         (previous_generation != 0).then_some(previous_generation),
         source.to_json(&bundle),
-        stored.iter().map(|e| e.event_entry(&sensitive)).collect(),
+        stored
+            .iter()
+            .map(|e| e.event_entry(sensitive.as_ref()))
+            .collect(),
     );
     Ok(json!({ "generation": generation }))
 }

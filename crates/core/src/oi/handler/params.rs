@@ -172,15 +172,18 @@ impl StoredEdit {
     /// The entry an event carries for this edit: neither value if either
     /// was, or is, held in secret storage, or holds one of the app's
     /// `sensitive` values after the change, since the entry carries one
-    /// redaction flag for both.
+    /// redaction flag for both. With no `sensitive` values to match against,
+    /// neither value is carried.
     pub(crate) fn event_entry(
         &self,
-        sensitive: &crate::runtime::redact::SensitiveValues,
+        sensitive: Option<&crate::runtime::redact::SensitiveValues>,
     ) -> ParamChangeEntry {
-        let holds_sensitive = [&self.edit.previous, &self.edit.new_value]
-            .into_iter()
-            .flatten()
-            .any(|v| sensitive.found_in(v));
+        let holds_sensitive = sensitive.is_none_or(|sensitive| {
+            [&self.edit.previous, &self.edit.new_value]
+                .into_iter()
+                .flatten()
+                .any(|v| sensitive.found_in(v))
+        });
         if self.is_secret || self.previous_is_secret || holds_sensitive {
             ParamChangeEntry::redacted(self.edit.name.clone())
         } else {
@@ -263,6 +266,25 @@ pub(crate) fn current_sensitive(
         .db
         .call(move |db| crate::runtime::apps::sensitive_values(db, &cipher, &app, &def, &stored))
         .map_err(|e| OiError::internal(format!("cannot read the app's sensitive values: {e}")))
+}
+
+// spec: SEC#matching
+/// The sensitive values of `app` to report a change it has committed against,
+/// or none when they cannot be read, so that the change's event still goes
+/// out, carrying no value.
+pub(crate) fn sensitive_after_change(
+    state: &OiState,
+    app: &AppName,
+) -> Option<crate::runtime::redact::SensitiveValues> {
+    current_sensitive(state, app)
+        .inspect_err(|e| {
+            tracing::error!(
+                app = %app,
+                "cannot read the app's sensitive values; its change is announced with every value withheld: {}",
+                e.message
+            );
+        })
+        .ok()
 }
 
 fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
@@ -452,10 +474,13 @@ pub(crate) fn set_params(
 
     // spec: PRM#parameter-changes
     // spec: SEC#matching
-    let sensitive = current_sensitive(state, app)?;
+    let sensitive = sensitive_after_change(state, app);
     ctx.events.params_changed(
         app,
-        stored.iter().map(|e| e.event_entry(&sensitive)).collect(),
+        stored
+            .iter()
+            .map(|e| e.event_entry(sensitive.as_ref()))
+            .collect(),
         generation,
         previous_generation,
     );
