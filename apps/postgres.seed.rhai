@@ -44,14 +44,16 @@ let bestool_psql_version = app.param("bestool-psql-version")
     .description("bestool-psql release version to fetch from github.com/beyondessential/bestool");
 
 let max_connections = app.param("max-connections")
+    .kind(#{ name: "integer", range: 1..=262143 })
     .required(false)
-    .default_value("100")
+    .default_value(100)
     .description("max_connections setting; affects per-connection memory sizing");
 
 let db_type = app.param("db-type")
+    .kind(#{ name: "choice", options: ["web", "oltp", "dw", "mixed", "desktop"] })
     .required(false)
     .default_value("mixed")
-    .description("Workload profile for tuning: web, oltp, dw, mixed, desktop");
+    .description("Workload profile for tuning");
 
 let extra_config = app.param("extra-config")
     .kind("multiline")
@@ -83,8 +85,8 @@ let pg_major = || parse_major.call(version.value());
 let compute_tuning = || {
     let mem_mb = AVAILABLE_MEMORY / 1048576;
     let cpu = AVAILABLE_THREADS;
-    let conns = parse_int(max_connections.value());
-    let dtype = db_type.value();
+    let conns = max_connections.parsed();
+    let dtype = db_type.parsed();
 
     let shared_mb = mem_mb / 4;
     if shared_mb < 128 { shared_mb = 128 }
@@ -220,8 +222,7 @@ let pg_svc = app.service("postgres")
 // Worst-case PID budget: one backend per connection plus background workers,
 // some margin for pg_upgrade tooling.
 let pids_budget = || {
-    let conns = parse_int(max_connections.value());
-    conns + 100
+    max_connections.parsed() + 100
 };
 
 app.deployment("postgres")

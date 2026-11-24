@@ -94,9 +94,10 @@ let db_user = app.param("db-user")
     .validate(|v, all| sql_name.call(v));
 
 let fhir_enabled = app.param("fhir-enabled")
+    .kind("boolean")
     .required(false)
-    .default_value("false")
-    .description("Whether to run the FHIR refresh + resolve workers (set to 'true' to enable)");
+    .default_value(false)
+    .description("Whether to run the FHIR refresh + resolve workers");
 
 let patient_portal_fqdn = app.param("patient-portal-fqdn")
     .required(false)
@@ -137,7 +138,7 @@ let canonical = || {
 };
 
 let portal_on = || patient_portal_fqdn.is_set();
-let fhir_on = || fhir_enabled.value() == "true";
+let fhir_on = || fhir_enabled.parsed();
 
 // JSON-string-encode a value with the few escapes JSON5 requires.
 // Rhai's `String.replace(from, to)` mutates the receiver in place and
@@ -484,7 +485,7 @@ app.on_action("provision-admin", |rt, param| {
             let vol = app.volume().tmpfs().description("Initial admin provisioning");
             vol.write("/provision.json5", `{
                 users: {
-                    ${json_str.call(param["email"])}: {
+                    ${json_str.call(`${param["email"].local}@${param["email"].domain}`)}: {
                         role: "admin",
                         displayName: ${json_str.call(param["name"])},
                         password: ${json_str.call(param["password"])},
