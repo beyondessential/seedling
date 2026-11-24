@@ -28,8 +28,7 @@ pub(super) fn register(module: &mut rhai::Module) {
     // spec: ENC#encodings
     unary(module, "decode_hex", |ctx, text| {
         let text = take_text(text)?;
-        let bytes = hex::decode(&text.bytes)
-            .map_err(|e| -> Box<EvalAltResult> { format!("`text` is not base16: {e}").into() })?;
+        let bytes = hex::decode(&text.bytes).map_err(|e| not_encoded("base16", hex_error(e)))?;
         blob_result(ctx, &[&text], bytes)
     });
     // spec: ENC#encodings
@@ -47,7 +46,7 @@ pub(super) fn register(module: &mut rhai::Module) {
         let text = take_text(text)?;
         let bytes = general_purpose::STANDARD
             .decode(&text.bytes)
-            .map_err(|e| -> Box<EvalAltResult> { format!("`text` is not base64: {e}").into() })?;
+            .map_err(|e| not_encoded("base64", base64_error(e)))?;
         blob_result(ctx, &[&text], bytes)
     });
     // spec: ENC#encodings
@@ -69,9 +68,7 @@ pub(super) fn register(module: &mut rhai::Module) {
         let text = take_text(text)?;
         let bytes = general_purpose::URL_SAFE_NO_PAD
             .decode(&text.bytes)
-            .map_err(|e| -> Box<EvalAltResult> {
-                format!("`text` is not base64url: {e}").into()
-            })?;
+            .map_err(|e| not_encoded("base64url", base64_error(e)))?;
         blob_result(ctx, &[&text], bytes)
     });
     // spec: ENC#encodings
@@ -172,6 +169,37 @@ fn take_text(text: Dynamic) -> Result<ByteArg, Box<EvalAltResult>> {
     Ok(ByteArg::text(&take_string("text", text)?))
 }
 
+// spec: SEC#redaction
+/// A decoding failure, naming where `text` went wrong but never what it
+/// holds: it may be a secret parameter's value, and errors are not redacted.
+fn not_encoded(encoding: &str, why: String) -> Box<EvalAltResult> {
+    format!("`text` is not {encoding}: {why}").into()
+}
+
+fn hex_error(e: hex::FromHexError) -> String {
+    match e {
+        hex::FromHexError::InvalidHexCharacter { index, .. } => {
+            format!("invalid digit at position {index}")
+        }
+        hex::FromHexError::OddLength | hex::FromHexError::InvalidStringLength => {
+            "odd number of digits".into()
+        }
+    }
+}
+
+fn base64_error(e: base64::DecodeError) -> String {
+    match e {
+        base64::DecodeError::InvalidByte(offset, _) => {
+            format!("invalid character at position {offset}")
+        }
+        base64::DecodeError::InvalidLength(_) => "invalid length".into(),
+        base64::DecodeError::InvalidLastSymbol { offset, .. } => {
+            format!("non-zero trailing bits at position {offset}")
+        }
+        base64::DecodeError::InvalidPadding => "invalid padding".into(),
+    }
+}
+
 fn max_string(ctx: &NativeCallContext) -> usize {
     ctx.engine().max_string_size()
 }
@@ -229,7 +257,8 @@ fn parse_hyphenated(text: &str) -> Result<uuid::Uuid, Box<EvalAltResult>> {
         });
     if !shaped {
         return Err(format!(
-            "`namespace` must be a UUID in hyphenated form, as 8-4-4-4-12 hexadecimal digits, got {text:?}"
+            "`namespace` must be a UUID in hyphenated form, as 8-4-4-4-12 hexadecimal digits, got a value of {} characters",
+            text.chars().count()
         )
         .into());
     }

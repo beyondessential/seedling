@@ -107,6 +107,21 @@ fn the_decoders_are_strict() {
     }
 }
 
+// spec: SEC#redaction
+#[test]
+fn errors_leave_out_the_argument() {
+    for (src, held) in [
+        (r#"std::decode_hex("aQ")"#, &["Q"][..]),
+        (r#"std::decode_base64("Zm9v~mFy")"#, &["~", "126"]),
+        (r#"std::decode_base64url("Zm9v~mFy")"#, &["~", "126"]),
+        (r#"std::decode_base64("Zh==")"#, &["'h'", "0x68"]),
+        (r#"std::uuid_v5("s3cr3t", "x")"#, &["s3cr3t"]),
+    ] {
+        let err = throws(src);
+        assert!(held.iter().all(|h| !err.contains(h)), "{err}");
+    }
+}
+
 // spec: ENC#encodings
 #[test]
 fn the_utf8_helpers_round_trip_and_keep_empty_empty() {
