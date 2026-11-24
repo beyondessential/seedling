@@ -39,7 +39,11 @@ Hexadecimal digits in an IPv6 address MUST be accepted in either case.
 
 ## Subnets
 
-`std::parse_ip_subnet(text)` MUST accept exactly an address that `std::parse_ip_address` accepts, followed by `/` and a prefix length, and MUST reject every other value.
+`std::parse_ip_subnet(text)` MUST accept exactly the values below, and MUST reject every other value.
+
+- An address that `std::parse_ip_address` accepts, followed by `/` and a prefix length.
+- An address that `std::parse_ip_address` accepts, standing for the subnet of that address with a prefix length of 32 for IPv4 and of 128 for IPv6.
+
 The prefix length MUST be written in decimal with no leading zero, and MUST be at most 32 for an IPv4 address and at most 128 for an IPv6 address.
 
 `std::parse_ip_subnet` MUST reject a value whose host bits are not all zero.
@@ -58,3 +62,12 @@ Its error SHOULD name the subnet with those host bits cleared.
 - An address that `std::parse_ip_address` accepts, standing for the range holding only that address.
 
 Addresses MUST be ordered as unsigned integers of their family's width.
+
+## Family argument
+
+Each of the three kinds MUST take an optional `family` [argument](action.md#kind-arguments), which is valid only if it is the integer `4` or the integer `6`.
+Each of the three parsers MUST accept being called with or without `family`.
+A parser given `family` MUST reject a value of the other family, and its error SHOULD state the family it expected.
+
+> [!NOTE]
+> A script that needs one family, such as an IPv4 address pool, declares it on the kind so that the operator interface and the parser's error say so before any validator runs.
