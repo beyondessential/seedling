@@ -148,6 +148,20 @@ fn a_document_masks_each_strings_value_except_identifiers() {
 
 // spec: SEC#responses-and-events
 #[test]
+fn a_document_masks_a_member_name_holding_a_value() {
+    let mut document = serde_json::json!({ "env": { "TOKEN_hunter2": "set", "PLAIN": "x" } });
+    mask_document(&mut document, Some("demo"), &mut |_: &str| {
+        Ok::<_, ()>(holding(&["hunter2"]))
+    })
+    .unwrap();
+    assert_eq!(
+        document,
+        serde_json::json!({ "env": { "TOKEN_<redacted>": "set", "PLAIN": "x" } })
+    );
+}
+
+// spec: SEC#responses-and-events
+#[test]
 fn a_document_about_no_app_is_left_as_it_is() {
     let mut document = serde_json::json!({ "note": "hunter2" });
     mask_document(&mut document, None, &mut |_: &str| {
