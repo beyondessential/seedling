@@ -302,7 +302,7 @@ Each entry of `params` has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `name` | string | the parameter's name |
-| `kind` | string | `text`, `multiline`, `email`, `password`, `weak-password`, `random`, `version`, `version-semver`, `purl` or `volume` |
+| `kind` | string | `text`, `multiline`, `email`, `password`, `weak-password`, `random`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname` or `volume` |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
 | `default_value` | string or null | its default value |
