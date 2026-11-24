@@ -1,7 +1,7 @@
 //! The check of each whole response and event the Operator Interface sends,
 //! which masks a sensitive value wherever no narrower rule withheld it.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use seedling_protocol::{
     error::{HandlerResult, OiError},
@@ -74,20 +74,35 @@ pub(crate) fn withhold_event(
     state: &OiState,
     event: &OiEvent,
 ) -> Option<Value> {
-    let mut value = serde_json::to_value(event)
-        .inspect_err(|e| tracing::warn!("event serialisation error: {e}"))
-        .ok()?;
+    masked_event(sensitive, state, event)
+        .inspect_err(|e| tracing::warn!("an event is withheld: {e}"))
+        .ok()
+}
+
+/// `event` with each sensitive value of the app it names masked, or why it
+/// cannot be.
+fn masked_event(
+    sensitive: &mut SensitiveByApp,
+    state: &OiState,
+    event: &OiEvent,
+) -> Result<Value, String> {
+    let mut value =
+        serde_json::to_value(event).map_err(|e| format!("event serialisation error: {e}"))?;
     let mut values_for = |app: &str| sensitive.of(state, app).cloned();
-    match mask_document(&mut value, None, &mut values_for) {
-        Ok(()) => Some(value),
-        Err(e) => {
-            tracing::warn!(
-                "an event is withheld: its app's sensitive values cannot be read: {}",
-                e.message
-            );
-            None
-        }
-    }
+    mask_document(&mut value, None, &mut values_for)
+        .map_err(|e| format!("its app's sensitive values cannot be read: {}", e.message))?;
+    Ok(value)
+}
+
+// spec: AUD#entries
+// spec: SEC#responses-and-events
+/// The audit log's entry for each event: the event as the event feed sends
+/// it, or why it cannot be written.
+pub fn audit_entries(
+    state: Arc<OiState>,
+) -> impl FnMut(&OiEvent) -> Result<Value, String> + Send + 'static {
+    let mut sensitive = SensitiveByApp::new(&state);
+    move |event| masked_event(&mut sensitive, &state, event)
 }
 
 /// The sensitive values of each app a stream of log entries or events
@@ -190,6 +205,27 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.message, "bad value <redacted>");
+    }
+
+    // spec: AUD#entries
+    // spec: SEC#responses-and-events
+    #[test]
+    fn an_audit_entry_masks_a_sensitive_value_the_event_quotes() {
+        let oi = oi();
+        let mut entries = audit_entries(std::sync::Arc::clone(&oi.state));
+        let event = OiEvent::FaultFiled {
+            timestamp: jiff::Timestamp::now(),
+            id: "f1".into(),
+            app: AppName::new("demo").unwrap(),
+            resource_type: None,
+            resource_name: None,
+            instance_id: None,
+            kind: "probe_failed".into(),
+            description: "login with Hoiho-Quarry-35 refused".into(),
+            actor: None,
+        };
+        let entry = oi.block_on(async { entries(&event) }).unwrap();
+        assert_eq!(entry["description"], "login with <redacted> refused");
     }
 
     // spec: SEC#responses-and-events

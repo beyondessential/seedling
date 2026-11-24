@@ -10,4 +10,5 @@ pub mod state;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use redaction::audit_entries;
 pub use server::{DEFAULT_PORT, run};
