@@ -2,7 +2,8 @@ name: CodeQL
 
 # Static analysis of the Rust workspace with GitHub CodeQL. Rust uses the
 # build-less analysis mode (build-mode: none), so no toolchain or system
-# dependencies are needed here.
+# dependencies are needed here. That mode is also what lets the paths-ignore
+# list in .github/codeql/codeql-config.yml take effect.
 
 on:
   pull_request:
@@ -26,6 +27,7 @@ jobs:
         with:
           languages: rust
           build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4.39.3
         with:
