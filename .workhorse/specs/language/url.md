@@ -11,7 +11,7 @@ Applies to the `url`, `url-origin` and `hostname` [param kinds](action.md#param-
 | term | meaning |
 | --- | --- |
 | A-label | the ASCII form of an internationalised domain name label, as defined by [RFC 5890](https://www.rfc-editor.org/rfc/rfc5890) section 2.3.2.1 |
-| URL parser, host, host serialiser | as defined by the [URL Standard](https://url.spec.whatwg.org/) |
+| URL parser, host, host parser, host serialiser, opaque host, special scheme | as defined by the [URL Standard](https://url.spec.whatwg.org/) |
 | IDNA processing | the domain name to ASCII conversion of [Unicode Technical Standard #46](https://www.unicode.org/reports/tr46/), nontransitional, with `CheckHyphens`, `CheckBidi` and `CheckJoiners` set, `UseSTD3ASCIIRules` set, and `VerifyDnsLength` set |
 
 ## Hostnames
@@ -42,8 +42,20 @@ The result MUST be the value as converted, in lower case.
 `std::parse_url` MUST accept a URL that has no host, such as `file:///etc/hosts` or `mailto:someone@example.org`, and its result then carries no `host`.
 Where the URL has a host, the `host` its result carries MUST be that host as the host serialiser writes it.
 
+Where the URL's host is an opaque host, `std::parse_url` MUST first give its percent-decoded text to the host parser, not as opaque.
+Where that succeeds, the `host` the result carries MUST be the host it gives, as the host serialiser writes it, and otherwise the opaque host.
+
 > [!NOTE]
 > The host serialiser writes a domain in ASCII and in lower case, with each internationalised label as an A-label, and an IPv6 address enclosed in `[` and `]`.
+> The URL parser leaves the host of a URL whose scheme is not a special scheme opaque, so without the second parse `postgres://DB.Example.org` and `https://db.example.org` would carry different hosts for the same server.
+
+### Userinfo
+
+The `username` and `password` a parsed URL carries MUST be the URL's username and password, percent-decoded.
+`std::parse_url` MUST reject a URL whose percent-decoded username or password is not valid UTF-8, or holds a character of a general category that [kind parsers](action.md#kind-parsers) reject in a value.
+
+> [!NOTE]
+> A password holding `@`, `:` or `/` can only be written percent-encoded in a URL, and a script passing it on needs the password itself.
 
 ### Ports
 
