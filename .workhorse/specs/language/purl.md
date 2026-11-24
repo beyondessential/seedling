@@ -10,10 +10,10 @@ Applies to the `purl` [param kind](action.md#param-kinds), its [parser](action.m
 
 | term | meaning |
 | --- | --- |
-| Package URL, purl | as defined by [ECMA-427](https://ecma-tc54.github.io/ECMA-427/) |
+| Package URL, purl | as defined by [ECMA-427, 2nd edition](https://ecma-tc54.github.io/ECMA-427/) |
 | type, namespace, name, version, qualifiers, subpath | the components of a Package URL, as ECMA-427 defines them |
-| lenient PURL grammar | the [lenient grammar](https://github.com/package-url/purl-spec/blob/main/docs/specification/lenient-ABNF-grammar.md) the purl specification gives for the input a parser attempts |
-| parsing procedure | the purl specification's [How to parse a PURL](https://github.com/package-url/purl-spec/blob/main/docs/specification/how-to-parse.md) |
+| lenient PURL grammar | the [lenient grammar](https://github.com/package-url/purl-spec/blob/v1.1.1/docs/specification/lenient-ABNF-grammar.md) the purl specification gives, at its v1.1.1 release, for the input a parser attempts |
+| parsing procedure | the purl specification's [How to parse a PURL](https://github.com/package-url/purl-spec/blob/v1.1.1/docs/specification/how-to-parse.md), at its v1.1.1 release |
 
 ## Accepted values
 
