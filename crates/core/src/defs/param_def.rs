@@ -412,14 +412,12 @@ impl IntRange {
 
     /// The least value, or `None` where the range starts at the smallest
     /// integer.
-    // spec: APPS#parameters
     pub fn min(&self) -> Option<i64> {
         (self.start != i64::MIN).then_some(self.start)
     }
 
     /// The greatest value, or `None` where the range ends at the largest
     /// integer, inclusive or not.
-    // spec: APPS#parameters
     pub fn max(&self) -> Option<i64> {
         (self.end != i64::MAX).then(|| self.greatest())
     }
