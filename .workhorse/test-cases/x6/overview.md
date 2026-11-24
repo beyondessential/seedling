@@ -22,6 +22,7 @@
 
 - [x] A validator that throws a message quoting the proposed secret value: the rejection reads `<redacted>` in its place (verifies spec: SEC)
 - [x] An action that throws a message quoting a value it derived: the failure reads `<redacted>` in its place (verifies spec: SEC)
+- [x] An action that throws a message quoting the hex encoding of a value it derived: the failure reads `<redacted>` in its place (verifies spec: SEC)
 - [x] A shell session whose closure throws a message quoting a secret shell param: the error the client receives reads `<redacted>` in its place (verifies spec: SEC)
 - [x] Set a weak-password param to a single character: every described string holding that character reads `null`, and the rest read as declared (verifies spec: SEC)
 

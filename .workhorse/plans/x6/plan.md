@@ -4,7 +4,7 @@ Build the redaction the X6 spec edits describe. Sensitive values are secret para
 
 ## Design notes
 
-- **One matcher type.** `runtime::seeds::DerivedValues` became `SensitiveValues` in `runtime/redact.rs`. Secret param values go into it as well, so every check runs one code path.
+- **One matcher type.** `runtime::seeds::DerivedValues` became `SensitiveValues` in `runtime/redact.rs`. Secret param values go into it as well, so every check runs one code path. It keeps the rolling hash C7 gave derived values, and the byte matching the digest and encoding helpers check their arguments with.
 - **Masking from hashes.** `mask` finds each matching window, merges overlapping and adjacent byte ranges, and replaces each with `<redacted>`. A window whose bytes equal a valid UTF-8 value begins and ends on character boundaries. One that does not can only be a hash collision, and is passed over.
 - **No process-wide registry (drift from the first draft).** The draft keyed a global registry by app name. Tests run many daemons in one process, and they share app names such as `demo`, so a global registry would mix their values and let one daemon's deregistration remove another's. The values travel with the work instead:
   - An operation or shell session holds a `redact::Scope` that starts from its app's values. Its secret params, each invoked action's secret params and its derived values are added as they arrive.
@@ -67,6 +67,7 @@ Build the redaction the X6 spec edits describe. Sensitive values are secret para
 - [x] Earlier values of secret parameters join the app's sensitive values (`runtime::apps::sensitive_values`, `generations::earlier_secret_values`)
 - [x] Masking leaves an existing marker alone
 - [x] Check every OI response and event as a whole, except definition and template retrieval; drop the per-field fault masking it subsumes
+- [x] After rebasing onto C7: a helper result an action closure computes from one of the operation's sensitive values joins the operation's scope
 
 ## Finish
 
