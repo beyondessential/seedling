@@ -88,6 +88,9 @@ A log query at any granularity MUST return breadcrumbs and container output toge
 The runtime MUST write a call's breadcrumb when the call first executes, and MUST NOT write it again when the call is replayed.
 The runtime MUST write one `replay` breadcrumb at the start of each replay pass.
 
+A breadcrumb MUST NOT carry a [sensitive value](secrets.md#sensitive-value) of the app, or of the lifecycle operation or shell session whose closure made the call, as [matching](secrets.md#matching) defines them.
+The runtime MUST mask a value a breadcrumb records that contains one, such as an `rt.exec` argument or an invoked action's parameter, as [withheld values](secrets.md#withheld-values) specifies for free text.
+
 ## Volume storage
 
 The runtime MUST store each named non-tmpfs volume as a directory in the data directory and bind-mount it into the containers that use it.

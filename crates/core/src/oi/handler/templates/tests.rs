@@ -238,3 +238,31 @@ fn template_instantiate_registers_app() {
     assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("already registered"), "{msg}");
 }
+
+// spec: TPL#preview
+#[test]
+fn a_preview_withholds_what_holds_a_sensitive_value() {
+    let oi = TestOi::new();
+    let script = r#"
+        let key = app.param("api-key").kind("password").required(false).default_value("Moa-Kettle-12");
+        let pw = std::random_string("pw", 24, "abcdefghijklmnopqrstuvwxyz");
+        app.description("seeded with " + pw);
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .env("KEY", "k=" + key.value())
+            .env("PLAIN", "visible");
+    "#;
+    let preview = oi
+        .call("/templates/preview", json!({ "body": script }))
+        .unwrap();
+    assert_eq!(preview["description"], json!(null), "{preview}");
+    assert_eq!(
+        preview["params"][0]["default_value"],
+        json!(null),
+        "{preview}"
+    );
+    let env = &preview["resources"][0]["def"]["container"]["env"];
+    assert_eq!(env["KEY"], json!(null), "{env}");
+    assert_eq!(env["PLAIN"], json!("visible"), "{env}");
+    assert!(!preview.to_string().contains("Moa-Kettle-12"), "{preview}");
+}

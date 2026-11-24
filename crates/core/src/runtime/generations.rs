@@ -625,6 +625,42 @@ pub fn param_map_at(
     Ok(map)
 }
 
+/// Every value the history records for a parameter `secret_now` names, and
+/// every value it records protected, whatever the parameter: the earlier
+/// values of the app's secrets, which stay sensitive after they change.
+// spec: SEC#matching
+pub fn earlier_secret_values(
+    db: &Db,
+    app: &AppName,
+    cipher: &Cipher,
+    secret_now: impl Fn(&str) -> bool,
+) -> Result<Vec<String>, Error> {
+    let mut stmt = db.conn.prepare(
+        "SELECT param_name, previous_value, previous_value_ciphertext,
+                new_value, new_value_ciphertext
+         FROM generation_params
+         WHERE app = ?1",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![app])?;
+    let mut values = Vec::new();
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(0)?;
+        let secret = secret_now(&name);
+        for (plain, protected) in [(1, 2), (3, 4)] {
+            if let Some(ct) = row.get::<_, Option<Vec<u8>>>(protected)? {
+                let value = cipher.decrypt(&ct).map_err(|e| Error::UnreadableParam {
+                    param: name.clone(),
+                    reason: e.to_string(),
+                })?;
+                values.push(value.expose_secret().to_owned());
+            } else if secret && let Some(value) = row.get::<_, Option<String>>(plain)? {
+                values.push(value);
+            }
+        }
+    }
+    Ok(values)
+}
+
 /// Look up the definition active at a specific generation: the bundle hash
 /// and provenance of the most recent Register/ScriptUpdate at or before it.
 // spec: GEN#reconstruction

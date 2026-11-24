@@ -29,6 +29,7 @@ pub mod nat64_prefix;
 pub mod pod_networks;
 pub mod priority;
 pub mod probe;
+pub mod redact;
 pub mod registries;
 pub mod registry;
 pub mod restart_gens;

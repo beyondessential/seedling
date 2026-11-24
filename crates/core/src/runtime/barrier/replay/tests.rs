@@ -86,6 +86,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -121,6 +122,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -192,6 +194,7 @@ fn db_action_log_sequential_barriers() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -222,6 +225,7 @@ fn db_action_log_sequential_barriers() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -252,6 +256,7 @@ fn db_action_log_sequential_barriers() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );

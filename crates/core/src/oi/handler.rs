@@ -80,6 +80,7 @@ mod templates;
 mod tls;
 mod volumes;
 
+pub(crate) use params::current_sensitive;
 pub(crate) use status::get_infra_status;
 
 /// Context derived from an incoming OI request, passed through dispatch.
@@ -431,6 +432,13 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/tls/retry-blocks/clear" => tls::clear_retry_block(state, params.parse()?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };
+
+    // spec: SEC#responses-and-events
+    let app = serde_json::from_str::<Value>(params.0)
+        .ok()
+        .and_then(|p| p.get("app").and_then(Value::as_str).map(str::to_owned));
+    let result =
+        crate::oi::redaction::withhold_response(state, &req.method, app.as_deref(), result);
 
     match &result {
         Ok(_) => tracing::info!(method = %req.method, "ok"),

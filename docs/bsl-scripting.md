@@ -490,7 +490,7 @@ Pitfalls:
 - **An operation's values differ in the next operation.** Anything that must outlast the operation is derived at the top level, or written into a volume by the operation that derived it.
 - **Every argument is part of the value.** Changing a length or an alphabet gives a different value, not a longer or shorter one; two uses that need different secrets need different labels.
 - **App-seeded values change when the seed does:** when an operator rotates it, when the app is deregistered and registered again, and when an app is moved to another host, which registers it there afresh. Data written with the old values keeps them, so a database whose password came from the seed needs its password changed to match.
-- **Derived values are withheld like secret parameters.** An environment value that holds one reads as `null` when an operator describes the app.
+- **Derived values are withheld like secret parameters.** Any string that holds one reads as `null` when an operator describes the app, and it is masked as `<redacted>` in breadcrumbs, errors and faults. A short value is masked wherever it appears, even by chance.
 
 #### Password hashes
 

@@ -170,10 +170,21 @@ impl StoredEdit {
     // spec: SEC#generation-history
     // spec: SEC#redaction
     /// The entry an event carries for this edit: neither value if either
-    /// was, or is, held in secret storage, since the entry carries one
-    /// redaction flag for both.
-    pub(crate) fn event_entry(&self) -> ParamChangeEntry {
-        if self.is_secret || self.previous_is_secret {
+    /// was, or is, held in secret storage, or holds one of the app's
+    /// `sensitive` values after the change, since the entry carries one
+    /// redaction flag for both. With no `sensitive` values to match against,
+    /// neither value is carried.
+    pub(crate) fn event_entry(
+        &self,
+        sensitive: Option<&crate::runtime::redact::SensitiveValues>,
+    ) -> ParamChangeEntry {
+        let holds_sensitive = sensitive.is_none_or(|sensitive| {
+            [&self.edit.previous, &self.edit.new_value]
+                .into_iter()
+                .flatten()
+                .any(|v| sensitive.found_in(v))
+        });
+        if self.is_secret || self.previous_is_secret || holds_sensitive {
             ParamChangeEntry::redacted(self.edit.name.clone())
         } else {
             ParamChangeEntry::new(
@@ -229,6 +240,51 @@ pub(crate) fn load_current_values(
         .db
         .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
         .map_err(|e| OiError::internal(format!("db error: {e}")))
+}
+
+// spec: SEC#matching
+/// The sensitive values of `app` as they stand: the stored values of the
+/// parameters its running definition marks secret, and the values that
+/// definition derived. Read from storage rather than from the running
+/// definition, which holds the values it was evaluated with and not values
+/// stored since by a change it could not take.
+pub(crate) fn current_sensitive(
+    state: &OiState,
+    app: &AppName,
+) -> Result<crate::runtime::redact::SensitiveValues, OiError> {
+    let Some(def) = state
+        .registry
+        .read()
+        .get(app.as_str())
+        .map(|e| e.app.def.load_full())
+    else {
+        return Ok(Default::default());
+    };
+    let stored = load_current_values(state, app)?;
+    let (app, cipher) = (app.clone(), Arc::clone(&state.cipher));
+    state
+        .db
+        .call(move |db| crate::runtime::apps::sensitive_values(db, &cipher, &app, &def, &stored))
+        .map_err(|e| OiError::internal(format!("cannot read the app's sensitive values: {e}")))
+}
+
+// spec: SEC#matching
+/// The sensitive values of `app` to report a change it has committed against,
+/// or none when they cannot be read, so that the change's event still goes
+/// out, carrying no value.
+pub(crate) fn sensitive_after_change(
+    state: &OiState,
+    app: &AppName,
+) -> Option<crate::runtime::redact::SensitiveValues> {
+    current_sensitive(state, app)
+        .inspect_err(|e| {
+            tracing::error!(
+                app = %app,
+                "cannot read the app's sensitive values; its change is announced with every value withheld: {}",
+                e.message
+            );
+        })
+        .ok()
 }
 
 fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
@@ -417,9 +473,14 @@ pub(crate) fn set_params(
     super::images::reconcile_pins_post_update(state, app);
 
     // spec: PRM#parameter-changes
+    // spec: SEC#matching
+    let sensitive = sensitive_after_change(state, app);
     ctx.events.params_changed(
         app,
-        stored.iter().map(StoredEdit::event_entry).collect(),
+        stored
+            .iter()
+            .map(|e| e.event_entry(sensitive.as_ref()))
+            .collect(),
         generation,
         previous_generation,
     );

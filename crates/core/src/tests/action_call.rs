@@ -422,7 +422,11 @@ fn run_outer_in_replay_context(
     let result =
         defs::app::with_action_call_table(captured.actions.clone(), Some(outer_name), || {
             let _guard = ActionClosureGuard::new(action_def_arc, String::new(), HashMap::new())
-                .with_active_rt(rt);
+                .with_active_rt(rt)
+                .with_operation_seed(
+                    &crate::runtime::seeds::Seed::for_tests(),
+                    &crate::runtime::redact::Scope::empty(),
+                );
             let call_ast = engine
                 .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
                 .expect("call ast must compile");
@@ -521,4 +525,36 @@ fn sub_action_with_secret_params_fails_without_a_secret_key() {
             .as_deref()
             .is_none_or(|x| !x.contains("s3cret-value"))
     }));
+}
+
+// spec: HIST#action-calls
+// spec: SEC#matching
+#[test]
+fn a_plain_sub_action_param_holding_a_derived_value_is_protected_and_replays() {
+    let script = r#"
+        app.on_action("inner", |rt, p| {
+            if p.dsn != "postgres://app:" + std::random_string("pw", 20, "abcdefghjkmnpqrstuvwxyz") + "@db" {
+                throw "inner saw the wrong dsn";
+            }
+        }, #{ params: #{ "dsn": #{ kind: "text" } } });
+        app.on_action("outer", |rt, _p| {
+            let pw = std::random_string("pw", 20, "abcdefghjkmnpqrstuvwxyz");
+            app.action("inner").invoke(#{ dsn: DSN });
+        });
+    "#;
+    let cipher = Arc::new(crate::runtime::secrets::Cipher::for_tests());
+    let first = script.replace("DSN", r#""postgres://app:" + pw + "@db""#);
+    let (result, pending) =
+        run_outer_in_replay_context(&first, Vec::new(), Some(Arc::clone(&cipher)));
+    result.expect("outer must run");
+    let extra = sub_action_payload(&pending);
+    assert!(
+        !extra.contains("postgres://app:"),
+        "a param holding a derived value is not recorded in the clear: {extra}"
+    );
+
+    // spec: OPS#sub-action-parameters
+    let second = script.replace("DSN", r#""changed""#);
+    let (result, _) = run_outer_in_replay_context(&second, pending, Some(cipher));
+    result.expect("replay must recover the recorded dsn");
 }

@@ -173,6 +173,40 @@ fn unsetting_a_param_the_definition_makes_secret_withholds_a_plain_stored_value(
     );
 }
 
+// spec: SEC#matching
+// spec: PRM#parameter-changes
+// A change committed while the app's sensitive values cannot be read is
+// still announced, so a stream holding the app's values reads them again.
+#[test]
+fn a_change_is_announced_with_no_value_when_sensitive_values_cannot_be_read() {
+    let oi = oi_with_params_app();
+    oi.state.db.call(|db| {
+        db.conn
+            .execute(
+                "INSERT INTO generation_params
+                    (app, generation, param_name, new_value_ciphertext)
+                 VALUES ('demo', 1, 'api-key', x'00')",
+                [],
+            )
+            .unwrap();
+    });
+    let mut rx = oi.state.event_tx.subscribe();
+    let _ = oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "greeting": "kia ora" } }),
+    );
+
+    let events = drain_events(&mut rx);
+    let changed = events
+        .iter()
+        .find(|e| e["type"] == "ParamsChanged")
+        .expect("a ParamsChanged event");
+    let entry = &changed["changes"][0];
+    assert_eq!(entry["name"], "greeting", "{changed}");
+    assert_eq!(entry["redacted"], true, "{changed}");
+    assert!(entry.get("new_value").is_none(), "{changed}");
+}
+
 // spec: SEC#redaction
 #[test]
 fn a_definition_update_changing_a_secret_param_emits_no_value() {

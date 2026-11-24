@@ -371,10 +371,11 @@ fn run_probe(
             };
         }
     };
+    let probe_sensitive = crate::runtime::redact::Scope::new(app.sensitive());
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
     let eval_result = {
         let _guard = ActionClosureGuard::new(action_def, op_id.0.clone(), HashMap::new())
-            .with_operation_seed(&seed);
+            .with_operation_seed(&seed, &probe_sensitive);
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
         engine.compile(call_script).ok().and_then(|ast| {
@@ -386,7 +387,8 @@ fn run_probe(
 
     let gathered_images = images.lock().clone();
 
-    let error = eval_result.map(|e| format!("{e}"));
+    // spec: SEC#withheld-values
+    let error = eval_result.map(|e| probe_sensitive.values().mask(&e.to_string()).into_owned());
 
     HandlerProbe {
         name: handler_name.to_owned(),
