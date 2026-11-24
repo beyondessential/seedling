@@ -14,6 +14,9 @@ Applies to the `url`, `url-origin` and `hostname` [param kinds](action.md#param-
 | URL parser, host, host parser, host serialiser, opaque host, special scheme | as defined by the [URL Standard](https://url.spec.whatwg.org/) |
 | IDNA processing | the domain name to ASCII conversion of [Unicode Technical Standard #46](https://www.unicode.org/reports/tr46/), nontransitional, with `CheckHyphens`, `CheckBidi` and `CheckJoiners` set, `UseSTD3ASCIIRules` set, and `VerifyDnsLength` set |
 
+> [!NOTE]
+> The URL Standard and UTS #46 are referenced by their current editions, and the parsers follow the editions the implementation tracks, so a Seedling release can change how an unusual value parses.
+
 ## Hostnames
 
 `std::parse_hostname(text)` MUST return a string for a value it accepts.
