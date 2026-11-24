@@ -45,6 +45,14 @@ Where the URL has a host, the `host` its result carries MUST be that host as the
 > [!NOTE]
 > The host serialiser writes a domain in ASCII and in lower case, with each internationalised label as an A-label, and an IPv6 address enclosed in `[` and `]`.
 
+### Ports
+
+The `port` a parsed URL carries MUST be the URL's port, as an integer, where it gives one, and otherwise the [default port](https://url.spec.whatwg.org/#default-port) of its scheme.
+Where the URL gives no port and its scheme has no default port, its result carries no `port`.
+
+> [!NOTE]
+> Only the URL Standard's special schemes have a default port: `http` and `ws` 80, `https` and `wss` 443, and `ftp` 21.
+
 ### Query
 
 The `query` a parsed URL carries MUST be the URL's query as the URL parser leaves it, without its leading `?`, and MUST NOT be percent-decoded.
