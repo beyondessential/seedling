@@ -340,8 +340,16 @@ builders enumerated in the [language specs](../.workhorse/specs/language/).
 - **Encryption at rest** under a runtime-managed key file with the same
   permissions as the database
   ([SEC#secret-key](../.workhorse/specs/runtime/secrets.md#secret-key), [SEC#storage](../.workhorse/specs/runtime/secrets.md#storage)).
-- **Redaction in describe and history responses**
+- **Redaction wherever the runtime reports a value.** A secret parameter's
+  value, a secret action or shell param's value, and a derived value are
+  sensitive. Any describe field, parameter value, history entry or event
+  value that contains one reads as withheld, and each occurrence is masked
+  in breadcrumbs, fault descriptions, error messages and the daemon's log
+  lines. Output from workloads and shell sessions is passed through as it is
   ([SEC#redaction](../.workhorse/specs/runtime/secrets.md#redaction)).
+- **The action log seals sub-action params** that are secret or hold a
+  sensitive value
+  ([HIST#action-calls](../.workhorse/specs/runtime/history.md#action-calls)).
 - **Automatic migration** when a parameter transitions from non-secret to
   secret, so the historical plaintext does not linger
   ([SEC#migration](../.workhorse/specs/runtime/secrets.md#migration)).
@@ -360,8 +368,9 @@ builders enumerated in the [language specs](../.workhorse/specs/language/).
 - **Rotation is the recovery for a disclosed seed**, at the cost of every
   derived value; it needs the console's dangerous mode or an explicit `--yes`
   ([SEC#app-seed-rotation](../.workhorse/specs/runtime/secrets.md#app-seed-rotation)).
-- **Derived values are redacted like secret parameters** in describe
-  responses ([SEC#redaction](../.workhorse/specs/runtime/secrets.md#redaction)).
+- **Derived values are redacted like secret parameters**, including those an
+  operation's closures derive
+  ([SEC#matching](../.workhorse/specs/runtime/secrets.md#matching)).
 
 ### TLS certificate handling
 
