@@ -211,3 +211,28 @@ fn a_long_value_is_found_in_a_long_text_in_one_pass() {
     text.pop();
     assert!(!values.found_in_bytes(&text));
 }
+
+// spec: SEC#withheld-values
+#[test]
+fn a_structured_value_masks_each_part_in_place() {
+    let sensitive = holding(&["say \"hi\"", "5432"]);
+    let value = serde_json::json!({ "q": "say \"hi\" now", "port": 5432, "keep": [1, "x"] });
+    assert!(sensitive.found_in_json(&value));
+    assert_eq!(
+        sensitive.mask_json(&value),
+        serde_json::json!({ "q": "<redacted> now", "port": "<redacted>", "keep": [1, "x"] })
+    );
+}
+
+// spec: SEC#withheld-values
+#[test]
+fn a_value_held_only_in_a_parts_text_masks_that_part_whole() {
+    let sensitive = holding(&[r#"{"a":1}"#]);
+    let value = serde_json::json!({ "outer": { "a": 1 }, "keep": "x" });
+    assert!(sensitive.found_in_json(&value));
+    assert_eq!(
+        sensitive.mask_json(&value),
+        serde_json::json!({ "outer": "<redacted>", "keep": "x" })
+    );
+    assert!(!sensitive.found_in_json(&serde_json::json!({ "outer": { "a": 2 } })));
+}

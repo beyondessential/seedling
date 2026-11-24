@@ -286,19 +286,24 @@ impl SensitiveValues {
     /// JSON text of the whole, which holds a value a script supplied as other
     /// than a string. Each string is matched as it is, not as JSON escapes
     /// it, so a value holding a quote or a backslash is still found.
+    ///
+    /// The text of a part is a stretch of the text of the whole, so the whole
+    /// is the only text matched.
     pub fn found_in_json(&self, value: &serde_json::Value) -> bool {
+        use serde_json::Value;
+        self.found_in_parts(value)
+            || matches!(value, Value::Array(_) | Value::Object(_))
+                && self.found_in(&value.to_string())
+    }
+
+    fn found_in_parts(&self, value: &serde_json::Value) -> bool {
         use serde_json::Value;
         match value {
             Value::String(s) => self.found_in(s),
-            Value::Array(items) => {
-                items.iter().any(|v| self.found_in_json(v)) || self.found_in(&value.to_string())
-            }
-            Value::Object(members) => {
-                members
-                    .iter()
-                    .any(|(k, v)| self.found_in(k) || self.found_in_json(v))
-                    || self.found_in(&value.to_string())
-            }
+            Value::Array(items) => items.iter().any(|v| self.found_in_parts(v)),
+            Value::Object(members) => members
+                .iter()
+                .any(|(k, v)| self.found_in(k) || self.found_in_parts(v)),
             other => self.found_in(&other.to_string()),
         }
     }
@@ -308,31 +313,66 @@ impl SensitiveValues {
     /// object key, and a number or boolean that holds one replaced by its
     /// masked text. A whole that holds one only in its JSON text is replaced
     /// by that text masked.
+    ///
+    /// Each part is masked first, and the whole is checked once; only a value
+    /// that sits in the text of some part is looked for part by part.
     pub fn mask_json(&self, value: &serde_json::Value) -> serde_json::Value {
         use serde_json::Value;
-        let masked = match value {
-            Value::String(s) => return Value::String(self.mask(s).into_owned()),
-            Value::Array(items) => Value::Array(items.iter().map(|v| self.mask_json(v)).collect()),
+        let masked = self.mask_parts(value);
+        if matches!(masked, Value::Array(_) | Value::Object(_))
+            && self.found_in(&masked.to_string())
+        {
+            self.mask_json_by_level(value)
+        } else {
+            masked
+        }
+    }
+
+    fn mask_parts(&self, value: &serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        match value {
+            Value::String(s) => Value::String(self.mask(s).into_owned()),
+            Value::Array(items) => Value::Array(items.iter().map(|v| self.mask_parts(v)).collect()),
             Value::Object(members) => Value::Object(
                 members
                     .iter()
-                    .map(|(k, v)| (self.mask(k).into_owned(), self.mask_json(v)))
+                    .map(|(k, v)| (self.mask(k).into_owned(), self.mask_parts(v)))
                     .collect(),
             ),
-            other => {
-                let text = other.to_string();
-                return if self.found_in(&text) {
-                    Value::String(self.mask(&text).into_owned())
-                } else {
-                    other.clone()
-                };
+            other => self.mask_scalar(other),
+        }
+    }
+
+    fn mask_json_by_level(&self, value: &serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        let masked = match value {
+            Value::String(s) => return Value::String(self.mask(s).into_owned()),
+            Value::Array(items) => {
+                Value::Array(items.iter().map(|v| self.mask_json_by_level(v)).collect())
             }
+            Value::Object(members) => Value::Object(
+                members
+                    .iter()
+                    .map(|(k, v)| (self.mask(k).into_owned(), self.mask_json_by_level(v)))
+                    .collect(),
+            ),
+            other => return self.mask_scalar(other),
         };
         let text = masked.to_string();
         if self.found_in(&text) {
             Value::String(self.mask(&text).into_owned())
         } else {
             masked
+        }
+    }
+
+    /// A number or boolean, replaced by its masked text if it holds a value.
+    fn mask_scalar(&self, value: &serde_json::Value) -> serde_json::Value {
+        let text = value.to_string();
+        if self.found_in(&text) {
+            serde_json::Value::String(self.mask(&text).into_owned())
+        } else {
+            value.clone()
         }
     }
 }
