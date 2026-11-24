@@ -406,7 +406,8 @@ pub(crate) fn serialize_param_schema(
                     "kind": req.kind.as_str(),
                     "required": req.required,
                     "description": req.description,
-                    "default_value": req.default_value,
+                    // spec: APPS#parameters
+                    "default_value": req.default_value.as_ref().filter(|_| !req.is_secret()),
                     "secret": req.is_secret(),
                 }),
             )

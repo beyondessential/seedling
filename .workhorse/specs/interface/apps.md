@@ -307,12 +307,12 @@ Each entry of `params` has these members.
 | `kind` | string | `text`, `multiline`, `email`, `password`, `weak-password`, `random`, `version`, `version-semver` or `volume` |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
-| `default_value` | string or null | its default value |
+| `default_value` | string or null | its default value, or `null` where it is secret |
 | `secret` | boolean | its effective [secret flag](../language/parameter.md#secret-parameters) |
 | `is_set` | boolean | whether it has a stored value |
 | `value` | string or null | its stored value, or `null` where it is unset, secret or withheld |
 
-When a parameter's effective secret flag is true, its `value` MUST be `null` whether or not a value is stored.
+When a parameter's effective secret flag is true, its `value` and `default_value` MUST be `null` whether or not either is set.
 A parameter's `value` MUST also be `null` where it contains a [sensitive value](../runtime/secrets.md#sensitive-value) of the app, matched as [matching](../runtime/secrets.md#matching) specifies.
 A client MUST use `is_set` to tell an unset parameter from a withheld one.
 

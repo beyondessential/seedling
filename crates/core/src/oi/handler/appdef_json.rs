@@ -140,7 +140,8 @@ pub(crate) fn param_schema_entry_json(name: &str, schema: &ParamDef) -> Value {
         "kind": schema.kind.as_str(),
         "required": schema.required,
         "description": schema.description,
-        "default_value": schema.default_value,
+        // spec: APPS#parameters
+        "default_value": schema.default_value.as_ref().filter(|_| !schema.is_secret()),
         "secret": schema.is_secret(),
     })
 }

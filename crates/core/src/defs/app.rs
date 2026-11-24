@@ -484,18 +484,32 @@ pub struct AppDef {
 impl AppDef {
     // spec: SEC#matching
     /// The sensitive values of an app with this definition and `stored`
-    /// parameter values: the stored values of the parameters it marks secret,
-    /// and the values its evaluation derived.
+    /// parameter values: the stored and default values of the parameters it
+    /// marks secret, the default values of its actions' and shells' secret
+    /// params, and the values its evaluation derived.
     pub fn sensitive(
         &self,
         stored: &BTreeMap<String, String>,
     ) -> crate::runtime::redact::SensitiveValues {
         let mut values = self.derived.clone();
-        for (name, schema) in &self.params {
-            if schema.is_secret()
-                && let Some(value) = stored.get(name.as_str())
-            {
+        for (name, schema) in self.params.iter().filter(|(_, p)| p.is_secret()) {
+            if let Some(value) = stored.get(name.as_str()) {
                 values.insert(value);
+            }
+            if let Some(default) = &schema.default_value {
+                values.insert(default);
+            }
+        }
+        let schemas = self
+            .actions
+            .values()
+            .map(|a| &a.params)
+            .chain(self.shells.values().map(|s| &s.params));
+        for schema in schemas.flat_map(|params| params.values()) {
+            if schema.is_secret()
+                && let Some(default) = &schema.default_value
+            {
+                values.insert(default);
             }
         }
         values

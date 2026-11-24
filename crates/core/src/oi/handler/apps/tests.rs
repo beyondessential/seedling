@@ -1827,6 +1827,56 @@ fn descriptions_and_defaults_outside_def_holding_a_sensitive_value_are_null() {
 }
 
 // spec: APPS#parameters
+// spec: SEC#sensitive-value
+#[test]
+fn a_secret_default_is_withheld_and_withholds_what_holds_it() {
+    let oi = TestOi::new();
+    let script = r#"
+        let key = app.param("api-key").kind("password").required(false).default_value("Moa-Kettle-12");
+        app.on_shell("tools", |rt, shell, p| {}, #{
+            params: #{ "token": #{ kind: "text", secret: true, default_value: "Weta-Lantern-40" } },
+        });
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .env("KEY", "k=" + key.value())
+            .env("TOKEN", "t=Weta-Lantern-40")
+            .env("PLAIN", "visible");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let key = shown["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "api-key")
+        .unwrap();
+    assert_eq!(key["default_value"], json!(null), "{key}");
+    let shell = shown["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "tools")
+        .unwrap();
+    assert_eq!(
+        shell["params"]["token"]["default_value"],
+        json!(null),
+        "{shell}"
+    );
+    let env = &shown["resources"][0]["def"]["container"]["env"];
+    assert_eq!(env["KEY"], json!(null), "{env}");
+    assert_eq!(env["TOKEN"], json!(null), "{env}");
+    assert_eq!(env["PLAIN"], json!("visible"));
+    for value in ["Moa-Kettle-12", "Weta-Lantern-40"] {
+        assert!(
+            !shown.to_string().contains(value),
+            "{value} leaked: {shown}"
+        );
+    }
+}
+
+// spec: APPS#parameters
 // spec: APPS#generation-history
 // spec: SEC#matching
 #[test]
