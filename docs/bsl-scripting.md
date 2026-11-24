@@ -449,7 +449,7 @@ release.matches("~2.71")      // true
 std::parse_version_semver("2.71.4-rc.1").matches("~2.71")    // false
 
 app.param("version").kind("version-semver").validate(|v, all| {
-    if !std::parse_version_semver(v).matches("~2.71") { throw "this definition runs 2.71.x"; }
+    if !v.matches("~2.71") { throw "this definition runs 2.71.x"; }
 });
 ```
 
