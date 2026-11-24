@@ -44,7 +44,8 @@ Two `Version` values MUST compare through `<`, `<=`, `>`, `>=`, `==` and `!=` as
 
 `version.segments()` MUST return the components libversion order splits the value into, in order, without a leading `v` or `V` that ordering disregards.
 Each run of digits MUST be an integer, and each run of letters MUST be a string as written.
-`std::parse_version` MUST reject a value holding a run of digits too large for a BSL integer.
+In a `Version` that is not a numbered version, a run of digits too large for a BSL integer MUST be a string as written.
+`std::parse_version` MUST reject a numbered version holding a run of digits too large for a BSL integer.
 
 > [!NOTE]
 > `v1.0a1` has the segments `1`, `0`, `"a"` and `1`.
