@@ -232,10 +232,20 @@ fn settle(
     args: &[&ByteArg],
     forms: impl FnOnce() -> Vec<Vec<u8>>,
 ) -> Result<(), Box<EvalAltResult>> {
+    let held: Vec<&[u8]> = args.iter().filter_map(|a| a.withholdable()).collect();
     if is_in_action_closure() {
+        // spec: SEC#matching
+        let sensitive = seeds::operation_scope().map(|scope| scope.values());
+        if !sensitive.is_some_and(|s| held.iter().any(|a| s.found_in_bytes(a))) {
+            return Ok(());
+        }
+        // spec: LIM#limits
+        if !seeds::count_derivation(helper_limits(ctx)?.derived_values) {
+            return Err(too_large("Number of derived values"));
+        }
+        seeds::record_operation_derived(forms());
         return Ok(());
     }
-    let held: Vec<&[u8]> = args.iter().filter_map(|a| a.withholdable()).collect();
     let Some(dependence) = seeds::dependence(&held) else {
         return Ok(());
     };

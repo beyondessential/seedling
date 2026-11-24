@@ -1279,3 +1279,12 @@ fn a_failure_masks_a_value_the_operation_derived() {
     let thrown = derived_on_replay(&seed, r#"`password=${id};`"#);
     assert!(thrown.contains("password=<redacted>;"), "{thrown}");
 }
+
+// spec: SEC#matching
+// spec: SEC#redaction
+#[test]
+fn a_failure_masks_a_helper_result_computed_from_a_value_the_operation_derived() {
+    let seed = crate::runtime::seeds::Seed::from_bytes([1; 32]);
+    let thrown = derived_on_replay(&seed, r#"`hex=${std::encode_hex(id)};`"#);
+    assert!(thrown.contains("hex=<redacted>;"), "{thrown}");
+}

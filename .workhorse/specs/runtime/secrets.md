@@ -30,7 +30,7 @@ A secret parameter's value, a derived value, or a helper result the runtime with
 
 ### Sensitive value
 
-A non-empty value that is the stored or default value of a secret parameter, a value the [generation history](#generation-history) records for a parameter that is secret now or records protected, the value of an action or shell param whose [`secret`](../language/action.md#param-schemas) is `true`, whether supplied or defaulted, or a derived value.
+A non-empty value that is the stored or default value of a secret parameter, a value the [generation history](#generation-history) records for a parameter that is secret now or records protected, the value of an action or shell param whose [`secret`](../language/action.md#param-schemas) is `true`, whether supplied or defaulted, or a derived value, including a helper result the runtime withholds as one.
 
 ## Secret key
 
@@ -135,6 +135,7 @@ The runtime MUST relay the output of a workload container or a shell session unc
 
 The runtime MUST match a value against the sensitive values of the app it concerns: the stored and default values of its secret parameters, every value its generation history records for a parameter that is secret now or records protected, the default values of the secret params of its actions and shells, and the derived values the evaluation of its current definition returned.
 It MUST also match a value a lifecycle operation or a shell session records against that operation's or session's sensitive values: the values of its own secret params and of the secret params of every action it has invoked, and the derived values its action closures returned.
+A helper result computed in an action closure is withheld as a derived value when an argument contains one of the operation's or session's sensitive values.
 It MUST match a value it reports from an earlier record, such as a generation history entry, against the sensitive values current when it builds the response or event reporting it.
 
 > [!NOTE]
