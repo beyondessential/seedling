@@ -105,8 +105,9 @@ pub(super) fn parse_param_defs(
             secret,
         };
         // spec: ACN#param-schemas
-        def.check_default()
-            .map_err(|e| -> Box<EvalAltResult> { format!("param `{key}` default_value: {e}").into() })?;
+        def.check_default().map_err(|e| -> Box<EvalAltResult> {
+            format!("param `{key}` default_value: {e}").into()
+        })?;
         reqs.insert(param_name, def);
     }
     Ok(reqs)

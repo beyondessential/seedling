@@ -435,7 +435,7 @@ fn a_param_change_is_accepted_while_an_operation_runs_for_the_app() {
     oi.state.scheduler.lock().admit(
         &AppName::new_unchecked("demo"),
         &OperationTarget::Action(ActionName::new_unchecked("backup")),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -676,12 +676,13 @@ fn a_change_the_server_refuses_as_malformed_stores_nothing() {
     assert!(message.contains("not a name"), "{message}");
     refused(r#"{"_hidden":"y"}"#);
     refused(r#"{"ab":"y"}"#);
-    let message = refused(r#"{"greeting":1}"#);
+    let message = refused(r#"{"greeting":1.5}"#);
     assert!(message.contains("greeting"), "{message}");
-    refused(r#"{"greeting":true}"#);
+    refused(r#"{"greeting":1e3}"#);
+    refused(r#"{"greeting":9223372036854775808}"#);
     refused(r#"{"greeting":{"a":"b"}}"#);
     refused(r#"{"greeting":["a"]}"#);
-    refused(r#"{"mystery":"x","greeting":2}"#);
+    refused(r#"{"mystery":"x","greeting":2.5}"#);
 
     assert_eq!(stored_values(&oi), vec![]);
     assert_eq!(generation_count(&oi), 1);
@@ -795,7 +796,7 @@ fn a_change_is_accepted_while_an_operation_runs_for_the_app() {
     oi.state.scheduler.lock().admit(
         &AppName::new_unchecked("demo"),
         &OperationTarget::Action(ActionName::new_unchecked("backup")),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -899,7 +900,7 @@ fn a_plan_treats_proposed_params_with_no_members_as_none_and_refuses_what_a_chan
     assert!(message.contains("greeting"), "{message}");
     let (code, _) = plan(r#"{"not a name":"y"}"#).unwrap_err();
     assert_eq!(code, "requirements_invalid");
-    let (code, _) = plan(r#"{"greeting":3}"#).unwrap_err();
+    let (code, _) = plan(r#"{"greeting":3.5}"#).unwrap_err();
     assert_eq!(code, "requirements_invalid");
 }
 
@@ -920,7 +921,7 @@ fn an_update_refuses_what_a_parameter_change_refuses() {
     refused("{}");
     refused(r#"{"greeting":"a","greeting":"b"}"#);
     refused(r#"{"not a name":"y"}"#);
-    refused(r#"{"greeting":3}"#);
+    refused(r#"{"greeting":3.5}"#);
 
     assert_eq!(generation_count(&oi), 1);
     assert_eq!(stored_values(&oi), vec![]);

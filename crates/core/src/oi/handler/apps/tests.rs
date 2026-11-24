@@ -329,7 +329,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     oi.state.scheduler.lock().admit(
         &app,
         &OperationTarget::Action(action),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -380,7 +380,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     sched.admit(
         &other,
         &OperationTarget::Action(backup.clone()),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &installed(),
@@ -389,7 +389,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     let queued = sched.admit(
         &demo,
         &OperationTarget::Action(backup),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &installed(),
@@ -1366,7 +1366,7 @@ fn admit(oi: &TestOi, app: &str, action: &str) {
     oi.state.scheduler.lock().admit(
         &AppName::new(app).expect("app name"),
         &OperationTarget::Action(ActionName::new(action).expect("action name")),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -2296,7 +2296,7 @@ fn rotation_is_refused_while_an_operation_or_change_holds_the_app() {
         oi.state.scheduler.lock().admit(
             app,
             &backup,
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "test",
             &installed(),

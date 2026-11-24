@@ -1444,7 +1444,10 @@ fn start_replay(
                     operation = %target,
                     "interrupted operation has no persisted params (legacy row); replaying with empty map"
                 );
-                (seedling_core::runtime::param_map::ParamMap::default(), Default::default())
+                (
+                    seedling_core::runtime::param_map::ParamMap::default(),
+                    Default::default(),
+                )
             }
             Err(e) => {
                 tracing::error!(

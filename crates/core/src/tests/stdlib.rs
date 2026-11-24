@@ -287,7 +287,7 @@ fn a_validator_derives_what_the_top_level_derives() {
             script,
         )),
         &proposed,
-        &proposed,
+        &crate::runtime::apps::supplied_values(&proposed),
         &seed(1),
         &crate::ScriptLimits::default(),
     );

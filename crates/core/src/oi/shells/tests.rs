@@ -365,7 +365,9 @@ fn run_shell_session(
             Arc::clone(&entry.tick_notify),
         )
     };
-    let params = params.as_object().cloned().unwrap_or_default();
+    let params = crate::runtime::param_map::ParamMap::from_values(
+        params.as_object().cloned().unwrap_or_default(),
+    );
     let stop = StopSignal::new();
     let session_id = SessionId::generate();
     let slot = sessions.open(session_id);
@@ -606,15 +608,17 @@ fn a_shell_whose_volume_param_cannot_be_bound_does_not_run_its_closure() {
 #[test]
 fn params_a_shell_declares_no_schema_for_still_reach_its_closure() {
     let oi = TestOi::new();
-    let submitted = std::collections::BTreeMap::from([("greeting".to_owned(), "hello".to_owned())]);
+    let mut submitted = serde_json::Map::new();
+    submitted.insert("greeting".to_owned(), serde_json::json!("hello"));
     let params = super::session::validate_shell_params(
         &oi.state,
         &std::collections::BTreeMap::new(),
-        &submitted,
+        submitted,
     )
     .unwrap();
     assert_eq!(
-        params["greeting"], "hello",
+        params.get("greeting").unwrap(),
+        "hello",
         "an undeclared param was dropped"
     );
 }

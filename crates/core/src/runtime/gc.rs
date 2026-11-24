@@ -359,7 +359,7 @@ mod tests {
                 target: action_name("start").into(),
                 generation: 1,
             },
-            &serde_json::Map::new(),
+            &crate::runtime::param_map::ParamMap::default(),
             &Default::default(),
         )
         .unwrap();

@@ -264,7 +264,7 @@ mod tests {
         oi.state.scheduler.lock().admit(
             &app,
             &OperationTarget::Action(action),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "test",
             &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -298,7 +298,7 @@ mod tests {
         oi.state.scheduler.lock().admit(
             &AppName::new("blocker").unwrap(),
             &OperationTarget::Action(ActionName::new("install").unwrap()),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "test",
             &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -345,7 +345,7 @@ mod tests {
         });
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].operation_id.0, id);
-        assert_eq!(restored[0].params["token"], "hunter2");
+        assert_eq!(restored[0].params.get("token").unwrap(), "hunter2");
         assert_eq!(
             restored[0].actor.as_ref().unwrap().id.as_deref(),
             Some("test-suite")
@@ -462,7 +462,7 @@ mod tests {
                 seedling_protocol::names::ActionName::new("refresh").unwrap(),
             ),
             operation_id: crate::runtime::barrier::OperationId(id.to_owned()),
-            params: serde_json::Map::new(),
+            params: crate::runtime::param_map::ParamMap::default(),
             generation: 1,
             trigger: "operator".to_owned(),
             actor: None,

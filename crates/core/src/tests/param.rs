@@ -103,7 +103,7 @@ fn unset_param_value_falls_back_to_default_value() {
 
     let def = app.def.load();
     let schema = def.params.get("max-connections").unwrap();
-    assert_eq!(schema.default_value.as_deref(), Some("100"));
+    assert_eq!(schema.default_text().as_deref(), Some("100"));
 }
 
 // spec: PARAM#values
@@ -273,7 +273,7 @@ fn param_schema_builder_methods_set_fields() {
         crate::defs::param_def::ParamKind::Email
     ));
     assert!(schema.required);
-    assert_eq!(schema.default_value.as_deref(), Some("admin@example.com"));
+    assert_eq!(schema.default_text().as_deref(), Some("admin@example.com"));
     assert_eq!(schema.description.as_deref(), Some("Admin email address"));
 }
 
@@ -370,6 +370,7 @@ fn action_param_kind_version_accepted() {
             ))
             .expect("param declared")
             .kind
+            .clone()
     };
     assert_eq!(
         kind_of("generic"),

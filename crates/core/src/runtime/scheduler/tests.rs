@@ -63,7 +63,7 @@ fn an_app_being_uninstalled_is_refused() {
         s.admit(
             &app("app1"),
             &act("backup"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             &phase(AppPhase::Uninstalling),
@@ -85,7 +85,7 @@ fn an_installed_app_is_admitted() {
         s.admit(
             &app("app1"),
             &act("backup"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             &phase(AppPhase::Installed),
@@ -111,7 +111,7 @@ fn a_queued_operation_carries_the_actor_it_was_admitted_with() {
     s.admit(
         &app("app1"),
         &act("backup"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         &phase(AppPhase::Installed),
@@ -121,7 +121,7 @@ fn a_queued_operation_carries_the_actor_it_was_admitted_with() {
         s.admit(
             &app("app2"),
             &act("backup"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             &phase(AppPhase::Installed),
@@ -148,7 +148,7 @@ fn empty_scheduler_accepts_first_request() {
         s.request(
             &app("app1"),
             &act("start"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -167,7 +167,7 @@ fn same_app_second_request_rejected() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -176,7 +176,7 @@ fn same_app_second_request_rejected() {
         s.request(
             &app("app1"),
             &act("start"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -192,7 +192,7 @@ fn same_app_different_action_still_rejected() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -201,7 +201,7 @@ fn same_app_different_action_still_rejected() {
         s.request(
             &app("app1"),
             &act("deploy"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -221,7 +221,7 @@ fn different_app_request_is_queued() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -230,7 +230,7 @@ fn different_app_request_is_queued() {
         s.request(
             &app("app2"),
             &act("start"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -250,7 +250,7 @@ fn already_queued_app_is_rejected() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -258,7 +258,7 @@ fn already_queued_app_is_rejected() {
     s.request(
         &app("app2"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -267,7 +267,7 @@ fn already_queued_app_is_rejected() {
         s.request(
             &app("app2"),
             &act("start"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -283,7 +283,7 @@ fn two_different_apps_can_both_queue() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -292,7 +292,7 @@ fn two_different_apps_can_both_queue() {
         s.request(
             &app("app2"),
             &act("start"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -303,7 +303,7 @@ fn two_different_apps_can_both_queue() {
         s.request(
             &app("app3"),
             &act("start"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -320,7 +320,7 @@ fn queued_app_rejected_regardless_of_action_name() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -328,7 +328,7 @@ fn queued_app_rejected_regardless_of_action_name() {
     s.request(
         &app("app2"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -337,7 +337,7 @@ fn queued_app_rejected_regardless_of_action_name() {
         s.request(
             &app("app2"),
             &act("deploy"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -357,7 +357,7 @@ fn complete_current_with_empty_queue_clears_active() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -374,7 +374,7 @@ fn dequeued_operation_is_active_at_the_generation_current_at_dispatch() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -382,7 +382,7 @@ fn dequeued_operation_is_active_at_the_generation_current_at_dispatch() {
     s.request(
         &app("app2"),
         &act("deploy"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -402,7 +402,7 @@ fn dequeued_operation_of_an_app_with_no_current_generation_keeps_its_requested_o
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -410,7 +410,7 @@ fn dequeued_operation_of_an_app_with_no_current_generation_keeps_its_requested_o
     s.request(
         &app("app2"),
         &act("deploy"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         2,
         "operator",
         None,
@@ -429,7 +429,7 @@ fn complete_current_dequeues_next_and_makes_it_active() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -437,7 +437,7 @@ fn complete_current_dequeues_next_and_makes_it_active() {
     s.request(
         &app("app2"),
         &act("deploy"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -460,7 +460,7 @@ fn queue_is_drained_in_fifo_order() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -468,7 +468,7 @@ fn queue_is_drained_in_fifo_order() {
     s.request(
         &app("app2"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -476,7 +476,7 @@ fn queue_is_drained_in_fifo_order() {
     s.request(
         &app("app3"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -500,7 +500,7 @@ fn after_complete_same_app_can_be_requested_again() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -511,7 +511,7 @@ fn after_complete_same_app_can_be_requested_again() {
         s.request(
             &app("app1"),
             &act("start"),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "operator",
             None
@@ -531,7 +531,7 @@ fn push_call_with_no_cycle_succeeds() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -548,7 +548,7 @@ fn push_call_detects_direct_cycle() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -566,7 +566,7 @@ fn push_call_detects_transitive_cycle() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -586,7 +586,7 @@ fn pop_call_allows_reuse_of_action_name() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -604,7 +604,7 @@ fn complete_current_clears_call_stack() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -612,7 +612,7 @@ fn complete_current_clears_call_stack() {
     s.request(
         &app("app2"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -631,7 +631,7 @@ fn call_stack_is_empty_at_start_of_new_operation() {
     s.request(
         &app("app1"),
         &act("start"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "operator",
         None,
@@ -788,7 +788,7 @@ fn fire(s: &Arc<Mutex<Scheduler>>, name: &str) -> ScheduleResult {
     s.lock().admit(
         &app(name),
         &act("nightly"),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "schedule",
         &phase(AppPhase::Installed),

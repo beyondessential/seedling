@@ -41,8 +41,8 @@ pub(super) fn register(module: &mut rhai::Module) {
                 );
             }
             _ => {
-                let kind = ParamKind::without_arguments(name)
-                    .expect("only choice requires an argument");
+                let kind =
+                    ParamKind::without_arguments(name).expect("only choice requires an argument");
                 register_parser(module, &helper, kind);
             }
         }

@@ -637,7 +637,9 @@ mod tests {
         with_default
             .get_mut(&ParamName::new("target").unwrap())
             .unwrap()
-            .default_value = Some("all".to_owned());
+            .default_value = Some(crate::defs::param_def::SuppliedValue::Text(
+            "all".to_owned(),
+        ));
         let schemas = Arc::new(BTreeMap::from([(action_name("backup"), with_default)]));
         let later: Timestamp = "2026-04-21T19:37:22Z".parse().unwrap();
         let fired = check_due_schedules(&db, &mut scheduler, later, &|_| {

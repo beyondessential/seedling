@@ -90,7 +90,7 @@ fn admit_gate_run(oi: &TestOi, app: &str, gate_name: &str) {
     oi.state.scheduler.lock().admit(
         &AppName::new(app).unwrap(),
         &OperationTarget::Gate(gate(gate_name)),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(AppPhase::Installed),

@@ -10,11 +10,12 @@ use serde_json::{Value, json};
 
 use super::HandlerResult;
 use crate::{
+    defs::param_def::SuppliedValue,
     oi::{handler::RequestCtx, state::OiState},
     runtime::{generations, scheduler::AppHold},
 };
 
-/// The parameters a request changes, in ascending order of name: a string
+/// The parameters a request changes, in ascending order of name: a value
 /// sets the parameter and `None` unsets it.
 ///
 /// Deserialised from the request's own text, since a JSON object read into a
@@ -22,23 +23,20 @@ use crate::{
 /// name.
 // spec: PRM#parameter-changes
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParamChanges(BTreeMap<ParamName, Option<String>>);
+pub(crate) struct ParamChanges(BTreeMap<ParamName, Option<SuppliedValue>>);
 
 impl ParamChanges {
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&ParamName, Option<&str>)> {
-        self.0.iter().map(|(name, value)| (name, value.as_deref()))
-    }
-
     /// The values an app would hold, given what it holds now, if every member
-    /// of the request were applied.
-    pub(crate) fn applied_to(
+    /// of the request were applied, each as it was supplied.
+    // spec: PRM#validation
+    pub(crate) fn proposed(
         &self,
         current: &BTreeMap<String, String>,
-    ) -> BTreeMap<String, String> {
-        let mut proposed = current.clone();
-        for (name, value) in self.iter() {
+    ) -> BTreeMap<String, SuppliedValue> {
+        let mut proposed = crate::runtime::apps::supplied_values(current);
+        for (name, value) in &self.0 {
             match value {
-                Some(v) => proposed.insert(name.as_str().to_owned(), v.to_owned()),
+                Some(v) => proposed.insert(name.as_str().to_owned(), v.clone()),
                 None => proposed.remove(name.as_str()),
             };
         }
@@ -47,14 +45,17 @@ impl ParamChanges {
 
     /// The members that move a stored value: a member giving a parameter's
     /// stored value, or unsetting one with no stored value, changes nothing.
+    // spec: PRM#parameter-storage
     pub(crate) fn edits(&self, current: &BTreeMap<String, String>) -> Vec<ParamEdit> {
-        self.iter()
+        self.0
+            .iter()
             .filter_map(|(name, value)| {
                 let previous = current.get(name.as_str());
-                (previous.map(String::as_str) != value).then(|| ParamEdit {
+                let new_value = value.as_ref().map(SuppliedValue::canonical);
+                (previous != new_value.as_ref()).then(|| ParamEdit {
                     name: name.clone(),
                     previous: previous.cloned(),
-                    new_value: value.map(str::to_owned),
+                    new_value,
                 })
             })
             .collect()
@@ -101,7 +102,10 @@ impl ParamChanges {
             type Value = ParamChanges;
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("an object naming each parameter to change, with a string or null")
+                f.write_str(
+                    "an object naming each parameter to change, with a string, a boolean, an \
+                     integer or null",
+                )
             }
 
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
@@ -109,13 +113,13 @@ impl ParamChanges {
                 while let Some(key) = map.next_key::<String>()? {
                     let name = ParamName::new(&key).map_err(A::Error::custom)?;
                     let value = match map.next_value::<Value>()? {
-                        Value::String(s) => Some(s),
                         Value::Null => None,
-                        _ => {
-                            return Err(A::Error::custom(format!(
-                                "parameter '{key}' must be a string, or null to unset it"
-                            )));
-                        }
+                        value => Some(SuppliedValue::from_json(&value).ok_or_else(|| {
+                            A::Error::custom(format!(
+                                "parameter '{key}' must be a string, a boolean, an integer, or \
+                                 null to unset it"
+                            ))
+                        })?),
                     };
                     if changes.insert(name, value).is_some() {
                         return Err(A::Error::custom(format!(
@@ -314,7 +318,7 @@ fn reload_and_persist_apperror(
 fn validate_proposed(
     state: &OiState,
     app: &AppName,
-    proposed: &BTreeMap<String, String>,
+    proposed: &BTreeMap<String, SuppliedValue>,
 ) -> Result<(), OiError> {
     let (bundle, seed, last_good) = {
         let reg = state.registry.read();
@@ -329,8 +333,9 @@ fn validate_proposed(
         )
     };
     let limits = &state.script_limits;
+    let values = crate::runtime::apps::canonical_values(proposed);
     let (_, result) =
-        crate::runtime::apps::evaluate_validated(app, &bundle, proposed, proposed, &seed, limits);
+        crate::runtime::apps::evaluate_validated(app, &bundle, &values, proposed, &seed, limits);
     let rejections = match result {
         Ok(r) => r,
         Err(_) => {
@@ -387,7 +392,7 @@ pub(crate) fn set_params(
         return Ok(json!({ "generation": previous_generation }));
     }
 
-    validate_proposed(state, app, &params.params.applied_to(&current))?;
+    validate_proposed(state, app, &params.params.proposed(&current))?;
 
     let secret: BTreeMap<ParamName, bool> = edits
         .iter()

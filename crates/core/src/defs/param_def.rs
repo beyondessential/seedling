@@ -130,9 +130,13 @@ pub enum ParamKind {
     // spec: ACN#param-kinds
     Boolean,
     // spec: ACN#param-kinds
-    Integer { range: Option<IntRange> },
+    Integer {
+        range: Option<IntRange>,
+    },
     // spec: ACN#param-kinds
-    Choice { options: Vec<String> },
+    Choice {
+        options: Vec<String>,
+    },
     // spec: ACN#param-kinds
     Version,
     // spec: ACN#param-kinds
@@ -259,7 +263,10 @@ impl ParamKind {
             (_, SuppliedValue::Bool(_)) => "a boolean",
             (_, SuppliedValue::Int(_)) => "an integer",
         };
-        Err(format!("{given} is given for a param of kind {}", self.as_str()))
+        Err(format!(
+            "{given} is given for a param of kind {}",
+            self.as_str()
+        ))
     }
 
     /// Parse a supplied value: a boolean or integer, for the kind that takes
@@ -287,8 +294,9 @@ pub fn take_kind(what: &str, value: Dynamic) -> Result<ParamKind, Box<EvalAltRes
             format!("`{what}`: the choice kind takes `options`, so it is given as a map").into()
         });
     }
-    let map = take_map(what, value)
-        .map_err(|_| -> Box<EvalAltResult> { format!("`{what}` must be a kind name or a kind map").into() })?;
+    let map = take_map(what, value).map_err(|_| -> Box<EvalAltResult> {
+        format!("`{what}` must be a kind name or a kind map").into()
+    })?;
     let Some(name) = map.get("name") else {
         return Err(format!("`{what}` is a kind map without a `name`").into());
     };
@@ -310,7 +318,11 @@ pub fn take_kind(what: &str, value: Dynamic) -> Result<ParamKind, Box<EvalAltRes
     Ok(kind_with(name, range, options))
 }
 
-fn kind_with(name: ParamKindName, range: Option<IntRange>, options: Option<Vec<String>>) -> ParamKind {
+fn kind_with(
+    name: ParamKindName,
+    range: Option<IntRange>,
+    options: Option<Vec<String>>,
+) -> ParamKind {
     match name {
         ParamKindName::Text => ParamKind::Text,
         ParamKindName::Multiline => ParamKind::Multiline,
@@ -363,7 +375,9 @@ pub fn take_options(what: &str, value: Dynamic) -> Result<Vec<String>, Box<EvalA
         }
         ParamKind::Text
             .parse(option)
-            .map_err(|e| -> Box<EvalAltResult> { format!("`{what}` option {option:?} {e}").into() })?;
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("`{what}` option {option:?} {e}").into()
+            })?;
         if !seen.insert(option.as_str()) {
             return Err(format!("`{what}` holds {option:?} more than once").into());
         }
@@ -411,7 +425,11 @@ impl IntRange {
     }
 
     fn greatest(&self) -> i64 {
-        if self.inclusive { self.end } else { self.end - 1 }
+        if self.inclusive {
+            self.end
+        } else {
+            self.end - 1
+        }
     }
 }
 

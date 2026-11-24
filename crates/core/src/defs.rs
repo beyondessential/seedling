@@ -180,6 +180,7 @@ pub fn finish_evaluation(app: &app::App) -> Result<(), String> {
     ingress::check_claim_conflicts(&def)?;
     container::check_images_declared(&def)?;
     service::check_route_balances(&def)?;
+    param::check_defaults(&def)?;
     gate::check_gates(&def)
 }
 

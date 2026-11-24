@@ -201,8 +201,8 @@ fn resolve_call_params(
     });
     // spec: OPS#persistence
     if !validated.versions().is_empty() {
-        payload["versions"] = serde_json::to_value(validated.versions())
-            .expect("version types serialise as strings");
+        payload["versions"] =
+            serde_json::to_value(validated.versions()).expect("version types serialise as strings");
     }
     if !secret.is_empty() {
         let cipher = g.cipher.clone().ok_or_else(|| -> Box<EvalAltResult> {
@@ -540,7 +540,7 @@ mod tests {
         }))
         .unwrap();
 
-        let split = split_secret_params(Some(&schema), &validated);
+        let split = split_secret_params(Some(&schema), &ParamMap::from_values(validated));
         assert_eq!(split.journal["token"], REDACTED);
         assert_eq!(split.journal["label"], "plain-label");
         assert_eq!(split.secret["token"], "s3cret-value");

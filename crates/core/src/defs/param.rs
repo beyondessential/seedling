@@ -15,6 +15,18 @@ pub struct Param {
     pub app: App,
 }
 
+/// Check each declared default against its parameter's kind, which the script
+/// may have declared before or after the default.
+// spec: PARAM#kind-checks
+pub(super) fn check_defaults(def: &super::app::AppDef) -> Result<(), String> {
+    for (name, param) in &def.params {
+        param
+            .check_default()
+            .map_err(|e| format!("the default of parameter '{name}' is rejected: {e}"))?;
+    }
+    Ok(())
+}
+
 impl Param {
     /// The stored value, or the declared default without one.
     // spec: PARAM#values

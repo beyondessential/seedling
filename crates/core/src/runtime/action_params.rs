@@ -256,9 +256,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use seedling_protocol::names::ParamName;
+    use serde_json::json;
 
     use super::{ParamValidationError, VolumeLookup, apply_schema, validate_volume_params};
-    use crate::defs::param_def::{ParamDef, ParamKind};
+    use crate::{
+        defs::param_def::{IntRange, ParamDef, ParamKind, SuppliedValue},
+        runtime::param_map::ParamMap,
+    };
 
     struct NoVolumes;
 
@@ -270,91 +274,9 @@ mod tests {
 
     fn text_with_default(default: &str) -> ParamDef {
         ParamDef {
-            kind: ParamKind::Text,
-            required: false,
-            default_value: Some(default.to_owned()),
-            description: None,
-            secret: None,
+            default_value: Some(SuppliedValue::Text(default.to_owned())),
+            ..of_kind(ParamKind::Text)
         }
-    }
-
-    fn schema(name: &str, def: ParamDef) -> BTreeMap<ParamName, ParamDef> {
-        let mut m = BTreeMap::new();
-        m.insert(ParamName::new(name).expect("param name"), def);
-        m
-    }
-
-    // spec: ACN#param-schemas
-    // A non-string used to be skipped as absent, so a submitted value was
-    // silently replaced by the field's default — the caller believed the
-    // value they sent had been taken.
-    #[test]
-    fn a_non_string_value_is_refused_rather_than_defaulted() {
-        let sch = schema("count", text_with_default("fallback"));
-
-        let mut params = serde_json::Map::new();
-        params.insert("count".to_owned(), serde_json::json!(42));
-
-        let err = apply_schema(&sch, &mut params).expect_err("42 is not a string");
-        assert_eq!(
-            err,
-            ParamValidationError::NotAString {
-                key: "count".to_owned()
-            }
-        );
-        assert_eq!(
-            params["count"],
-            serde_json::json!(42),
-            "a rejected call must not have rewritten the value"
-        );
-    }
-
-    // spec: ACN#param-schemas
-    #[test]
-    fn an_absent_field_still_takes_its_default() {
-        let sch = schema("name", text_with_default("fallback"));
-
-        let mut params = serde_json::Map::new();
-        apply_schema(&sch, &mut params).expect("absent is fine when a default exists");
-        assert_eq!(params["name"], serde_json::json!("fallback"));
-    }
-
-    // spec: ACN#param-schemas
-    #[test]
-    fn a_string_value_is_taken_as_given() {
-        let sch = schema("name", text_with_default("fallback"));
-
-        let mut params = serde_json::Map::new();
-        params.insert("name".to_owned(), serde_json::json!("given"));
-        apply_schema(&sch, &mut params).expect("a string is fine");
-        assert_eq!(params["name"], serde_json::json!("given"));
-    }
-
-    // spec: ACN#volume-params
-    // spec: ACN#param-schemas
-    // An empty optional volume param is an absent one: it named a volume
-    // called "", which is not a volume name, and the invocation was refused.
-    #[test]
-    fn an_empty_optional_volume_param_is_absent() {
-        let def = |required| ParamDef {
-            kind: ParamKind::Volume,
-            required,
-            default_value: None,
-            description: None,
-            secret: None,
-        };
-        let mut params = serde_json::Map::new();
-        params.insert("data".to_owned(), serde_json::json!(""));
-
-        validate_volume_params(&schema("data", def(false)), &params, &NoVolumes)
-            .expect("empty and optional is absent");
-        assert_eq!(
-            validate_volume_params(&schema("data", def(true)), &params, &NoVolumes),
-            Err(ParamValidationError::VolumeMissing {
-                key: "data".to_owned()
-            }),
-            "empty and required is missing"
-        );
     }
 
     fn of_kind(kind: ParamKind) -> ParamDef {
@@ -367,13 +289,184 @@ mod tests {
         }
     }
 
+    fn schema(name: &str, def: ParamDef) -> BTreeMap<ParamName, ParamDef> {
+        BTreeMap::from([(ParamName::new(name).expect("param name"), def)])
+    }
+
+    fn supplied(
+        name: &str,
+        value: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::from_iter([(name.to_owned(), value)])
+    }
+
+    fn integer(range: Option<IntRange>) -> ParamKind {
+        ParamKind::Integer { range }
+    }
+
+    // spec: ACN#param-schemas
+    // A non-string used to be skipped as absent, so a submitted value was
+    // silently replaced by the field's default — the caller believed the
+    // value they sent had been taken.
+    #[test]
+    fn a_value_of_a_type_its_kind_does_not_take_is_refused_rather_than_defaulted() {
+        let sch = schema("count", text_with_default("fallback"));
+        for (value, reason) in [
+            (json!(42), "an integer is given for a param of kind text"),
+            (json!(true), "a boolean is given for a param of kind text"),
+            (json!(["a"]), "an array is not a value a param takes"),
+        ] {
+            let err = apply_schema(&sch, supplied("count", value.clone())).expect_err("wrong type");
+            assert_eq!(
+                err,
+                ParamValidationError::WrongType {
+                    key: "count".to_owned(),
+                    reason: reason.to_owned(),
+                },
+                "{value}"
+            );
+        }
+    }
+
+    // spec: ACN#param-schemas
+    // spec: ACI#action-parameters
+    #[test]
+    fn a_boolean_or_integer_param_takes_its_native_json_type() {
+        let flag = schema("flag", of_kind(ParamKind::Boolean));
+        assert_eq!(
+            apply_schema(&flag, supplied("flag", json!(true)))
+                .unwrap()
+                .get("flag"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            apply_schema(&flag, supplied("flag", json!("false")))
+                .unwrap()
+                .get("flag"),
+            Some(&json!(false))
+        );
+
+        let count = schema("count", of_kind(integer(None)));
+        assert_eq!(
+            apply_schema(&count, supplied("count", json!(-7)))
+                .unwrap()
+                .get("count"),
+            Some(&json!(-7))
+        );
+        assert_eq!(
+            apply_schema(&count, supplied("count", json!("12")))
+                .unwrap()
+                .get("count"),
+            Some(&json!(12))
+        );
+    }
+
+    // spec: ACI#action-parameters
+    #[test]
+    fn a_json_number_that_is_not_a_signed_64_bit_integer_is_refused() {
+        let count = schema("count", of_kind(integer(None)));
+        for text in ["1.0", "1e3", "9223372036854775808", "-9223372036854775809"] {
+            let value: serde_json::Value = serde_json::from_str(text).unwrap();
+            let err = apply_schema(&count, supplied("count", value)).expect_err(text);
+            assert!(
+                matches!(err, ParamValidationError::WrongType { .. }),
+                "{text}: {err:?}"
+            );
+        }
+    }
+
+    // spec: ACN#param-delivery
+    #[test]
+    fn declared_params_reach_the_closure_as_parser_results() {
+        let mut sch = schema("contact", of_kind(ParamKind::Email));
+        sch.extend(schema("size", of_kind(integer(IntRange::new(1, 10, true)))));
+        sch.extend(schema(
+            "tier",
+            of_kind(ParamKind::Choice {
+                options: vec!["a".into(), "b".into()],
+            }),
+        ));
+        sch.extend(schema("pinned", of_kind(ParamKind::Version)));
+        let mut params = supplied("contact", json!("ops@example.org"));
+        params.insert("size".into(), json!("3"));
+        params.insert("tier".into(), json!("b"));
+        params.insert("pinned".into(), json!("v16.4"));
+        params.insert("extra".into(), json!(["as", "supplied"]));
+
+        let map = apply_schema(&sch, params).unwrap();
+        assert_eq!(
+            map.get("contact"),
+            Some(&json!({ "local": "ops", "domain": "example.org" }))
+        );
+        assert_eq!(map.get("size"), Some(&json!(3)));
+        assert_eq!(map.get("tier"), Some(&json!("b")));
+        assert_eq!(map.get("extra"), Some(&json!(["as", "supplied"])));
+
+        let delivered = map.to_rhai().unwrap();
+        let pinned = delivered["pinned"].clone();
+        let pinned = pinned
+            .try_cast::<crate::defs::version::Version>()
+            .expect("a Version");
+        assert_eq!(pinned.to_string(), "v16.4");
+    }
+
+    // spec: ACN#param-schemas
+    #[test]
+    fn an_absent_field_still_takes_its_default() {
+        let sch = schema("name", text_with_default("fallback"));
+        let map = apply_schema(&sch, serde_json::Map::new()).expect("a default fills it");
+        assert_eq!(map.get("name"), Some(&json!("fallback")));
+
+        let flag = schema(
+            "flag",
+            ParamDef {
+                default_value: Some(SuppliedValue::Bool(true)),
+                ..of_kind(ParamKind::Boolean)
+            },
+        );
+        let map = apply_schema(&flag, supplied("flag", json!(""))).expect("a default fills it");
+        assert_eq!(map.get("flag"), Some(&json!(true)));
+    }
+
+    // spec: ACN#param-delivery
+    #[test]
+    fn a_declared_param_without_a_value_is_absent() {
+        for value in [None, Some(json!(""))] {
+            let params = value.map(|v| supplied("note", v)).unwrap_or_default();
+            let map = apply_schema(&schema("note", of_kind(ParamKind::Text)), params).unwrap();
+            assert_eq!(map, ParamMap::default());
+        }
+    }
+
+    // spec: ACN#volume-params
+    // spec: ACN#param-schemas
+    // An empty optional volume param is an absent one: it named a volume
+    // called "", which is not a volume name, and the invocation was refused.
+    #[test]
+    fn an_empty_optional_volume_param_is_absent() {
+        let def = |required| ParamDef {
+            required,
+            ..of_kind(ParamKind::Volume)
+        };
+        let params = ParamMap::from_values(supplied("data", json!("")));
+
+        validate_volume_params(&schema("data", def(false)), &params, &NoVolumes)
+            .expect("empty and optional is absent");
+        assert_eq!(
+            validate_volume_params(&schema("data", def(true)), &params, &NoVolumes),
+            Err(ParamValidationError::VolumeMissing {
+                key: "data".to_owned()
+            }),
+            "empty and required is missing"
+        );
+    }
+
     // spec: ACN#kind-parsers
     #[test]
     fn a_text_param_with_a_line_break_is_refused_naming_the_field() {
-        let mut params = serde_json::Map::new();
-        params.insert("note".to_owned(), serde_json::json!("one\ntwo"));
+        let params = supplied("note", json!("one\ntwo"));
 
-        let err = apply_schema(&schema("note", of_kind(ParamKind::Text)), &mut params)
+        let err = apply_schema(&schema("note", of_kind(ParamKind::Text)), params.clone())
             .expect_err("text is a single line");
         assert_eq!(
             err,
@@ -384,7 +477,7 @@ mod tests {
             }
         );
 
-        apply_schema(&schema("note", of_kind(ParamKind::Multiline)), &mut params)
+        apply_schema(&schema("note", of_kind(ParamKind::Multiline)), params)
             .expect("multiline takes line breaks");
     }
 
@@ -392,11 +485,11 @@ mod tests {
     // spec: ACN#kind-parsers
     #[test]
     fn an_empty_param_is_absent_rather_than_refused_by_its_kind() {
-        let mut params = serde_json::Map::new();
-        params.insert("contact".to_owned(), serde_json::json!(""));
-
-        apply_schema(&schema("contact", of_kind(ParamKind::Email)), &mut params)
-            .expect("an empty optional email is absent");
+        apply_schema(
+            &schema("contact", of_kind(ParamKind::Email)),
+            supplied("contact", json!("")),
+        )
+        .expect("an empty optional email is absent");
     }
 
     // spec: ACN#kind-parsers
@@ -407,10 +500,11 @@ mod tests {
             (ParamKind::Version, "latest", "16.4"),
             (ParamKind::VersionSemver, "2.71", "v2.71.3"),
         ] {
-            let mut params = serde_json::Map::new();
-            params.insert("target".to_owned(), serde_json::json!(refused));
-            let err =
-                apply_schema(&schema("target", of_kind(kind)), &mut params).expect_err(refused);
+            let err = apply_schema(
+                &schema("target", of_kind(kind.clone())),
+                supplied("target", json!(refused)),
+            )
+            .expect_err(refused);
             let ParamValidationError::Requirements { messages } = err else {
                 panic!("{refused}: expected a requirement failure, got {err:?}");
             };
@@ -419,10 +513,12 @@ mod tests {
                 "{refused}: {messages:?}"
             );
 
-            let mut params = serde_json::Map::new();
-            params.insert("target".to_owned(), serde_json::json!(accepted));
-            apply_schema(&schema("target", of_kind(kind)), &mut params).expect(accepted);
-            assert_eq!(params["target"], serde_json::json!(accepted));
+            let map = apply_schema(
+                &schema("target", of_kind(kind)),
+                supplied("target", json!(accepted)),
+            )
+            .expect(accepted);
+            assert_eq!(map.get("target"), Some(&json!(accepted)));
         }
     }
 }

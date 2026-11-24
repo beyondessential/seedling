@@ -119,7 +119,9 @@ impl ParamMap {
             map.insert(key.as_str().into(), value);
         }
         if let Some(key) = self.versions.keys().find(|k| !self.values.contains_key(*k)) {
-            return Err(format!("param {key:?} is recorded as a version but has no value"));
+            return Err(format!(
+                "param {key:?} is recorded as a version but has no value"
+            ));
         }
         Ok(map)
     }
@@ -128,7 +130,9 @@ impl ParamMap {
 // spec: OPS#persistence
 fn restore_version(key: &str, version: VersionType, value: &Value) -> Result<Dynamic, String> {
     let Value::String(text) = value else {
-        return Err(format!("param {key:?} is recorded as a version but is not text"));
+        return Err(format!(
+            "param {key:?} is recorded as a version but is not text"
+        ));
     };
     let restored = match version {
         VersionType::Version => Version::parse(text).map(Dynamic::from),
