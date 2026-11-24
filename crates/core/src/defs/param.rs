@@ -32,6 +32,10 @@ impl Param {
     // spec: PARAM#values
     fn effective_value(&self) -> Result<String, Box<EvalAltResult>> {
         if let Some(v) = &self.value {
+            // spec: SEC#redaction
+            if !crate::runtime::barrier::runtime::is_in_action_closure() {
+                crate::runtime::seeds::record_param_value(self.name.as_str(), v);
+            }
             return Ok(v.clone());
         }
         if let Some(default) = self

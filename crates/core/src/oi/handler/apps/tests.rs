@@ -1686,6 +1686,9 @@ fn an_env_value_containing_a_derived_value_is_null() {
         let web = app.deployment("web").image("docker.io/library/nginx:1.29");
         web.env("URL", "postgres://app:" + pw + "@db/app");
         web.env("RAW", "key=" + raw.to_string());
+        web.env("AUTH", "Basic " + std::encode_base64("admin:" + pw));
+        web.env("RAW_HEX", std::encode_hex(raw));
+        web.env("DIGEST", std::encode_hex(std::digest_sha256("plain")));
         web.env("PLAIN", "visible");
     "#;
     oi.call("/apps/create", json!({ "app": "demo", "script": script }))
@@ -1698,6 +1701,17 @@ fn an_env_value_containing_a_derived_value_is_null() {
         env["RAW"],
         json!(null),
         "a Blob's string form is withheld too: {env}"
+    );
+    assert_eq!(
+        env["AUTH"],
+        json!(null),
+        "a helper result computed from a derived value: {env}"
+    );
+    assert_eq!(env["RAW_HEX"], json!(null), "a Blob's hex: {env}");
+    assert_ne!(
+        env["DIGEST"],
+        json!(null),
+        "computed from nothing withheld: {env}"
     );
     assert_eq!(env["PLAIN"], json!("visible"));
 }

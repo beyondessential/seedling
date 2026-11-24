@@ -47,18 +47,21 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) | ACME renewal information, under [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md) |
 | [ACME Profiles Extension](https://datatracker.ietf.org/doc/draft-ietf-acme-profiles/) (Internet-Draft) | certificate profiles, under [TLS](runtime/tls/certificates.md) |
 | [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) | problem details in Canopy answers, under [TCAN](runtime/tls/canopy.md) |
-| [FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) | SHA-256, under [TRN](interface/transport.md), [DEFN](interface/definitions.md), [INFRA](runtime/infrastructure.md), [WEB](web/serving.md), [RND](language/random.md) |
-| [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104) | HMAC, under [RND](language/random.md) |
+| [FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) | SHA-256 and SHA-512, under [TRN](interface/transport.md), [DEFN](interface/definitions.md), [INFRA](runtime/infrastructure.md), [WEB](web/serving.md), [RND](language/random.md), [ENC](language/encoding.md) |
+| [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104) | HMAC, under [RND](language/random.md), [ENC](language/encoding.md) |
 | [RFC 8439](https://www.rfc-editor.org/rfc/rfc8439) | ChaCha20, under [RND](language/random.md) |
+| [RFC 7693](https://www.rfc-editor.org/rfc/rfc7693) | BLAKE2b, under [ENC](language/encoding.md) |
+| [BLAKE3 specification](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf) | BLAKE3, under [ENC](language/encoding.md) |
+| [A Future-Adaptable Password Scheme](https://www.usenix.org/legacy/events/usenix99/provos/provos.pdf) and [OpenBSD's crypt(3)](https://man.openbsd.org/crypt.3) | bcrypt password hashes, under [RND](language/random.md) |
 | [FIPS 186-5](https://csrc.nist.gov/pubs/fips/186-5/final) | ECDSA P-256, under [WEB](web/serving.md) |
-| [RFC 9106](https://www.rfc-editor.org/rfc/rfc9106) | Argon2 password hashes, under [WEB](web/serving.md) |
-| [PHC string format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md) | password hash encoding, under [WEB](web/serving.md) |
-| [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) | base64 and hex encodings, under [DEFN](interface/definitions.md), [TCAN](runtime/tls/canopy.md) |
+| [RFC 9106](https://www.rfc-editor.org/rfc/rfc9106) | Argon2 password hashes, under [WEB](web/serving.md), [RND](language/random.md) |
+| [PHC string format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md) | password hash encoding, under [WEB](web/serving.md), [RND](language/random.md) |
+| [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) | base64 and hex encodings, under [DEFN](interface/definitions.md), [TCAN](runtime/tls/canopy.md), [RND](language/random.md), [ENC](language/encoding.md) |
 | [RFC 1952](https://www.rfc-editor.org/rfc/rfc1952) | gzip, under [DEFN](interface/definitions.md) |
 | [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) | JSON, under [WIRE](interface/wire.md), [AUD](runtime/audit-log.md), [WEB](web/serving.md) |
 | [JSON Lines](https://jsonlines.org/) | the audit log format, under [AUD](runtime/audit-log.md) |
 | [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | timestamps, under [APPS](interface/apps.md), [EVT](interface/events.md), [FLTS](interface/faults.md), [FWD](interface/port-forwards.md), [IMGM](interface/images.md), [INGM](interface/site-ingresses.md), [LOG](interface/logs.md), [RLY](interface/canopy-relay.md), [SHL](interface/shells.md), [SVCM](interface/services.md), [TPL](interface/templates.md), [VOLM](interface/volumes.md), [WEB](web/serving.md) |
-| [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) | UUIDs, under [IDN](runtime/identity.md), [RND](language/random.md) |
+| [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) | UUIDs, under [IDN](runtime/identity.md), [RND](language/random.md), [ENC](language/encoding.md) |
 | [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) | HTTP semantics, under [HTTP](language/http-service.md), [ING](language/ingress.md), [PRX](runtime/proxy.md), [SITE](runtime/site-resources.md), [RLY](interface/canopy-relay.md), [WEB](web/serving.md) |
 | [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111) | HTTP caching, under [WEB](web/serving.md) |
 | [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) | HTTP/1.1, under [ING](language/ingress.md), [PRX](runtime/proxy.md), [RLY](interface/canopy-relay.md) |

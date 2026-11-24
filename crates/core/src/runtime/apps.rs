@@ -866,9 +866,28 @@ fn run_definition(
     limits: &crate::ScriptLimits,
 ) -> (App, Result<Vec<Rejection>, ScriptError>) {
     let frame = crate::runtime::seeds::AppSeedFrame::enter(seed);
-    let (mut app, result) = run_seeded_definition(name, bundle, params, validate, limits);
+    let (mut app, mut result) = run_seeded_definition(name, bundle, params, validate, limits);
     app.seed = Some(seed.clone());
-    let derived = frame.take_derived();
+    // spec: SEC#redaction
+    // A parameter's secret flag is settled only once the script has run, so
+    // the helper results computed from parameter values are withheld now.
+    let secret: std::collections::BTreeSet<String> = app
+        .def
+        .load()
+        .params
+        .iter()
+        .filter(|(_, def)| def.is_secret())
+        .map(|(name, _)| name.to_string())
+        .collect();
+    let derived = match frame.take_derived(|p| secret.contains(p), limits.max_derived_values) {
+        Ok(derived) => derived,
+        Err(e) => {
+            if result.is_ok() {
+                result = Err(ScriptError(e));
+            }
+            crate::runtime::seeds::DerivedValues::default()
+        }
+    };
     // Most definitions derive nothing, and their definition is left as it is.
     if !derived.is_empty() {
         app.def.rcu(|d| {

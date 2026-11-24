@@ -7,7 +7,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fmt,
     sync::{Arc, OnceLock},
 };
@@ -105,65 +105,215 @@ impl AppSeed {
 
 thread_local! {
     static DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PASSWORD_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static APP_SEED: RefCell<Option<AppSeed>> = const { RefCell::new(None) };
     static OPERATION_SEED: RefCell<Option<Seed>> = const { RefCell::new(None) };
     static DERIVED: RefCell<Option<DerivedValues>> = const { RefCell::new(None) };
+    static WITHHOLDING: RefCell<Option<Withholding>> = const { RefCell::new(None) };
 }
 
-/// The text forms of the values an evaluation derived from its app seed,
-/// which the runtime withholds wherever it withholds secret parameter values.
-///
-/// They are needed only to find them in other text, so each is held as its
-/// length and a keyed hash of its bytes: a fixed size however long the value,
-/// and nothing a value could be read back from. A hash that collides only
-/// withholds text that held no derived value. The set is shared by every copy
-/// of the definition that carries it.
-// spec: SEC#redaction
+/// Text forms held by length, each as a keyed hash of its bytes and a keyed
+/// hash of its rolling hash: a fixed size however long the value, and nothing
+/// a value could be read back from. A hash that collides only withholds text
+/// that held no such value.
 #[derive(Clone, Default)]
-pub struct DerivedValues(Arc<BTreeMap<usize, HashSet<u64>>>);
+struct Forms(BTreeMap<usize, Hashes>);
 
-/// The key the runtime hashes derived values under, drawn once per process.
-fn redaction_hasher() -> &'static SipHasher13 {
-    static HASHER: OnceLock<SipHasher13> = OnceLock::new();
-    HASHER.get_or_init(|| {
+#[derive(Clone, Default)]
+struct Hashes {
+    rolling: HashSet<u64>,
+    bytes: HashSet<u64>,
+}
+
+impl Forms {
+    fn insert(&mut self, form: &[u8]) {
+        if form.is_empty() {
+            return;
+        }
+        let keys = redaction_keys();
+        let hashes = self.0.entry(form.len()).or_default();
+        hashes.rolling.insert(keys.seal(keys.rolling(form)));
+        hashes.bytes.insert(keys.sip.hash(form));
+    }
+
+    fn extend(&mut self, other: Forms) {
+        for (len, hashes) in other.0 {
+            let ours = self.0.entry(len).or_default();
+            ours.rolling.extend(hashes.rolling);
+            ours.bytes.extend(hashes.bytes);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.0.values().map(|h| h.bytes.len()).sum()
+    }
+
+    /// Each length is one pass over `bytes`: the rolling hash moves along a
+    /// window at a time, and only a window it matches is hashed in full.
+    fn found_in(&self, bytes: &[u8]) -> bool {
+        let keys = redaction_keys();
+        self.0.iter().any(|(&len, hashes)| {
+            let Some(first) = bytes.get(..len) else {
+                return false;
+            };
+            let top = keys.power(len - 1);
+            let mut rolling = keys.rolling(first);
+            let mut start = 0;
+            loop {
+                if hashes.rolling.contains(&keys.seal(rolling))
+                    && hashes
+                        .bytes
+                        .contains(&keys.sip.hash(&bytes[start..start + len]))
+                {
+                    return true;
+                }
+                let Some(&next) = bytes.get(start + len) else {
+                    return false;
+                };
+                rolling = keys.slide(rolling, top, bytes[start], next);
+                start += 1;
+            }
+        })
+    }
+}
+
+/// The modulus of the rolling hash, the Mersenne prime 2^61 - 1.
+const ROLLING_MODULUS: u64 = (1 << 61) - 1;
+
+/// The keys the runtime hashes withheld values under, drawn once per process.
+struct RedactionKeys {
+    sip: SipHasher13,
+    /// The base of the rolling hash, a polynomial in it modulo
+    /// [`ROLLING_MODULUS`].
+    base: u64,
+}
+
+impl RedactionKeys {
+    fn rolling(&self, bytes: &[u8]) -> u64 {
+        bytes
+            .iter()
+            .fold(0, |h, &b| add_mod(mul_mod(h, self.base), digit(b)))
+    }
+
+    /// The base raised to `exp`, the weight of a window's first byte.
+    fn power(&self, exp: usize) -> u64 {
+        (0..exp).fold(1, |p, _| mul_mod(p, self.base))
+    }
+
+    /// The rolling hash of the window one byte on, dropping `out` from its
+    /// front, whose weight is `top`, and taking `next` on at its end.
+    fn slide(&self, rolling: u64, top: u64, out: u8, next: u8) -> u64 {
+        let dropped = add_mod(rolling, ROLLING_MODULUS - mul_mod(digit(out), top));
+        add_mod(mul_mod(dropped, self.base), digit(next))
+    }
+
+    /// A rolling hash under the keyed hash, so a short form cannot be read
+    /// back from it.
+    fn seal(&self, rolling: u64) -> u64 {
+        self.sip.hash(&rolling.to_le_bytes())
+    }
+}
+
+/// A byte's digit in the rolling hash, never zero, so leading zero bytes
+/// still count.
+fn digit(b: u8) -> u64 {
+    u64::from(b) + 1
+}
+
+/// `x` reduced once by the modulus: enough below twice the modulus.
+fn reduce(x: u64) -> u64 {
+    if x >= ROLLING_MODULUS {
+        x - ROLLING_MODULUS
+    } else {
+        x
+    }
+}
+
+fn add_mod(a: u64, b: u64) -> u64 {
+    reduce(a + b)
+}
+
+fn mul_mod(a: u64, b: u64) -> u64 {
+    let product = u128::from(a) * u128::from(b);
+    let low = u64::try_from(product & u128::from(ROLLING_MODULUS)).expect("61 bits");
+    let high = u64::try_from(product >> 61).expect("below 2^61 for reduced operands");
+    // Each part is at most the modulus, so the sum is at most twice it.
+    reduce(reduce(low + high))
+}
+
+fn redaction_keys() -> &'static RedactionKeys {
+    static KEYS: OnceLock<RedactionKeys> = OnceLock::new();
+    KEYS.get_or_init(|| {
         use rand::Rng;
         let mut rng = rand::rng();
-        SipHasher13::new_with_keys(rng.next_u64(), rng.next_u64())
+        RedactionKeys {
+            sip: SipHasher13::new_with_keys(rng.next_u64(), rng.next_u64()),
+            base: 256 + rng.next_u64() % (ROLLING_MODULUS - 256),
+        }
     })
 }
 
+/// The text forms of the values an evaluation derived from its app seed, and
+/// of the helper results it withholds as derived values, which the runtime
+/// withholds wherever it withholds secret parameter values.
+///
+/// They are needed only to find them in other text, so they are held as
+/// [`Forms`]. The set is shared by every copy of the definition that carries
+/// it.
+// spec: SEC#redaction
+#[derive(Clone, Default)]
+pub struct DerivedValues(Arc<Forms>);
+
 impl DerivedValues {
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.0.is_empty()
     }
 
     /// How many distinct forms are held.
     pub fn len(&self) -> usize {
-        self.0.values().map(HashSet::len).sum()
+        self.0.len()
     }
 
-    fn insert(&mut self, form: &str) {
-        if form.is_empty() {
-            return;
+    fn insert(&mut self, form: &[u8]) {
+        if !form.is_empty() {
+            Arc::make_mut(&mut self.0).insert(form);
         }
-        let hash = redaction_hasher().hash(form.as_bytes());
-        Arc::make_mut(&mut self.0)
-            .entry(form.len())
-            .or_default()
-            .insert(hash);
     }
 
     // spec: SEC#redaction
     /// Whether `text` contains any of the forms held.
     pub fn found_in(&self, text: &str) -> bool {
-        let hasher = redaction_hasher();
-        let bytes = text.as_bytes();
-        self.0.iter().any(|(len, hashes)| {
-            bytes
-                .windows(*len)
-                .any(|window| hashes.contains(&hasher.hash(window)))
-        })
+        self.found_in_bytes(text.as_bytes())
     }
+
+    /// Whether `bytes` contain any of the forms held.
+    pub fn found_in_bytes(&self, bytes: &[u8]) -> bool {
+        self.0.found_in(bytes)
+    }
+}
+
+/// What the helper results of one evaluation may have to be withheld for.
+///
+/// Whether a parameter is secret is settled only when the evaluation ends,
+/// since a script can declare its flag after reading its value, so a result
+/// computed from a parameter's value waits here until then.
+// spec: SEC#redaction
+#[derive(Default)]
+struct Withholding {
+    /// The stored values the script has read, by parameter.
+    params: BTreeMap<String, Forms>,
+    /// Results computed from those values, by the parameters they depend on,
+    /// with how many results each holds.
+    pending: BTreeMap<BTreeSet<String>, (Forms, usize)>,
+}
+
+/// Why a helper result may be withheld.
+pub enum Dependence {
+    /// An argument contains a derived value, so the result is withheld.
+    Derived,
+    /// An argument contains the value of one of these parameters, so the
+    /// result is withheld if any of them is secret when the evaluation ends.
+    Params(BTreeSet<String>),
 }
 
 impl fmt::Debug for DerivedValues {
@@ -178,7 +328,9 @@ impl fmt::Debug for DerivedValues {
 pub struct AppSeedFrame {
     previous_seed: Option<AppSeed>,
     previous_derived: Option<DerivedValues>,
+    previous_withholding: Option<Withholding>,
     previous_derivations: usize,
+    previous_password_hashes: usize,
 }
 
 impl AppSeedFrame {
@@ -186,18 +338,48 @@ impl AppSeedFrame {
         Self {
             previous_seed: APP_SEED.with(|s| s.replace(Some(seed.clone()))),
             previous_derived: DERIVED.with(|d| d.replace(Some(DerivedValues::default()))),
+            previous_withholding: WITHHOLDING.with(|w| w.replace(Some(Withholding::default()))),
             previous_derivations: DERIVATIONS.with(|c| c.replace(0)),
+            previous_password_hashes: PASSWORD_HASHES.with(|c| c.replace(0)),
         }
     }
 
-    /// Take the values derived from the app seed since the frame was entered.
-    pub fn take_derived(&self) -> DerivedValues {
-        DERIVED.with(|d| {
+    // spec: SEC#redaction
+    /// Take the values derived from the app seed since the frame was entered,
+    /// with every result computed from a parameter that `is_secret` now says
+    /// is secret.
+    // spec: LIM#limits
+    /// Each such result counts toward `limit`, 0 being no limit; an error
+    /// says the evaluation went beyond it.
+    pub fn take_derived(
+        &self,
+        is_secret: impl Fn(&str) -> bool,
+        limit: usize,
+    ) -> Result<DerivedValues, String> {
+        let mut derived = DERIVED.with(|d| {
             d.borrow_mut()
                 .as_mut()
                 .map(std::mem::take)
                 .unwrap_or_default()
-        })
+        });
+        let pending = WITHHOLDING.with(|w| {
+            w.borrow_mut()
+                .as_mut()
+                .map(|w| std::mem::take(&mut w.pending))
+                .unwrap_or_default()
+        });
+        for (params, (forms, results)) in pending {
+            if !params.iter().any(|p| is_secret(p)) {
+                continue;
+            }
+            for _ in 0..results {
+                if !count_derivation(limit) {
+                    return Err("Number of derived values too large".into());
+                }
+            }
+            Arc::make_mut(&mut derived.0).extend(forms);
+        }
+        Ok(derived)
     }
 }
 
@@ -205,7 +387,9 @@ impl Drop for AppSeedFrame {
     fn drop(&mut self) {
         APP_SEED.with(|s| *s.borrow_mut() = self.previous_seed.take());
         DERIVED.with(|d| *d.borrow_mut() = self.previous_derived.take());
+        WITHHOLDING.with(|w| *w.borrow_mut() = self.previous_withholding.take());
         DERIVATIONS.with(|c| c.set(self.previous_derivations));
+        PASSWORD_HASHES.with(|c| c.set(self.previous_password_hashes));
     }
 }
 
@@ -214,6 +398,7 @@ impl Drop for AppSeedFrame {
 pub struct OperationSeedFrame {
     previous: Option<Seed>,
     previous_derivations: usize,
+    previous_password_hashes: usize,
 }
 
 impl OperationSeedFrame {
@@ -221,6 +406,7 @@ impl OperationSeedFrame {
         Self {
             previous: OPERATION_SEED.with(|s| s.replace(Some(seed.clone()))),
             previous_derivations: DERIVATIONS.with(|c| c.replace(0)),
+            previous_password_hashes: PASSWORD_HASHES.with(|c| c.replace(0)),
         }
     }
 }
@@ -229,14 +415,14 @@ impl Drop for OperationSeedFrame {
     fn drop(&mut self) {
         OPERATION_SEED.with(|s| *s.borrow_mut() = self.previous.take());
         DERIVATIONS.with(|c| c.set(self.previous_derivations));
+        PASSWORD_HASHES.with(|c| c.set(self.previous_password_hashes));
     }
 }
 
-// spec: LIM#limits
-/// Count one more derivation in the current frame, saying whether it is
-/// within `limit`, 0 being no limit; one past it is not counted.
-pub fn count_derivation(limit: usize) -> bool {
-    DERIVATIONS.with(|c| {
+/// Count one more in `counter`, saying whether it is within `limit`, 0 being
+/// no limit; one past it is not counted.
+fn count(counter: &'static std::thread::LocalKey<std::cell::Cell<usize>>, limit: usize) -> bool {
+    counter.with(|c| {
         let n = c.get() + 1;
         let within = limit == 0 || n <= limit;
         if within {
@@ -244,6 +430,20 @@ pub fn count_derivation(limit: usize) -> bool {
         }
         within
     })
+}
+
+// spec: LIM#limits
+/// Count one more derived value in the current frame, saying whether it is
+/// within `limit`, 0 being no limit; one past it is not counted.
+pub fn count_derivation(limit: usize) -> bool {
+    count(&DERIVATIONS, limit)
+}
+
+// spec: LIM#limits
+/// Count one more password hash in the current frame, as
+/// [`count_derivation`] counts derived values.
+pub fn count_password_hash(limit: usize) -> bool {
+    count(&PASSWORD_HASHES, limit)
 }
 
 /// The seed installed for the static and validator contexts.
@@ -268,14 +468,94 @@ pub fn operation_seed() -> Result<Seed, String> {
 
 /// Record a value derived from the app seed, in each text form a script can
 /// turn it into.
-pub fn record_derived(forms: impl IntoIterator<Item = String>) {
+pub fn record_derived(forms: impl IntoIterator<Item = impl AsRef<[u8]>>) {
     DERIVED.with(|d| {
         if let Some(values) = d.borrow_mut().as_mut() {
             for form in forms {
-                values.insert(&form);
+                values.insert(form.as_ref());
             }
         }
     });
+}
+
+// spec: SEC#redaction
+/// Record a parameter's stored value as the script reads it, so a helper
+/// result computed from it can be withheld if the parameter is secret.
+pub fn record_param_value(name: &str, value: &str) {
+    WITHHOLDING.with(|w| {
+        if let Some(w) = w.borrow_mut().as_mut() {
+            w.params
+                .entry(name.to_owned())
+                .or_default()
+                .insert(value.as_bytes());
+        }
+    });
+}
+
+// spec: SEC#redaction
+/// What a helper result computed from `args` may be withheld for, if
+/// anything: an argument contains a withheld value when it holds a derived
+/// value, a parameter's value, or an earlier result computed from one.
+pub fn dependence(args: &[&[u8]]) -> Option<Dependence> {
+    let derived = DERIVED.with(|d| {
+        d.borrow()
+            .as_ref()
+            .is_some_and(|d| args.iter().any(|a| d.found_in_bytes(a)))
+    });
+    if derived {
+        return Some(Dependence::Derived);
+    }
+    let params = WITHHOLDING.with(|w| {
+        let w = w.borrow();
+        let Some(w) = w.as_ref() else {
+            return BTreeSet::new();
+        };
+        let found = |forms: &Forms| args.iter().any(|a| forms.found_in(a));
+        let mut params: BTreeSet<String> = w
+            .params
+            .iter()
+            .filter(|(_, forms)| found(forms))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for (names, (forms, _)) in &w.pending {
+            if found(forms) {
+                params.extend(names.iter().cloned());
+            }
+        }
+        params
+    });
+    (!params.is_empty()).then_some(Dependence::Params(params))
+}
+
+// spec: SEC#redaction
+/// Withhold a helper result, in each of its text `forms`, for `dependence`.
+// spec: LIM#limits
+/// A result withheld as a derived value counts toward `limit` at once; one
+/// waiting on a parameter's flag counts if it is withheld when the
+/// evaluation ends. Says whether the result is within the limit.
+pub fn withhold(
+    dependence: Dependence,
+    forms: impl IntoIterator<Item = impl AsRef<[u8]>>,
+    limit: usize,
+) -> bool {
+    match dependence {
+        Dependence::Derived => {
+            if !count_derivation(limit) {
+                return false;
+            }
+            record_derived(forms);
+        }
+        Dependence::Params(params) => WITHHOLDING.with(|w| {
+            if let Some(w) = w.borrow_mut().as_mut() {
+                let (held, results) = w.pending.entry(params).or_default();
+                for form in forms {
+                    held.insert(form.as_ref());
+                }
+                *results += 1;
+            }
+        }),
+    }
+    true
 }
 
 #[cfg(test)]

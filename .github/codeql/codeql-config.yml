@@ -1,0 +1,12 @@
+name: Seedling CodeQL config
+
+# Test-only code (#[cfg(test)] modules in their own files) and the fuzz harness
+# never ship, so alerts on them are noise. Inline #[cfg(test)] blocks inside
+# production files cannot be excluded by path and are still analysed.
+paths-ignore:
+  - "**/tests/**"
+  - "**/tests.rs"
+  - "**/*_tests.rs"
+  - "**/test_support.rs"
+  - crates/core/src/runtime/definition/fetch/testing.rs
+  - "crates/protocol/fuzz/**"
