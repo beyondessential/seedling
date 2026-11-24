@@ -500,26 +500,19 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     })?;
 
     // Names come from AppDef; values come from the params table. A value in
-    // secret storage is never returned: it is read only to find where else it
-    // shows, and the names of those params are what the listing keeps.
+    // secret storage is never read here, only the names of the params it
+    // holds.
     // spec: SEC#redaction
     let name_owned = params.app.clone();
-    let cipher = Arc::clone(&state.cipher);
-    let (plain_params, secret_params) = state
+    let (plain_params, secret_param_names) = state
         .db
         .call(move |db| {
             Ok::<_, rusqlite::Error>((
                 crate::runtime::apps::load_params_for_app(db, &name_owned)?,
-                crate::runtime::apps::secret_params::load_secret_params_for_app(
-                    db,
-                    &cipher,
-                    &name_owned,
-                )?,
+                crate::runtime::apps::secret_params::secret_param_names(db, &name_owned)?,
             ))
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to read params: {e}")))?;
-    let secret_param_names: std::collections::BTreeSet<String> =
-        secret_params.keys().cloned().collect();
 
     // Fetch all active faults for this app once, then split by level.
     let name_owned = params.app.clone();
@@ -566,6 +559,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     };
 
     let def = entry.app.def.load();
+    // spec: SEC#matching
+    let sensitive = super::params::current_sensitive(state, &params.app)?;
 
     // spec: APPS#gates
     let gate_standing = gate_surface::read(
@@ -599,11 +594,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             let mut obj = param_schema_entry_json(k.as_str(), schema);
             let is_set =
                 plain_params.contains_key(k.as_str()) || secret_param_names.contains(k.as_str());
+            // spec: APPS#parameters
             let value = if schema.is_secret() {
                 Value::Null
             } else {
                 plain_params
                     .get(k.as_str())
+                    .filter(|v| !sensitive.found_in(v))
                     .map(|v| Value::String(v.clone()))
                     .unwrap_or(Value::Null)
             };
@@ -618,7 +615,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // spec: SEC#redaction
     let unknown_params_json: Vec<Value> = plain_params
         .iter()
-        .map(|(k, v)| (k, Value::String(v.clone())))
+        .map(|(k, v)| {
+            if sensitive.found_in(v) {
+                (k, Value::Null)
+            } else {
+                (k, Value::String(v.clone()))
+            }
+        })
         .chain(secret_param_names.iter().map(|k| (k, Value::Null)))
         .filter(|(k, _)| !def.params.contains_key(k.as_str()))
         .collect::<BTreeMap<_, _>>()
@@ -798,27 +801,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             )
         })?;
 
-    // spec: APPS#redacted-values
-    // An environment value that contains the stored value of a parameter whose
-    // effective secret flag is true is reported as null.
-    let secret_values: Vec<&str> = def
-        .params
-        .iter()
-        .filter(|(_, schema)| schema.is_secret())
-        .flat_map(|(k, _)| {
-            plain_params
-                .get(k.as_str())
-                .or_else(|| secret_params.get(k.as_str()))
-        })
-        .map(String::as_str)
-        .filter(|v| !v.is_empty())
-        .collect();
-    super::appdef_json::redact_secret_env(&mut resources_json, |v| {
-        secret_values.iter().any(|s| v.contains(s))
-            // spec: SEC#redaction — and so does one containing a value the
-            // evaluation derived from the app seed.
-            || def.derived.found_in(v)
-    });
+    super::appdef_json::redact_def_strings(&mut resources_json, &sensitive);
 
     // Dynamic resources (created inside action closures, not in AppDef).
     // Returned as a separate top-level field so consumers can choose whether
@@ -1096,6 +1079,10 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
             .map(|e| e.app.def.load().params.clone())
             .unwrap_or_default()
     };
+    // spec: SEC#matching
+    // An entry is matched against the sensitive values current now, not
+    // those of when it was recorded.
+    let sensitive = super::params::current_sensitive(state, &params.app)?;
 
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let name_owned = params.app.clone();
@@ -1179,7 +1166,15 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                             .is_some_and(|d| d.is_secret());
                         let mut entry = serde_json::Map::new();
                         entry.insert("name".into(), json!(p.name));
-                        if is_secret || p.previous_value_redacted || p.new_value_redacted {
+                        let holds_sensitive = [&p.previous_value, &p.new_value]
+                            .into_iter()
+                            .flatten()
+                            .any(|v| sensitive.found_in(v));
+                        if is_secret
+                            || p.previous_value_redacted
+                            || p.new_value_redacted
+                            || holds_sensitive
+                        {
                             entry.insert("redacted".into(), json!(true));
                         } else {
                             entry.insert(
@@ -2036,15 +2031,14 @@ pub(crate) fn update_app(
     tracing::info!(app = %name, generation, "updated app");
     // spec: EVT#app-events
     // spec: SEC#generation-history
+    // spec: SEC#matching
+    let sensitive = super::params::current_sensitive(state, &params.app)?;
     ctx.events.app_updated(
         &params.app,
         generation,
         (previous_generation != 0).then_some(previous_generation),
         source.to_json(&bundle),
-        stored
-            .iter()
-            .map(super::params::StoredEdit::event_entry)
-            .collect(),
+        stored.iter().map(|e| e.event_entry(&sensitive)).collect(),
     );
     Ok(json!({ "generation": generation }))
 }

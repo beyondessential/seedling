@@ -87,6 +87,7 @@ fn barrier_satisfied_on_first_pass() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -134,6 +135,7 @@ fn barrier_suspends_then_resumes() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -165,6 +167,7 @@ fn barrier_suspends_then_resumes() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -213,6 +216,7 @@ fn sequential_barriers() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -243,6 +247,7 @@ fn sequential_barriers() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -273,6 +278,7 @@ fn sequential_barriers() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -333,6 +339,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -376,6 +383,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -430,6 +438,7 @@ fn barrier_deadline_zero_uses_the_state_default() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -458,6 +467,7 @@ fn barrier_deadline_zero_uses_the_state_default() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -511,6 +521,7 @@ fn replay_idempotency() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -541,6 +552,7 @@ fn replay_idempotency() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -605,6 +617,7 @@ fn rt_stop_acts_as_barrier() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -635,6 +648,7 @@ fn rt_stop_acts_as_barrier() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -687,6 +701,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -736,6 +751,7 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -788,6 +804,7 @@ fn warm_images_barrier_uses_image_oracle() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -836,6 +853,7 @@ fn warm_images_barrier_suspends_when_image_absent() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -905,6 +923,7 @@ fn terminated_eventually_never_times_out() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -956,6 +975,7 @@ fn terminated_eventually_never_times_out() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -1006,6 +1026,7 @@ fn cancel_aborts_with_cancelled_result() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -1087,6 +1108,7 @@ fn rt_stop_deadline_is_enforced() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -1118,6 +1140,7 @@ fn rt_stop_deadline_is_enforced() {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -1172,6 +1195,7 @@ fn run_pass_with_db(
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         scope,
     )
@@ -2318,6 +2342,7 @@ fn default_stop_deadline_of(declarations: &str, stopped: &str) -> Option<u64> {
             executor: None,
             exclusions: Default::default(),
             operation_seed: crate::runtime::seeds::Seed::for_tests(),
+            sensitive: crate::runtime::redact::Scope::empty(),
         },
         &mut scope,
     );
@@ -2385,6 +2410,7 @@ fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
                 executor: None,
                 exclusions: Default::default(),
                 operation_seed: crate::runtime::seeds::Seed::for_tests(),
+                sensitive: crate::runtime::redact::Scope::empty(),
             },
             &mut scope,
         )

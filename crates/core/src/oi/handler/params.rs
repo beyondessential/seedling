@@ -170,10 +170,18 @@ impl StoredEdit {
     // spec: SEC#generation-history
     // spec: SEC#redaction
     /// The entry an event carries for this edit: neither value if either
-    /// was, or is, held in secret storage, since the entry carries one
+    /// was, or is, held in secret storage, or holds one of the app's
+    /// `sensitive` values after the change, since the entry carries one
     /// redaction flag for both.
-    pub(crate) fn event_entry(&self) -> ParamChangeEntry {
-        if self.is_secret || self.previous_is_secret {
+    pub(crate) fn event_entry(
+        &self,
+        sensitive: &crate::runtime::redact::SensitiveValues,
+    ) -> ParamChangeEntry {
+        let holds_sensitive = [&self.edit.previous, &self.edit.new_value]
+            .into_iter()
+            .flatten()
+            .any(|v| sensitive.found_in(v));
+        if self.is_secret || self.previous_is_secret || holds_sensitive {
             ParamChangeEntry::redacted(self.edit.name.clone())
         } else {
             ParamChangeEntry::new(
@@ -229,6 +237,27 @@ pub(crate) fn load_current_values(
         .db
         .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
         .map_err(|e| OiError::internal(format!("db error: {e}")))
+}
+
+// spec: SEC#matching
+/// The sensitive values of `app` as they stand: the stored values of the
+/// parameters its running definition marks secret, and the values that
+/// definition derived. Read from storage rather than from the running
+/// definition, which holds the values it was evaluated with and not values
+/// stored since by a change it could not take.
+pub(crate) fn current_sensitive(
+    state: &OiState,
+    app: &AppName,
+) -> Result<crate::runtime::redact::SensitiveValues, OiError> {
+    let Some(def) = state
+        .registry
+        .read()
+        .get(app.as_str())
+        .map(|e| e.app.def.load_full())
+    else {
+        return Ok(Default::default());
+    };
+    Ok(def.sensitive(&load_current_values(state, app)?))
 }
 
 fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
@@ -417,9 +446,11 @@ pub(crate) fn set_params(
     super::images::reconcile_pins_post_update(state, app);
 
     // spec: PRM#parameter-changes
+    // spec: SEC#matching
+    let sensitive = current_sensitive(state, app)?;
     ctx.events.params_changed(
         app,
-        stored.iter().map(StoredEdit::event_entry).collect(),
+        stored.iter().map(|e| e.event_entry(&sensitive)).collect(),
         generation,
         previous_generation,
     );

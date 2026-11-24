@@ -367,9 +367,16 @@ impl ActionClosureGuard {
     }
 
     // spec: RND#seeds
-    /// Install the seed the closure's derivation helpers derive from.
-    pub fn with_operation_seed(mut self, seed: &crate::runtime::seeds::Seed) -> Self {
-        self.operation_seed = Some(crate::runtime::seeds::OperationSeedFrame::enter(seed));
+    /// Install the seed the closure's derivation helpers derive from, and the
+    /// scope that records what they derive.
+    pub fn with_operation_seed(
+        mut self,
+        seed: &crate::runtime::seeds::Seed,
+        sensitive: &crate::runtime::redact::Scope,
+    ) -> Self {
+        self.operation_seed = Some(crate::runtime::seeds::OperationSeedFrame::enter(
+            seed, sensitive,
+        ));
         self
     }
 

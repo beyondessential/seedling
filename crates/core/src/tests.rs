@@ -156,6 +156,7 @@ pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
         executor: hooks.executor,
         exclusions: Default::default(),
         operation_seed: crate::runtime::seeds::Seed::for_tests(),
+        sensitive: crate::runtime::redact::Scope::empty(),
     }
 }
 

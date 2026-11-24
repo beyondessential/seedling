@@ -27,10 +27,8 @@ use crate::defs::param_def::ParamDef;
 use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
 use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
+use crate::runtime::redact::{REDACTED, SensitiveValues};
 use crate::runtime::secrets::Cipher;
-
-/// What the journal shows in place of a secret param's value.
-const REDACTED: &str = "<redacted>";
 
 type Schema = BTreeMap<ParamName, ParamDef>;
 
@@ -174,7 +172,9 @@ fn resolve_call_params(
             Ok(Some(entry)) => {
                 let cipher = g.cipher.clone();
                 drop(g);
-                return recover_recorded_params(action_name, &entry, cipher.as_deref());
+                let params = recover_recorded_params(action_name, &entry, cipher.as_deref())?;
+                hold_secret_params(schema.as_ref(), &params);
+                return Ok(params);
             }
             Ok(None) => {}
             Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
@@ -182,12 +182,19 @@ fn resolve_call_params(
     }
 
     let validated = validate_call_params(rt, schema.as_ref(), params)?;
+    hold_secret_params(schema.as_ref(), &validated);
 
     let SplitParams {
         plain,
         secret,
         journal,
-    } = split_secret_params(schema.as_ref(), &validated);
+    } = split_secret_params(
+        schema.as_ref(),
+        &validated,
+        &crate::runtime::seeds::operation_scope()
+            .map(|scope| scope.values())
+            .unwrap_or_default(),
+    );
 
     let mut g = ctx.lock();
     let idx = g.call_index;
@@ -328,33 +335,67 @@ fn recover_recorded_params(
     Ok(params)
 }
 
+// spec: SEC#matching
+/// Hold the values of the called action's secret params, supplied or
+/// defaulted, as sensitive values of the running operation.
+fn hold_secret_params(schema: Option<&Schema>, params: &JsonMap<String, JsonValue>) {
+    let (Some(schema), Some(scope)) = (schema, crate::runtime::seeds::operation_scope()) else {
+        return;
+    };
+    scope.insert_secret_params(params, |name| {
+        schema.get(name).is_some_and(ParamDef::is_secret)
+    });
+}
+
 /// A call's validated params, divided for recording.
 struct SplitParams {
     /// The params recorded readable in the log entry.
     plain: JsonMap<String, JsonValue>,
-    /// The secret params, recorded encrypted.
+    /// The params recorded encrypted: the secret ones, and those whose value
+    /// contains a sensitive value.
     secret: JsonMap<String, JsonValue>,
-    /// Every param, with each secret one's value redacted, for the journal.
+    /// Every param, with each secret one's value redacted and each sensitive
+    /// value another holds masked, for the journal.
     journal: JsonMap<String, JsonValue>,
+}
+
+/// A param value as text to match: a string as it is, and any other value as
+/// its JSON text.
+fn param_text(value: &JsonValue) -> std::borrow::Cow<'_, str> {
+    match value {
+        JsonValue::String(s) => std::borrow::Cow::Borrowed(s),
+        other => std::borrow::Cow::Owned(other.to_string()),
+    }
 }
 
 // spec: SEC#storage
 // spec: SEC#redaction
+// spec: HIST#action-calls
 fn split_secret_params(
     schema: Option<&Schema>,
     validated: &JsonMap<String, JsonValue>,
+    sensitive: &SensitiveValues,
 ) -> SplitParams {
-    let mut plain = validated.clone();
+    let mut plain = JsonMap::new();
     let mut secret = JsonMap::new();
-    let mut journal = validated.clone();
-    for (name, _) in schema
-        .into_iter()
-        .flatten()
-        .filter(|(_, def)| def.is_secret())
-    {
-        if let Some(value) = plain.remove(name.as_str()) {
-            secret.insert(name.as_str().to_owned(), value);
-            journal.insert(name.as_str().to_owned(), JsonValue::from(REDACTED));
+    let mut journal = JsonMap::new();
+    for (name, value) in validated {
+        let is_secret = schema
+            .and_then(|schema| schema.get(name.as_str()))
+            .is_some_and(ParamDef::is_secret);
+        let text = param_text(value);
+        if is_secret {
+            secret.insert(name.clone(), value.clone());
+            journal.insert(name.clone(), JsonValue::from(REDACTED));
+        } else if sensitive.found_in(&text) {
+            secret.insert(name.clone(), value.clone());
+            journal.insert(
+                name.clone(),
+                JsonValue::from(sensitive.mask(&text).into_owned()),
+            );
+        } else {
+            plain.insert(name.clone(), value.clone());
+            journal.insert(name.clone(), value.clone());
         }
     }
     SplitParams {
@@ -512,10 +553,32 @@ mod tests {
         }))
         .unwrap();
 
-        let split = split_secret_params(Some(&schema), &validated);
+        let split = split_secret_params(Some(&schema), &validated, &SensitiveValues::default());
         assert_eq!(split.journal["token"], REDACTED);
         assert_eq!(split.journal["label"], "plain-label");
         assert_eq!(split.secret["token"], "s3cret-value");
         assert!(!split.plain.contains_key("token"));
+    }
+
+    // spec: HIST#action-calls
+    #[test]
+    fn a_plain_param_holding_a_sensitive_value_is_sealed_and_masked() {
+        let validated: JsonMap<String, JsonValue> = serde_json::from_value(serde_json::json!({
+            "url": "postgres://app:hunter2@db/app",
+            "port": 5432,
+            "label": "plain-label",
+        }))
+        .unwrap();
+        let mut sensitive = SensitiveValues::default();
+        sensitive.insert("hunter2");
+        sensitive.insert("5432");
+
+        let split = split_secret_params(None, &validated, &sensitive);
+        assert_eq!(split.secret["url"], "postgres://app:hunter2@db/app");
+        assert_eq!(split.secret["port"], 5432);
+        assert_eq!(split.journal["url"], "postgres://app:<redacted>@db/app");
+        assert_eq!(split.journal["port"], REDACTED);
+        assert_eq!(split.plain.keys().collect::<Vec<_>>(), ["label"]);
+        assert_eq!(split.journal["label"], "plain-label");
     }
 }

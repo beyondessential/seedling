@@ -882,7 +882,7 @@ fn run_definition(
             if result.is_ok() {
                 result = Err(ScriptError(e));
             }
-            crate::runtime::seeds::DerivedValues::default()
+            crate::runtime::redact::SensitiveValues::default()
         }
     };
     // Most definitions derive nothing, and their definition is left as it is.
@@ -893,6 +893,24 @@ fn run_definition(
             d
         });
     }
+    // spec: SEC#withheld-values
+    // What the script threw, or a validator rejected with, may quote any
+    // value it could read: the app's sensitive values as this evaluation
+    // sees them, and those of the proposed values it validated.
+    let mut sensitive = app.sensitive();
+    if let Some(proposed) = validate {
+        sensitive.extend(&app.def.load().sensitive(proposed));
+    }
+    let result = match result {
+        Ok(rejections) => Ok(rejections
+            .into_iter()
+            .map(|r| Rejection {
+                reason: sensitive.mask(&r.reason).into_owned(),
+                ..r
+            })
+            .collect()),
+        Err(ScriptError(e)) => Err(ScriptError(sensitive.mask(&e).into_owned())),
+    };
     (app, result)
 }
 

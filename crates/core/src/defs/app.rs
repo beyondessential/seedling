@@ -478,7 +478,28 @@ pub struct AppDef {
     pub gates: BTreeMap<GateName, GateDef>,
     /// Values the evaluation derived from the app seed, withheld wherever
     /// secret parameter values are.
-    pub derived: crate::runtime::seeds::DerivedValues,
+    pub derived: crate::runtime::redact::SensitiveValues,
+}
+
+impl AppDef {
+    // spec: SEC#matching
+    /// The sensitive values of an app with this definition and `stored`
+    /// parameter values: the stored values of the parameters it marks secret,
+    /// and the values its evaluation derived.
+    pub fn sensitive(
+        &self,
+        stored: &BTreeMap<String, String>,
+    ) -> crate::runtime::redact::SensitiveValues {
+        let mut values = self.derived.clone();
+        for (name, schema) in &self.params {
+            if schema.is_secret()
+                && let Some(value) = stored.get(name.as_str())
+            {
+                values.insert(value);
+            }
+        }
+        values
+    }
 }
 
 fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAltResult>> {
@@ -596,6 +617,13 @@ impl App {
     /// Take the selections the script gave this app's gates, leaving none.
     pub(crate) fn take_gate_selections(&self) -> BTreeMap<GateName, Collection> {
         take_gate_selections(self.evaluation)
+    }
+
+    // spec: SEC#matching
+    /// The app's own sensitive values: the stored values of the parameters
+    /// its definition marks secret, and the values its evaluation derived.
+    pub fn sensitive(&self) -> crate::runtime::redact::SensitiveValues {
+        self.def.load().sensitive(&self.stored.lock())
     }
 
     /// Guard the evaluation this app is declared by, releasing the

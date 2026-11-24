@@ -46,18 +46,28 @@ pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
 ///
 /// Callers building a richer view (/apps/show) augment the returned object
 /// with live `instances`, `faults`, `stopped`, and a `scale.current`.
-/// Report as null each environment value, in the described resources, that
-/// `withheld` says holds a value to withhold.
+/// Report as null each string in the described resources' `def` that holds
+/// a sensitive value: every object member's value and every array element,
+/// at any depth, whatever the member.
 // spec: APPS#redacted-values
-pub(crate) fn redact_secret_env(resources: &mut [Value], withheld: impl Fn(&str) -> bool) {
+pub(crate) fn redact_def_strings(
+    resources: &mut [Value],
+    sensitive: &crate::runtime::redact::SensitiveValues,
+) {
+    fn walk(value: &mut Value, sensitive: &crate::runtime::redact::SensitiveValues) {
+        match value {
+            Value::String(s) if sensitive.found_in(s) => *value = Value::Null,
+            Value::Array(items) => items.iter_mut().for_each(|v| walk(v, sensitive)),
+            Value::Object(members) => members.values_mut().for_each(|v| walk(v, sensitive)),
+            _ => {}
+        }
+    }
+    if sensitive.is_empty() {
+        return;
+    }
     for resource in resources {
-        let Some(Value::Object(env)) = resource.pointer_mut("/def/container/env") else {
-            continue;
-        };
-        for value in env.values_mut() {
-            if value.as_str().is_some_and(&withheld) {
-                *value = Value::Null;
-            }
+        if let Some(def) = resource.get_mut("def") {
+            walk(def, sensitive);
         }
     }
 }

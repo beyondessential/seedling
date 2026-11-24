@@ -738,6 +738,17 @@ pub(super) async fn run_app_shell(
                 return ScriptEnd::Failed("no seed could be drawn for the session".into());
             }
         };
+        // spec: SEC#matching
+        let sensitive = crate::runtime::redact::Scope::new(app.sensitive());
+        {
+            let def = app.def.load();
+            let schema = def.shells.get(&shell_name_for_task).map(|s| &s.params);
+            sensitive.insert_secret_params(&validated_params, |name| {
+                schema
+                    .and_then(|schema| schema.get(name))
+                    .is_some_and(|p| p.is_secret())
+            });
+        }
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,
@@ -778,6 +789,7 @@ pub(super) async fn run_app_shell(
                     app: &app,
                     subject: Subject::Shell(shell_name_for_task.as_str()),
                     operation_seed: operation_seed.clone(),
+                    sensitive: sensitive.clone(),
                     log: &log,
                     world: Arc::clone(&world),
                     registry: Arc::clone(&registry),
@@ -804,11 +816,13 @@ pub(super) async fn run_app_shell(
             match result {
                 OperationResult::Completed => break ScriptEnd::Completed,
                 OperationResult::Failed(e) => {
+                    // spec: SEC#withheld-values
+                    let why = sensitive.values().mask(&e.to_string()).into_owned();
                     tracing::error!(
                         app = %app_name_for_task, shell = %shell_name_for_task,
-                        "shell closure failed: {e}"
+                        "shell closure failed: {why}"
                     );
-                    break ScriptEnd::Failed(format!("the shell's script failed: {e}"));
+                    break ScriptEnd::Failed(format!("the shell's script failed: {why}"));
                 }
                 // spec: OPS#cancellation
                 OperationResult::Cancelled => break ScriptEnd::Cancelled,
