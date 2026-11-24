@@ -80,6 +80,7 @@ mod templates;
 mod tls;
 mod volumes;
 
+pub(crate) use params::current_sensitive;
 pub(crate) use status::get_infra_status;
 
 /// Context derived from an incoming OI request, passed through dispatch.

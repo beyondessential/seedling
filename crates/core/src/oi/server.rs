@@ -545,7 +545,7 @@ async fn handle_bidi_stream(
             }
         };
 
-        tokio::spawn(super::logs::log_stream_task(uni, rx));
+        tokio::spawn(super::logs::log_stream_task(Arc::clone(&state), uni, rx));
         return;
     }
 
