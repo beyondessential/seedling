@@ -135,6 +135,8 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `password` | none | a strong password | the value |
 | `weak-password` | none | a password of any strength | the value |
 | `random` | none | free-form text, usually a generated random value | the value |
+| `version` | none | a version of any scheme | a `Version`, as [generic versions](version.md#generic-versions) specify |
+| `version-semver` | none | a [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version | a `SemVer`, as [SemVer versions](version.md#semver-versions) specify |
 | `boolean` | none | `true` or `false` | the value as a boolean |
 | `integer` | `range`, optional | a whole number, within `range` where one is given | the value as an integer |
 | `choice` | `options`, required | one of `options` | the value |
@@ -199,7 +201,7 @@ Where `std::parse_integer` rejects an integer for falling outside `range`, its e
 
 ### Presentation of kinds
 
-A presentation layer SHOULD offer a single-line input for a `text` param, and a multi-line input for a `multiline` param.
+A presentation layer SHOULD offer a single-line input for a `text`, `version` or `version-semver` param, and a multi-line input for a `multiline` param.
 A presentation layer SHOULD offer a toggle for a `boolean` param, a numeric input limited to `range` for an `integer` param, and a selection among `options`, in the order the script declared them, for a `choice` param.
 A presentation layer MUST let an operator leave a param that is not required without a value, whatever its kind.
 A presentation layer MAY warn about an `email` value that is valid but unlikely to be meant, such as `" "@example.org`.

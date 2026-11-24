@@ -1020,6 +1020,61 @@ fn a_value_its_kind_refuses_is_not_stored() {
 }
 
 // spec: PARAM#kind-checks
+// spec: VER#generic-versions
+// spec: VER#semver-versions
+#[test]
+fn a_version_its_kind_refuses_is_not_stored() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("base").kind("version").required(false);
+                app.param("release").kind("version-semver").required(false);
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    for (param, value, reason) in [
+        (
+            "base",
+            "latest",
+            "base: \"latest\" is not a version: it holds no digit",
+        ),
+        (
+            "release",
+            "2.71",
+            "release: \"2.71\" is not a SemVer version",
+        ),
+    ] {
+        let (code, message) = oi
+            .call(
+                "/apps/params/set",
+                json!({ "app": "demo", "params": { param: value } }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "validation_failed", "{value}: {message}");
+        assert!(message.contains(reason), "{value}: {message}");
+    }
+    assert_eq!(stored_values(&oi), vec![]);
+
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "base": "16.4", "release": "v2.71.3" } }),
+    )
+    .unwrap();
+    assert_eq!(
+        stored_values(&oi),
+        vec![
+            ("base".to_owned(), "16.4".to_owned()),
+            ("release".to_owned(), "v2.71.3".to_owned()),
+        ]
+    );
+}
+
+// spec: PARAM#kind-checks
 #[test]
 fn a_validator_never_sees_a_value_its_kind_refuses() {
     let oi = oi_with_contact_app(r#".validate(|v, all| { throw "the validator ran"; })"#);

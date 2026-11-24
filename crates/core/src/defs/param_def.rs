@@ -2,6 +2,8 @@ use seedling_protocol::names::SiteVolumeName;
 use strum::VariantArray;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
+use super::version::{SemVer, Version};
+
 // spec: ACN#param-schemas
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamDef {
@@ -41,6 +43,10 @@ pub enum ParamKind {
     WeakPassword,
     // spec: ACN#param-kinds
     Random,
+    // spec: ACN#param-kinds
+    Version,
+    // spec: ACN#param-kinds
+    VersionSemver,
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -83,6 +89,8 @@ impl ParamKind {
                     return Err("password is too weak".to_owned());
                 }
             }
+            Self::Version => return Version::parse(value).map(ParsedValue::Version),
+            Self::VersionSemver => return SemVer::parse(value).map(ParsedValue::SemVer),
             // spec: ACN#kind-parsers
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|e| e.to_string())?;
@@ -104,6 +112,8 @@ impl ParamKind {
             Self::Password => "password",
             Self::WeakPassword => "weak-password",
             Self::Random => "random",
+            Self::Version => "version",
+            Self::VersionSemver => "version-semver",
             Self::Volume => "volume",
         }
     }
@@ -120,6 +130,8 @@ impl std::str::FromStr for ParamKind {
             "password" => Ok(Self::Password),
             "weak-password" => Ok(Self::WeakPassword),
             "random" => Ok(Self::Random),
+            "version" => Ok(Self::Version),
+            "version-semver" => Ok(Self::VersionSemver),
             "volume" => Ok(Self::Volume),
             _ => Err(()),
         }
@@ -135,6 +147,8 @@ pub enum ParsedValue {
         local: String,
         domain: String,
     },
+    Version(Version),
+    SemVer(SemVer),
 }
 
 // spec: ACN#kind-parsers

@@ -56,6 +56,16 @@ describe("ParamFields", () => {
     expect((screen.getByText("submit") as HTMLButtonElement).disabled).toBe(false);
   });
 
+  // spec: ACN#presentation-of-kinds
+  it("offers a single-line text input for a version param", () => {
+    for (const kind of ["version", "version-semver"]) {
+      const { unmount } = renderWithSession(<Form entries={[["tag", def({ kind })]] as ParamEntries} />);
+      const input = screen.getByLabelText(/tag/, { selector: "input" }) as HTMLInputElement;
+      expect(input.type).toBe("text");
+      unmount();
+    }
+  });
+
   // spec: ACN#volume-params
   it("offers site volumes for a volume param", async () => {
     renderWithSession(<Form entries={[["data", def({ kind: "volume" })]] as ParamEntries} />, {
