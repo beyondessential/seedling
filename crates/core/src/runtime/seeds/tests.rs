@@ -56,11 +56,11 @@ fn a_nested_frame_restores_its_callers() {
         let inner = AppSeedFrame::enter(&AppSeed::Ready(Seed::from_bytes([2; SEED_LEN])));
         record_derived(["inner".to_owned()]);
         assert_eq!(app_seed().unwrap().expose(), &[2; SEED_LEN]);
-        let inner = inner.take_derived();
+        let inner = inner.take_derived(|_| false, 0).unwrap();
         assert!(inner.found_in("inner") && !inner.found_in("outer"));
     }
     assert_eq!(app_seed().unwrap().expose(), outer.expose());
-    let outer = _outer.take_derived();
+    let outer = _outer.take_derived(|_| false, 0).unwrap();
     assert!(outer.found_in("outer") && !outer.found_in("inner"));
 }
 
@@ -70,5 +70,5 @@ fn a_form_derived_twice_is_recorded_once() {
     let frame = AppSeedFrame::enter(&AppSeed::for_tests());
     record_derived(["same".to_owned(), "same".to_owned()]);
     record_derived(["same".to_owned()]);
-    assert_eq!(frame.take_derived().len(), 1);
+    assert_eq!(frame.take_derived(|_| false, 0).unwrap().len(), 1);
 }
