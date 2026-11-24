@@ -141,22 +141,28 @@ fn describe(error: ParseError) -> String {
     }
 }
 
-/// The entries of a `checksum` qualifier the `purl` crate has validated and
-/// normalised, each checked to name an algorithm and hold digits.
+/// The entries of a `checksum` qualifier the `purl` crate has validated, each
+/// checked to name an algorithm and hold digits, in lower case and in the
+/// byte order of their algorithm names.
 // spec: PURL#accepted-values
 // spec: PURL#components
 fn checksums(value: &str) -> Result<Vec<String>, String> {
-    value
+    let mut entries = value
         .split(',')
         .map(|entry| match entry.rsplit_once(':') {
             Some((algorithm, digits)) if !algorithm.is_empty() && !digits.is_empty() => {
-                Ok(entry.to_owned())
+                Ok((algorithm.to_ascii_lowercase(), digits.to_ascii_lowercase()))
             }
             _ => Err(format!(
                 "the {CHECKSUM} entry {entry:?} does not name an algorithm and hold its digits"
             )),
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort();
+    Ok(entries
+        .into_iter()
+        .map(|(algorithm, digits)| format!("{algorithm}:{digits}"))
+        .collect())
 }
 
 // spec: PURL#accepted-values

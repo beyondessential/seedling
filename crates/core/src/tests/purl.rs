@@ -284,3 +284,18 @@ fn a_script_reads_components_as_properties() {
         parse("pkg:cargo/serde")
     )));
 }
+
+// spec: PURL#components
+#[test]
+fn checksums_sort_by_their_algorithm_names() {
+    let map = components("pkg:npm/foo?checksum=SHA1:AA,sha:bb,md5:CC");
+    let qualifiers = map["qualifiers"].clone().try_cast::<rhai::Map>().unwrap();
+    let checksums: Vec<String> = qualifiers["checksum"]
+        .clone()
+        .into_array()
+        .expect("checksum is an array")
+        .into_iter()
+        .map(|entry| entry.into_string().expect("each entry is a string"))
+        .collect();
+    assert_eq!(checksums, ["md5:cc", "sha:bb", "sha1:aa"]);
+}
