@@ -378,9 +378,9 @@ pub fn is_identifier(member: &str) -> bool {
 }
 
 // spec: SEC#responses-and-events
-/// Mask, in place, each string and member name in `document` that contains a
-/// sensitive value of the app it concerns, other than an identifier, and
-/// replace each number or boolean that contains one with its masked text. `app` is the app the
+/// Mask, in place, each string in `document` that contains a sensitive value
+/// of the app it concerns, other than an identifier, and replace each number
+/// or boolean that contains one with its masked text. `app` is the app the
 /// whole concerns, if any; an object with an `app` member concerns that app
 /// instead. `values_for` gives an app's sensitive values.
 pub fn mask_document<E>(
@@ -408,15 +408,6 @@ pub fn mask_document<E>(
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             let app = named.as_deref().or(app);
-            if let Some(app) = app {
-                let values = values_for(app)?;
-                if members.keys().any(|k| values.found_in(k)) {
-                    *members = std::mem::take(members)
-                        .into_iter()
-                        .map(|(k, v)| (values.mask(&k).into_owned(), v))
-                        .collect();
-                }
-            }
             for (member, value) in members.iter_mut() {
                 if !is_identifier(member) {
                     mask_document(value, app, values_for)?;
