@@ -40,5 +40,5 @@ Adds the `[metadata]` table to the bundle's metadata file, readable by scripts t
 
 ## Docs
 
-- [ ] `docs/bsl-scripting.md`: add `[metadata]` to the `seedling.toml` section, with an example defaulting a version parameter from `app.metadata().version`
-- [ ] `docs/deploying.md`: show a definition publishing `metadata.version`, and that `--set version=…` is then needed only to deploy a release other than the one the definition was published for
+- [x] `docs/bsl-scripting.md`: add `[metadata]` to the `seedling.toml` section, with an example defaulting a version parameter from `app.metadata().version`
+- [x] `docs/deploying.md`: show a definition publishing `metadata.version`, and that `--set version=…` is then needed only to deploy a release other than the one the definition was published for

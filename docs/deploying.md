@@ -157,6 +157,12 @@ seedling-ctl apps plan tamanu --ref ghcr.io/<org>/tamanu-definition:2.13.0 --par
 seedling-ctl apps update tamanu --ref ghcr.io/<org>/tamanu-definition:2.13.0 --set version=2.13.0
 ```
 
+A definition that records the release it was published for in its
+`seedling.toml` (`[metadata]` `version = "2.13.0"`) can default its version
+parameter to it (see [BSL scripting](bsl-scripting.md#definition-bundles)), so
+`--ref` alone upgrades both, and `--set version=…` is needed only to run a
+different release.
+
 An update that fails to fetch, breaks the bundle rules, fails to evaluate, or
 is rejected by a parameter validator is refused, and the app keeps running
 what it had. `seedling-ctl apps export tamanu ./out [--generation N]` writes
