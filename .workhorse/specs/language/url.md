@@ -61,6 +61,7 @@ The `username` and `password` a parsed URL carries MUST be the URL's username an
 
 The `port` a parsed URL carries MUST be the URL's port, as an integer, where it gives one, and otherwise the [default port](https://url.spec.whatwg.org/#default-port) of its scheme.
 Where the URL gives no port and its scheme has no default port, its result carries no `port`.
+`std::parse_url` MUST reject a URL whose port is 0, as the [port rules](overview.md#ports) require.
 
 > [!NOTE]
 > Only the URL Standard's special schemes have a default port: `http` and `ws` 80, `https` and `wss` 443, and `ftp` 21.
