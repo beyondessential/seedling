@@ -276,32 +276,142 @@ fn a_file_and_a_folder_of_the_same_name_conflict() {
 
 // spec: DEFN#provenance-reporting
 #[test]
-fn the_requirement_is_readable_without_rebuilding_the_bundle() {
+fn the_declarations_are_readable_without_rebuilding_the_bundle() {
+    let meta: &[u8] = b"seedling = \">=0.12\"\n[metadata]\nversion = \"2.71.4\"";
     let cases: &[&[(&str, &[u8])]] = &[
-        &[
-            ("app.seed.rhai", b"x"),
-            ("seedling.toml", b"seedling = \">=0.12\""),
-        ],
+        &[("app.seed.rhai", b"x"), ("seedling.toml", meta)],
         // A path sorting after the metadata file, and one before it.
         &[
             ("aaa.txt", b"a"),
-            ("seedling.toml", b"seedling = \">=0.12\""),
+            ("app.seed.rhai", b"x"),
+            ("seedling.toml", meta),
             ("zzz.txt", b"z"),
         ],
     ];
     for files_in in cases {
         let b = Bundle::from_files(files(files_in)).unwrap();
-        let read = Bundle::requirement_of_canonical(&b.canonical_bytes()).unwrap();
-        assert_eq!(
-            read.as_ref().map(|r| r.as_str()),
-            b.seedling_versions().map(|r| r.as_str())
-        );
+        let read = Bundle::declared_of_canonical(&b.canonical_bytes()).unwrap();
+        assert_eq!(read.seedling_versions.as_ref(), b.seedling_versions());
+        assert_eq!(&read.metadata, b.metadata().unwrap());
+        assert_eq!(read.metadata["version"], "2.71.4");
     }
     let none = Bundle::from_files(files(&[("app.seed.rhai", b"x"), ("zzz.txt", b"z")])).unwrap();
-    assert!(
-        Bundle::requirement_of_canonical(&none.canonical_bytes())
-            .unwrap()
-            .is_none()
+    assert_eq!(
+        Bundle::declared_of_canonical(&none.canonical_bytes()).unwrap(),
+        Declared::default()
     );
-    assert!(Bundle::requirement_of_canonical(b"not a bundle").is_err());
+    assert!(Bundle::declared_of_canonical(b"not a bundle").is_err());
+}
+
+// spec: BND#metadata-table
+#[test]
+fn a_bundle_without_a_metadata_table_has_an_empty_one() {
+    let bare = Bundle::from_script("x").unwrap();
+    assert!(bare.metadata().unwrap().is_empty());
+    let no_field = Bundle::from_files(files(&[
+        ("seedling.toml", b"seedling = \">=0.12\""),
+        ("app.seed.rhai", b"x"),
+    ]))
+    .unwrap();
+    assert!(no_field.metadata().unwrap().is_empty());
+}
+
+// spec: BND#metadata-table
+#[test]
+fn metadata_values_convert_by_type() {
+    let b = Bundle::from_files(files(&[
+        (
+            "seedling.toml",
+            br#"
+[metadata]
+string = "2.71.4"
+integer = -7
+float = 1.5
+whole_float = 2.0
+boolean = true
+offset_datetime = 1979-05-27 07:32:00.5-07:00
+local_datetime = 1979-05-27T07:32:00
+local_date = 1979-05-27
+local_time = 07:32:00
+array = [1, "two", [3.0]]
+table = { nested = { deep = false } }
+"#,
+        ),
+        ("app.seed.rhai", b"x"),
+    ]))
+    .unwrap();
+    let expected = serde_json::json!({
+        "string": "2.71.4",
+        "integer": -7,
+        "float": 1.5,
+        "whole_float": 2.0,
+        "boolean": true,
+        "offset_datetime": "1979-05-27T07:32:00.5-07:00",
+        "local_datetime": "1979-05-27T07:32:00",
+        "local_date": "1979-05-27",
+        "local_time": "07:32:00",
+        "array": [1, "two", [3.0]],
+        "table": { "nested": { "deep": false } },
+    });
+    assert_eq!(Value::Object(b.metadata().unwrap().clone()), expected);
+    assert!(b.metadata().unwrap()["whole_float"].is_f64());
+    assert!(b.metadata().unwrap()["integer"].is_i64());
+}
+
+// spec: DEFN#bundle-rules
+// spec: BND#metadata-table
+#[test]
+fn unrepresentable_metadata_is_refused_by_where_it_sits() {
+    let cases: &[(&[u8], &str)] = &[
+        (b"metadata = 1", "`metadata` must be a table, got integer"),
+        (
+            b"metadata = \"1.2.3\"",
+            "`metadata` must be a table, got string",
+        ),
+        (b"[metadata]\nratio = inf", "`metadata.ratio`"),
+        (b"[metadata]\nratio = -inf", "`metadata.ratio`"),
+        (
+            b"[metadata.limits]\nlist = [1.0, nan]",
+            "`metadata.limits.list[1]`",
+        ),
+    ];
+    for (meta, needle) in cases {
+        let b = Bundle::from_files(files(&[("seedling.toml", meta), ("app.seed.rhai", b"")]))
+            .expect("the strict reading of metadata does not stop a bundle being held");
+        let m = match b.metadata() {
+            Err(BundleError::Invalid(m)) => m,
+            other => panic!("expected invalid metadata, got {other:?}"),
+        };
+        assert!(m.contains(needle), "{needle}: {m}");
+        assert!(b.script().is_err());
+    }
+}
+
+// spec: BND#metadata-table
+// spec: DEFN#provenance-reporting
+#[test]
+fn a_readable_table_survives_the_rest_of_the_metadata_breaking_the_rules() {
+    for meta in [
+        &b"future_field = true\n[metadata]\nversion = \"1.0\""[..],
+        b"script = [\"missing.rhai\"]\n[metadata]\nversion = \"1.0\"",
+    ] {
+        let b =
+            Bundle::from_files(files(&[("seedling.toml", meta), ("app.seed.rhai", b"")])).unwrap();
+        assert!(b.script().is_err());
+        assert_eq!(b.metadata().unwrap()["version"], "1.0");
+    }
+}
+
+// spec: DEFN#seedling-version-support
+#[test]
+fn an_unsupported_bundle_with_unreadable_metadata_is_reported_unsupported() {
+    let b = Bundle::from_files(files(&[
+        ("seedling.toml", b"seedling = \">=99\"\nmetadata = 1"),
+        ("app.seed.rhai", b""),
+    ]))
+    .expect("an unsupported bundle is still holdable");
+    assert!(matches!(
+        b.check_installable(&Version::new(0, 12, 0)),
+        Err(BundleError::Unsupported { .. })
+    ));
 }

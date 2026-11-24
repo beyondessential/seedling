@@ -8,6 +8,6 @@ pub mod provenance;
 pub mod recheck;
 pub mod version;
 
-pub use bundle::{Bundle, BundleError, Script};
+pub use bundle::{Bundle, BundleError, Declared, Script};
 pub use provenance::{Origin, Source};
 pub use version::VersionRequirement;

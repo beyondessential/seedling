@@ -689,14 +689,33 @@ tamanu/
     └── logo.png
 ```
 
-`seedling.toml` is optional and has two optional fields:
+`seedling.toml` is optional and has three optional fields:
 
 ```toml
 seedling = ">=0.13, <0.15"          # Seedling versions this definition supports; `||` separates alternatives
 script = ["lib.rhai", "app.seed.rhai"] # script files, concatenated in order; default ["app.seed.rhai"]
+
+[metadata]                           # free-form values for the script; Seedling does not interpret them
+version = "2.12.0"
 ```
 
 A definition for a Seedling version the host is not running is refused when it is installed. An error in any script file is reported against that file and its own line number.
+
+`app.metadata()` returns the `[metadata]` table as a map, or an empty map when there is none; a key it does not hold reads as `()`. Strings, integers, floats, booleans, arrays and tables arrive as their BSL counterparts, and dates and times as strings. A float that is not finite (`inf`, `nan`) is refused when the definition is installed. The table is also shown with the definition's provenance, so a definition can carry the release it was published for and default to it:
+
+```rhai
+let published = app.metadata().version;           // () if the definition declares none
+let version = app.param("version").kind("version-semver");
+if published != () {
+    version.default_value(published);
+    let major = std::parse_version_semver(published).major();
+    version.validate(|value, all| {
+        if std::parse_version_semver(value).major() != major { throw `this definition runs ${major}.x`; }
+    });
+}
+```
+
+Inside a gate's body, `last.metadata()` reads the table of the definition at the gate's last success.
 
 Every other file is a *sidecar* the script can read:
 

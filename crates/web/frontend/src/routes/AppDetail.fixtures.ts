@@ -205,6 +205,7 @@ export function makeDetail(overrides: Partial<AppDetail> = {}): AppDetail {
       reported_origin: null,
       content_hash: "sha256:0d9e",
       seedling_versions: null,
+      metadata: {},
     },
     description: "A **testing** app",
     canopy_type: null,
