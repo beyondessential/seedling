@@ -86,6 +86,7 @@ A member marked "optional" is absent where it has no value.
 `changes` in `ParamsChanged` and `AppUpdated` holds one entry for each parameter whose stored value the change moved, in ascending order of name, and is absent from an `AppUpdated` that changed no parameter.
 Each entry has the members `name`, `previous_value` (string, optional), `new_value` (string, optional) and `redacted` (`true`, optional), where an absent value is an unset one.
 An entry for a secret parameter MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](../runtime/secrets.md#generation-history) require.
+So MUST an entry either of whose values contains a [sensitive value](../runtime/secrets.md#sensitive-value) of the app, as [redaction](../runtime/secrets.md#redaction) requires.
 
 ### Operation events
 

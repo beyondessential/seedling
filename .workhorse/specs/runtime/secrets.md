@@ -135,6 +135,7 @@ The runtime MUST relay the output of a workload container or a shell session unc
 
 The runtime MUST match a value against the sensitive values of the app it concerns: the stored values of its secret parameters, and the derived values the evaluation of its current definition returned.
 It MUST also match a value a lifecycle operation or a shell session records against that operation's or session's sensitive values: the values of its own secret params and of the secret params of every action it has invoked, and the derived values its action closures returned.
+It MUST match a value it reports from an earlier record, such as a generation history entry, against the sensitive values current when it builds the response or event reporting it.
 
 > [!NOTE]
 > A short sensitive value, such as a one-character weak password, withholds every value that contains it.

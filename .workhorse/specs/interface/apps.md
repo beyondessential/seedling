@@ -308,13 +308,14 @@ Each entry of `params` has these members.
 | `default_value` | string or null | its default value |
 | `secret` | boolean | its effective [secret flag](../language/parameter.md#secret-parameters) |
 | `is_set` | boolean | whether it has a stored value |
-| `value` | string or null | its stored value, or `null` where it is unset or secret |
+| `value` | string or null | its stored value, or `null` where it is unset, secret or withheld |
 
 When a parameter's effective secret flag is true, its `value` MUST be `null` whether or not a value is stored.
-A client MUST use `is_set` to tell an unset secret from a set one.
+A parameter's `value` MUST also be `null` where it contains a [sensitive value](../runtime/secrets.md#sensitive-value) of the app, matched as [matching](../runtime/secrets.md#matching) specifies.
+A client MUST use `is_set` to tell an unset parameter from a withheld one.
 
 Each entry of `unknown_params` has the members `name` and `value`.
-`value` MUST be `null` for a value held in secret storage.
+`value` MUST be `null` for a value held in secret storage, and for one that contains a sensitive value of the app.
 An unknown parameter's value has no effect until the definition declares the parameter.
 
 ### Actions
@@ -421,4 +422,4 @@ Each entry of `params` has these members.
 | `new_value` | string or null | present when `redacted` is not: the value after the change, or `null` where the change unset it |
 | `redacted` | boolean | present, and true, when the values are withheld |
 
-The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was [protected](../runtime/secrets.md#storage) when the change was recorded.
+The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was [protected](../runtime/secrets.md#storage) when the change was recorded or contains a [sensitive value](../runtime/secrets.md#sensitive-value) of the app.
