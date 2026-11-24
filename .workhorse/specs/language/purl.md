@@ -52,7 +52,7 @@ It MUST accept a purl of any type, whether or not the purl specification defines
 | `qualifiers` | when the purl has a qualifier with a non-empty value | an object map from each such qualifier's key, in lower case, to its percent-decoded value |
 | `subpath` | when the purl has a subpath segment other than an empty one, `.` or `..` | the percent-decoded subpath segments, without empty ones, `.` or `..`, joined by `/` |
 
-`std::parse_purl` MUST return every component as the parsing procedure gives it, and MUST NOT apply the normalisation a type's own definition calls for.
+`std::parse_purl` MUST return every component as the parsing procedure gives it, without the procedure's type-specific normalisation steps.
 
 The value of a `checksum` qualifier MUST be an array of the strings its percent-decoded value holds between `,` separators, in order.
 Every other qualifier's value MUST be a string.
