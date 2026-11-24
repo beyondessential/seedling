@@ -78,17 +78,29 @@ impl SensitiveValues {
     ///
     /// A held value is valid UTF-8, so its bytes start and end on character
     /// boundaries wherever they occur; a range that does not can only come
-    /// from a hash collision and is passed over.
+    /// from a hash collision and is passed over. So is one that overlaps a
+    /// [`REDACTED`] marker already in the text, so that masking text twice
+    /// leaves it as masking it once did, however short a held value is.
     fn occurrences<'t>(&'t self, text: &'t str) -> impl Iterator<Item = (usize, usize)> + 't {
         let hasher = redaction_hasher();
         let bytes = text.as_bytes();
+        let markers: Vec<(usize, usize)> = text
+            .match_indices(REDACTED)
+            .map(|(at, m)| (at, at + m.len()))
+            .collect();
         self.0.iter().flat_map(move |(len, hashes)| {
+            let markers = markers.clone();
             bytes
                 .windows(*len)
                 .enumerate()
                 .filter(move |(_, window)| hashes.contains(&hasher.hash(window)))
                 .map(move |(start, _)| (start, start + len))
                 .filter(|(start, end)| text.is_char_boundary(*start) && text.is_char_boundary(*end))
+                .filter(move |(start, end)| {
+                    !markers
+                        .iter()
+                        .any(|(m_start, m_end)| start < m_end && m_start < end)
+                })
         })
     }
 

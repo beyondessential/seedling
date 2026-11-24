@@ -48,6 +48,16 @@ fn a_value_among_multibyte_text_is_masked_on_character_boundaries() {
     );
 }
 
+// spec: SEC#withheld-values
+#[test]
+fn masking_masked_text_again_changes_nothing() {
+    let sensitive = holding(&["e", "hunter2"]);
+    let once = sensitive.mask("see hunter2").into_owned();
+    assert_eq!(once, "s<redacted> <redacted>");
+    assert!(matches!(sensitive.mask(&once), Cow::Borrowed(_)));
+    assert!(!sensitive.found_in(REDACTED));
+}
+
 // spec: SEC#sensitive-value
 #[test]
 fn an_empty_value_is_not_sensitive() {
