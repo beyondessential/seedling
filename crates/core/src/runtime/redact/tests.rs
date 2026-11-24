@@ -58,6 +58,23 @@ fn masking_masked_text_again_changes_nothing() {
     assert!(!sensitive.found_in(REDACTED));
 }
 
+// spec: SEC#withheld-values
+#[test]
+fn a_value_overlapping_a_marker_is_masked_with_it() {
+    let sensitive = holding(&["x<redacted>y", "ed> a"]);
+    assert_eq!(sensitive.mask("q x<redacted>y q"), "q <redacted> q");
+    assert_eq!(sensitive.mask("<redacted> ab"), "<redacted>b");
+}
+
+// spec: SEC#withheld-values
+#[test]
+fn a_marker_forming_a_value_with_its_neighbours_is_masked_again() {
+    let sensitive = holding(&["pw", "> z"]);
+    let masked = sensitive.mask("pw z");
+    assert_eq!(masked, "<redacted>");
+    assert!(!sensitive.found_in(&masked));
+}
+
 // spec: SEC#sensitive-value
 #[test]
 fn an_empty_value_is_not_sensitive() {

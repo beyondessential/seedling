@@ -186,25 +186,31 @@ impl SensitiveValues {
     ///
     /// A range that does not start and end on character boundaries is passed
     /// over: a held value that is valid UTF-8 always does wherever it occurs,
-    /// so such a range is a Blob's bytes or a hash collision. So is one that
-    /// overlaps a [`REDACTED`] marker already in the text, so that masking
-    /// text twice leaves it as masking it once did, however short a held
-    /// value is.
+    /// so such a range is a Blob's bytes or a hash collision. So is one lying
+    /// wholly inside a [`REDACTED`] marker already in the text, which shows
+    /// the marker and nothing of the value, so that masking text twice leaves
+    /// it as masking it once did, however short a held value is. A range that
+    /// overlaps a marker without lying inside it is widened to cover the
+    /// marker.
     fn occurrences(&self, text: &str, mut found: impl FnMut(usize, usize) -> ControlFlow<()>) {
         let markers: Vec<(usize, usize)> = text
             .match_indices(REDACTED)
             .map(|(at, m)| (at, at + m.len()))
             .collect();
-        self.scan(text.as_bytes(), |start, end| {
-            let on_boundaries = text.is_char_boundary(start) && text.is_char_boundary(end);
-            let in_marker = markers
-                .iter()
-                .any(|(m_start, m_end)| start < *m_end && *m_start < end);
-            if on_boundaries && !in_marker {
-                found(start, end)
-            } else {
-                ControlFlow::Continue(())
+        self.scan(text.as_bytes(), |mut start, mut end| {
+            if !(text.is_char_boundary(start) && text.is_char_boundary(end)) {
+                return ControlFlow::Continue(());
             }
+            for &(m_start, m_end) in &markers {
+                if m_start <= start && end <= m_end {
+                    return ControlFlow::Continue(());
+                }
+                if start < m_end && m_start < end {
+                    start = start.min(m_start);
+                    end = end.max(m_end);
+                }
+            }
+            found(start, end)
         });
     }
 
@@ -232,14 +238,26 @@ impl SensitiveValues {
     // spec: SEC#withheld-values
     /// `text` with each stretch an occurrence of a held value covers replaced
     /// by [`REDACTED`], and the rest as it is.
+    ///
+    /// A marker can join the text beside it into a new occurrence, so masking
+    /// repeats until none is left; each repeat folds such an occurrence into
+    /// its marker, so the text shrinks and the repeats end.
     pub fn mask<'t>(&self, text: &'t str) -> Cow<'t, str> {
+        let mut masked = Cow::Borrowed(text);
+        while let Some(next) = self.mask_once(&masked) {
+            masked = Cow::Owned(next);
+        }
+        masked
+    }
+
+    fn mask_once(&self, text: &str) -> Option<String> {
         let mut ranges: Vec<(usize, usize)> = Vec::new();
         self.occurrences(text, |start, end| {
             ranges.push((start, end));
             ControlFlow::Continue(())
         });
         if ranges.is_empty() {
-            return Cow::Borrowed(text);
+            return None;
         }
         ranges.sort_unstable();
         let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
@@ -257,7 +275,7 @@ impl SensitiveValues {
             at = end;
         }
         out.push_str(&text[at..]);
-        Cow::Owned(out)
+        Some(out)
     }
 }
 
