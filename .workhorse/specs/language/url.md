@@ -61,7 +61,7 @@ It MUST accept a URL of any scheme, including one with no host, such as `file://
 
 Where the URL's host is not an opaque host, `host` MUST be that host as the host serialiser writes it.
 
-Where the URL's host is an opaque host, `std::parse_url` MUST give its percent-decoded text to the host parser, not as opaque.
+Where the URL's host is an opaque host, `std::parse_url` MUST give that host, as the URL parser leaves it, to the host parser, not as opaque.
 Where that succeeds, `host` MUST be the host it gives, as the host serialiser writes it, and otherwise the opaque host.
 
 > [!NOTE]
