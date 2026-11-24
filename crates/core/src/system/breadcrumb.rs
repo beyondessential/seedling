@@ -271,7 +271,7 @@ impl BreadcrumbKind<'_> {
                 } else {
                     let masked: JsonMap<String, JsonValue> = params
                         .iter()
-                        .map(|(k, v)| (k.clone(), mask_param(sensitive, v)))
+                        .map(|(k, v)| (k.clone(), sensitive.mask_json(v)))
                         .collect();
                     format!(
                         " {}",
@@ -288,23 +288,6 @@ impl BreadcrumbKind<'_> {
                 committed_len,
             } => {
                 format!("replay pass: op={operation_id} committed={committed_len}")
-            }
-        }
-    }
-}
-
-/// A param value with each occurrence of a sensitive value masked: a string
-/// in place, and any other value, where its JSON text holds one, as that text
-/// masked.
-fn mask_param(sensitive: &SensitiveValues, value: &JsonValue) -> JsonValue {
-    match value {
-        JsonValue::String(s) => JsonValue::String(sensitive.mask(s).into_owned()),
-        other => {
-            let text = other.to_string();
-            if sensitive.found_in(&text) {
-                JsonValue::String(sensitive.mask(&text).into_owned())
-            } else {
-                other.clone()
             }
         }
     }

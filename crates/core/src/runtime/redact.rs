@@ -136,6 +136,64 @@ impl SensitiveValues {
     }
 }
 
+impl SensitiveValues {
+    // spec: SEC#redaction
+    /// Whether any part of `value` contains a held value: a string, an
+    /// object's key, or a number's or boolean's text, at any depth, or the
+    /// JSON text of the whole, which holds a value a script supplied as other
+    /// than a string. Each string is matched as it is, not as JSON escapes
+    /// it, so a value holding a quote or a backslash is still found.
+    pub fn found_in_json(&self, value: &serde_json::Value) -> bool {
+        use serde_json::Value;
+        match value {
+            Value::String(s) => self.found_in(s),
+            Value::Array(items) => {
+                items.iter().any(|v| self.found_in_json(v)) || self.found_in(&value.to_string())
+            }
+            Value::Object(members) => {
+                members
+                    .iter()
+                    .any(|(k, v)| self.found_in(k) || self.found_in_json(v))
+                    || self.found_in(&value.to_string())
+            }
+            other => self.found_in(&other.to_string()),
+        }
+    }
+
+    // spec: SEC#withheld-values
+    /// `value` with each held value masked: in place in each string and
+    /// object key, and a number or boolean that holds one replaced by its
+    /// masked text. A whole that holds one only in its JSON text is replaced
+    /// by that text masked.
+    pub fn mask_json(&self, value: &serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        let masked = match value {
+            Value::String(s) => return Value::String(self.mask(s).into_owned()),
+            Value::Array(items) => Value::Array(items.iter().map(|v| self.mask_json(v)).collect()),
+            Value::Object(members) => Value::Object(
+                members
+                    .iter()
+                    .map(|(k, v)| (self.mask(k).into_owned(), self.mask_json(v)))
+                    .collect(),
+            ),
+            other => {
+                let text = other.to_string();
+                return if self.found_in(&text) {
+                    Value::String(self.mask(&text).into_owned())
+                } else {
+                    other.clone()
+                };
+            }
+        };
+        let text = masked.to_string();
+        if self.found_in(&text) {
+            Value::String(self.mask(&text).into_owned())
+        } else {
+            masked
+        }
+    }
+}
+
 impl fmt::Debug for SensitiveValues {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SensitiveValues({} withheld)", self.len())

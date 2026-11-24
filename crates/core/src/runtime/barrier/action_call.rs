@@ -359,15 +359,6 @@ struct SplitParams {
     journal: JsonMap<String, JsonValue>,
 }
 
-/// A param value as text to match: a string as it is, and any other value as
-/// its JSON text.
-fn param_text(value: &JsonValue) -> std::borrow::Cow<'_, str> {
-    match value {
-        JsonValue::String(s) => std::borrow::Cow::Borrowed(s),
-        other => std::borrow::Cow::Owned(other.to_string()),
-    }
-}
-
 // spec: SEC#storage
 // spec: SEC#redaction
 // spec: HIST#action-calls
@@ -383,16 +374,12 @@ fn split_secret_params(
         let is_secret = schema
             .and_then(|schema| schema.get(name.as_str()))
             .is_some_and(ParamDef::is_secret);
-        let text = param_text(value);
         if is_secret {
             secret.insert(name.clone(), value.clone());
             journal.insert(name.clone(), JsonValue::from(REDACTED));
-        } else if sensitive.found_in(&text) {
+        } else if sensitive.found_in_json(value) {
             secret.insert(name.clone(), value.clone());
-            journal.insert(
-                name.clone(),
-                JsonValue::from(sensitive.mask(&text).into_owned()),
-            );
+            journal.insert(name.clone(), sensitive.mask_json(value));
         } else {
             plain.insert(name.clone(), value.clone());
             journal.insert(name.clone(), value.clone());
@@ -580,5 +567,24 @@ mod tests {
         assert_eq!(split.journal["port"], REDACTED);
         assert_eq!(split.plain.keys().collect::<Vec<_>>(), ["label"]);
         assert_eq!(split.journal["label"], "plain-label");
+    }
+
+    // spec: HIST#action-calls
+    #[test]
+    fn a_nested_value_its_json_text_would_escape_is_sealed() {
+        let validated: JsonMap<String, JsonValue> = serde_json::from_value(serde_json::json!({
+            "conn": { "user": "app", "password": r#"Tok"en\99"# },
+        }))
+        .unwrap();
+        let mut sensitive = SensitiveValues::default();
+        sensitive.insert(r#"Tok"en\99"#);
+
+        let split = split_secret_params(None, &validated, &sensitive);
+        assert!(split.plain.is_empty(), "{:?}", split.plain);
+        assert_eq!(split.secret["conn"]["password"], r#"Tok"en\99"#);
+        assert_eq!(
+            split.journal["conn"],
+            serde_json::json!({ "user": "app", "password": REDACTED })
+        );
     }
 }
