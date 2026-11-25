@@ -38,6 +38,19 @@ impl ParamDef {
         ))
     }
 
+    /// Check that the param is not secret where its kind lists every value it
+    /// can take.
+    // spec: PARAM#secret-parameters
+    pub fn check_secret(&self) -> Result<(), String> {
+        match &self.kind {
+            ParamKind::Boolean | ParamKind::Choice { .. } if self.is_secret() => Err(format!(
+                "a {} param cannot be secret, since the definition lists every value it can take",
+                self.kind.as_str()
+            )),
+            _ => Ok(()),
+        }
+    }
+
     /// The declared default as the text a param takes, or `None` without one.
     pub fn default_text(&self) -> Option<String> {
         self.default_value.as_ref().map(SuppliedValue::canonical)

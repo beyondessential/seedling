@@ -693,10 +693,10 @@ fn a_result_computed_from_a_secret_parameter_is_withheld_however_late_it_is_decl
 fn a_result_computed_from_a_secret_parameters_parsed_value_is_withheld() {
     let (_, found) = withheld(
         r#"
-            let tier = app.param("tier").secret(true).kind(#{ name: "choice", options: ["gold", "silver"] });
-            app.description(std::encode_hex(tier.parsed()));
+            let key = app.param("key").kind("weak-password");
+            app.description(std::encode_hex(key.parsed()));
         "#,
-        &[("tier", "gold")],
+        &[("key", "Moa-Kettle")],
     );
     assert!(found);
 }

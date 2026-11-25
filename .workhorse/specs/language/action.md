@@ -114,6 +114,7 @@ Declaring a param schema MUST throw if a `default_value` is a boolean and the ki
 A boolean or integer `default_value` MUST be taken as its [canonical form](#kind-parsers).
 
 `secret` defaults to `true` for the `password` and `weak-password` kinds and to `false` for every other kind.
+Declaring a param schema MUST throw if a param whose kind is `boolean` or `choice` has `secret` set to `true`, as such a param cannot be [secret](parameter.md#secret-parameters).
 The runtime MUST handle a param whose `secret` is `true` as it handles a [secret parameter](parameter.md#secret-parameters).
 
 The runtime MUST validate an invocation's params against the schema, in this order, before the closure runs:

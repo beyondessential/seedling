@@ -65,6 +65,11 @@ A schema method MUST throw when called in the [action context](app.md#action-con
 A parameter is secret when its `secret` flag is `true`.
 A parameter whose kind is `"password"` or `"weak-password"` MUST be secret unless the script sets `secret(false)`.
 A script MAY call `secret` before or after `kind`, and an explicit `secret` call MUST take precedence over the kind in either direction.
+A parameter whose kind is `boolean` or `choice` MUST NOT be secret.
+Once a script's evaluation has run to completion, the runtime MUST fail the evaluation if such a parameter is secret, naming the parameter.
+
+> [!NOTE]
+> Every value such a parameter can take is one the definition lists, so withholding it hides nothing, and masking it wherever it appears would mask the listed values themselves and show by elimination which one is set.
 
 The runtime MUST protect a secret parameter's value as [secret storage](../runtime/secrets.md#storage) and [redaction](../runtime/secrets.md#redaction) specify.
 

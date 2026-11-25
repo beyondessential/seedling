@@ -201,7 +201,7 @@ port.parsed()               // 8080, an integer
 canary.is_set() && canary.parsed()  // a boolean, without comparing against "true"
 ```
 
-A range with no start, such as `..10`, starts at 0, so give the start of a range that takes negative values. `default_value("")` removes a default. A default the kind refuses fails the evaluation once the script has finished, since `kind` and `default_value` can be called in either order.
+A range with no start, such as `..10`, starts at 0, so give the start of a range that takes negative values. `default_value("")` removes a default. A default the kind refuses fails the evaluation once the script has finished, since `kind` and `default_value` can be called in either order. A `boolean` or `choice` parameter cannot be secret, since the definition lists every value it can take; the same goes for action and shell params.
 
 Every set value is first checked against its kind, by the kind's [parser](#parsing-a-kind): `text` and every kind but `multiline` hold a single line with no control characters, `email` needs an address, `password` a strong one, `boolean` exactly `true` or `false`, `integer` a whole number in plain decimal form within its range, and `choice` one of its options, matched case-sensitively. A value its kind refuses is rejected with the parser's reason, and while any value is refused no validator runs. An empty stored value is checked like any other; unset a parameter to clear it.
 

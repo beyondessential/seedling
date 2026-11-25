@@ -18,6 +18,8 @@
 - [x] `default_value` takes a boolean or integer as its canonical form, `""` clears it, and a float throws (verifies spec: PARAM)
 - [x] A default the kind rejects, or a native default of the wrong kind, fails the evaluation whichever of `kind` and `default_value` came first (verifies spec: PARAM)
 - [x] An action param default its kind rejects throws at declaration; native defaults and an empty default are taken (verifies spec: ACN)
+- [x] A secret `boolean` or `choice` parameter fails the evaluation whichever of `kind` and `secret` came first; `secret(false)` and a secret `integer` are taken (verifies spec: PARAM)
+- [x] A secret `boolean` or `choice` action param throws at declaration (verifies spec: ACN)
 
 ## Values in scripts
 

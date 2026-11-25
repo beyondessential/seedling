@@ -589,6 +589,30 @@ fn param_schema_random_kind_with_secret_true_is_secret() {
     assert!(schema.is_secret());
 }
 
+// spec: PARAM#secret-parameters
+#[test]
+fn a_secret_boolean_or_choice_param_fails_the_evaluation_once_it_completes() {
+    for script in [
+        // Declared in either order, the pair is checked once both are known.
+        r#"app.param("flag").kind("boolean").secret(true);"#,
+        r#"app.param("flag").secret(true).kind("boolean");"#,
+        r#"app.param("flag").kind(#{ name: "choice", options: ["a", "b"] }).secret(true);"#,
+    ] {
+        let err = evaluation_error(script, &[]).unwrap_or_else(|| panic!("{script}"));
+        assert!(
+            err.contains("parameter 'flag'") && err.contains("cannot be secret"),
+            "{script}: {err}"
+        );
+    }
+    for script in [
+        r#"app.param("flag").secret(true).kind("boolean").secret(false);"#,
+        r#"app.param("flag").kind("password").kind("boolean");"#,
+        r#"app.param("pin").kind("integer").secret(true);"#,
+    ] {
+        assert_eq!(evaluation_error(script, &[]), None, "{script}");
+    }
+}
+
 // spec: PARAM#validators
 // spec: APP#validator-immutability
 // Only declarations threw in a validator, so a builder call on a captured
@@ -879,6 +903,33 @@ fn a_default_its_kind_rejects_fails_the_evaluation_once_it_completes() {
         None,
         "a default replaced before the evaluation ends is not checked"
     );
+}
+
+// spec: ACN#param-schemas
+#[test]
+fn a_secret_boolean_or_choice_action_param_throws_at_declaration() {
+    for params in [
+        r#"#{ flag: #{ kind: "boolean", secret: true } }"#,
+        r#"#{ flag: #{ kind: #{ name: "choice", options: ["a"] }, secret: true } }"#,
+    ] {
+        let err = run_test_script_err(&format!(
+            r#"app.on_action("run", |rt, p| {{}}, #{{ params: {params} }});"#
+        ))
+        .to_string();
+        assert!(
+            err.contains("param `flag` secret") && err.contains("cannot be secret"),
+            "{params}: {err}"
+        );
+    }
+    let app = run_test_script_app(
+        r#"app.on_action("run", |rt, p| {}, #{ params: #{
+            flag: #{ kind: "boolean", secret: false },
+            pin: #{ kind: "integer", secret: true },
+        } });"#,
+    );
+    let def = app.def.load();
+    let params = &def.actions.get("run").unwrap().params;
+    assert!(params.get("pin").unwrap().is_secret());
 }
 
 // spec: ACN#param-schemas

@@ -15,14 +15,18 @@ pub struct Param {
     pub app: App,
 }
 
-/// Check each declared default against its parameter's kind, which the script
-/// may have declared before or after the default.
-// spec: PARAM#kind-checks
-pub(super) fn check_defaults(def: &super::app::AppDef) -> Result<(), String> {
+/// Check each parameter's default and secret flag against its kind, which the
+/// script may have declared before or after either.
+pub(super) fn check_params(def: &super::app::AppDef) -> Result<(), String> {
     for (name, param) in &def.params {
+        // spec: PARAM#kind-checks
         param
             .check_default()
             .map_err(|e| format!("the default of parameter '{name}' is rejected: {e}"))?;
+        // spec: PARAM#secret-parameters
+        param
+            .check_secret()
+            .map_err(|e| format!("parameter '{name}': {e}"))?;
     }
     Ok(())
 }
