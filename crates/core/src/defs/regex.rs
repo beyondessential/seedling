@@ -2,7 +2,7 @@
 //! budget their compiling counts toward.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap},
     fmt,
     sync::{Arc, LazyLock, Mutex},
 };
@@ -177,9 +177,13 @@ static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Mutex::default);
 
 #[derive(Default)]
 struct Cache {
-    patterns: HashMap<String, Arc<Compiled>>,
-    /// The cached patterns, least recently used first.
-    order: VecDeque<String>,
+    /// Each cached pattern, with the tick it was last used at.
+    patterns: HashMap<String, (Arc<Compiled>, u64)>,
+    /// The cached patterns by the tick they were last used at, least recently
+    /// used first.
+    order: BTreeMap<u64, String>,
+    /// The tick the next use is recorded at.
+    tick: u64,
     /// What the cached patterns may hold.
     size: usize,
 }
@@ -187,11 +191,14 @@ struct Cache {
 impl Cache {
     /// The cached `pattern`, marked as the most recently used.
     fn get(&mut self, pattern: &str) -> Option<Arc<Compiled>> {
-        let compiled = self.patterns.get(pattern)?;
-        if let Some(at) = self.order.iter().position(|p| p == pattern) {
-            let used = self.order.remove(at).expect("the position is in range");
-            self.order.push_back(used);
-        }
+        let tick = self.next_tick();
+        let (compiled, used) = self.patterns.get_mut(pattern)?;
+        let name = self
+            .order
+            .remove(used)
+            .expect("every cached pattern is ordered");
+        *used = tick;
+        self.order.insert(tick, name);
         Some(Arc::clone(compiled))
     }
 
@@ -203,17 +210,23 @@ impl Cache {
             return;
         }
         while self.size + compiled.size > CACHE_CAPACITY {
-            let Some(oldest) = self.order.pop_front() else {
+            let Some((_, oldest)) = self.order.pop_first() else {
                 break;
             };
-            if let Some(evicted) = self.patterns.remove(&oldest) {
+            if let Some((evicted, _)) = self.patterns.remove(&oldest) {
                 self.size -= evicted.size;
             }
         }
+        let tick = self.next_tick();
         self.size += compiled.size;
-        self.order.push_back(compiled.pattern.clone());
+        self.order.insert(tick, compiled.pattern.clone());
         self.patterns
-            .insert(compiled.pattern.clone(), Arc::clone(compiled));
+            .insert(compiled.pattern.clone(), (Arc::clone(compiled), tick));
+    }
+
+    fn next_tick(&mut self) -> u64 {
+        self.tick += 1;
+        self.tick
     }
 }
 
