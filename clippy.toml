@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "rhai::Engine::compile", reason = "compile through `seedling_core::defs::compile`, which checks literal regex patterns and optimises the script the engine leaves unoptimised" },
+]

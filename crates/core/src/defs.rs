@@ -216,6 +216,15 @@ const NO_TO_JSON: &str = "`to_json` is not available: use `std::encode_json`";
 /// would run. The check reads the script before optimisation, which would
 /// carry a `const` into a call's argument as though it were written there.
 pub fn compile(engine: &Engine, source: &str) -> Result<AST, Box<EvalAltResult>> {
+    debug_assert_eq!(
+        engine.optimization_level(),
+        OptimizationLevel::None,
+        "an engine setup_language did not build would skip the literal-pattern check's premise"
+    );
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one place a script is compiled"
+    )]
     let ast = engine.compile(source)?;
     let limit = regex::engine_limit(engine)?;
     let mut refused = None;
