@@ -6,7 +6,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     io::{ErrorKind, Read},
-    ops::Bound,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -416,8 +415,7 @@ impl Tree for Disk {
 /// What an archive holds at a path.
 #[derive(Debug, Clone)]
 enum Held {
-    /// A file, with its contents where they were read.
-    File(Option<Arc<[u8]>>),
+    File(Arc<[u8]>),
     Dir,
     Other,
 }
@@ -426,9 +424,15 @@ enum Held {
 ///
 /// It holds every link in the repository, every `.seedignore`, the metadata
 /// file of the definition folder it was read for, and what
-/// [`Archive::load`] reads beneath the paths a definition reads.
+/// [`Archive::load`] reads beneath the paths a definition reads. What the
+/// definition would leave out is not held at all, so the repository's size
+/// beyond the definition costs nothing.
 pub(super) struct Archive {
-    entries: BTreeMap<String, Held>,
+    entries: HashMap<String, Held>,
+    /// The names directly within each directory, including directories only
+    /// implied by what is held beneath them, so that listing one costs its
+    /// own entries.
+    children: HashMap<String, BTreeSet<String>>,
 }
 
 impl Archive {
@@ -439,7 +443,8 @@ impl Archive {
     pub fn scan(tarball: &[u8], folder: &str) -> Result<Self, String> {
         let metadata = join(folder, METADATA_FILE);
         let mut archive = Self {
-            entries: BTreeMap::new(),
+            entries: HashMap::new(),
+            children: HashMap::new(),
         };
         let mut budget = Budget::full();
         let mut tar = open(tarball);
@@ -458,7 +463,7 @@ impl Archive {
                 {
                     budget.take_file(&name, name.len())?;
                     let contents = budget.read(&name, entry)?;
-                    archive.hold(name, Held::File(Some(contents.into())))?;
+                    archive.hold(name, Held::File(contents.into()))?;
                 }
                 _ => {}
             }
@@ -469,7 +474,7 @@ impl Archive {
     /// The definition folder's metadata file, where it holds one.
     pub fn metadata(&self, folder: &str) -> Option<&[u8]> {
         match self.entries.get(&join(folder, METADATA_FILE)) {
-            Some(Held::File(Some(contents))) => Some(contents),
+            Some(Held::File(contents)) => Some(contents),
             _ => None,
         }
     }
@@ -522,28 +527,45 @@ impl Archive {
                 continue;
             }
             match kind {
-                Some(Kind::Dir) => self.hold(name, Held::Dir)?,
+                Some(Kind::Dir) => {
+                    if on_the_way(&name) || self.kept(&mut ignores, &within, &name, Kind::Dir)? {
+                        self.hold(name, Held::Dir)?;
+                    }
+                }
                 Some(Kind::File) => {
-                    if matches!(
-                        self.entries.get(&name),
-                        Some(Held::File(Some(_)) | Held::Other)
-                    ) {
+                    if matches!(self.entries.get(&name), Some(Held::File(_) | Held::Other))
+                        || !self.kept(&mut ignores, &within, &name, Kind::File)?
+                    {
                         continue;
                     }
-                    let contents = if self.kept(&mut ignores, &within, &name, Kind::File)? {
-                        // Read against what one file may hold, so that
-                        // contents already held are not charged twice.
-                        let contents = Budget::full().read(&name, entry)?;
-                        Some(share(&mut held, &mut budget, &name, contents)?)
-                    } else {
-                        None
-                    };
+                    // Read against what one file may hold, so that contents
+                    // already held are not charged twice.
+                    let contents = Budget::full().read(&name, entry)?;
+                    let contents = share(&mut held, &mut budget, &name, contents)?;
                     self.hold(name, Held::File(contents))?;
                 }
                 Some(Kind::Other) | None => {}
             }
         }
         Ok(())
+    }
+
+    /// List `name` in its directory, and each directory above it in its own,
+    /// up to the first already listed.
+    fn list(&mut self, name: &str) {
+        let mut child = name;
+        while !child.is_empty() {
+            let (parent, leaf) = child.rsplit_once('/').unwrap_or(("", child));
+            if !self
+                .children
+                .entry(parent.to_owned())
+                .or_default()
+                .insert(leaf.to_owned())
+            {
+                break;
+            }
+            child = parent;
+        }
     }
 
     /// Whether reading some definition folder rooted at one of `within` keeps
@@ -570,13 +592,14 @@ impl Archive {
     /// claims is there, and a file and a directory at one path are refused.
     fn hold(&mut self, name: String, what: Held) -> Result<(), String> {
         match (self.entries.get(&name), &what) {
-            (None, _) | (Some(Held::File(None)), Held::File(_)) => {
+            (None, _) => {
+                self.list(&name);
                 self.entries.insert(name, what);
             }
             (Some(Held::Other), _) | (_, Held::Other) => {
                 self.entries.insert(name, Held::Other);
             }
-            (Some(Held::Dir), Held::Dir) | (Some(Held::File(Some(_))), Held::File(_)) => {}
+            (Some(Held::Dir), Held::Dir) | (Some(Held::File(_)), Held::File(_)) => {}
             _ => {
                 return Err(format!(
                     "the downloaded archive holds {name} as both a file and a directory"
@@ -632,49 +655,25 @@ impl Tree for Archive {
             Some(Held::File(_)) => Some(Kind::File),
             Some(Held::Dir) => Some(Kind::Dir),
             Some(Held::Other) => Some(Kind::Other),
-            None => {
-                let beneath = format!("{path}/");
-                self.entries
-                    .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
-                    .next()
-                    .filter(|(p, _)| p.starts_with(&beneath))
-                    .map(|_| Kind::Dir)
-            }
+            None => self.children.contains_key(path).then_some(Kind::Dir),
         })
     }
 
     fn entries(&self, dir: &str) -> Result<Vec<(Name, Kind)>, String> {
-        let beneath = if dir.is_empty() {
-            String::new()
-        } else {
-            format!("{dir}/")
+        let Some(names) = self.children.get(dir) else {
+            return Ok(Vec::new());
         };
-        // `a/b.txt` sorts between `a/b` and `a/b/c`, so the names beneath a
-        // directory are gathered as a set rather than by neighbour.
-        let mut names: BTreeSet<&str> = BTreeSet::new();
-        for (path, _) in self
-            .entries
-            .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
-        {
-            let Some(rest) = path.strip_prefix(&beneath) else {
-                break;
-            };
-            let name = rest.split('/').next().unwrap_or(rest);
-            if !name.is_empty() {
-                names.insert(name);
-            }
-        }
         let mut found = Vec::with_capacity(names.len());
         for name in names {
             let kind = self.kind(&join(dir, name))?.expect("a listed name is held");
-            found.push((Name::Utf8(name.to_owned()), kind));
+            found.push((Name::Utf8(name.clone()), kind));
         }
         Ok(found)
     }
 
     fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, String> {
         match self.entries.get(path) {
-            Some(Held::File(Some(contents))) => budget.read(path, &contents[..]),
+            Some(Held::File(contents)) => budget.read(path, &contents[..]),
             _ => Err(format!("{path} was not read from the downloaded archive")),
         }
     }

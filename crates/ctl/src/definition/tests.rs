@@ -954,3 +954,35 @@ fn a_copy_beside_its_source_counts_once_against_the_file_limit_from_github() {
     let files = github::read_definition(&data, "apps/web").unwrap();
     assert_eq!(files.len(), half + 2);
 }
+
+// spec: CLI#definition-folders
+// spec: CLI#include-assembly
+#[test]
+fn an_empty_source_folder_reads_the_same_from_disk_and_from_github() {
+    let (dir, _) = both_ways(&[
+        (
+            "apps/def/seedling.toml",
+            b"[include]\n\"lib\" = \"../empty\"",
+        ),
+        ("apps/def/app.seed.rhai", b"app;"),
+    ]);
+    std::fs::create_dir_all(dir.path().join("apps/empty")).unwrap();
+    let data = tarball(|b| {
+        tar_file(
+            b,
+            "o-r-abc/apps/def/seedling.toml",
+            b"[include]\n\"lib\" = \"../empty\"",
+        );
+        tar_file(b, "o-r-abc/apps/def/app.seed.rhai", b"app;");
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o755);
+        b.append_data(&mut header, "o-r-abc/apps/empty/", &[][..])
+            .unwrap();
+    });
+    let from_disk = read_assembled_folder(&dir.path().join("apps/def")).unwrap_err();
+    let from_github = github::read_definition(&data, "apps/def").unwrap_err();
+    assert!(from_disk.ends_with("holds no files"), "{from_disk}");
+    assert!(from_github.ends_with("holds no files"), "{from_github}");
+}
