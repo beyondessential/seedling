@@ -230,9 +230,17 @@ pub struct HealthCheckSpec {
 pub struct ExecHandle {
     pub stdin: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
     pub stdout: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
-    pub pty_master_fd: std::os::unix::io::RawFd,
+    pub pty_master_fd: RawPty,
     pub child: tokio::process::Child,
 }
+
+/// The raw handle of a PTY master.
+#[cfg(unix)]
+pub type RawPty = std::os::fd::RawFd;
+
+/// The raw handle of a PTY master, which only a Unix container runtime gives.
+#[cfg(not(unix))]
+pub type RawPty = i32;
 
 // ---------------------------------------------------------------------------
 // Transient unit spec
@@ -257,48 +265,12 @@ pub struct TransientUnitSpec {
     /// Seconds systemd waits between sending `kill_signal` and `SIGKILL`.
     /// Maps to `TimeoutStopSec`. `None` leaves systemd's default (90s).
     pub timeout_stop_secs: Option<u32>,
-    /// Seconds systemd waits between a unit's exit and the next restart
-    /// attempt. Maps to `RestartSec`. `None` leaves systemd's default (100ms),
-    /// which is dangerously aggressive for crash-looping containers — five
-    /// failures inside the default 10-second `StartLimitIntervalSec` trips
-    /// `start-limit-hit` and the unit refuses to restart at all.
-    // spec: AUTO#restart-pacing
-    pub restart_sec: Option<u32>,
-    /// Width of the start-limit window in seconds. Maps to
-    /// `StartLimitIntervalSec`. `None` leaves systemd's default (10s).
-    /// Set to 0 to disable the start limit entirely.
-    // spec: AUTO#restart-pacing
-    pub start_limit_interval_sec: Option<u32>,
-    /// Number of starts permitted within `start_limit_interval_sec` before
-    /// systemd refuses to restart the unit. Maps to `StartLimitBurst`. `None`
-    /// leaves systemd's default (5).
-    // spec: AUTO#restart-pacing
-    pub start_limit_burst: Option<u32>,
-    /// Resource-control slice the unit joins. Maps to `Slice=`. `None` leaves
-    /// the unit in the supervisor's default slice.
+    /// Where the unit stands against every other on the host, which the
+    /// process manager realises as the unit's resource-control group and its
+    /// kill preference.
     // spec: PRIO#resource-control-groups
-    pub slice: Option<String>,
-    /// How strongly the kernel should prefer this unit's processes as
-    /// out-of-memory victims. Maps to `OOMScoreAdjust=`. `None` inherits.
-    ///
-    /// Applied when the unit's processes are spawned: unlike the slice weights,
-    /// the supervisor cannot change it on a process that is already running.
     // spec: PRIO#kill-order
-    pub oom_score_adjust: Option<i32>,
-}
-
-/// A resource-control slice the runtime owns, with the weights it should carry.
-// spec: PRIO#resource-control-groups
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SliceSpec {
-    /// Full unit name, e.g. `seedling-myapp-critical.slice`.
-    pub name: String,
-    pub description: String,
-    /// Share of contended capacity this slice claims, relative to its
-    /// siblings. Fans out to both `CPUWeight=` and `IOWeight=`: a workload's
-    /// standing is one thing, and nothing in the mapping distinguishes its
-    /// claim on CPU from its claim on I/O.
-    pub weight: u64,
+    pub standing: crate::system::priority::UnitStanding,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

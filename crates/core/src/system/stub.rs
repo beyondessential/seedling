@@ -1,5 +1,5 @@
-//! In-memory fakes for the four system traits, used to boot the daemon
-//! without podman / systemd / nftables / Caddy.
+//! In-memory fakes for the system traits, used to boot the daemon without
+//! the host's container runtime, process supervisor, packet filter or proxy.
 //!
 //! Constructed by [`System::setup_stubbed`] when the daemon is started with
 //! `--stub-backends`. Every operation succeeds; observed state matches what
@@ -18,13 +18,15 @@ use std::{
 use futures_util::FutureExt;
 use ipnet::Ipv4Net;
 use parking_lot::Mutex;
+use seedling_protocol::names::AppName;
 
 use super::{
     BoxError, BoxFuture, ContainerFilter, ContainerHealth, ContainerRuntime, ContainerSpec,
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
     ExecOutput, ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig,
     ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
-    types::{ActiveState, SPEC_HASH_LABEL, SliceSpec, UnitExit},
+    priority::{AppStandings, UnitStanding},
+    types::{ActiveState, SPEC_HASH_LABEL, UnitExit},
 };
 
 /// The image reference in a `podman run` argv.
@@ -545,18 +547,16 @@ pub struct StubProcessManager {
 struct UnitState_ {
     units: BTreeMap<String, UnitRecord>,
     persistent_units: BTreeMap<String, String>,
-    /// Slices ensured so far, by unit name. Overwritten on reweight, so the
-    /// map always holds the weights last applied.
-    slices: BTreeMap<String, SliceSpec>,
+    /// The standings provided for so far, by app. Overwritten on each sync,
+    /// so the map always holds the standings last applied.
+    groups: BTreeMap<AppName, AppStandings>,
 }
 
 struct UnitRecord {
     state: ActiveState,
     sub: String,
-    /// The slice the unit joined and the kill preference it was started with,
-    /// as the spec carried them.
-    slice: Option<String>,
-    oom_score_adjust: Option<i32>,
+    /// The standing the unit was started with, where the spec carried one.
+    standing: Option<UnitStanding>,
     /// Mirrors systemd's `NRestarts`: monotonic while the unit lives, reset
     /// when the unit is recreated. Driven directly by tests.
     restarts: u32,
@@ -607,18 +607,18 @@ impl StubProcessManager {
         }
     }
 
-    /// The slices ensured so far, carrying the weights last applied to each.
-    pub fn slices(&self) -> BTreeMap<String, SliceSpec> {
-        self.state.lock().slices.clone()
+    /// The standings provided for so far, as last applied for each app.
+    pub fn groups(&self) -> BTreeMap<AppName, AppStandings> {
+        self.state.lock().groups.clone()
     }
 
-    /// The slice a unit joined and the kill preference it was started with.
-    pub fn placement(&self, unit: &str) -> Option<(Option<String>, Option<i32>)> {
+    /// The standing a unit was started with.
+    pub fn standing(&self, unit: &str) -> Option<UnitStanding> {
         self.state
             .lock()
             .units
             .get(unit)
-            .map(|u| (u.slice.clone(), u.oom_score_adjust))
+            .and_then(|u| u.standing.clone())
     }
 }
 
@@ -690,8 +690,7 @@ impl ProcessManager for StubProcessManager {
                 UnitRecord {
                     state: ActiveState::Active,
                     sub: "running".to_owned(),
-                    slice: spec.slice.clone(),
-                    oom_score_adjust: spec.oom_score_adjust,
+                    standing: Some(spec.standing.clone()),
                     restarts: 0,
                     last_exit: None,
                     result: None,
@@ -703,20 +702,20 @@ impl ProcessManager for StubProcessManager {
         .boxed()
     }
 
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
             let mut s = self.state.lock();
             if prune {
-                let wanted: std::collections::HashSet<&str> =
-                    desired.iter().map(|spec| spec.name.as_str()).collect();
-                s.slices.retain(|name, _| wanted.contains(name.as_str()));
+                let wanted: std::collections::HashSet<&AppName> =
+                    apps.iter().map(|app| &app.app).collect();
+                s.groups.retain(|name, _| wanted.contains(name));
             }
-            for spec in desired {
-                s.slices.insert(spec.name.clone(), spec);
+            for app in apps {
+                s.groups.insert(app.app.clone(), app);
             }
             Ok(())
         }
@@ -829,8 +828,7 @@ impl ProcessManager for StubProcessManager {
             s.units.entry(name.to_owned()).or_insert(UnitRecord {
                 state: ActiveState::Active,
                 sub: "running".to_owned(),
-                slice: None,
-                oom_score_adjust: None,
+                standing: None,
                 restarts: 0,
                 last_exit: None,
                 result: None,
@@ -883,6 +881,210 @@ impl DataPlane for StubDataPlane {
 
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
         async { Ok(()) }.boxed()
+    }
+}
+
+/// Stub NAT64 translator: installs and removes nothing.
+pub struct StubTranslator;
+
+impl super::AddressTranslator for StubTranslator {
+    fn set_up(&self) -> BoxFuture<'_, Result<(), BoxError>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn tear_down(&self) -> BoxFuture<'_, Result<(), BoxError>> {
+        async { Ok(()) }.boxed()
+    }
+}
+
+/// Stub volume storage: plain directories, none of them snapshottable.
+/// Confinement refuses a path whose `..` or symlinks would leave the root, as
+/// a host's storage does, though it judges the path before writing rather than
+/// as one step, and does not look for mount crossings.
+pub struct StubVolumeStorage;
+
+impl super::volume_store::VolumeStorage for StubVolumeStorage {
+    fn snapshotting(&self) -> bool {
+        false
+    }
+
+    fn create<'a>(&'a self, path: &'a std::path::Path) -> BoxFuture<'a, std::io::Result<()>> {
+        async move {
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::create_dir(path).await
+        }
+        .boxed()
+    }
+
+    fn remove<'a>(&'a self, path: &'a std::path::Path) -> BoxFuture<'a, std::io::Result<()>> {
+        tokio::fs::remove_dir_all(path).boxed()
+    }
+
+    fn is_snapshottable<'a>(&'a self, _path: &'a std::path::Path) -> BoxFuture<'a, bool> {
+        async { false }.boxed()
+    }
+
+    fn snapshot<'a>(
+        &'a self,
+        _source: &'a std::path::Path,
+        _dest: &'a std::path::Path,
+        _writable: bool,
+    ) -> BoxFuture<'a, std::io::Result<()>> {
+        async { Err(std::io::Error::other("stub volume storage cannot snapshot")) }.boxed()
+    }
+
+    fn write_confined<'a>(
+        &'a self,
+        root: &'a std::path::Path,
+        rel_path: &'a str,
+        contents: &'a [u8],
+    ) -> BoxFuture<'a, Result<(), super::volume_store::ConfinedWriteError>> {
+        use snafu::IntoError;
+        use std::path::Component;
+
+        use super::volume_store::{EscapeSnafu, IoSnafu};
+
+        async move {
+            let rel = rel_path.trim_start_matches('/');
+            let mut depth = 0_usize;
+            for component in std::path::Path::new(rel).components() {
+                match component {
+                    Component::Normal(_) => depth += 1,
+                    Component::CurDir => {}
+                    Component::ParentDir if depth > 0 => depth -= 1,
+                    _ => {
+                        return EscapeSnafu {
+                            path: root.join(rel),
+                        }
+                        .fail();
+                    }
+                }
+            }
+            if depth == 0 {
+                return EscapeSnafu {
+                    path: root.join(rel),
+                }
+                .fail();
+            }
+            let path = root.join(rel);
+            // A symlink along the path, or at its end, is followed to where it
+            // leads, which must still be beneath the root.
+            let escape = || EscapeSnafu { path: path.clone() }.build();
+            let io = |e: std::io::Error| IoSnafu { path: path.clone() }.into_error(e);
+            let canonical_root = tokio::fs::canonicalize(root).await.map_err(io)?;
+            let mut existing = path.as_path();
+            while tokio::fs::symlink_metadata(existing).await.is_err() {
+                existing = existing.parent().ok_or_else(escape)?;
+            }
+            match tokio::fs::canonicalize(existing).await {
+                Ok(resolved) if resolved.starts_with(&canonical_root) => {}
+                Ok(_) => return Err(escape()),
+                // A link whose target is gone leads nowhere the root holds.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(escape()),
+                Err(e) => return Err(io(e)),
+            }
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| IoSnafu { path: parent }.into_error(e))?;
+            }
+            tokio::fs::write(&path, contents)
+                .await
+                .map_err(|e| IoSnafu { path: &path }.into_error(e))
+        }
+        .boxed()
+    }
+}
+
+/// Stub journal source: a journal with nothing in it.
+pub struct StubJournal;
+
+impl super::journal::JournalSource for StubJournal {
+    fn open(
+        &self,
+        _opts: super::journal::LogStreamOptions,
+    ) -> Result<tokio::sync::mpsc::Receiver<super::journal::LogEntry>, BoxError> {
+        let (_, rx) = tokio::sync::mpsc::channel(1);
+        Ok(rx)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod volume_storage_tests {
+    use super::StubVolumeStorage;
+    use crate::system::volume_store::{ConfinedWriteError, VolumeStorage};
+
+    // spec: ACTU#storage-confinement
+    #[tokio::test]
+    async fn a_symlink_leaving_the_root_is_refused_and_creates_nothing_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("data")).unwrap();
+
+        let err = StubVolumeStorage
+            .write_confined(dir.path(), "data/newdir/f.txt", b"evil")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ConfinedWriteError::Escape { .. }), "{err}");
+        assert!(!outside.path().join("newdir").exists());
+    }
+
+    // spec: ACTU#storage-confinement
+    #[tokio::test]
+    async fn a_symlinked_file_leaving_the_root_is_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("f.txt");
+        std::fs::write(&target, b"theirs").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("f.txt")).unwrap();
+
+        let err = StubVolumeStorage
+            .write_confined(dir.path(), "f.txt", b"evil")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ConfinedWriteError::Escape { .. }), "{err}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
+    }
+
+    // spec: ACTU#storage-confinement
+    #[tokio::test]
+    async fn a_symlink_within_the_root_and_dotdot_inside_it_are_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("real")).unwrap();
+        std::os::unix::fs::symlink("real", dir.path().join("link")).unwrap();
+
+        StubVolumeStorage
+            .write_confined(dir.path(), "link/f.txt", b"inside")
+            .await
+            .unwrap();
+        StubVolumeStorage
+            .write_confined(dir.path(), "sub/../sib/g.txt", b"inside")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(dir.path().join("real/f.txt")).unwrap(),
+            b"inside"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("sib/g.txt")).unwrap(),
+            b"inside"
+        );
+    }
+
+    // spec: ACTU#storage-confinement
+    #[tokio::test]
+    async fn dotdot_leaving_the_root_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = StubVolumeStorage
+            .write_confined(dir.path(), "sub/../../escape", b"evil")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfinedWriteError::Escape { .. }), "{err}");
     }
 }
 

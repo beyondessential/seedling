@@ -16,9 +16,10 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime, ProcessManager,
+    priority::AppStandings,
     types::{
         ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ExecOutput,
-        ImageSummary, NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
+        ImageSummary, NetworkSummary, TransientUnitSpec, UnitState, UnitSummary,
     },
 };
 
@@ -223,13 +224,13 @@ impl ProcessManager for Switchable<dyn ProcessManager> {
         async move { inner.list_units(prefix).await }.boxed()
     }
 
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>> {
         let inner = self.get();
-        async move { inner.sync_slices(desired, prune).await }.boxed()
+        async move { inner.sync_groups(apps, prune).await }.boxed()
     }
 
     fn write_unit<'a>(
@@ -257,35 +258,11 @@ impl ProcessManager for Switchable<dyn ProcessManager> {
     }
 }
 
-/// How the daemon reaches its backends: the host's podman and systemd, or
-/// whatever a test stands in.
-pub(crate) trait Connector: Send + Sync + 'static {
+/// How the daemon reaches its backends: the host's container runtime and
+/// process manager, or whatever a test stands in.
+pub trait Connector: Send + Sync + 'static {
     fn container(&self) -> BoxFuture<'_, Result<Arc<dyn ContainerRuntime>, BoxError>>;
     fn process(&self) -> BoxFuture<'_, Result<Arc<dyn ProcessManager>, BoxError>>;
-}
-
-/// Connects to the host's podman and systemd.
-pub(crate) struct HostConnector {
-    /// The data directory, where the process manager keeps its records.
-    pub(crate) data_dir: std::path::PathBuf,
-}
-
-impl Connector for HostConnector {
-    fn container(&self) -> BoxFuture<'_, Result<Arc<dyn ContainerRuntime>, BoxError>> {
-        async {
-            let podman = crate::system::podman::PodmanRuntime::new().await?;
-            Ok(Arc::new(podman) as Arc<dyn ContainerRuntime>)
-        }
-        .boxed()
-    }
-
-    fn process(&self) -> BoxFuture<'_, Result<Arc<dyn ProcessManager>, BoxError>> {
-        async {
-            let systemd = crate::system::systemd::SystemdManager::connect(&self.data_dir).await?;
-            Ok(Arc::new(systemd) as Arc<dyn ProcessManager>)
-        }
-        .boxed()
-    }
 }
 
 /// A connector with nothing to connect to, for backends supplied ready-made.
@@ -325,7 +302,7 @@ pub struct Backends {
 impl Backends {
     /// Backends that start as `container` and `process`, each failed or
     /// working, and are reached through `connector` thereafter.
-    pub(crate) fn new(
+    pub fn new(
         connector: Arc<dyn Connector>,
         container: Result<Arc<dyn ContainerRuntime>, BoxError>,
         process: Result<Arc<dyn ProcessManager>, BoxError>,
@@ -335,7 +312,7 @@ impl Backends {
             Err(e) => (
                 Arc::new(crate::system::unavailable::UnavailableContainerRuntime)
                     as Arc<dyn ContainerRuntime>,
-                Some(format!("container runtime (podman) unavailable: {e}")),
+                Some(format!("container runtime unavailable: {e}")),
             ),
         };
         let (process, process_down) = match process {
@@ -343,7 +320,7 @@ impl Backends {
             Err(e) => (
                 Arc::new(crate::system::unavailable::UnavailableProcessManager)
                     as Arc<dyn ProcessManager>,
-                Some(format!("process manager (systemd) unavailable: {e}")),
+                Some(format!("process manager unavailable: {e}")),
             ),
         };
         Self {
@@ -414,9 +391,7 @@ impl Backends {
         if container_down {
             match self.connector.container().await {
                 Ok(c) => container = Some(c),
-                Err(e) => {
-                    container_failure = Some(format!("container runtime (podman) unavailable: {e}"))
-                }
+                Err(e) => container_failure = Some(format!("container runtime unavailable: {e}")),
             }
         }
         let mut process = None;
@@ -424,9 +399,7 @@ impl Backends {
         if process_down {
             match self.connector.process().await {
                 Ok(p) => process = Some(p),
-                Err(e) => {
-                    process_failure = Some(format!("process manager (systemd) unavailable: {e}"))
-                }
+                Err(e) => process_failure = Some(format!("process manager unavailable: {e}")),
             }
         }
 

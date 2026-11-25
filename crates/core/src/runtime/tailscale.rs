@@ -423,8 +423,7 @@ impl TailscaleProvider {
 }
 
 fn build_client(socket: &std::path::Path) -> Result<reqwest::Client, TailscaleError> {
-    reqwest::Client::builder()
-        .unix_socket(socket)
+    crate::runtime::local_socket::client_builder(socket)
         .build()
         .map_err(|e| TailscaleError::Unreachable(format!("client build failed: {e}")))
 }

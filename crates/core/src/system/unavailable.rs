@@ -1,5 +1,5 @@
-//! Erroring backend implementations used when the container runtime (podman)
-//! or process manager (systemd) could not be reached at startup. They let the
+//! Erroring backend implementations used when the container runtime or
+//! process manager could not be reached at startup. They let the
 //! daemon come up in a degraded mode — the operator interface, database, and
 //! scheduler run and surface a system-wide fault — instead of crash-looping.
 //! Every method fails loudly; unlike the stub backends, they never fake
@@ -9,14 +9,15 @@ use ipnet::{Ipv4Net, Ipv6Net};
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime, ProcessManager,
+    priority::AppStandings,
     types::{
         ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ExecOutput,
-        ImageSummary, NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
+        ImageSummary, NetworkSummary, TransientUnitSpec, UnitState, UnitSummary,
     },
 };
 
 fn unavailable() -> BoxError {
-    "container/process backend unavailable: the podman/systemd connection failed at startup".into()
+    "container/process backend unavailable: the connection failed at startup".into()
 }
 
 /// A `ContainerRuntime` whose every operation fails with an "unavailable" error.
@@ -182,9 +183,9 @@ impl ProcessManager for UnavailableProcessManager {
         Box::pin(async { Err(unavailable()) })
     }
 
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async { Err(unavailable()) })

@@ -15,7 +15,7 @@ use nftables::{
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
 
-use crate::system::types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule};
+use seedling_core::system::types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule};
 
 pub(super) const TABLE: &str = "seedling_net";
 pub(super) const CHAIN_PRE: &str = "prerouting";

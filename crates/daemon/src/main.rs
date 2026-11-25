@@ -18,14 +18,17 @@ use seedling_core::{
         registry::DbInstanceRegistry,
     },
     system::{
-        System,
-        host_probes::{Fact, HostConstants, HostProbes, HostSource},
+        Platform, System,
+        host_probes::{Fact, HostConstants, HostProbes},
         nat64::should_activate_nat64,
-        netinfo::{detect_ipv4_egress, detect_ipv6_egress},
         node_prefix_from_machine_id,
         reconcile::Reconciler,
         resolver::{resolver_addr, resolver_gateway_addr, spawn_dns_forwarder},
     },
+};
+use seedling_linux::{
+    host::HostSource,
+    netinfo::{detect_ipv4_egress, detect_ipv6_egress},
 };
 use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
@@ -307,8 +310,8 @@ async fn main() {
         )
     });
 
-    // spec: ACTU#btrfs-check
-    let use_btrfs = match seedling_core::system::volume_store::is_btrfs(&data_dir) {
+    // spec: ACTU#snapshotting-check
+    let use_btrfs = match seedling_linux::volume_storage::is_btrfs(&data_dir) {
         Ok(true) => {
             tracing::info!("data directory is on BTRFS; using subvolumes for named volumes");
             true
@@ -357,7 +360,8 @@ async fn main() {
     // System backends
     // ---------------------------------------------------------------------------
 
-    let node_prefix = node_prefix_from_machine_id()
+    let node_prefix = seedling_linux::host::machine_id()
+        .and_then(|id| node_prefix_from_machine_id(&id))
         .unwrap_or_else(|e| fatal!("cannot derive node prefix from machine-id: {e}"));
 
     let tick_notify = Arc::new(Notify::new());
@@ -399,7 +403,7 @@ async fn main() {
     // spec: CONST#determining-host-constants
     // A constant that cannot be determined at start is looked for again by
     // the reconciler on each iteration, which files a fault until it is.
-    let constants = HostConstants::detect();
+    let constants = HostConstants::detect(&HostSource).await;
     let host_probes = HostProbes::new(
         Arc::new(HostSource),
         nat64_detection_fact,
@@ -472,12 +476,28 @@ async fn main() {
     };
     let _dns_forwarder_handle = forwarder_handle;
 
+    let journal = Arc::new(seedling_linux::journal::Journal);
+    seedling_core::system::journal::install_sink(journal.clone());
+    let storage = Arc::new(seedling_linux::volume_storage::HostVolumeStorage::new(
+        use_btrfs,
+    ));
     let (driver, caddy_admin_client) = if args.stub_backends {
         tracing::info!("booting with stubbed system backends (no podman/systemd/nftables)");
-        System::setup_stubbed(&data_dir, use_btrfs)
+        System::setup_stubbed(&data_dir, storage, journal)
             .unwrap_or_else(|e| fatal!("stubbed system setup failed: {e}"))
     } else {
-        System::setup(node_prefix, &data_dir, use_btrfs)
+        let data_plane = seedling_linux::data_plane::NftablesDataPlane::new(node_prefix)
+            .unwrap_or_else(|e| fatal!("cannot open the packet filter: {e}"));
+        let platform = Platform {
+            connector: Arc::new(seedling_linux::connector::HostConnector {
+                data_dir: data_dir.clone(),
+            }),
+            data_plane: Arc::new(data_plane),
+            journal,
+            storage,
+            translator: Arc::new(seedling_linux::jool::Jool),
+        };
+        System::setup(platform, node_prefix, &data_dir)
             .await
             .unwrap_or_else(|e| fatal!("system setup failed: {e}"))
     };
@@ -1696,8 +1716,12 @@ mod tests {
         use seedling_core::system::System;
 
         let data_dir = tempfile::tempdir().expect("temp data dir");
-        let (driver, _caddy_admin) =
-            System::setup_stubbed(data_dir.path(), false).expect("stub system");
+        let (driver, _caddy_admin) = System::setup_stubbed(
+            data_dir.path(),
+            std::sync::Arc::new(seedling_core::system::stub::StubVolumeStorage),
+            std::sync::Arc::new(seedling_core::system::stub::StubJournal),
+        )
+        .expect("stub system");
         let db = DbHandle::open_in_memory().expect("in-memory db");
 
         // Two resources spared for the operation that will not replay, and
@@ -1732,8 +1756,12 @@ mod tests {
         use seedling_protocol::names::AppName;
 
         let data_dir = tempfile::tempdir().expect("temp data dir");
-        let (driver, _caddy_admin) =
-            System::setup_stubbed(data_dir.path(), false).expect("stub system");
+        let (driver, _caddy_admin) = System::setup_stubbed(
+            data_dir.path(),
+            std::sync::Arc::new(seedling_core::system::stub::StubVolumeStorage),
+            std::sync::Arc::new(seedling_core::system::stub::StubJournal),
+        )
+        .expect("stub system");
         let db = DbHandle::open_in_memory().expect("in-memory db");
         insert_dynamic_resources(&db, &[(INST_A, "op-abandoned")]);
         let volume = AnonymousVolume {
@@ -1785,7 +1813,7 @@ mod tests {
 
         let data_dir = tempfile::tempdir().expect("temp data dir");
         let (driver, _caddy_admin) =
-            System::setup_unavailable(data_dir.path(), false).expect("unavailable system");
+            System::setup_unavailable(data_dir.path()).expect("unavailable system");
         let db = DbHandle::open_in_memory().expect("in-memory db");
 
         insert_dynamic_resources(&db, &[(INST_A, "op-abandoned"), (INST_B, "op-abandoned")]);

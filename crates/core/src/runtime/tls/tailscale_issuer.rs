@@ -67,8 +67,7 @@ pub async fn issue(
     // No redirect following: any 30x from tailscaled would otherwise
     // make reqwest re-issue with a Referer header set, which fails the
     // CSRF check at the localapi entrypoint on the next hop.
-    let client = reqwest::Client::builder()
-        .unix_socket(socket)
+    let client = crate::runtime::local_socket::client_builder(&socket)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| IssueError::Unreachable {

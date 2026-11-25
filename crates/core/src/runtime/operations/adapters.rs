@@ -121,7 +121,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
                             // spec: ACTU#volume-storage
                             let host_path =
                                 tmpfs_volume_path(VolumeName::for_app(&app, &name).as_str());
-                            ensure_tmpfs_volume_dir(&host_path, &writes)
+                            ensure_tmpfs_volume_dir(&driver.volume_store, &host_path, &writes)
                                 .await
                                 .map_err(|e| format!("rt.write: {e}"))?;
                             host_path
@@ -145,7 +145,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
                     }
                     VolumeWriteTarget::ExternalBound { host_path } => host_path,
                 };
-                safe_volume_write(&mountpoint, &path, &contents)
+                safe_volume_write(&driver.volume_store, &mountpoint, &path, &contents)
                     .await
                     .map_err(|e| format!("rt.write: {e}"))
             })

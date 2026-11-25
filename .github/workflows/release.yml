@@ -24,8 +24,8 @@ jobs:
       matrix:
         include:
           # The `seedling` daemon is Linux-only (systemd/nftables/jool/podman via
-          # seedling-core). seedling-ctl and seedling-web depend only on
-          # seedling-protocol, so they cross-compile with no libsystemd coupling.
+          # seedling-linux). seedling-ctl and seedling-web do not depend on
+          # seedling-linux, so they cross-compile with no libsystemd coupling.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
             deb: true

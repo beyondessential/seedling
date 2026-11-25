@@ -141,7 +141,7 @@ The server MUST then emit a `SiteVolumeDeleted` event.
 The server MUST reject a `source` that is not a volume string with `requirements_invalid`.
 The server MUST reject a `source` naming no site volume, or naming an app volume that has no storage, with `not_found`.
 The server MUST reject a `source` naming a bind or snapshot site volume with `requirements_invalid`.
-The server MUST reject a `source` whose volume is not stored as a BTRFS subvolume with `requirements_invalid`.
+The server MUST reject a `source` whose volume is not stored as a [snapshottable volume](../runtime/actuation.md#volume-storage) with `requirements_invalid`.
 The server MUST reject a `name` that is reserved or taken with `requirements_invalid`.
 If the snapshot's storage cannot be created, the server MUST answer with `internal`.
 
@@ -159,7 +159,7 @@ The server MUST emit a `SiteVolumeSnapshotted` event, whose `source` is the [vol
 
 The server MUST reject a `source` that names no site volume with `not_found`.
 The server MUST reject a `source` that names a site volume other than a snapshot with `requirements_invalid`.
-On a host whose data directory is not on BTRFS, the server MUST reject the request with `requirements_invalid`.
+On a host whose data directory is not on the [snapshotting volume store](../runtime/actuation.md#volume-storage), the server MUST reject the request with `requirements_invalid`.
 The server MUST reject a `name` that is reserved or taken with `requirements_invalid`.
 If the new site volume's storage cannot be created, the server MUST answer with `internal`.
 

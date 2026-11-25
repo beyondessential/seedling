@@ -15,11 +15,7 @@ ed25519-dalek.workspace = true
 futures-util.workspace = true
 ipnet.workspace = true
 jiff.workspace = true
-libc = "0.2.191"
-nftables = { version = "0.6.3", features = ["tokio"] }
-nix = { version = "0.31.3", features = ["signal", "term"] }
 parking_lot.workspace = true
-podman-rest-client = { version = "0.13.0", default-features = false, features = ["uds", "v5"] }
 quinn.workspace = true
 rand.workspace = true
 reqwest.workspace = true
@@ -28,9 +24,7 @@ reqwest.workspace = true
 # with ErrorDataRace before any script runs, and every BSL script is written
 # that way.
 rhai = { version = "=1.25.1", features = ["internals", "metadata", "no_time"] }
-rtnetlink = "0.24.0"
 rusqlite = { version = "0.42.0", features = ["bundled"] }
-rustix = { version = "1.1.6", features = ["fs", "process"] }
 rustls.workspace = true
 rustls-pki-types.workspace = true
 serde.workspace = true
@@ -38,13 +32,10 @@ serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 subtle.workspace = true
-systemd = "0.11.1"
-tempfile = "3.27.0"
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 wildmatch.workspace = true
-zbus = { version = "6.2.1", features = ["tokio"] }
 zxcvbn = "3.1.1"
 whoami.workspace = true
 orion = "0.18.1"
@@ -89,9 +80,16 @@ saphyr = "0.3.4"
 saphyr-parser = "0.3.4"
 hifijson = "0.5.1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.6", features = ["process"] }
+
 [dev-dependencies]
 flate2 = "1.1.11"
 rcgen = { version = "0.14.10", features = ["x509-parser"] }
 tar = "0.4.46"
+tempfile = "3.27.0"
 time = "0.3.55"
 tokio = { workspace = true, features = ["test-util"] }

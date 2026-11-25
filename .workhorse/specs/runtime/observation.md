@@ -45,7 +45,7 @@ For a Volume instance, the runtime MUST observe whether the named volume exists.
 If a named non-tmpfs volume exists but its storage is not of the backend of the [data directory](actuation.md#volume-storage), the runtime MUST report a backend mismatch and MUST NOT report the volume as present.
 
 > [!NOTE]
-> A plain directory found where the data directory is on a BTRFS filesystem is a backend mismatch, as is a BTRFS subvolume found where it is not.
+> A plain directory found where the data directory is on the snapshotting volume store is a backend mismatch, as is a snapshottable volume found where it is not.
 > A volume with a backend mismatch is replaced as [volume removal](actuation.md#volume-removal) specifies.
 
 ## Ingresses

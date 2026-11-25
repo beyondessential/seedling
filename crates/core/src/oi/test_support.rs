@@ -104,9 +104,13 @@ impl TestOi {
     ) -> Self {
         let data_dir = tempfile::tempdir().expect("create temp data dir");
         let driver = driver.unwrap_or_else(|| {
-            System::setup_stubbed(data_dir.path(), false)
-                .expect("stub system setup")
-                .0
+            System::setup_stubbed(
+                data_dir.path(),
+                std::sync::Arc::new(crate::system::stub::StubVolumeStorage),
+                std::sync::Arc::new(crate::system::stub::StubJournal),
+            )
+            .expect("stub system setup")
+            .0
         });
         let db = DbHandle::open_in_memory().expect("open in-memory db");
         let cipher = Arc::new(Cipher::for_tests());

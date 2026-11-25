@@ -1,26 +1,43 @@
 use std::sync::Arc;
 
+use seedling_core::{
+    defs::container::signal_number,
+    system::{
+        BoxError, BoxFuture, ProcessManager,
+        priority::AppStandings,
+        types::{
+            ActiveState, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind, UnitState,
+            UnitSummary,
+        },
+        volume_store::ConfinedWriteError,
+    },
+};
 use snafu::{IntoError, ResultExt, Snafu};
 use zbus::{Array, Connection, OwnedObjectPath, Signature, Structure, Variant as Value};
 
-use crate::system::{
-    BoxError, BoxFuture, ProcessManager,
-    types::{
-        ActiveState, SliceSpec, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind,
-        UnitState, UnitSummary,
-    },
-};
+use self::priority::SliceSpec;
 
+pub mod priority;
 mod slice_files;
 
 const UNIT_DIR: &str = "/etc/systemd/system";
+
+// spec: LINUX#restart-pacing
+/// Seconds between a unit's exit and its next automatic restart.
+const RESTART_DELAY_SECS: u64 = 5;
+// spec: LINUX#restart-pacing
+/// Width of the window the start limit counts starts in, in seconds.
+const START_LIMIT_INTERVAL_SECS: u64 = 600;
+// spec: LINUX#restart-pacing
+/// Starts permitted within the window before systemd stops restarting a unit.
+const START_LIMIT_BURST: u32 = 10;
 
 // ---------------------------------------------------------------------------
 // Internal error type
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Snafu)]
-pub(crate) enum SystemdError {
+pub enum SystemdError {
     #[snafu(display("D-Bus error: {source}"))]
     DBus {
         #[snafu(source(from(zbus::Error, Box::new)))]
@@ -237,7 +254,7 @@ fn parse_exec_main(code: i32, status: i32) -> Option<UnitExit> {
 // SystemdManager
 // ---------------------------------------------------------------------------
 
-pub(crate) struct SystemdManager {
+pub struct SystemdManager {
     conn: Arc<Connection>,
     /// The record of the slice unit files this runtime has written, in the data
     /// directory.
@@ -249,7 +266,7 @@ const SLICE_RECORD: &str = "slice-units";
 
 impl SystemdManager {
     /// Connect to the system D-Bus. Called once at startup.
-    pub(crate) async fn connect(data_dir: &std::path::Path) -> Result<Self, SystemdError> {
+    pub async fn connect(data_dir: &std::path::Path) -> Result<Self, SystemdError> {
         let conn = Connection::system().await.context(DBusSnafu)?;
         Ok(Self {
             conn: Arc::new(conn),
@@ -308,7 +325,7 @@ impl SystemdManager {
         // clients) get clean termination. The systemd D-Bus API takes
         // KillSignal as a signal number (int32), not the canonical name.
         if let Some(sig) = &spec.kill_signal {
-            let n = signal_name_to_number(sig).ok_or_else(|| {
+            let n = signal_number(sig).ok_or_else(|| {
                 ProtocolSnafu {
                     message: format!("unknown kill_signal {sig:?}"),
                 }
@@ -331,45 +348,38 @@ impl SystemdManager {
         // spec: LINUX#restart-pacing
         // Slow systemd's per-unit restart cadence so a crash-looping
         // container does not blow through the start-limit window in seconds.
-        if let Some(secs) = spec.restart_sec {
-            props.push(UnitProperty {
-                name: "RestartUSec",
-                value: Value::from(u64::from(secs) * 1_000_000),
-            });
-        }
-        if let Some(secs) = spec.start_limit_interval_sec {
-            props.push(UnitProperty {
-                name: "StartLimitIntervalUSec",
-                value: Value::from(u64::from(secs) * 1_000_000),
-            });
-        }
-        if let Some(burst) = spec.start_limit_burst {
-            props.push(UnitProperty {
-                name: "StartLimitBurst",
-                value: Value::from(burst),
-            });
-        }
-        // spec: PRIO#resource-control-groups
+        // The wide window means a slow-failing container (e.g. takes 30s to
+        // crash) still gets multiple chances; the per-attempt delay means a
+        // fast-failing container can't burn through the budget in a
+        // heartbeat.
+        props.push(UnitProperty {
+            name: "RestartUSec",
+            value: Value::from(RESTART_DELAY_SECS * 1_000_000),
+        });
+        props.push(UnitProperty {
+            name: "StartLimitIntervalUSec",
+            value: Value::from(START_LIMIT_INTERVAL_SECS * 1_000_000),
+        });
+        props.push(UnitProperty {
+            name: "StartLimitBurst",
+            value: Value::from(START_LIMIT_BURST),
+        });
         // spec: LINUX#resource-control-groups
-        // The unit joins the slice its app and declared level resolve to; the
-        // slice itself carries the CPU and I/O weights.
-        if let Some(slice) = &spec.slice {
-            validate_unit_name(slice)?;
-            props.push(UnitProperty {
-                name: "Slice",
-                value: Value::from(slice.as_str()),
-            });
-        }
-        // spec: PRIO#kill-order
+        // The unit joins the slice its standing resolves to; the slice itself
+        // carries the CPU and I/O weights.
+        let slice = priority::unit_slice(&spec.standing);
+        validate_unit_name(&slice)?;
+        props.push(UnitProperty {
+            name: "Slice",
+            value: Value::from(slice),
+        });
         // spec: LINUX#kill-order
         // Set here rather than adjusted later because the supervisor applies it
         // when it spawns the process and cannot change it afterwards.
-        if let Some(adj) = spec.oom_score_adjust {
-            props.push(UnitProperty {
-                name: "OOMScoreAdjust",
-                value: Value::from(adj),
-            });
-        }
+        props.push(UnitProperty {
+            name: "OOMScoreAdjust",
+            value: Value::from(priority::unit_oom_score_adjust(&spec.standing)),
+        });
         // spec: ACTU#container-logs
         // spec: LINUX#logs
         if !spec.log_extra_fields.is_empty() {
@@ -658,13 +668,11 @@ impl SystemdManager {
 
     async fn write_unit_impl(&self, name: &str, content: &str) -> Result<(), SystemdError> {
         validate_unit_name(name)?;
-        super::confined::write_async(std::path::Path::new(UNIT_DIR), name, content.as_bytes())
+        crate::confined::write_async(std::path::Path::new(UNIT_DIR), name, content.as_bytes())
             .await
             .map_err(|e| match e {
-                super::confined::ConfinedWriteError::Io { source, .. } => {
-                    IoSnafu.into_error(source)
-                }
-                super::confined::ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
+                ConfinedWriteError::Io { source, .. } => IoSnafu.into_error(source),
+                ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
                     name: name.to_owned(),
                 }
                 .build(),
@@ -703,47 +711,6 @@ impl SystemdManager {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Map a canonical signal name (`"SIGINT"`, etc.) to its Linux signal number.
-/// systemd's `KillSignal=` D-Bus property is typed as a 32-bit int, so the
-/// caller must convert from the BSL-facing string form.
-fn signal_name_to_number(name: &str) -> Option<i32> {
-    let bare = name.strip_prefix("SIG").unwrap_or(name);
-    Some(match bare {
-        "HUP" => 1,
-        "INT" => 2,
-        "QUIT" => 3,
-        "ILL" => 4,
-        "TRAP" => 5,
-        "ABRT" => 6,
-        "BUS" => 7,
-        "FPE" => 8,
-        "KILL" => 9,
-        "USR1" => 10,
-        "SEGV" => 11,
-        "USR2" => 12,
-        "PIPE" => 13,
-        "ALRM" => 14,
-        "TERM" => 15,
-        "STKFLT" => 16,
-        "CHLD" => 17,
-        "CONT" => 18,
-        "STOP" => 19,
-        "TSTP" => 20,
-        "TTIN" => 21,
-        "TTOU" => 22,
-        "URG" => 23,
-        "XCPU" => 24,
-        "XFSZ" => 25,
-        "VTALRM" => 26,
-        "PROF" => 27,
-        "WINCH" => 28,
-        "IO" | "POLL" => 29,
-        "PWR" => 30,
-        "SYS" => 31,
-        _ => return None,
-    })
-}
 
 fn restart_str(r: TransientRestart) -> &'static str {
     match r {
@@ -840,11 +807,12 @@ impl ProcessManager for SystemdManager {
         Box::pin(async move { self.stop_unit_impl(name).await.map_err(Into::into) })
     }
 
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>> {
+        let desired = priority::desired_slices(&apps).into_values().collect();
         Box::pin(async move {
             self.sync_slices_impl(desired, prune)
                 .await

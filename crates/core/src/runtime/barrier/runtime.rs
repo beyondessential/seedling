@@ -3107,8 +3107,8 @@ pub struct Executed {
 /// mirrors systemctl's `<code>/<NAME>` convention.
 ///
 /// POSIX/bash conventions are listed inline (six entries) and
-/// signal-terminated processes (128+N) defer to `nix` so the table
-/// stays in lockstep with libc. systemd's LSB codes (200..255) are
+/// signal-terminated processes (128+N) take the name of the signal
+/// numbered N. systemd's LSB codes (200..255) are
 /// out of scope here — they are set by exec failure paths in the
 /// init manager, not by anything `rt.exec` invokes.
 fn exit_code_name(code: i32) -> Option<String> {
@@ -3126,10 +3126,8 @@ fn exit_code_name(code: i32) -> Option<String> {
     }
 
     // Signal-terminated: shell convention is 128 + signal number.
-    if (129..=128 + 64).contains(&code)
-        && let Ok(sig) = nix::sys::signal::Signal::try_from(code - 128)
-    {
-        return Some(sig.as_str().to_owned());
+    if (129..=128 + 64).contains(&code) {
+        return crate::defs::container::signal_name(code - 128);
     }
 
     None
@@ -3190,6 +3188,8 @@ mod exit_code_tests {
         assert_eq!(format_exit_code(127), "127/NOTFOUND");
         assert_eq!(format_exit_code(137), "137/SIGKILL");
         assert_eq!(format_exit_code(143), "143/SIGTERM");
+        assert_eq!(format_exit_code(157), "157/SIGIO");
+        assert_eq!(format_exit_code(159), "159/SIGSYS");
     }
 
     #[test]
@@ -3198,6 +3198,8 @@ mod exit_code_tests {
         assert_eq!(format_exit_code(42), "42");
         assert_eq!(format_exit_code(217), "217");
         assert_eq!(format_exit_code(255), "255");
+        // A real-time signal has a number but no name of its own.
+        assert_eq!(format_exit_code(128 + 40), "168");
     }
 }
 

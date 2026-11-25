@@ -6,9 +6,10 @@
 
 use std::sync::Arc;
 
-use crate::system::{BoxFuture, nat64};
+use crate::system::BoxFuture;
 
-/// Where the probes' answers come from: the host, or a test's stand-in.
+/// Where the probes' answers come from: the host, through its platform, or a
+/// test's stand-in.
 pub trait ProbeSource: Send + Sync {
     fn external_nat64(&self) -> BoxFuture<'_, Result<bool, String>>;
     fn ipv4_egress(&self) -> BoxFuture<'_, Result<bool, String>>;
@@ -19,36 +20,37 @@ pub trait ProbeSource: Send + Sync {
     fn node_name(&self) -> BoxFuture<'_, Result<String, String>>;
 }
 
-/// The host's own resolver and routing tables.
-pub struct HostSource;
+/// A source for hosts with nothing left to look for, whose facts were all
+/// determined before probing began.
+struct NothingToProbe;
 
-impl ProbeSource for HostSource {
+impl ProbeSource for NothingToProbe {
     fn external_nat64(&self) -> BoxFuture<'_, Result<bool, String>> {
-        Box::pin(nat64::detect_external_nat64())
+        Box::pin(async { Err("nothing to probe".to_owned()) })
     }
 
     fn ipv4_egress(&self) -> BoxFuture<'_, Result<bool, String>> {
-        Box::pin(crate::system::netinfo::detect_ipv4_egress())
+        Box::pin(async { Err("nothing to probe".to_owned()) })
     }
 
     fn ipv6_egress(&self) -> BoxFuture<'_, Result<bool, String>> {
-        Box::pin(crate::system::netinfo::detect_ipv6_egress())
+        Box::pin(async { Err("nothing to probe".to_owned()) })
     }
 
     fn timezone(&self) -> BoxFuture<'_, Result<String, String>> {
-        Box::pin(async { crate::sysconst::detect_timezone() })
+        Box::pin(async { Err("nothing to probe".to_owned()) })
     }
 
     fn available_threads(&self) -> BoxFuture<'_, Result<i64, String>> {
-        Box::pin(async { crate::sysconst::detect_available_threads() })
+        Box::pin(async { Err("nothing to probe".to_owned()) })
     }
 
     fn available_memory(&self) -> BoxFuture<'_, Result<i64, String>> {
-        Box::pin(async { crate::sysconst::detect_available_memory() })
+        Box::pin(async { Err("nothing to probe".to_owned()) })
     }
 
     fn node_name(&self) -> BoxFuture<'_, Result<String, String>> {
-        Box::pin(async { crate::sysconst::detect_node_name() })
+        Box::pin(async { Err("nothing to probe".to_owned()) })
     }
 }
 
@@ -125,12 +127,12 @@ pub struct HostConstants {
 }
 
 impl HostConstants {
-    /// Every constant as the host gives it now.
-    pub fn detect() -> Self {
+    /// Every constant as `source` gives it now.
+    pub async fn detect(source: &dyn ProbeSource) -> Self {
         Self {
-            available_threads: Fact::from_result(crate::sysconst::detect_available_threads()),
-            available_memory: Fact::from_result(crate::sysconst::detect_available_memory()),
-            node_name: Fact::from_result(crate::sysconst::detect_node_name()),
+            available_threads: Fact::from_result(source.available_threads().await),
+            available_memory: Fact::from_result(source.available_memory().await),
+            node_name: Fact::from_result(source.node_name().await),
         }
     }
 
@@ -191,7 +193,7 @@ impl HostProbes {
     /// Facts that are all determined and have nothing to look for.
     pub fn settled(ipv4_egress: bool, ipv6_egress: bool) -> Self {
         Self::new(
-            Arc::new(HostSource),
+            Arc::new(NothingToProbe),
             None,
             Fact::Determined(ipv4_egress),
             Fact::Determined(ipv6_egress),

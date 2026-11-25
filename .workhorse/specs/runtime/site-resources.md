@@ -45,9 +45,9 @@ A site volume is one of three kinds:
 
 | kind | storage |
 | --- | --- |
-| managed | a directory the runtime creates and maintains in the [data directory](actuation.md#data-directory), as a BTRFS subvolume where the data directory is on BTRFS |
+| managed | a directory the runtime creates and maintains in the [data directory](actuation.md#data-directory), as a [snapshottable volume](actuation.md#volume-storage) where the data directory is on the host's snapshotting volume store |
 | bind | a host path the operator supplies, mounted as it is |
-| snapshot | a read-only BTRFS snapshot of another volume, created by the runtime |
+| snapshot | a read-only snapshot of another volume, created by the runtime |
 
 A site volume is mapped read-write or read-only.
 The runtime MUST mount a snapshot site volume read-only, whatever its mapping says.
@@ -79,18 +79,18 @@ Checking that a name is free and taking it MUST be one indivisible step, so that
 
 ### Site volume snapshots
 
-An operator MAY snapshot an app volume or a managed site volume into a new snapshot site volume, when that volume is stored as a BTRFS subvolume.
+An operator MAY snapshot an app volume or a managed site volume into a new snapshot site volume, when that volume is stored as a [snapshottable volume](actuation.md#volume-storage).
 A snapshot site volume MUST record the volume it was taken from.
-The runtime MUST reject a request to snapshot a volume that is not stored as a BTRFS subvolume.
+The runtime MUST reject a request to snapshot a volume that is not stored as a snapshottable volume.
 
 The runtime MUST emit an event when it creates a snapshot site volume, identifying the new snapshot and its source volume, app or site.
 
 ### Snapshot promotion
 
-An operator MAY promote a snapshot site volume into a new managed site volume under a name the operator chooses, when the data directory is on BTRFS.
+An operator MAY promote a snapshot site volume into a new managed site volume under a name the operator chooses, when the data directory is on the host's snapshotting volume store.
 The runtime MUST create the new volume as a writable copy of the snapshot's contents, and record it as a managed site volume.
 Promotion MUST leave the snapshot unchanged.
-On a host whose data directory is not on BTRFS, the runtime MUST reject a promotion request.
+On a host whose data directory is not on the snapshotting volume store, the runtime MUST reject a promotion request.
 
 The runtime MUST emit an event when it promotes a snapshot, identifying the new managed site volume and the source snapshot.
 

@@ -9,11 +9,11 @@ use snafu::{ResultExt, Snafu};
 
 use super::config::build_caddy_config;
 use super::proxy::{CaddyAddrs, CaddyProxy};
-use crate::system::priority;
 use crate::system::{
     ContainerRuntime, NetworkProxy, ProcessManager,
     types::{ContainerStatus, ProxyConfig, TransientRestart, TransientUnitSpec},
 };
+use crate::system::{journal::INFRA_FIELD, priority::UnitStanding};
 
 pub(crate) const CADDY_BLUE: &str = "seedling-caddy-blue";
 pub(crate) const CADDY_GREEN: &str = "seedling-caddy-green";
@@ -358,18 +358,14 @@ async fn start_slot(
                 "/etc/caddy/admin.json".to_owned(),
             ],
             restart: TransientRestart::Always,
-            log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "proxy".to_owned())],
+            log_extra_fields: vec![(INFRA_FIELD.to_owned(), "proxy".to_owned())],
             kill_signal: None,
             timeout_stop_secs: None,
             // spec: PRIO#kill-order
             // Infrastructure ranks above every app workload: a host under
             // memory pressure must not lose the components that route to
             // whatever survives.
-            slice: Some(priority::INFRA_SLICE.to_owned()),
-            oom_score_adjust: Some(priority::INFRA_OOM_SCORE_ADJUST),
-            restart_sec: Some(5),
-            start_limit_interval_sec: Some(600),
-            start_limit_burst: Some(10),
+            standing: UnitStanding::Infrastructure,
         })
         .await
         .context(ProcessSnafu)

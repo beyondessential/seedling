@@ -41,8 +41,9 @@ use crate::{
         actuator::Actuator,
         caddy,
         observer::Observer,
-        priority, resolver,
-        types::{DataPlaneRules, SliceSpec, UnitSummary},
+        priority::AppStandings,
+        resolver,
+        types::{DataPlaneRules, UnitSummary},
     },
 };
 
@@ -1235,67 +1236,34 @@ fn caddy_fault_action(
     }
 }
 
-/// The slices the running workloads need, with the weights each should carry.
+/// The standings the running workloads take: each app's priority and the
+/// Deployment levels its workloads stand at.
 ///
 /// Pure so the derivation can be checked without a supervisor: applying it is
-/// [`Reconciler::reconcile_slices`].
+/// [`Reconciler::reconcile_groups`].
 // spec: PRIO#resource-control-groups
-// spec: PRIO#contended-capacity
-fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
-    let mut desired: BTreeMap<String, SliceSpec> = BTreeMap::new();
-
-    for app in apps {
-        let app_slice = priority::app_slice(&app.name);
-        desired.insert(
-            app_slice.clone(),
-            SliceSpec {
-                name: app_slice,
-                description: format!("seedling app {}", app.name),
-                weight: priority::app_weight(app.app_priority),
-            },
-        );
-
-        // The levels this app's definition actually declares, plus Normal,
-        // where Jobs and every other workload that is not a Deployment stand.
-        // A level that stops being declared has its slice forgotten, which is
-        // safe: forgetting unlinks the unit file and leaves anything still
-        // running in the slice alone.
-        let mut tiers: BTreeSet<Priority> = BTreeSet::new();
-        tiers.insert(Priority::Normal);
-        for resource in app.declarations.resources.values() {
-            if let Resource::Deployment(deployment) = resource {
-                tiers.insert(deployment.def.lock().priority);
+fn desired_standings(apps: &[AppSnapshot]) -> Vec<AppStandings> {
+    apps.iter()
+        .map(|app| {
+            // The levels this app's definition actually declares, plus Normal,
+            // where Jobs and every other workload that is not a Deployment
+            // stand. A level that stops being declared has its group
+            // forgotten, which is safe: forgetting leaves anything still
+            // running in it alone.
+            let mut levels: BTreeSet<Priority> = BTreeSet::new();
+            levels.insert(Priority::Normal);
+            for resource in app.declarations.resources.values() {
+                if let Resource::Deployment(deployment) = resource {
+                    levels.insert(deployment.def.lock().priority);
+                }
             }
-        }
-        for tier in tiers {
-            let name = priority::tier_slice(&app.name, tier);
-            desired.insert(
-                name.clone(),
-                SliceSpec {
-                    name,
-                    description: format!("seedling app {} at {}", app.name, tier.as_str()),
-                    weight: priority::deployment_weight(tier),
-                },
-            );
-        }
-    }
-
-    // spec: PRIO#kill-order
-    // spec: PRIO#resource-control-groups
-    // Inserted last so it always wins the key: an app named for the
-    // infrastructure component realises the same slice name, and an app that
-    // predates the reservation on that name would otherwise reweight the group
-    // holding the proxy and the resolver down to its own standing.
-    desired.insert(
-        priority::INFRA_SLICE.to_owned(),
-        SliceSpec {
-            name: priority::INFRA_SLICE.to_owned(),
-            description: "seedling infrastructure".to_owned(),
-            weight: priority::INFRA_WEIGHT,
-        },
-    );
-
-    desired
+            AppStandings {
+                app: app.name.clone(),
+                priority: app.app_priority,
+                levels,
+            }
+        })
+        .collect()
 }
 
 impl Reconciler {
@@ -1327,31 +1295,31 @@ impl Reconciler {
 }
 
 impl Reconciler {
-    /// Bring the resource-control slices into step with the app priorities and
+    /// Bring the resource-control groups into step with the app priorities and
     /// the declared Deployment levels.
     ///
-    /// Runs before actuation so a workload started this tick joins a slice that
-    /// already carries the right weights, and reweights the slices of workloads
+    /// Runs before actuation so a workload started this tick joins a group that
+    /// already carries the right weights, and reweights the groups of workloads
     /// that are already running, which is what makes an app priority change
     /// take effect without a redeploy.
     // spec: PRIO#resource-control-groups
-    async fn reconcile_slices(&mut self, apps: &[AppSnapshot], dropped_apps: usize) {
+    async fn reconcile_groups(&mut self, apps: &[AppSnapshot], dropped_apps: usize) {
         let now = Instant::now();
         if !self.slice_retry.should_attempt(now) {
             return;
         }
 
-        let desired: Vec<SliceSpec> = desired_slices(apps).into_values().collect();
+        let desired = desired_standings(apps);
         // spec: RCN#applying-absolute-state
-        // Forgetting a slice is only safe when every app was accounted for. An
+        // Forgetting a group is only safe when every app was accounted for. An
         // app dropped by a transient error is absent from `apps` while its
-        // workloads keep running, and its slice carries the weights they run
+        // workloads keep running, and its group carries the weights they run
         // under.
         let prune = dropped_apps == 0;
 
         let synced = tokio::time::timeout(
             SLICE_SYNC_TIMEOUT,
-            self.driver.process.sync_slices(desired, prune),
+            self.driver.process.sync_groups(desired, prune),
         )
         .await;
 
@@ -1521,7 +1489,7 @@ impl Reconciler {
         }
         let app_coverage = Coverage::of(dropped_apps);
 
-        self.reconcile_slices(&apps, dropped_apps).await;
+        self.reconcile_groups(&apps, dropped_apps).await;
 
         // spec: NAT64#translator-lifecycle
         // Wake-from-idle: ensure NAT64 translator is installed before any
@@ -1529,7 +1497,7 @@ impl Reconciler {
         // module already loaded, instance-add handles EEXIST) so it is safe
         // to run on every non-idle tick where `nat64_installed` is false.
         if nat64_step(self.nat64_active, self.nat64_translator, false) == Some(Nat64Step::SetUp) {
-            match crate::system::jool::setup_nat64().await {
+            match self.driver.translator.set_up().await {
                 Ok(()) => {
                     self.nat64_translator = Nat64Translator::Installed;
                     self.clear_system_fault("nat64_setup_failed");
@@ -1951,28 +1919,8 @@ impl Reconciler {
                     self.reconcile_dtls_refusals(served).await;
                 }
 
-                match routes_res {
-                    Some(Err(e)) => {
-                        error!(error = %e, "routes: apply_routes failed");
-                        self.file_system_fault(
-                            "routes_failed",
-                            &format!("apply_routes failed: {e}"),
-                        );
-                    }
-                    Some(Ok(())) => self.clear_system_fault("routes_failed"),
-                    None => {}
-                }
-                match rules_res {
-                    Some(Err(e)) => {
-                        error!(error = %e, "rules: apply_rules failed");
-                        self.file_system_fault(
-                            "nftables_failed",
-                            &format!("apply_rules failed: {e}"),
-                        );
-                    }
-                    Some(Ok(())) => self.clear_system_fault("nftables_failed"),
-                    None => {}
-                }
+                self.settle_plane_fault("routes_failed", "apply_routes", routes_res);
+                self.settle_plane_fault("packet_filter_failed", "apply_rules", rules_res);
                 match proxy_res {
                     Some(Err(e)) => {
                         error!(error = ?e, addr = %caddy_ip, "proxy: apply_config failed");
@@ -2036,19 +1984,10 @@ impl Reconciler {
                 // Caddy unavailable — still apply routes (they don't need
                 // caddy), unless this tick's route set is missing a
                 // contributor.
-                match apply_routes_plane(&*self.driver.data_plane, &all_routes, routes_coverage)
-                    .await
-                {
-                    Some(Err(e)) => {
-                        error!(error = %e, "routes: apply_routes failed");
-                        self.file_system_fault(
-                            "routes_failed",
-                            &format!("apply_routes failed: {e}"),
-                        );
-                    }
-                    Some(Ok(())) => self.clear_system_fault("routes_failed"),
-                    None => {}
-                }
+                let routes_res =
+                    apply_routes_plane(&*self.driver.data_plane, &all_routes, routes_coverage)
+                        .await;
+                self.settle_plane_fault("routes_failed", "apply_routes", routes_res);
             }
         }
 
@@ -2224,7 +2163,7 @@ impl Reconciler {
 
         // spec: NAT64#translator-lifecycle
         if nat64_step(self.nat64_active, self.nat64_translator, true) == Some(Nat64Step::TearDown) {
-            match crate::system::jool::teardown_nat64().await {
+            match self.driver.translator.tear_down().await {
                 Ok(()) => {
                     self.nat64_translator = Nat64Translator::Removed;
                     // spec: FLT#host-faults
@@ -3635,6 +3574,35 @@ mod tests {
         })
     }
 
+    // spec: FLT#host-faults
+    // spec: RCN#applying-absolute-state
+    #[test]
+    fn a_packet_filter_fault_follows_the_applies_and_a_withheld_one_moves_nothing() {
+        let oi = crate::oi::test_support::TestOi::new();
+        let reconciler = test_reconciler(&oi);
+        let filed = || {
+            active_kinds(&oi, "_system")
+                .iter()
+                .any(|(kind, _)| kind == "packet_filter_failed")
+        };
+
+        reconciler.settle_plane_fault("packet_filter_failed", "apply_rules", None);
+        assert!(!filed(), "a withheld apply files nothing");
+
+        reconciler.settle_plane_fault(
+            "packet_filter_failed",
+            "apply_rules",
+            Some(Err("the ruleset was refused".into())),
+        );
+        assert!(filed(), "a failed apply files the fault");
+
+        reconciler.settle_plane_fault("packet_filter_failed", "apply_rules", None);
+        assert!(filed(), "a withheld apply clears nothing");
+
+        reconciler.settle_plane_fault("packet_filter_failed", "apply_rules", Some(Ok(())));
+        assert!(!filed(), "the next successful apply clears it");
+    }
+
     // spec: FLT#volume-faults
     #[test]
     fn volume_create_and_remove_failures_clear_when_the_volume_is_created_or_removed() {
@@ -3901,14 +3869,11 @@ mod tests {
             crate::system::stub::StubContainerRuntime::new(dir.path().join("vols")),
         )));
         let backends = crate::system::backends::Backends::working(container, process);
-        let system = Arc::new(crate::system::System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
-            data_plane: Arc::new(crate::system::stub::StubDataPlane),
-            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(crate::system::System::for_tests(
             backends,
-        });
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(system);
         oi.call(
             "/apps/create",
@@ -3939,14 +3904,11 @@ mod tests {
         let flaky = Flaky::down();
         let backends = down_backends(&flaky);
         let dir = tempfile::tempdir().unwrap();
-        let system = Arc::new(crate::system::System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
-            data_plane: Arc::new(crate::system::stub::StubDataPlane),
-            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(crate::system::System::for_tests(
             backends,
-        });
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(Arc::clone(&system));
         let mut reconciler = test_reconciler(&oi);
         let held = |oi: &crate::oi::test_support::TestOi| -> bool {
@@ -4678,14 +4640,11 @@ mod tests {
             Arc::clone(&container) as Arc<dyn crate::system::ContainerRuntime>,
             process,
         );
-        let system = Arc::new(crate::system::System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
-            data_plane: Arc::new(crate::system::stub::StubDataPlane),
-            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(crate::system::System::for_tests(
             backends,
-        });
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        ));
         (
             crate::oi::test_support::TestOi::with_driver(system),
             container,
@@ -6617,8 +6576,7 @@ mod tests {
     fn dtls_session_refused_is_filed_on_a_recent_refusal_and_cleared_when_it_is_not_one() {
         use crate::system::{
             ContainerRuntime, ProcessManager,
-            stub::{StubContainerRuntime, StubDataPlane, StubProcessManager},
-            volume_store::VolumeStore,
+            stub::{StubContainerRuntime, StubProcessManager},
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -6633,14 +6591,11 @@ mod tests {
         let proxy = Arc::new(RefusingProxy(parking_lot::Mutex::new(Ok(
             Default::default(),
         ))));
-        let system = Arc::new(System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::clone(&proxy) as Arc<dyn crate::system::NetworkProxy>,
-            data_plane: Arc::new(StubDataPlane),
-            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(System::for_tests(
             backends,
-        });
+            Arc::clone(&proxy) as Arc<dyn crate::system::NetworkProxy>,
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(system);
         let reconciler = test_reconciler(&oi);
 
@@ -6697,9 +6652,8 @@ mod tests {
     fn a_crash_looping_instance_the_supervisor_would_restart_is_stopped() {
         use crate::system::{
             ContainerRuntime, ProcessManager,
-            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+            stub::{StubContainerRuntime, StubNetworkProxy, StubProcessManager},
             types::ActiveState,
-            volume_store::VolumeStore,
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -6711,14 +6665,11 @@ mod tests {
             Arc::clone(&container) as Arc<dyn ContainerRuntime>,
             Arc::clone(&process) as Arc<dyn ProcessManager>,
         );
-        let system = Arc::new(System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(StubNetworkProxy),
-            data_plane: Arc::new(StubDataPlane),
-            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(System::for_tests(
             backends,
-        });
+            Arc::new(StubNetworkProxy),
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(system);
         oi.call(
             "/apps/create",
@@ -6827,8 +6778,7 @@ mod tests {
     fn a_workloads_spec_hash_moves_with_the_key_of_a_gate_it_is_ordered_directly_after_only() {
         use crate::system::{
             ContainerRuntime, ProcessManager,
-            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
-            volume_store::VolumeStore,
+            stub::{StubContainerRuntime, StubNetworkProxy, StubProcessManager},
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -6840,14 +6790,11 @@ mod tests {
             Arc::clone(&container) as Arc<dyn ContainerRuntime>,
             Arc::clone(&process) as Arc<dyn ProcessManager>,
         );
-        let system = Arc::new(System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(StubNetworkProxy),
-            data_plane: Arc::new(StubDataPlane),
-            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(System::for_tests(
             backends,
-        });
+            Arc::new(StubNetworkProxy),
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(system);
         oi.call(
             "/apps/create",
@@ -7102,7 +7049,7 @@ mod tests {
 
     // spec: PRIO#resource-control-groups
     #[test]
-    fn each_declared_level_gets_a_tier_slice_under_its_app() {
+    fn an_app_stands_at_each_declared_level_and_at_normal() {
         let apps = vec![snapshot_with_priorities(
             "demo",
             AppPriority::Normal,
@@ -7115,114 +7062,30 @@ mod tests {
                 .priority(Priority.Low);
             "#,
         )];
-        let slices = desired_slices(&apps);
+        let standings = desired_standings(&apps);
 
-        assert!(slices.contains_key("seedling-demo.slice"));
-        assert!(slices.contains_key("seedling-demo-critical.slice"));
-        assert!(slices.contains_key("seedling-demo-low.slice"));
-        // Always present: Jobs and other non-Deployment workloads stand here.
-        assert!(slices.contains_key("seedling-demo-normal.slice"));
-        // Not declared by any Deployment, so not created. Forgetting a level
-        // that stops being declared is safe because removal unlinks the unit
-        // file and leaves anything still running in the slice alone.
-        assert!(!slices.contains_key("seedling-demo-elevated.slice"));
-    }
-
-    // spec: PRIO#contended-capacity
-    #[test]
-    fn the_app_slice_carries_the_app_weight_and_the_tier_slice_the_tier_weight() {
-        let apps = vec![snapshot_with_priorities(
-            "demo",
-            AppPriority::High,
-            r#"
-            app.deployment("api")
-                .image("docker.io/library/nginx:1")
-                .priority(Priority.Critical);
-            "#,
-        )];
-        let slices = desired_slices(&apps);
-
-        let app_slice = &slices["seedling-demo.slice"];
-        assert_eq!(app_slice.weight, priority::app_weight(AppPriority::High));
-        assert_eq!(app_slice.weight, priority::app_weight(AppPriority::High));
-
-        let tier = &slices["seedling-demo-critical.slice"];
-        assert_eq!(tier.weight, priority::deployment_weight(Priority::Critical));
+        assert_eq!(standings.len(), 1);
+        // Normal is always there: Jobs and other non-Deployment workloads
+        // stand at it. Elevated is not declared by any Deployment, so it is
+        // not provided for.
+        assert_eq!(
+            standings[0].levels.iter().copied().collect::<Vec<_>>(),
+            [Priority::Low, Priority::Normal, Priority::Critical]
+        );
     }
 
     // spec: PRIO#priority-setting
-    // The same definition at a different app priority must produce a different
-    // app-slice weight: that difference is what a reweight applies.
+    // The same definition at a different app priority must produce a
+    // different standing: that difference is what a reweight applies.
     #[test]
-    fn changing_the_app_priority_changes_the_app_slice_weight() {
+    fn changing_the_app_priority_changes_the_apps_standing() {
         let script = r#"app.deployment("api").image("docker.io/library/nginx:1");"#;
-        let high = desired_slices(&[snapshot_with_priorities("demo", AppPriority::High, script)]);
-        let low = desired_slices(&[snapshot_with_priorities("demo", AppPriority::Low, script)]);
-        assert_ne!(
-            high["seedling-demo.slice"].weight,
-            low["seedling-demo.slice"].weight
-        );
-        // The tier slices are unchanged: the app term lives on the app slice.
-        assert_eq!(
-            high["seedling-demo-normal.slice"].weight,
-            low["seedling-demo-normal.slice"].weight
-        );
-    }
-
-    // spec: PRIO#kill-order
-    #[test]
-    fn the_infra_slice_is_always_present_and_outweighs_every_app() {
-        let slices = desired_slices(&[]);
-        let infra = &slices[priority::INFRA_SLICE];
-        assert_eq!(infra.weight, priority::INFRA_WEIGHT);
-
-        let apps = vec![snapshot_with_priorities(
-            "demo",
-            AppPriority::High,
-            r#"app.deployment("api").image("docker.io/library/nginx:1");"#,
-        )];
-        let with_app = desired_slices(&apps);
-        assert!(with_app[priority::INFRA_SLICE].weight > with_app["seedling-demo.slice"].weight);
-    }
-
-    // spec: PRIO#resource-control-groups
-    // Registering an app under the infrastructure name is refused, but an app
-    // that predates that reservation still reaches this derivation, and its
-    // slice name is byte-identical to the infrastructure slice. The
-    // infrastructure entry has to win, or the group holding the proxy and the
-    // resolver takes the app's standing.
-    #[test]
-    fn an_app_named_for_the_infra_slice_cannot_displace_it() {
-        let apps = vec![snapshot_with_priorities(
-            priority::INFRA_COMPONENT,
-            AppPriority::Low,
-            r#"app.deployment("api").image("docker.io/library/nginx:1");"#,
-        )];
-        let slices = desired_slices(&apps);
-        assert_eq!(
-            slices[priority::INFRA_SLICE].weight,
-            priority::INFRA_WEIGHT,
-            "infrastructure keeps its own weight, not the app's"
-        );
-    }
-
-    // spec: PRIO#resource-control-groups
-    // Two apps whose names differ only by a hyphen must not share a slice, nor
-    // nest one inside the other.
-    #[test]
-    fn hyphenated_app_names_get_their_own_slice_trees() {
-        let script = r#"app.deployment("api").image("docker.io/library/nginx:1");"#;
-        let apps = vec![
-            snapshot_with_priorities("app", AppPriority::Normal, script),
-            snapshot_with_priorities("app-two", AppPriority::High, script),
-        ];
-        let slices = desired_slices(&apps);
-        assert!(slices.contains_key("seedling-app.slice"));
-        assert!(slices.contains_key("seedling-app_two.slice"));
-        assert_ne!(
-            slices["seedling-app.slice"].weight,
-            slices["seedling-app_two.slice"].weight
-        );
+        let high =
+            desired_standings(&[snapshot_with_priorities("demo", AppPriority::High, script)]);
+        let low = desired_standings(&[snapshot_with_priorities("demo", AppPriority::Low, script)]);
+        assert_eq!(high[0].priority, AppPriority::High);
+        assert_eq!(low[0].priority, AppPriority::Low);
+        assert_eq!(high[0].levels, low[0].levels);
     }
 
     // spec: RCN#applying-absolute-state

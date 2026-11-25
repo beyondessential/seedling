@@ -32,24 +32,50 @@ pub fn auth_file_candidates() -> Vec<PathBuf> {
     if let Some(explicit) = std::env::var_os("REGISTRY_AUTH_FILE") {
         return vec![PathBuf::from(explicit)];
     }
-    let mut out = Vec::new();
-    match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(dir) => out.push(PathBuf::from(dir).join("containers/auth.json")),
-        None => out.push(PathBuf::from(format!(
-            "/run/containers/{}/auth.json",
-            rustix::process::getuid().as_raw()
-        ))),
-    }
+    let home = home_dir();
+    let mut out: Vec<PathBuf> = primary_auth_file(home.as_deref()).into_iter().collect();
     let config_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+        .or_else(|| home.as_ref().map(|h| h.join(".config")));
     if let Some(config) = config_home {
         out.push(config.join("containers/auth.json"));
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        out.push(PathBuf::from(home).join(".docker/config.json"));
+    if let Some(home) = home {
+        out.push(home.join(".docker/config.json"));
     }
     out
+}
+
+/// The container engine's own credentials file, which on Linux lives in the
+/// user's runtime directory.
+#[cfg(target_os = "linux")]
+fn primary_auth_file(_home: Option<&Path>) -> Option<PathBuf> {
+    Some(match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(dir) => PathBuf::from(dir).join("containers/auth.json"),
+        None => PathBuf::from(format!(
+            "/run/containers/{}/auth.json",
+            rustix::process::getuid().as_raw()
+        )),
+    })
+}
+
+/// The container engine's own credentials file, which off Linux lives in the
+/// user's configuration directory.
+#[cfg(not(target_os = "linux"))]
+fn primary_auth_file(home: Option<&Path>) -> Option<PathBuf> {
+    home.map(|h| h.join(".config/containers/auth.json"))
+}
+
+/// The user's home directory: `HOME`, or on Windows, where that is seldom set,
+/// the user's profile directory.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| {
+            cfg!(windows)
+                .then(|| std::env::var_os("USERPROFILE"))
+                .flatten()
+        })
+        .map(PathBuf::from)
 }
 
 /// Credentials for `registry`/`repository` from the first file holding an

@@ -10,13 +10,13 @@ use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 use snafu::{ResultExt, Snafu};
 
-use crate::system::priority;
 use crate::system::{
     ContainerRuntime, ProcessManager,
     types::{
         ContainerState, ContainerStatus, SPEC_HASH_LABEL, TransientRestart, TransientUnitSpec,
     },
 };
+use crate::system::{journal::INFRA_FIELD, priority::UnitStanding};
 
 use super::{resolver_addr, resolver_ipv4_subnet, resolver_network_prefix};
 
@@ -235,18 +235,14 @@ async fn start_slot(
                 "/Corefile".to_owned(),
             ],
             restart: TransientRestart::Always,
-            log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "resolver".to_owned())],
+            log_extra_fields: vec![(INFRA_FIELD.to_owned(), "resolver".to_owned())],
             kill_signal: None,
             timeout_stop_secs: None,
             // spec: PRIO#kill-order
             // Infrastructure ranks above every app workload: a host under
             // memory pressure must not lose the components that route to
             // whatever survives.
-            slice: Some(priority::INFRA_SLICE.to_owned()),
-            oom_score_adjust: Some(priority::INFRA_OOM_SCORE_ADJUST),
-            restart_sec: Some(5),
-            start_limit_interval_sec: Some(600),
-            start_limit_burst: Some(10),
+            standing: UnitStanding::Infrastructure,
         })
         .await
         .context(ProcessSnafu)

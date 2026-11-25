@@ -731,6 +731,43 @@ impl ContainerDef {
     }
 }
 
+/// The POSIX signals a container can be sent or ended by, named without the
+/// `SIG` prefix, with the number each carries on the hosts containers run on.
+const SIGNALS: &[(&str, i32)] = &[
+    ("HUP", 1),
+    ("INT", 2),
+    ("QUIT", 3),
+    ("ILL", 4),
+    ("TRAP", 5),
+    ("ABRT", 6),
+    ("BUS", 7),
+    ("FPE", 8),
+    ("KILL", 9),
+    ("USR1", 10),
+    ("SEGV", 11),
+    ("USR2", 12),
+    ("PIPE", 13),
+    ("ALRM", 14),
+    ("TERM", 15),
+    ("STKFLT", 16),
+    ("CHLD", 17),
+    ("CONT", 18),
+    ("STOP", 19),
+    ("TSTP", 20),
+    ("TTIN", 21),
+    ("TTOU", 22),
+    ("URG", 23),
+    ("XCPU", 24),
+    ("XFSZ", 25),
+    ("VTALRM", 26),
+    ("PROF", 27),
+    ("WINCH", 28),
+    ("IO", 29),
+    ("POLL", 29),
+    ("PWR", 30),
+    ("SYS", 31),
+];
+
 /// Validate and normalise a stop signal name. Accepts the canonical
 /// uppercase `SIGFOO` form or its bare `FOO` shorthand; returns the
 /// canonical `SIGFOO` form on success. Returns `None` for any
@@ -738,18 +775,31 @@ impl ContainerDef {
 /// `rt.signal()` to keep signal name handling consistent across the
 /// runtime.
 pub fn canonicalise_signal_name(input: &str) -> Option<String> {
-    const KNOWN: &[&str] = &[
-        "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1", "SEGV", "USR2",
-        "PIPE", "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP", "TSTP", "TTIN", "TTOU", "URG",
-        "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "IO", "POLL", "PWR", "SYS",
-    ];
     let trimmed = input.trim();
     let upper = trimmed.to_ascii_uppercase();
     let bare = upper.strip_prefix("SIG").unwrap_or(&upper);
-    if !KNOWN.contains(&bare) {
+    if !SIGNALS.iter().any(|(name, _)| *name == bare) {
         return None;
     }
     Some(format!("SIG{bare}"))
+}
+
+/// The number of the signal named `name`, in its canonical `SIGFOO` form or
+/// as the bare `FOO`.
+pub fn signal_number(name: &str) -> Option<i32> {
+    let bare = name.strip_prefix("SIG").unwrap_or(name);
+    SIGNALS
+        .iter()
+        .find(|(known, _)| *known == bare)
+        .map(|&(_, number)| number)
+}
+
+/// The canonical `SIGFOO` name of the signal numbered `number`.
+pub fn signal_name(number: i32) -> Option<String> {
+    SIGNALS
+        .iter()
+        .find(|&&(_, known)| known == number)
+        .map(|(name, _)| format!("SIG{name}"))
 }
 
 fn normalise_signal(input: &str) -> Result<String, Box<EvalAltResult>> {

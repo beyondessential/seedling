@@ -513,21 +513,21 @@ async fn handle_bidi_stream(
             }
         };
 
-        let rx =
-            match tokio::task::block_in_place(|| crate::system::journal::spawn_log_reader(opts)) {
-                Ok(rx) => rx,
-                Err(e) => {
-                    tracing::error!("failed to open journal: {e}");
-                    // spec: LOG#log-stream-request
-                    let resp = error_response(&OiError::new(
-                        ErrorCode::Internal,
-                        format!("cannot open the host's log store: {e}"),
-                    ));
-                    let _ = send.write_all(&resp).await;
-                    let _ = send.finish();
-                    return;
-                }
-            };
+        let journal = Arc::clone(&state.driver.journal);
+        let rx = match tokio::task::block_in_place(|| journal.open(opts)) {
+            Ok(rx) => rx,
+            Err(e) => {
+                tracing::error!("failed to open journal: {e}");
+                // spec: LOG#log-stream-request
+                let resp = error_response(&OiError::new(
+                    ErrorCode::Internal,
+                    format!("cannot open the host's log store: {e}"),
+                ));
+                let _ = send.write_all(&resp).await;
+                let _ = send.finish();
+                return;
+            }
+        };
 
         let response = serde_json::to_vec(&json!({ "result": {} })).expect("serialisation");
         if let Err(e) = send.write_all(&response).await {

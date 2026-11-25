@@ -7,7 +7,7 @@ use rtnetlink::{
 };
 
 use super::{DataPlaneError, NftablesDataPlane};
-use crate::system::types::ServiceRoute;
+use seedling_core::system::types::ServiceRoute;
 
 /// Format an rtnetlink error into a descriptive message similar to iproute2 output.
 fn format_rtnetlink_error(err: &rtnetlink::Error, context: &str) -> String {
@@ -220,9 +220,9 @@ impl NftablesDataPlane {
 /// The `main` routing table. A default route confined to a policy-routing
 /// table is not the system's egress path, so anything asking "can this host
 /// reach the internet" has to look here specifically.
-pub(crate) const MAIN_ROUTE_TABLE: u32 = 254;
+pub const MAIN_ROUTE_TABLE: u32 = 254;
 
-pub(crate) fn effective_table(msg: &rtnetlink::packet_route::route::RouteMessage) -> u32 {
+pub fn effective_table(msg: &rtnetlink::packet_route::route::RouteMessage) -> u32 {
     for attr in &msg.attributes {
         if let RouteAttribute::Table(t) = attr {
             return *t;

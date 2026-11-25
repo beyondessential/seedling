@@ -881,6 +881,28 @@ impl Reconciler {
         });
     }
 
+    /// File or clear the fault of a host plane the tick applies whole, by how
+    /// its apply went: filed when it failed, cleared when it succeeded, and
+    /// left as it is when the apply was withheld, since then nothing ran to
+    /// conclude from.
+    // spec: FLT#host-faults
+    // spec: RCN#applying-absolute-state
+    pub(super) fn settle_plane_fault(
+        &self,
+        fault_kind: &str,
+        call: &str,
+        outcome: Option<Result<(), crate::system::BoxError>>,
+    ) {
+        match outcome {
+            Some(Err(e)) => {
+                tracing::error!(error = %e, "{call} failed");
+                self.file_system_fault(fault_kind, &format!("{call} failed: {e}"));
+            }
+            Some(Ok(())) => self.clear_system_fault(fault_kind),
+            None => {}
+        }
+    }
+
     pub(super) fn clear_system_fault(&self, fault_kind: &str) {
         let fault_kind = fault_kind.to_owned();
         self.db.call(move |db| {

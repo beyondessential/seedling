@@ -21,6 +21,9 @@ Applies to a [host](../overview.md#host) running Linux, settling for that platfo
 | systemd-resolved | systemd's local resolver, [systemd-resolved.service(8)](https://www.freedesktop.org/software/systemd/man/latest/systemd-resolved.service.html). |
 | Podman | A container engine, [Podman](https://podman.io/). |
 | XDG base directories | The per-user directory layout of the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/). |
+| BTRFS | A copy-on-write Linux filesystem, [BTRFS](https://btrfs.readthedocs.io/). |
+| subvolume | A part of a BTRFS filesystem that can be snapshotted on its own, [subvolumes](https://btrfs.readthedocs.io/en/latest/Subvolumes.html). |
+| nftables | The Linux kernel's packet-filtering framework, [nftables](https://wiki.nftables.org/). |
 
 ## Host facilities
 
@@ -31,6 +34,8 @@ Applies to a [host](../overview.md#host) running Linux, settling for that platfo
 | system journal | the journal |
 | resource-control group | a slice, over cgroup v2 |
 | system resolver | systemd-resolved, at its extra stub listener `127.0.0.54:53` |
+| snapshotting volume store | a BTRFS filesystem, as [volume storage](#volume-storage) settles |
+| packet-filtering rules | rules in nftables, as the [packet filter](#packet-filter) settles |
 | machine identifier | the contents of `/etc/machine-id`, with surrounding whitespace removed |
 
 The host MUST run systemd as its service manager, with the unified cgroup v2 hierarchy.
@@ -123,6 +128,26 @@ The adjustment is fixed when a unit's processes start, so a change of priority r
 The runtime MUST send the standard output and standard error of every container to the journal, through its supervised unit.
 The runtime MUST attach the [journal fields](../runtime/actuation.md#container-logs) of a container to every entry its unit writes, as fields of that unit's log.
 The runtime MUST read [log streams](../interface/logs.md) from the journal, selecting entries by those fields.
+
+## Volume storage
+
+The data directory is on the [snapshotting volume store](../runtime/actuation.md#volume-storage) when it is on a BTRFS filesystem.
+The platform's [opt-out from snapshotting](../runtime/actuation.md#snapshotting-check) MUST be the daemon's `--without-btrfs` flag.
+
+The runtime MUST create each snapshottable volume as a subvolume, and MUST remove one by deleting the subvolume.
+A [snapshot site volume](../runtime/site-resources.md#site-volume-snapshots) MUST be a read-only snapshot of its source subvolume.
+The managed site volume a [promotion](../runtime/site-resources.md#snapshot-promotion) creates MUST be a writable snapshot of the snapshot site volume's subvolume.
+
+> [!NOTE]
+> Snapshots of subvolumes share unchanged data with their source, so a snapshot or promotion takes no time or space in proportion to the volume's size.
+
+## Packet filter
+
+The runtime MUST hold all its packet-filtering rules in one nftables table, `seedling_net`, of the `inet` family.
+The runtime MUST replace the whole contents of that table on each apply, and MUST NOT alter any other table.
+
+> [!NOTE]
+> A fixed table of its own lets the runtime replace its rules atomically without flushing the host's ruleset, so an operator's firewall in other tables keeps working, and makes Seedling's rules easy to tell apart when inspecting the host.
 
 ## Forwarding
 

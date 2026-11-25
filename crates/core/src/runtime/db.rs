@@ -1,4 +1,4 @@
-use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 
 use rusqlite::{Connection, Result as SqlResult};
 use seedling_protocol::names::{ActionName, AppName};
@@ -173,6 +173,7 @@ const SQL_V81: &str = include_str!("db/migrations/v81.sql");
 // spec: GRUN#gate-state
 const SQL_V82: &str = include_str!("db/migrations/v82.sql");
 const SQL_V83: &str = include_str!("db/migrations/v83.sql");
+const SQL_V84: &str = include_str!("db/migrations/v84.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -585,6 +586,11 @@ const MIGRATIONS: &[Migration] = &[
         sql: SQL_V83,
         custom_run: None,
     },
+    Migration {
+        version: 84,
+        sql: SQL_V84,
+        custom_run: None,
+    },
 ];
 
 fn migration_hash(sql: &str) -> String {
@@ -606,8 +612,7 @@ impl Db {
     // spec: INFRA#file-permissions
     pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if path.exists() {
-            let mode = path.metadata()?.permissions().mode() & 0o777;
-            if mode & 0o077 != 0 {
+            if let Some(mode) = crate::runtime::private_files::exposed_mode(path)? {
                 return Err(format!(
                     "database file {} has insecure permissions (0{:o}); expected 0600",
                     path.display(),

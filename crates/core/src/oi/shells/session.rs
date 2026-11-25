@@ -1076,12 +1076,30 @@ pub(super) struct AttachmentEnd {
 // spec: SHL#session-end
 /// The exit status of a finished process: its exit code, or 128 plus the
 /// signal that ended it.
+#[cfg(unix)]
 fn exit_status_code(status: std::process::ExitStatus) -> i32 {
     use std::os::unix::process::ExitStatusExt;
     status
         .code()
         .or_else(|| status.signal().map(|signal| 128 + signal))
         .unwrap_or(-1)
+}
+
+#[cfg(not(unix))]
+fn exit_status_code(_status: std::process::ExitStatus) -> i32 {
+    todo!("exit status of a shell job on a platform without Unix signals")
+}
+
+/// Ask the job running as `pid` to terminate.
+#[cfg(unix)]
+fn terminate(pid: u32) {
+    // SAFETY: sending a signal has no memory-safety preconditions.
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+}
+
+#[cfg(not(unix))]
+fn terminate(_pid: u32) {
+    todo!("terminating a shell job on a platform without Unix signals")
 }
 
 /// Relays the session's input and output to its job until the attachment ends,
@@ -1129,7 +1147,7 @@ pub(super) async fn run_attachment(
         Err(forced) => {
             // spec: SHL#session-end
             if let Some(pid) = live.exec.child.id() {
-                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                terminate(pid);
             }
 
             let graceful =

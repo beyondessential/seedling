@@ -1,0 +1,32 @@
+[package]
+name = "seedling-linux"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The Linux platform of the Seedling runtime: the adapters that reach the host"
+
+[dependencies]
+seedling-core = { path = "../core" }
+seedling-protocol = { path = "../protocol" }
+
+futures-util.workspace = true
+ipnet.workspace = true
+jiff.workspace = true
+libc = "0.2.191"
+nftables = { version = "0.6.3", features = ["tokio"] }
+nix = { version = "0.31.3", features = ["signal", "term"] }
+podman-rest-client = { version = "0.13.0", default-features = false, features = ["uds", "v5"] }
+rtnetlink = "0.24.0"
+rustix = { version = "1.1.6", features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+snafu.workspace = true
+systemd = "0.11.1"
+tokio.workspace = true
+tracing.workspace = true
+zbus = { version = "6.2.1", features = ["tokio"] }
+
+[dev-dependencies]
+bytes = "1.12.1"
+http = "1.5.0"
+tempfile = "3.27.0"

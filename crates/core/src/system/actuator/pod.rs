@@ -16,7 +16,7 @@ use crate::{
     },
     system::{
         System,
-        priority::WorkloadStanding,
+        priority::{UnitStanding, WorkloadStanding},
         types::{ActiveState, TransientRestart, TransientUnitSpec},
     },
 };
@@ -195,7 +195,7 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                         path: host_path.clone(),
                     })?;
                 for (path, contents) in &vol.def.writes {
-                    safe_volume_write(host_path, path, contents).await?;
+                    safe_volume_write(&driver.volume_store, host_path, path, contents).await?;
                 }
             } else {
                 // spec: ACTU#volume-storage
@@ -236,7 +236,7 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                     .await
                     .context(ContainerSnafu)?;
                 for (path, contents) in &vol.def.writes {
-                    safe_volume_write(&mountpoint, path, contents).await?;
+                    safe_volume_write(&driver.volume_store, &mountpoint, path, contents).await?;
                 }
             }
         }
@@ -386,24 +386,11 @@ impl Actuator {
                 kill_signal,
                 timeout_stop_secs,
                 // spec: PRIO#resource-control-groups
-                // spec: LINUX#resource-control-groups
-                // The tier slice carries the Deployment weight and nests under
-                // the app slice, which carries the app weight.
-                slice: Some(standing.slice(&instance.app)),
                 // spec: PRIO#kill-order
-                // spec: LINUX#kill-order
-                oom_score_adjust: Some(standing.oom_score_adjust()),
-                // spec: AUTO#restart-pacing
-                // spec: LINUX#restart-pacing
-                // Pod containers: 5 second pause between restarts, and a
-                // 10-minute / 10-attempt window before systemd gives up. The
-                // wider window means a slow-failing container (e.g. takes
-                // 30s to crash) still gets multiple chances; the per-attempt
-                // delay means a fast-failing container can't burn through
-                // the budget in a heartbeat.
-                restart_sec: Some(5),
-                start_limit_interval_sec: Some(600),
-                start_limit_burst: Some(10),
+                standing: UnitStanding::Workload {
+                    app: instance.app.clone(),
+                    standing,
+                },
                 log_extra_fields: crate::system::journal::instance_log_fields(instance),
             })
             .await

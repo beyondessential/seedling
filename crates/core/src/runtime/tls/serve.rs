@@ -13,7 +13,6 @@
 //! the convention Caddy expects.
 
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -343,8 +342,7 @@ fn redact_token_in_path(path: &str) -> String {
 /// by SNI enumeration even when they can reach the listener.
 pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
     if path.exists() {
-        let mode = path.metadata()?.permissions().mode() & 0o777;
-        if mode & 0o077 != 0 {
+        if let Some(mode) = crate::runtime::private_files::exposed_mode(path)? {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 format!(
@@ -603,8 +601,10 @@ mod tests {
         assert_eq!(url, "http://[::1]:7892/cert/abc123/get-certificate");
     }
 
+    #[cfg(unix)]
     #[test]
     fn token_persistence_round_trips() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cert-endpoint-token");
         let t1 = load_or_create_token(&path).unwrap();
@@ -616,6 +616,7 @@ mod tests {
     }
 
     // spec: INFRA#file-permissions
+    #[cfg(unix)]
     #[test]
     fn token_creation_does_not_follow_a_planted_symlink() {
         let dir = tempfile::tempdir().unwrap();

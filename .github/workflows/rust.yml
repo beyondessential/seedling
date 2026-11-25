@@ -66,10 +66,33 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-targets --locked
 
+  # seedling-core builds on every platform seedling-ctl ships for; the
+  # Linux-only crates are covered by the jobs above.
+  portable:
+    name: Portable core / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
+          rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo clippy
+        run: cargo clippy -p seedling-core --all-targets --locked -- -D warnings
+
   rust-pass:
     name: Rust pass
     if: always()
-    needs: [lint, test]
+    needs: [lint, test, portable]
     runs-on: ubuntu-latest
     steps:
       - uses: re-actors/alls-green@release/v1

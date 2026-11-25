@@ -5005,6 +5005,7 @@ dependencies = [
  "quinn",
  "rustls",
  "seedling-core",
+ "seedling-linux",
  "seedling-protocol",
  "serde_json",
  "tempfile",
@@ -5062,15 +5063,12 @@ dependencies = [
  "libc",
  "libversion",
  "miette",
- "nftables",
- "nix 0.31.3",
  "num-bigint",
  "oci-client",
  "orion",
  "parking_lot",
  "pem 4.0.0",
  "percent-encoding",
- "podman-rest-client",
  "purl",
  "quinn",
  "rand 0.10.3",
@@ -5078,7 +5076,6 @@ dependencies = [
  "regex-automata",
  "reqwest",
  "rhai",
- "rtnetlink",
  "rusqlite",
  "rustix",
  "rustls",
@@ -5096,7 +5093,6 @@ dependencies = [
  "snafu",
  "strum",
  "subtle",
- "systemd",
  "tar",
  "tempfile",
  "time",
@@ -5110,7 +5106,6 @@ dependencies = [
  "wildmatch",
  "winnow",
  "x509-parser",
- "zbus",
  "zxcvbn",
 ]
 
@@ -5138,6 +5133,33 @@ dependencies = [
  "toml 1.2.1+spec-1.1.0",
  "tracing",
  "whoami",
+]
+
+[[package]]
+name = "seedling-linux"
+version = "0.12.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http",
+ "ipnet",
+ "jiff",
+ "libc",
+ "nftables",
+ "nix 0.31.3",
+ "podman-rest-client",
+ "rtnetlink",
+ "rustix",
+ "seedling-core",
+ "seedling-protocol",
+ "serde",
+ "serde_json",
+ "snafu",
+ "systemd",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "zbus",
 ]
 
 [[package]]

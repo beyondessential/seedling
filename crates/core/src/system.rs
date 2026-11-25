@@ -3,17 +3,19 @@ use std::{path::Path, sync::Arc};
 use ipnet::{Ipv4Net, Ipv6Net};
 use sha2::{Digest, Sha256};
 
-use crate::system::types::{
-    ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
-    ExecOutput, ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, SliceSpec,
-    TransientUnitSpec, UnitState, UnitSummary,
+use crate::system::{
+    priority::AppStandings,
+    types::{
+        ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules,
+        ExecHandle, ExecOutput, ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute,
+        TransientUnitSpec, UnitState, UnitSummary,
+    },
 };
 
 pub mod actuator;
 pub mod backends;
 pub mod host_probes;
 pub mod nat64;
-pub mod netinfo;
 pub mod observer;
 pub mod priority;
 pub mod reconcile;
@@ -22,15 +24,10 @@ pub mod types;
 
 pub mod breadcrumb;
 pub(crate) mod caddy;
-pub(crate) mod confined;
-pub(crate) mod data_plane;
-pub mod jool;
-pub(crate) mod journal;
-pub(crate) mod podman;
+pub mod journal;
 pub mod resolver;
 pub mod startup_cleanup;
 pub mod stub;
-pub(crate) mod systemd;
 pub(crate) mod unavailable;
 pub mod volume_store;
 
@@ -66,12 +63,12 @@ pub fn proxy_bridge_gateway(node_prefix: &Ipv6Net) -> std::net::Ipv6Addr {
 /// Follows from the prefix rather than from where an allocator happens to put
 /// the host part. `None` for a prefix too small to hold a gateway and a host.
 // spec: INFRA#pod-networks
-pub(crate) fn first_host_v6(prefix: &Ipv6Net) -> Option<std::net::Ipv6Addr> {
+pub fn first_host_v6(prefix: &Ipv6Net) -> Option<std::net::Ipv6Addr> {
     (prefix.prefix_len() <= 126).then(|| std::net::Ipv6Addr::from(u128::from(prefix.network()) + 1))
 }
 
 // spec: INFRA#pod-networks
-pub(crate) fn first_host_v4(prefix: &ipnet::Ipv4Net) -> Option<std::net::Ipv4Addr> {
+pub fn first_host_v4(prefix: &ipnet::Ipv4Net) -> Option<std::net::Ipv4Addr> {
     (prefix.prefix_len() <= 30).then(|| std::net::Ipv4Addr::from(u32::from(prefix.network()) + 1))
 }
 pub use types::{
@@ -79,8 +76,7 @@ pub use types::{
     ExecHandle as SystemExecHandle, ForwardProto, HealthCheckSpec, HttpRedirect, IngressRule,
     Mount, MountRule, MountSource, ObservationFact, ProxyConfig as SystemProxyConfig,
     ProxyListener, ProxyListenerProto, ProxyRoute, ResolvedExternalMount,
-    ServiceRoute as SystemServiceRoute, SliceSpec as SystemSliceSpec, TransientRestart,
-    VirtualHost,
+    ServiceRoute as SystemServiceRoute, TransientRestart, VirtualHost,
 };
 
 // ---------------------------------------------------------------------------
@@ -91,7 +87,7 @@ pub use types::{
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Heap-allocated, Send future returned by dyn-compatible async trait methods.
-pub(crate) use futures_util::future::BoxFuture;
+pub use futures_util::future::BoxFuture;
 
 // ---------------------------------------------------------------------------
 // Backend traits
@@ -194,6 +190,9 @@ pub trait ContainerRuntime: Send + Sync + 'static {
 
 pub trait ProcessManager: Send + Sync + 'static {
     // Transient units — container lifecycle; no unit file written to disk.
+    /// Start a transient unit. The process manager paces the unit's automatic
+    /// restarts, whatever its standing.
+    // spec: AUTO#restart-pacing
     fn start_transient<'a>(
         &'a self,
         spec: TransientUnitSpec,
@@ -212,22 +211,23 @@ pub trait ProcessManager: Send + Sync + 'static {
         prefix: &'a str,
     ) -> BoxFuture<'a, Result<Vec<UnitSummary>, BoxError>>;
 
-    // Resource-control slices — the grouping the runtime owns.
-    /// Make the set of slices this runtime owns match `desired`, creating,
-    /// reweighting and forgetting as needed.
+    // Resource-control groups — the grouping the runtime owns.
+    /// Make the resource-control groups this runtime owns provide for `apps`
+    /// and for the runtime's infrastructure, creating, reweighting and
+    /// forgetting as needed.
     ///
-    /// Takes the whole set rather than one slice at a time because the
-    /// supervisor re-reads its unit files as global work: deciding once for the
-    /// batch costs a single re-read instead of one per slice. The implementation
-    /// compares against what already exists, so a call that changes nothing
-    /// costs nothing.
+    /// Takes the whole set rather than one app at a time because the
+    /// supervisor may re-read its configuration as global work: deciding once
+    /// for the batch costs a single re-read instead of one per group. The
+    /// implementation compares against what already exists, so a call that
+    /// changes nothing costs nothing.
     ///
     /// `prune` is false when the caller could not account for every app this
-    /// tick, so a short `desired` set never forgets a live app's slice.
+    /// tick, so a short `apps` set never forgets a live app's group.
     // spec: PRIO#resource-control-groups
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>>;
 
@@ -256,8 +256,9 @@ pub trait NetworkProxy: Send + Sync + 'static {
 }
 
 pub trait DataPlane: Send + Sync + 'static {
-    /// Atomically replace the complete nftables rule set in `seedling_net`.
-    /// Idempotent. Covers ingress DNAT, FORWARD policy, and mount DNAT6.
+    /// Atomically replace the complete set of packet-filtering rules the
+    /// runtime owns. Idempotent. Covers ingress DNAT, FORWARD policy, and
+    /// mount DNAT6.
     fn apply_rules<'a>(&'a self, rules: &'a DataPlaneRules) -> BoxFuture<'a, Result<(), BoxError>>;
 
     /// Replace the complete set of IPv6 service routes in the routing table.
@@ -271,6 +272,19 @@ pub trait DataPlane: Send + Sync + 'static {
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>>;
 }
 
+/// The host's NAT64 translator, which the runtime installs while workloads
+/// need it and removes when the host goes idle.
+// spec: NAT64#translator-lifecycle
+pub trait AddressTranslator: Send + Sync + 'static {
+    /// Install the translator. Setting up one already installed is not an
+    /// error.
+    fn set_up(&self) -> BoxFuture<'_, Result<(), BoxError>>;
+
+    /// Remove the translator. Removing one that is not installed is not an
+    /// error.
+    fn tear_down(&self) -> BoxFuture<'_, Result<(), BoxError>>;
+}
+
 // ---------------------------------------------------------------------------
 // System
 // ---------------------------------------------------------------------------
@@ -281,8 +295,12 @@ pub struct System {
     pub proxy: Arc<dyn NetworkProxy>,
     pub data_plane: Arc<dyn DataPlane>,
     pub volume_store: volume_store::VolumeStore,
-    /// Whether the container runtime (podman) and process manager (systemd)
-    /// are reachable. While either is not, the daemon runs degraded: the
+    /// Where log streams are read from.
+    pub journal: Arc<dyn journal::JournalSource>,
+    /// The host's NAT64 translator.
+    pub translator: Arc<dyn AddressTranslator>,
+    /// Whether the container runtime and process manager are reachable.
+    /// While either is not, the daemon runs degraded: the
     /// backend is an erroring stub (see [`unavailable`]), the OI, database and
     /// reconciler run so the operator can see the fault, and no workloads are
     /// actuated. The reconciler probes the backends again, and
@@ -305,20 +323,20 @@ impl System {
 }
 
 // spec: INFRA#host-prefix-derivation
-/// Derive the node's /48 ULA prefix from `/etc/machine-id`.
+/// Derive the node's /48 ULA prefix from the host's machine identifier, as
+/// the platform reads it.
 ///
-/// The raw machine-id content (whitespace-trimmed) is hashed with SHA-256;
-/// the first four bytes of the digest fill octets 2–5 of the prefix:
+/// The identifier (whitespace-trimmed) is hashed with SHA-256; the first four
+/// bytes of the digest fill octets 2–5 of the prefix:
 ///
 /// ```text
 /// fd5e : <hash[0]><hash[1]> : <hash[2]><hash[3]> :: /48
 /// ```
 ///
 /// Hashing instead of direct interpretation means the derivation is
-/// agnostic to the machine-id format (plain hex, UUID with dashes, etc.).
-pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
-    let raw = std::fs::read_to_string("/etc/machine-id")?;
-    let trimmed = raw.trim();
+/// agnostic to the identifier's format (plain hex, UUID with dashes, etc.).
+pub fn node_prefix_from_machine_id(machine_id: &str) -> std::io::Result<Ipv6Net> {
+    let trimmed = machine_id.trim();
     if trimmed.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -340,6 +358,16 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
         .expect("48 is a valid IPv6 prefix length"))
 }
 
+/// What the host platform provides the runtime with, beyond what the runtime
+/// builds itself.
+pub struct Platform {
+    pub connector: Arc<dyn backends::Connector>,
+    pub data_plane: Arc<dyn DataPlane>,
+    pub journal: Arc<dyn journal::JournalSource>,
+    pub storage: Arc<dyn volume_store::VolumeStorage>,
+    pub translator: Arc<dyn AddressTranslator>,
+}
+
 /// Result of `System::setup` / `System::setup_stubbed`: the assembled system
 /// handle alongside the live Caddy admin client (or a placeholder under stub
 /// mode).
@@ -353,25 +381,23 @@ impl System {
     /// Errors from individual backends are returned as boxed trait objects so
     /// callers do not need to depend on internal error types.
     pub async fn setup(
+        platform: Platform,
         node_prefix: Ipv6Net,
         data_dir: &Path,
-        use_btrfs: bool,
     ) -> Result<SystemSetup, BoxError> {
-        // spec: INFRA#unavailable-backends — bring up the container runtime (podman)
-        // and process manager (systemd) best-effort. If either connection fails
-        // the daemon must NOT crash-loop: podman/systemd being down is a
+        // spec: INFRA#unavailable-backends — bring up the container runtime
+        // and process manager best-effort. If either connection fails
+        // the daemon must NOT crash-loop: either being down is a
         // recoverable host-configuration problem, and a crash-loop hides it
         // behind restart churn with no operator-visible signal. Instead we swap
         // in erroring backends, record the reason, and let the OI, database, and
         // reconciler come up so the operator sees a system-wide fault explaining
         // what is broken.
-        let connector = Arc::new(backends::HostConnector {
-            data_dir: data_dir.to_path_buf(),
-        });
+        let connector = platform.connector;
         let backends = backends::Backends::new(
-            connector.clone(),
-            backends::Connector::container(&*connector).await,
-            backends::Connector::process(&*connector).await,
+            Arc::clone(&connector),
+            connector.container().await,
+            connector.process().await,
         );
         if let Some(reason) = backends.unavailable_reason() {
             tracing::error!(
@@ -381,8 +407,6 @@ impl System {
             );
         }
         let (container, process) = (backends.container(), backends.process());
-        let data_plane_arc: Arc<dyn DataPlane> =
-            Arc::new(data_plane::NftablesDataPlane::new(node_prefix)?);
 
         // spec: PRX#proxy-lifecycle — bring Caddy up best-effort. A failure
         // here (image build, container start, health check) must NOT take down
@@ -413,14 +437,16 @@ impl System {
         let caddy_admin_client = caddy_proxy.admin_client_handle();
         let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
 
-        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+        let volume_store = volume_store::VolumeStore::new(data_dir, platform.storage)?;
 
         let system = Arc::new(Self {
             container,
             process,
             proxy,
-            data_plane: data_plane_arc,
+            data_plane: platform.data_plane,
             volume_store,
+            journal: platform.journal,
+            translator: platform.translator,
             backends,
         });
         Ok((system, caddy_admin_client))
@@ -433,8 +459,14 @@ impl System {
     /// host-system effect is faked; OI handlers, reconciliation, DB, and
     /// event emission remain real. Intended for end-to-end UI tests
     /// (Playwright) and as a foundation for future integration tests of
-    /// individual subsystems.
-    pub fn setup_stubbed(data_dir: &Path, use_btrfs: bool) -> Result<SystemSetup, BoxError> {
+    /// individual subsystems. Volumes are kept in `storage` and logs are read
+    /// from `journal`, so the daemon can still keep volumes as the host does
+    /// and show the breadcrumbs it writes.
+    pub fn setup_stubbed(
+        data_dir: &Path,
+        storage: Arc<dyn volume_store::VolumeStorage>,
+        journal: Arc<dyn journal::JournalSource>,
+    ) -> Result<SystemSetup, BoxError> {
         let volumes_root = data_dir.join("stub-volumes");
         std::fs::create_dir_all(&volumes_root)?;
 
@@ -443,7 +475,7 @@ impl System {
         let data_plane_arc: Arc<dyn DataPlane> = Arc::new(stub::StubDataPlane);
         let proxy: Arc<dyn NetworkProxy> = Arc::new(stub::StubNetworkProxy);
 
-        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+        let volume_store = volume_store::VolumeStore::new(data_dir, storage)?;
 
         // The caddy_admin_client field on Reconciler holds the live HTTP
         // client used during blue/green Caddy upgrades. Stub mode never
@@ -463,6 +495,8 @@ impl System {
             proxy,
             data_plane: data_plane_arc,
             volume_store,
+            journal,
+            translator: Arc::new(stub::StubTranslator),
             backends,
         });
         Ok((system, caddy_admin_client))
@@ -475,8 +509,9 @@ impl System {
     /// The counterpart to [`Self::setup_stubbed`], which fakes success: this
     /// one lets a test exercise what the daemon does when the world will not
     /// answer, rather than only what it does when the world agrees.
-    pub fn setup_unavailable(data_dir: &Path, use_btrfs: bool) -> Result<SystemSetup, BoxError> {
-        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+    pub fn setup_unavailable(data_dir: &Path) -> Result<SystemSetup, BoxError> {
+        let volume_store =
+            volume_store::VolumeStore::new(data_dir, Arc::new(stub::StubVolumeStorage))?;
         let placeholder_client = reqwest::Client::builder()
             .build()
             .expect("default reqwest client builds");
@@ -489,9 +524,35 @@ impl System {
             proxy: Arc::new(stub::StubNetworkProxy),
             data_plane: Arc::new(stub::StubDataPlane),
             volume_store,
+            journal: Arc::new(stub::StubJournal),
+            translator: Arc::new(stub::StubTranslator),
             backends,
         });
         Ok((system, caddy_admin_client))
+    }
+
+    /// A `System` on `backends` and `proxy`, with stubs for everything else,
+    /// for tests that need a backend of their own.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        backends: backends::Backends,
+        proxy: Arc<dyn NetworkProxy>,
+        data_dir: &Path,
+    ) -> Self {
+        Self {
+            container: backends.container(),
+            process: backends.process(),
+            proxy,
+            data_plane: Arc::new(stub::StubDataPlane),
+            volume_store: volume_store::VolumeStore::new(
+                data_dir,
+                Arc::new(stub::StubVolumeStorage),
+            )
+            .expect("the volume store opens"),
+            journal: Arc::new(stub::StubJournal),
+            translator: Arc::new(stub::StubTranslator),
+            backends,
+        }
     }
 }
 
@@ -547,6 +608,33 @@ mod gateway_tests {
                 .parse::<std::net::Ipv6Addr>()
                 .unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod node_prefix_tests {
+    use super::node_prefix_from_machine_id;
+
+    // spec: INFRA#host-prefix-derivation
+    #[test]
+    fn the_prefix_is_a_ula_48_derived_from_the_trimmed_identifier() {
+        let prefix = node_prefix_from_machine_id("0123456789abcdef0123456789abcdef").unwrap();
+        assert_eq!(prefix.prefix_len(), 48);
+        assert_eq!(prefix.network().segments()[0], 0xfd5e);
+        assert_eq!(
+            node_prefix_from_machine_id("  0123456789abcdef0123456789abcdef\n").unwrap(),
+            prefix
+        );
+        assert_ne!(
+            node_prefix_from_machine_id("fedcba9876543210fedcba9876543210").unwrap(),
+            prefix
+        );
+    }
+
+    // spec: INFRA#host-prefix-derivation
+    #[test]
+    fn an_empty_identifier_is_refused() {
+        assert!(node_prefix_from_machine_id(" \n").is_err());
     }
 }
 

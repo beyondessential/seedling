@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
 use seedling_protocol::names::{AppName, SessionId};
 
-use crate::runtime::barrier::CancelToken;
+use crate::{runtime::barrier::CancelToken, system::types::RawPty};
 
 /// Tells a session to end. Cloned into whoever must notice a stop, whether
 /// that is async code waiting for it or the script's blocking thread.
@@ -57,7 +57,7 @@ pub struct ShellSession {
     /// is applied when the pty comes into being if it has not yet.
     size: (u16, u16),
     /// `None` until the session's job has started.
-    pty_master_fd: Option<std::os::unix::io::RawFd>,
+    pty_master_fd: Option<RawPty>,
     pub(crate) stop: StopSignal,
 }
 
@@ -86,7 +86,8 @@ impl ShellSession {
     }
 }
 
-fn set_pty_size(fd: std::os::unix::io::RawFd, (rows, cols): (u16, u16)) {
+#[cfg(unix)]
+fn set_pty_size(fd: RawPty, (rows, cols): (u16, u16)) {
     let ws = libc::winsize {
         ws_row: rows,
         ws_col: cols,
@@ -96,6 +97,11 @@ fn set_pty_size(fd: std::os::unix::io::RawFd, (rows, cols): (u16, u16)) {
     // SAFETY: the caller holds the registry lock for a session whose pty is
     // still open, so `fd` is valid.
     unsafe { libc::ioctl(fd, libc::TIOCSWINSZ as _, &ws) };
+}
+
+#[cfg(not(unix))]
+fn set_pty_size(_fd: RawPty, _size: (u16, u16)) {
+    todo!("resizing a terminal on a platform without Unix ptys")
 }
 
 // spec: SHL#listing-sessions
@@ -134,7 +140,7 @@ impl ShellRegistry {
         &self,
         id: &SessionId,
         container_name: String,
-        pty_master_fd: std::os::unix::io::RawFd,
+        pty_master_fd: RawPty,
     ) -> bool {
         let mut sessions = self.sessions.lock();
         let Some(session) = sessions.get_mut(id) else {
@@ -241,6 +247,7 @@ mod tests {
     }
 
     /// A pty whose master and slave are both ours, so its size can be read back.
+    #[cfg(unix)]
     fn pty() -> (i32, i32) {
         let (mut master, mut slave) = (0, 0);
         // SAFETY: both out-pointers are valid, the rest may be null.
@@ -249,14 +256,15 @@ mod tests {
                 &mut master,
                 &mut slave,
                 std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
             )
         };
         assert_eq!(rc, 0, "openpty");
         (master, slave)
     }
 
+    #[cfg(unix)]
     fn size_of(fd: i32) -> (u16, u16) {
         let mut ws = libc::winsize {
             ws_row: 0,
@@ -304,6 +312,7 @@ mod tests {
 
     // spec: SHL#session-startup
     // spec: SHL#resizing-a-terminal
+    #[cfg(unix)]
     #[test]
     fn resize_while_starting_is_applied_when_the_terminal_exists() {
         let registry = ShellRegistry::new();
@@ -331,6 +340,7 @@ mod tests {
     }
 
     // spec: SHL#session-startup
+    #[cfg(unix)]
     #[test]
     fn initial_size_applies_when_nothing_resizes_it() {
         let registry = ShellRegistry::new();
@@ -371,6 +381,7 @@ mod tests {
     }
 
     // spec: SHL#session-end
+    #[cfg(unix)]
     #[test]
     fn a_detached_session_stays_registered_without_a_terminal_to_resize() {
         let registry = ShellRegistry::new();

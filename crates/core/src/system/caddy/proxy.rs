@@ -106,7 +106,7 @@ impl CaddyProxy {
 
 /// Build a `reqwest::Client` whose every connection goes through `socket_path`.
 pub(crate) fn build_client(socket_path: &Path) -> Result<reqwest::Client, reqwest::Error> {
-    reqwest::Client::builder().unix_socket(socket_path).build()
+    crate::runtime::local_socket::client_builder(socket_path).build()
 }
 
 impl CaddyProxy {

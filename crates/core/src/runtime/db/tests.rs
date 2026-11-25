@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 83);
+    assert_eq!(version, 84);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 83);
+    assert_eq!(version, 84);
 }
 
 // spec: APPS#persistence
@@ -92,6 +92,7 @@ fn all_tables_exist_after_migration() {
 }
 
 // spec: INFRA#file-permissions
+#[cfg(unix)]
 #[test]
 fn open_creates_database_with_owner_only_permissions() {
     use std::os::unix::fs::PermissionsExt;
@@ -115,6 +116,7 @@ fn open_creates_database_with_owner_only_permissions() {
 }
 
 // spec: INFRA#file-permissions
+#[cfg(unix)]
 #[test]
 fn open_does_not_create_the_database_through_a_planted_symlink() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -129,6 +131,7 @@ fn open_does_not_create_the_database_through_a_planted_symlink() {
 }
 
 // spec: INFRA#file-permissions
+#[cfg(unix)]
 #[test]
 fn open_rejects_database_with_group_readable_permissions() {
     use std::os::unix::fs::PermissionsExt;
@@ -903,4 +906,27 @@ fn reconstruction_reads_each_parameters_latest_change_through_an_index() {
         !plan.iter().any(|step| step.contains("TEMP B-TREE")),
         "{plan:?}"
     );
+}
+
+// spec: FLT#host-faults
+// The packet-filter fault was filed under the Linux tool's name before it took
+// the facility's. Left under the old name, an active one would never clear.
+#[test]
+fn an_active_packet_filter_fault_under_its_old_name_takes_the_new_one() {
+    let db = Db::open_in_memory_through(83).expect("open at v83");
+    db.conn
+        .execute_batch(
+            "INSERT INTO faults (id, app, kind, timestamp, description, subject)
+                 VALUES ('f1', '_system', 'nftables_failed', '2026-01-01T00:00:00Z',
+                         'apply_rules failed', '');",
+        )
+        .expect("seed v83 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let kind: String = db
+        .conn
+        .query_row("SELECT kind FROM faults WHERE id = 'f1'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kind, "packet_filter_failed");
 }
