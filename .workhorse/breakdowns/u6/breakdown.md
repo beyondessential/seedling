@@ -66,6 +66,6 @@ Give scripts random bytes, random strings, random (v4 not v7) UUIDs, which retur
 
 Extend redaction to the two paths that still show secret values to operators: the file writes reported when an app is described, and the parameter map of each `Action.invoke` call in the action execution log. Both use the same "withheld" marker as other redacted values. Values derived from an app's seed by the replicable randomness card are redacted wherever secret parameter values are, so both paths cover them too.
 
-## Regular expressions
+## Regular expressions · R7
 
 Add regular expression matching, capture, replacement and splitting, with an engine whose running time is linear in its input, or supports execution budgets, so a pattern from a parameter cannot stall evaluation.
