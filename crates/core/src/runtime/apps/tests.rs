@@ -981,3 +981,51 @@ fn a_definition_that_threw_part_way_moves_no_value_out_of_secret_storage() {
     migrate_param_storage(&db, &cipher, &name, &declared_only, false);
     assert!(secret_params::is_stored_secret(&db, &name, &param("token")).unwrap());
 }
+
+fn script_error_at(files: &[(&str, &str)]) -> ScriptError {
+    let bundle = Bundle::from_files(
+        files
+            .iter()
+            .map(|(p, c)| ((*p).to_owned(), c.as_bytes().to_vec())),
+    )
+    .unwrap();
+    let (_, err) = evaluate(
+        &app("positions"),
+        &Arc::new(bundle),
+        &BTreeMap::new(),
+        &crate::runtime::seeds::AppSeed::for_tests(),
+        &crate::ScriptLimits::default(),
+    );
+    err.expect("the script throws")
+}
+
+// spec: CLI#check-results
+#[test]
+fn a_script_error_lies_at_its_own_file_and_line() {
+    let err = script_error_at(&[
+        (
+            "seedling.toml",
+            "script = [\"first.rhai\", \"second.rhai\"]\n",
+        ),
+        ("first.rhai", "let a = 1;\nlet b = 2;\n"),
+        ("second.rhai", "let c = 3;\nthrow \"broken\";\n"),
+    ]);
+    assert_eq!(err.at, Some(("second.rhai".to_owned(), 2)), "{err}");
+}
+
+// spec: CLI#check-results
+#[test]
+fn a_script_error_in_a_function_lies_where_it_was_raised() {
+    let err = script_error_at(&[(
+        "app.seed.rhai",
+        "fn fail() {\n    throw \"broken\";\n}\n\nfail();\n",
+    )]);
+    assert_eq!(err.at, Some(("app.seed.rhai".to_owned(), 2)), "{err}");
+}
+
+// spec: CLI#check-results
+#[test]
+fn a_syntax_error_lies_at_its_line() {
+    let err = script_error_at(&[("app.seed.rhai", "let a = 1;\nlet = ;\n")]);
+    assert_eq!(err.at, Some(("app.seed.rhai".to_owned(), 2)), "{err}");
+}
