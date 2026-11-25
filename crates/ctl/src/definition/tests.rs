@@ -931,3 +931,26 @@ fn a_non_utf8_path_a_github_definition_leaves_out_is_no_bar() {
         [".seedignore", "app.seed.rhai"]
     );
 }
+
+// spec: CLI#include-assembly
+#[test]
+fn a_copy_beside_its_source_counts_once_against_the_file_limit_from_github() {
+    // Each half of the limit, held twice: once in the folder, once in the
+    // source it was copied from.
+    let half = seedling_bundle::BUNDLE_FILE_LIMIT / 2;
+    let data = tarball(|b| {
+        tar_file(
+            b,
+            "o-r-abc/apps/web/seedling.toml",
+            b"[include]\n\"lib\" = \"../shared\"",
+        );
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        for i in 0..half {
+            let contents = i.to_string();
+            tar_file(b, &format!("o-r-abc/apps/web/lib/{i}"), contents.as_bytes());
+            tar_file(b, &format!("o-r-abc/apps/shared/{i}"), contents.as_bytes());
+        }
+    });
+    let files = github::read_definition(&data, "apps/web").unwrap();
+    assert_eq!(files.len(), half + 2);
+}

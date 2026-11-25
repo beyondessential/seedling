@@ -531,7 +531,6 @@ impl Archive {
                         continue;
                     }
                     let contents = if self.kept(&mut ignores, &within, &name, Kind::File)? {
-                        budget.take_file(&name, name.len())?;
                         // Read against what one file may hold, so that
                         // contents already held are not charged twice.
                         let contents = Budget::full().read(&name, entry)?;
@@ -601,7 +600,10 @@ fn ancestors(path: &str) -> impl Iterator<Item = &str> {
 }
 
 /// Hold `contents`, once however many paths hold them: only contents not
-/// already held are taken from the budget.
+/// already held are taken from the budget, as a file of their own.
+///
+/// A folder's copy beside its source shares its contents, and is charged
+/// once, as it is read from disk.
 fn share(
     held: &mut HashMap<u64, Vec<Arc<[u8]>>>,
     budget: &mut Budget,
@@ -614,6 +616,7 @@ fn share(
     if let Some(existing) = same.iter().find(|h| h[..] == contents[..]) {
         return Ok(existing.clone());
     }
+    budget.take_file(name, name.len())?;
     budget.take_bytes(name, contents.len())?;
     let contents: Arc<[u8]> = contents.into();
     same.push(contents.clone());
