@@ -4,7 +4,7 @@ id: CLI
 
 # Reference client
 
-Applies to the [CLI](#cli), the reference command-line client of the [Operator Interface](../overview.md#operator-interface).
+Applies to the [CLI](#cli), the reference command-line client of the [Operator Interface](../overview.md#operator-interface), and to the [definition checks](#definition-checks) it makes without a server.
 
 ## Borrowed terms
 
@@ -16,7 +16,7 @@ Applies to the [CLI](#cli), the reference command-line client of the [Operator I
 
 ### CLI
 
-`seedling-ctl`, the command-line program through which an [operator](../overview.md#operator) uses the Operator Interface.
+`seedling-ctl`, the command-line program through which an [operator](../overview.md#operator) uses the Operator Interface, and through which a definition's author checks it.
 Commands in this spec are written without the program name: `apps create` is `seedling-ctl apps create`.
 
 ## Client identity key
