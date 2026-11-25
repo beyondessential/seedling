@@ -114,6 +114,7 @@ A replacement closure that returns anything other than a string MUST raise a scr
 
 Each call to `std::regex` or `std::parse_regex` MUST count the size of the pattern it compiles toward the regex compiled size [limit](../runtime/engine-limits.md#limits), whether or not the same pattern was compiled before.
 When a pattern's compiled size exceeds what remains of that limit, the helper MUST throw, and MUST count the whole remainder as used.
+[`action.invoke`](action.md#action-invocation) MUST likewise count each pattern it parses for a `regex` param toward the limit of the evaluation calling it, and refuse the invocation, counting the remainder as used, when the pattern exceeds what remains.
 
 > [!NOTE]
 > Repetition is what makes a compiled pattern large: `\w{1000}{1000}` is short to write and enormous once compiled.

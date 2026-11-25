@@ -121,6 +121,26 @@ impl Budget {
     }
 }
 
+/// Where each pattern a param check compiles takes its budget from.
+pub enum Budgets<'b> {
+    /// A whole budget for each value, for a check the runtime makes itself.
+    EachFresh(&'b HelperLimits),
+    // spec: REX#compiled-size
+    /// One budget every value counts toward, for a check a script's own call
+    /// makes, such as `action.invoke`.
+    Shared(&'b mut Budget),
+}
+
+impl Budgets<'_> {
+    /// Run `f` with the budget the next value compiles within.
+    pub fn with<R>(&mut self, f: impl FnOnce(&mut Budget) -> R) -> R {
+        match self {
+            Self::EachFresh(limits) => f(&mut Budget::of(limits)),
+            Self::Shared(budget) => f(budget),
+        }
+    }
+}
+
 // spec: REX#compiled-size
 /// Run `f` with what remains of the calling evaluation's compiled size limit,
 /// and count what it used.

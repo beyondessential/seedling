@@ -439,7 +439,12 @@ fn resolve_params(
             params.insert(key.to_owned(), value);
         }
     }
-    apply_schema(schema, params, &limits).map_err(|e| e.to_string())
+    apply_schema(
+        schema,
+        params,
+        &mut crate::defs::regex::Budgets::EachFresh(&limits),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// How many parameters the closure `pointer` declares, or `None` where the

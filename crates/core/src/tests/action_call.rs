@@ -590,6 +590,27 @@ fn a_regex_passes_on_to_an_invoked_action_as_its_pattern() {
     .expect("a Regex is passed on as its pattern");
 }
 
+// spec: REX#compiled-size
+#[test]
+fn an_invoked_regex_param_counts_toward_the_callers_budget() {
+    let err = invoke_action(
+        r#"
+            app.on_action("inner", |rt, p| {}, #{
+                params: #{ pattern: #{ kind: "regex" } },
+            });
+            app.on_action("outer", |rt, _p| {
+                let huge = "\\w{2000}";
+                try { std::regex(huge); } catch {}
+                app.action("inner").invoke(#{ pattern: "a" });
+            });
+        "#,
+        "outer",
+        rhai::Map::new(),
+    )
+    .expect_err("the budget is used up");
+    assert!(err.to_string().contains("compiled size limit"), "{err}");
+}
+
 // spec: ACN#param-schemas
 // spec: ACN#action-invocation
 #[test]

@@ -119,8 +119,12 @@ fn apply_action_param_schema(
     action_params_schema: &BTreeMap<ParamName, ParamDef>,
     params: serde_json::Map<String, serde_json::Value>,
 ) -> Result<ParamMap, OiError> {
-    action_params::apply_schema(action_params_schema, params, &state.script_limits.helpers())
-        .map_err(validation_error_to_oi)
+    action_params::apply_schema(
+        action_params_schema,
+        params,
+        &mut crate::defs::regex::Budgets::EachFresh(&state.script_limits.helpers()),
+    )
+    .map_err(validation_error_to_oi)
 }
 
 /// The refusal of a request the scheduler's admission rejected.

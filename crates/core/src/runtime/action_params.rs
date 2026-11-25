@@ -23,8 +23,7 @@ use seedling_protocol::names::{ParamName, SiteVolumeName};
 use crate::{
     defs::{
         param_def::{ParamDef, ParamKind, ParsedValue, SuppliedValue},
-        regex::Budget,
-        stdlib::HelperLimits,
+        regex::Budgets,
     },
     runtime::param_map::ParamMap,
 };
@@ -108,7 +107,7 @@ pub fn reject_reserved<'a>(
 pub fn apply_schema(
     schema: &BTreeMap<ParamName, ParamDef>,
     mut params: serde_json::Map<String, serde_json::Value>,
-    limits: &HelperLimits,
+    budgets: &mut Budgets,
 ) -> Result<ParamMap, ParamValidationError> {
     let mut supplied = BTreeMap::new();
     for (name, def) in schema {
@@ -130,7 +129,7 @@ pub fn apply_schema(
         supplied.insert(key.to_owned(), value);
     }
 
-    let parsed = run_requirements(schema, &supplied, limits)?;
+    let parsed = run_requirements(schema, &supplied, budgets)?;
     for name in schema.keys() {
         params.remove(name.as_str());
     }
@@ -221,7 +220,7 @@ pub trait VolumeLookup {
 pub fn run_requirements(
     schema: &BTreeMap<ParamName, ParamDef>,
     supplied: &BTreeMap<String, SuppliedValue>,
-    limits: &HelperLimits,
+    budgets: &mut Budgets,
 ) -> Result<BTreeMap<String, ParsedValue>, ParamValidationError> {
     let mut parsed = BTreeMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -242,7 +241,7 @@ pub fn run_requirements(
         };
 
         // spec: ACN#kind-parsers
-        match req_def.kind.parse_supplied(&value, &mut Budget::of(limits)) {
+        match budgets.with(|budget| req_def.kind.parse_supplied(&value, budget)) {
             Ok(value) => {
                 parsed.insert(field_str.to_owned(), value);
             }
@@ -304,7 +303,11 @@ mod tests {
         schema: &BTreeMap<ParamName, ParamDef>,
         params: serde_json::Map<String, serde_json::Value>,
     ) -> Result<ParamMap, ParamValidationError> {
-        super::apply_schema(schema, params, &crate::ScriptLimits::default().helpers())
+        super::apply_schema(
+            schema,
+            params,
+            &mut crate::defs::regex::Budgets::EachFresh(&crate::ScriptLimits::default().helpers()),
+        )
     }
 
     fn supplied(
