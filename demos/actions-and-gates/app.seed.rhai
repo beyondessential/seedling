@@ -19,8 +19,8 @@
 //   seedling-ctl apps params set actions-and-gates format=1   # migrate refuses
 //   seedling-ctl apps params set actions-and-gates greeting=Hello  # render reruns
 //   seedling-ctl apps gate run actions-and-gates verify
-//   seedling-ctl apps action invoke actions-and-gates note --param text=hi
-//   seedling-ctl apps shell actions-and-gates store
+//   seedling-ctl apps action actions-and-gates note text=hi copies=3
+//   seedling-ctl apps shell actions-and-gates store user=root
 
 app.description("Demo: gates keeping a store's format current, and actions and shells driving the runtime handle");
 
