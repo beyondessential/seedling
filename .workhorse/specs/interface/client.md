@@ -206,7 +206,7 @@ Packing the same bundle twice with the same CLI MUST write the same bytes.
 It MUST take its source in any form `apps create` takes, as [definition sources](#definition-sources) specifies, including `--ref <reference>` in place of the source.
 
 For `--ref`, the CLI MUST fetch the bundle itself, as [fetching](definitions.md#fetching) specifies for the server, with its own Seedling version as the running version in [artefact selection](definitions.md#artefact-selection).
-It MUST refuse a reference that the server would refuse before making any request to a registry.
+It MUST report an error and check nothing, making no request to a registry, when the reference breaks the rules [definition sources](definitions.md#definition-sources) give for a `reference`.
 It MUST authenticate to a registry with the credentials the container engine of the user running it would use to pull images.
 
 The CLI MUST check, in this order, and MUST stop at the first check that fails:
