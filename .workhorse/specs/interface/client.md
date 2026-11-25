@@ -286,6 +286,7 @@ The CLI MUST report an error and check nothing when an argument to `--set` has n
 The CLI MUST read `value` as the constant's type: a decimal integer for an integer constant, `true` or `false` for a boolean constant, and the text as given for a string constant.
 
 The CLI MUST report an error and check nothing when `NAME` is not a host constant, when the same constant is set more than once, or when `value` is not of the constant's type or breaks the rules [host constants](../language/constants.md#host-constants) give for it.
+A `TIMEZONE` value MUST be an [IANA time zone name](../language/constants.md#borrowed-terms).
 Where a default no option sets is undetermined, the CLI MUST treat it as the runtime does, so that an undetermined `AVAILABLE_MEMORY` fails the evaluation.
 
 > [!NOTE]
