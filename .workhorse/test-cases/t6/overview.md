@@ -47,7 +47,8 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 - [ ] `--const CPU_ARCHITECTURE=aarch64 --const AVAILABLE_MEMORY=2147483648 --const HOST_HAS_IPV6=true --const TIMEZONE=Pacific/Auckland`: the script sees each value (verifies spec: CLI#check-host-constants)
 - [ ] `--const AVAILABLE_THREADS=0`, `--const AVAILABLE_MEMORY=lots`, `--const HOST_HAS_IPV4=yes`, `--const CPU_ARCHITECTURE=`, `--const TIMEZONE=NZ`: each exits 2 and evaluates nothing (verifies spec: CLI#check-host-constants)
 - [ ] `--const IDLE_CMD=x`, `--const NOT_A_CONSTANT=1`, and the same constant given twice: each exits 2 (verifies spec: CLI#check-host-constants)
-- [ ] With the machine's memory made undetermined in a test seam and no `--const AVAILABLE_MEMORY`: the evaluation fails as a `script` error; with `--const AVAILABLE_MEMORY` it passes (verifies spec: CLI#check-host-constants, CONST#host-constants)
+- [ ] On the macOS and Windows builds, a script that reads `AVAILABLE_MEMORY`: with no `--const` the evaluation fails as a `script` error; with `--const AVAILABLE_MEMORY=2147483648` it passes (verifies spec: CLI#check-host-constants, CONST#host-constants)
+- [ ] On the macOS and Windows builds, a script that prints `AVAILABLE_THREADS` and `CPU_ARCHITECTURE` into a throw: both are the machine's own values (verifies spec: CLI#check-host-constants)
 
 ## Engine limits
 
