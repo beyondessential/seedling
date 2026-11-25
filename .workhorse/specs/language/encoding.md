@@ -16,6 +16,7 @@ Applies to the helpers in the [std module](std.md#the-std-module) through which 
 | HMAC | The keyed-hash message authentication code defined in [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104). |
 | base16, base64, base64url | The encodings defined in [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) sections 8, 4 and 5. |
 | UUID | A 128-bit universally unique identifier, [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562). |
+| percent-encoding, unreserved character | As defined by [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) sections 2.1 and 2.3. |
 
 ## Byte arguments
 
@@ -53,6 +54,7 @@ The std module MUST offer these helpers.
 | `std::decode_base64url(text: string)` | a Blob of the bytes `text` encodes in base64url |
 | `std::encode_utf8(text: string)` | a Blob of the UTF-8 encoding of `text` |
 | `std::decode_utf8(data: bytes)` | the string whose UTF-8 encoding is `data` |
+| `std::encode_percent(data: bytes)` | a string writing each byte of `data` that is an unreserved character as that character, and each other byte by percent-encoding with uppercase hexadecimal digits |
 
 Given an empty string or no bytes, each of these helpers MUST return an empty string or an empty Blob, as its result type is.
 
@@ -64,6 +66,10 @@ It MUST throw when `text` holds an odd number of characters, or any character ou
 Both MUST throw when the last character before any padding encodes bits that are not zero beyond the final byte.
 
 `decode_utf8` MUST throw when `data` is not valid UTF-8.
+
+> [!NOTE]
+> `encode_percent` leaves only unreserved characters as they are, so its result means the same in every component of a URL, whether a path segment, a query key or value, a fragment or userinfo.
+> It writes a space as `%20`, never as `+`, which reads as a space only in a form-encoded query.
 
 > [!NOTE]
 > A strict decoder gives every byte sequence exactly one encoding, so text that decodes is the text the matching encoder would have written.

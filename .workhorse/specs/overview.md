@@ -24,6 +24,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [purl specification](https://github.com/package-url/purl-spec/tree/v1.1.1/docs/specification), v1.1.1 | the lenient Package URL grammar and how to parse a Package URL, under [PURL](language/purl.md) |
 | [gitignore](https://git-scm.com/docs/gitignore) | patterns in `.seedignore` files, under [CLI](interface/client.md) |
 | [POSIX `crontab`](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/crontab.html), Issue 8 | schedule expressions, under [ACN](language/action.md) |
+| [POSIX Shell Command Language](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html), Issue 8 | shell words, under [QUOT](language/quoting.md) |
 | [IANA Time Zone Database](https://www.iana.org/time-zones) | time zone names, under [ACN](language/action.md), [CONST](language/constants.md) |
 | [SipHash](https://www.aumasson.jp/siphash/siphash.pdf) | the hash of schedule `H` fields, under [ACN](language/action.md) |
 | [Unicode Technical Standard #46](https://www.unicode.org/reports/tr46/) | internationalised domain names, under [URL](language/url.md) |
@@ -75,7 +76,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 9114](https://www.rfc-editor.org/rfc/rfc9114) | HTTP/3, under [ING](language/ingress.md), [PRX](runtime/proxy.md) |
 | [RFC 6585](https://www.rfc-editor.org/rfc/rfc6585) | status 429, under [PRX](runtime/proxy.md) |
 | [RFC 8246](https://www.rfc-editor.org/rfc/rfc8246) | immutable responses, under [WEB](web/serving.md) |
-| [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) | URIs, under [PRX](runtime/proxy.md) |
+| [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) | URIs and percent-encoding, under [PRX](runtime/proxy.md), [ENC](language/encoding.md) |
 | [RFC 8878](https://www.rfc-editor.org/rfc/rfc8878) | Zstandard compression, under [HTTP](language/http-service.md) |
 | [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047) | encoded header words, under [WEB](web/serving.md) |
 | [RFC 7034](https://www.rfc-editor.org/rfc/rfc7034) | `X-Frame-Options`, under [WEB](web/serving.md) |
