@@ -36,6 +36,7 @@ mod description;
 mod exec;
 mod gate;
 mod ingress;
+mod ip;
 mod job;
 mod param;
 mod pod;

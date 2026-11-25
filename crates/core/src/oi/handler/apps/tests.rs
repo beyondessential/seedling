@@ -2863,3 +2863,45 @@ fn a_description_reports_each_param_range_and_options() {
         .clone();
     assert_eq!(web["def"]["container"]["memory"], json!(536870912));
 }
+
+// spec: APPS#parameters
+// spec: APPS#actions
+#[test]
+fn a_description_reports_each_ip_param_family() {
+    let oi = TestOi::new();
+    let script = r#"
+        app.param("pool").kind(#{ name: "ip-range", family: 4 }).required(false);
+        app.param("proxy").kind("ip-address").required(false);
+        app.param("port").kind("integer").required(false);
+        app.on_action("allow", |rt, p| {}, #{ params: #{
+            subnet: #{ kind: #{ name: "ip-subnet", family: 6 } },
+        } });
+        app.deployment("web");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let param = |name: &str| {
+        desc["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("{name} described"))
+            .clone()
+    };
+    assert_eq!(param("pool")["family"], json!(4));
+    assert_eq!(param("pool")["kind"], "ip-range");
+    assert_eq!(param("proxy")["family"], json!(null));
+    assert_eq!(param("port")["family"], json!(null));
+
+    let allow = desc["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "allow")
+        .unwrap()
+        .clone();
+    assert_eq!(allow["params"]["subnet"]["family"], json!(6));
+}

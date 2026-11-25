@@ -245,6 +245,7 @@ export interface AppParam {
   kind: string;
   range: IntRange | null;
   options: string[] | null;
+  family: 4 | 6 | null;
   required: boolean;
   description: string | null;
   default_value: string | null;
@@ -310,6 +311,7 @@ export interface ParamSchema {
   kind: string;
   range: IntRange | null;
   options: string[] | null;
+  family: 4 | 6 | null;
   required: boolean;
   description: string;
   default_value: string | null;

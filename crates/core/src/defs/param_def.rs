@@ -10,6 +10,7 @@ use strum::VariantArray;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use super::{
+    ip::{Family, IpAddress, IpRange, IpSubnet, check_family, take_family},
     purl::{Purl, QualifierValue},
     quantity::{format_quantity, parse_quantity},
     take::{reject_unknown_keys, take_map, take_string, take_string_array},
@@ -89,6 +90,9 @@ pub enum ParamKindName {
     Url,
     UrlOrigin,
     Hostname,
+    IpAddress,
+    IpSubnet,
+    IpRange,
     Volume,
 }
 
@@ -111,6 +115,9 @@ impl ParamKindName {
             Self::Url => "url",
             Self::UrlOrigin => "url-origin",
             Self::Hostname => "hostname",
+            Self::IpAddress => "ip-address",
+            Self::IpSubnet => "ip-subnet",
+            Self::IpRange => "ip-range",
             Self::Volume => "volume",
         }
     }
@@ -121,6 +128,7 @@ impl ParamKindName {
         match self {
             Self::Integer | Self::Quantity => &["range"],
             Self::Choice => &["options"],
+            Self::IpAddress | Self::IpSubnet | Self::IpRange => &["family"],
             _ => &[],
         }
     }
@@ -179,6 +187,18 @@ pub enum ParamKind {
     UrlOrigin,
     // spec: ACN#param-kinds
     Hostname,
+    // spec: ACN#param-kinds
+    IpAddress {
+        family: Option<Family>,
+    },
+    // spec: ACN#param-kinds
+    IpSubnet {
+        family: Option<Family>,
+    },
+    // spec: ACN#param-kinds
+    IpRange {
+        family: Option<Family>,
+    },
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -205,6 +225,9 @@ impl ParamKind {
             Self::Url => ParamKindName::Url,
             Self::UrlOrigin => ParamKindName::UrlOrigin,
             Self::Hostname => ParamKindName::Hostname,
+            Self::IpAddress { .. } => ParamKindName::IpAddress,
+            Self::IpSubnet { .. } => ParamKindName::IpSubnet,
+            Self::IpRange { .. } => ParamKindName::IpRange,
             Self::Volume => ParamKindName::Volume,
         }
     }
@@ -213,11 +236,37 @@ impl ParamKind {
         self.name().as_str()
     }
 
+    /// The family an IP kind was given, or `None` for any other kind.
+    // spec: IP#family-argument
+    pub fn family(&self) -> Option<Family> {
+        match self {
+            Self::IpAddress { family } | Self::IpSubnet { family } | Self::IpRange { family } => {
+                *family
+            }
+            _ => None,
+        }
+    }
+
     /// The kind `name` stands for given no arguments, or `None` for a kind
     /// with a required argument.
     // spec: ACN#kind-arguments
     pub fn without_arguments(name: ParamKindName) -> Option<Self> {
-        (name != ParamKindName::Choice).then(|| kind_with(name, None, None))
+        (name != ParamKindName::Choice).then(|| kind_with(name, KindArguments::default()))
+    }
+
+    /// The IP kind `name` stands for given `family`, or `None` for a kind
+    /// that takes no `family`.
+    // spec: IP#family-argument
+    pub fn of_family(name: ParamKindName, family: Family) -> Option<Self> {
+        name.arguments().contains(&"family").then(|| {
+            kind_with(
+                name,
+                KindArguments {
+                    family: Some(family),
+                    ..KindArguments::default()
+                },
+            )
+        })
     }
 
     /// Whether this kind may appear in static param schemas (`app.param`).
@@ -301,6 +350,24 @@ impl ParamKind {
             Self::Url => return Url::parse(value).map(ParsedValue::Url),
             Self::UrlOrigin => return UrlOrigin::parse(value).map(ParsedValue::UrlOrigin),
             Self::Hostname => return parse_hostname(value).map(ParsedValue::Value),
+            // spec: IP#family-argument
+            Self::IpAddress { family } => {
+                let addr = IpAddress::parse(value)?;
+                check_family(*family, addr.family(), "address")?;
+                return Ok(ParsedValue::IpAddress(addr));
+            }
+            // spec: IP#family-argument
+            Self::IpSubnet { family } => {
+                let subnet = IpSubnet::parse(value)?;
+                check_family(*family, subnet.family(), "subnet")?;
+                return Ok(ParsedValue::IpSubnet(subnet));
+            }
+            // spec: IP#family-argument
+            Self::IpRange { family } => {
+                let range = IpRange::parse(value)?;
+                check_family(*family, range.family(), "range")?;
+                return Ok(ParsedValue::IpRange(range));
+            }
             // spec: ACN#kind-parsers
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|e| e.to_string())?;
@@ -374,14 +441,36 @@ pub fn take_kind(what: &str, value: Dynamic) -> Result<ParamKind, Box<EvalAltRes
     if name == ParamKindName::Choice && options.is_none() {
         return Err(format!("`{what}`: the choice kind takes `options`").into());
     }
-    Ok(kind_with(name, range, options))
+    let family = map
+        .get("family")
+        .map(|family| take_family(&format!("{what}.family"), family.clone()))
+        .transpose()?;
+    Ok(kind_with(
+        name,
+        KindArguments {
+            range,
+            options,
+            family,
+        },
+    ))
 }
 
-fn kind_with(
-    name: ParamKindName,
+/// The arguments a kind map carries, each `None` where it is absent.
+#[derive(Debug, Default)]
+struct KindArguments {
     range: Option<IntRange>,
     options: Option<Vec<String>>,
-) -> ParamKind {
+    family: Option<Family>,
+}
+
+/// The kind `name` stands for given `arguments`, of which it reads only its
+/// own, as [`take_kind`] has checked.
+fn kind_with(name: ParamKindName, arguments: KindArguments) -> ParamKind {
+    let KindArguments {
+        range,
+        options,
+        family,
+    } = arguments;
     match name {
         ParamKindName::Text => ParamKind::Text,
         ParamKindName::Multiline => ParamKind::Multiline,
@@ -401,6 +490,9 @@ fn kind_with(
         ParamKindName::Url => ParamKind::Url,
         ParamKindName::UrlOrigin => ParamKind::UrlOrigin,
         ParamKindName::Hostname => ParamKind::Hostname,
+        ParamKindName::IpAddress => ParamKind::IpAddress { family },
+        ParamKindName::IpSubnet => ParamKind::IpSubnet { family },
+        ParamKindName::IpRange => ParamKind::IpRange { family },
         ParamKindName::Volume => ParamKind::Volume,
     }
 }
@@ -575,16 +667,23 @@ impl SuppliedValue {
 // spec: ACN#kind-parsers
 fn parse_decimal(value: &str) -> Result<i64, String> {
     let digits = value.strip_prefix('-').unwrap_or(value);
-    let decimal = !digits.is_empty()
-        && digits.bytes().all(|b| b.is_ascii_digit())
-        && (digits == "0" || !digits.starts_with('0'))
-        && value != "-0";
+    let decimal = is_decimal_number(digits) && value != "-0";
     if !decimal {
         return Err("must be an integer in decimal form".to_owned());
     }
     value
         .parse()
         .map_err(|_| "must be an integer within the signed 64-bit range".to_owned())
+}
+
+/// Whether `digits` is a number in ASCII decimal digits with no leading
+/// zero, zero being written `0`.
+// spec: ACN#kind-parsers
+// spec: IP#decimal-number
+pub(crate) fn is_decimal_number(digits: &str) -> bool {
+    !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'))
 }
 
 /// What a kind's parser makes of a value it accepts.
@@ -603,6 +702,9 @@ pub enum ParsedValue {
     Purl(Purl),
     Url(Url),
     UrlOrigin(UrlOrigin),
+    IpAddress(IpAddress),
+    IpSubnet(IpSubnet),
+    IpRange(IpRange),
 }
 
 impl ParsedValue {
@@ -624,6 +726,9 @@ impl ParsedValue {
             Self::Purl(purl) => purl_map(purl),
             Self::Url(url) => url_map(url),
             Self::UrlOrigin(origin) => url_origin_map(origin),
+            Self::IpAddress(addr) => Dynamic::from(addr),
+            Self::IpSubnet(subnet) => Dynamic::from(subnet),
+            Self::IpRange(range) => Dynamic::from(range),
         }
     }
 }

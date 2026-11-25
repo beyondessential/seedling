@@ -6,6 +6,7 @@ use serde_json::{Value, json, to_value};
 
 use crate::defs::{
     action::{ActionDef, ShellDef},
+    ip::Family,
     param_def::{ParamDef, ParamKind},
     resource::{Resource, ResourceKind},
 };
@@ -193,6 +194,7 @@ fn param_schema_json(schema: &ParamDef) -> serde_json::Map<String, Value> {
         "kind": schema.kind.as_str(),
         "range": range,
         "options": options,
+        "family": schema.kind.family().map(Family::number),
         "required": schema.required,
         "description": schema.description,
         // spec: APPS#parameters

@@ -207,9 +207,9 @@ fn resolve_call_params(
         "params": &plain,
     });
     // spec: OPS#persistence
-    if !validated.versions().is_empty() {
-        payload["versions"] =
-            serde_json::to_value(validated.versions()).expect("version types serialise as strings");
+    if !validated.types().is_empty() {
+        payload["types"] =
+            serde_json::to_value(validated.types()).expect("parsed types serialise as strings");
     }
     if !secret.is_empty() {
         let cipher = g.cipher.clone().ok_or_else(|| -> Box<EvalAltResult> {
@@ -343,21 +343,21 @@ fn recover_recorded_params(
     }
 
     // spec: OPS#persistence
-    let versions = payload
-        .get("versions")
+    let types = payload
+        .get("types")
         .cloned()
         .map(serde_json::from_value)
         .transpose()
         .map_err(|e| -> Box<EvalAltResult> {
             format!(
-                "replay diverged at call {}: the log records version params that cannot be \
+                "replay diverged at call {}: the log records typed params that cannot be \
                  read ({e})",
                 entry.call_index
             )
             .into()
         })?
         .unwrap_or_default();
-    Ok(ParamMap::with_versions(params, versions))
+    Ok(ParamMap::with_types(params, types))
 }
 
 // spec: SEC#matching

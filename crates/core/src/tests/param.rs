@@ -837,6 +837,37 @@ fn kind_takes_a_kind_name_or_a_kind_map() {
     );
 }
 
+// spec: PARAM#schema
+// spec: ACN#kind-arguments
+// spec: IP#family-argument
+#[test]
+fn an_ip_kind_takes_an_optional_family() {
+    use crate::defs::{ip::Family, param_def::ParamKind};
+
+    assert_eq!(
+        kind_of(r#"app.param("proxy").kind("ip-address");"#, "proxy"),
+        ParamKind::IpAddress { family: None }
+    );
+    assert_eq!(
+        kind_of(
+            r#"app.param("allowed").kind(#{ name: "ip-subnet", family: 6 });"#,
+            "allowed"
+        ),
+        ParamKind::IpSubnet {
+            family: Some(Family::V6)
+        }
+    );
+    assert_eq!(
+        kind_of(
+            r#"app.param("pool").kind(#{ name: "ip-range", family: 4 });"#,
+            "pool"
+        ),
+        ParamKind::IpRange {
+            family: Some(Family::V4)
+        }
+    );
+}
+
 // spec: ACN#kind-arguments
 #[test]
 fn kind_refuses_a_kind_map_that_is_not_valid() {
@@ -857,6 +888,13 @@ fn kind_refuses_a_kind_map_that_is_not_valid() {
         ),
         (r#"#{ range: 1..2 }"#, "without a `name`"),
         (r#"#{ name: "integr" }"#, "unknown param kind"),
+        (r#"#{ name: "ip-address", family: 5 }"#, "must be 4 or 6"),
+        (
+            r#"#{ name: "ip-subnet", family: "4" }"#,
+            "the integer 4 or 6",
+        ),
+        (r#"#{ name: "ip-range", options: ["a"] }"#, "unknown key"),
+        (r#"#{ name: "text", family: 4 }"#, "unknown key"),
         (
             r#"#{ name: "volume" }"#,
             "not allowed on the static parameter",
@@ -1049,6 +1087,55 @@ fn validators_receive_parser_results_of_declared_set_parameters() {
             ]
         ),
         vec![]
+    );
+}
+
+// spec: PARAM#values
+// spec: IP#containment-and-overlap
+#[test]
+fn validators_receive_ip_values_and_the_kind_checks_their_family() {
+    let script = r#"
+        app.param("pool").kind(#{ name: "ip-range", family: 4 });
+        app.param("allowed").kind("ip-subnet").validate(|value, all| {
+            if type_of(value) != "IpSubnet" { throw `value is ${type_of(value)}`; }
+            if !value.contains(all.pool) { throw "the pool lies outside the allowed subnet"; }
+        });
+    "#;
+    assert_eq!(
+        rejections(
+            script,
+            &[
+                ("pool", text("10.0.0.10-10.0.0.20")),
+                ("allowed", text("10.0.0.0/24"))
+            ]
+        ),
+        vec![]
+    );
+    assert_eq!(
+        rejections(
+            script,
+            &[
+                ("pool", text("10.0.1.10-10.0.1.20")),
+                ("allowed", text("10.0.0.0/24"))
+            ]
+        ),
+        vec![(
+            "allowed".to_owned(),
+            "the pool lies outside the allowed subnet".to_owned()
+        )]
+    );
+    assert_eq!(
+        rejections(
+            script,
+            &[
+                ("pool", text("2001:db8::/120")),
+                ("allowed", text("10.0.0.0/24"))
+            ]
+        ),
+        vec![(
+            "pool".to_owned(),
+            "must be an IPv4 range, not an IPv6 one".to_owned()
+        )]
     );
 }
 

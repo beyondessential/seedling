@@ -57,8 +57,18 @@ describe("ParamFields", () => {
   });
 
   // spec: ACN#presentation-of-kinds
-  it("offers a single-line text input for a version, purl, url or hostname param", () => {
-    for (const kind of ["version", "version-semver", "purl", "url", "url-origin", "hostname"]) {
+  it("offers a single-line text input for a version, purl, url, hostname or IP param", () => {
+    for (const kind of [
+      "version",
+      "version-semver",
+      "purl",
+      "url",
+      "url-origin",
+      "hostname",
+      "ip-address",
+      "ip-subnet",
+      "ip-range",
+    ]) {
       const { unmount } = renderWithSession(<Form entries={[["tag", def({ kind })]] as ParamEntries} />);
       const input = screen.getByLabelText(/tag/, { selector: "input" }) as HTMLInputElement;
       expect(input.type).toBe("text");

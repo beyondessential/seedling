@@ -122,6 +122,9 @@ fn single_line_kinds_refuse_control_characters_and_separators() {
             "parse_url",
             "parse_url_origin",
             "parse_hostname",
+            "parse_ip_address",
+            "parse_ip_subnet",
+            "parse_ip_range",
             "parse_volume",
             "parse_quantity",
         ] {

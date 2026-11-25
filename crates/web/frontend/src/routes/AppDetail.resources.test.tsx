@@ -87,6 +87,7 @@ describe("AppDetail params", () => {
       kind: "quantity",
       range: { min: 1, max: 2 ** 31 },
       options: null,
+      family: null,
       required: false,
       description: null,
       default_value: null,
@@ -171,6 +172,7 @@ describe("AppDetail params", () => {
       default_value: null,
       range: null,
       options: null,
+      family: null,
       ...over,
     });
     const { request } = mount(
