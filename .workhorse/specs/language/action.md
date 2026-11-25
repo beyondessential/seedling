@@ -155,7 +155,7 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `integer` | `range`, optional | a whole number, within `range` where one is given | the value as an integer |
 | `quantity` | `range`, optional | a [quantity](#quantities), within `range` where one is given | its amount as an integer |
 | `choice` | `options`, required | one of `options` | the value |
-| `duration` | none | a length of time, as [duration syntax](duration.md#duration-syntax) specifies | a `Duration` |
+| `duration` | `min`, `max` and `precision`, optional | a length of time, as [duration syntax](duration.md#duration-syntax) specifies | a `Duration` |
 | `volume` | none | the name of a site volume, as [volume params](#volume-params) specify | the value |
 
 ### Kind arguments
@@ -175,10 +175,12 @@ The `family` of an `ip-address`, `ip-subnet` or `ip-range` kind is valid only as
 
 A `choice` kind's `options` is valid only if it is a non-empty array of non-empty strings, no two of which are equal, each of which `std::parse_text` accepts.
 
+A `duration` kind's arguments are valid as [duration bounds](duration.md#bounds) specify.
+
 ### Kind parsers
 
 Every kind MUST have a parser, the [helper](std.md#helper) `std::parse_<kind>`, where `<kind>` is the kind's name with each `-` written as `_`.
-A parser takes the value as its first argument, followed by the kind's argument where the kind has one, returns the parser result the kind table gives, and raises a script error for a value the kind does not accept.
+A parser takes the value as its first argument, followed by the kind's argument where the kind has one, or by a map of the arguments given where the kind has several, returns the parser result the kind table gives, and raises a script error for a value the kind does not accept.
 `std::parse_integer` and `std::parse_quantity` MUST each accept being called with or without `range`.
 `std::parse_choice` MUST throw when called without `options`.
 A parser MUST throw when given an argument that a kind map carrying it would make invalid.
@@ -250,6 +252,7 @@ Where it rejects a value that would be a quantity but for its suffix, its error 
 A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname`, `ip-address`, `ip-subnet`, `ip-range` or `duration` param, and a multi-line input for a `multiline` param.
 A presentation layer SHOULD offer a toggle for a `boolean` param, a numeric input limited to `range` for an `integer` param, and a selection among `options`, in the order the script declared them, for a `choice` param.
 A presentation layer SHOULD offer a single-line input for a `quantity` param, and SHOULD show the amount the value resolves to while it is entered.
+A presentation layer SHOULD show the bounds a `duration` param's kind declares beside its input.
 A presentation layer MUST let an operator leave a param that is not required without a value, whatever its kind.
 A presentation layer MAY warn about an `email` value that is valid but unlikely to be meant, such as `" "@example.org`.
 A presentation layer SHOULD indicate the strength of a `weak-password` value as it is entered, and MUST NOT refuse a `weak-password` value for its strength.

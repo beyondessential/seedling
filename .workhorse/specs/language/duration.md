@@ -31,6 +31,24 @@ A day MUST count as 24 hours, and a week as 7 days.
 > A fraction is allowed on the last unit only, from hours down, as in `1.5h`.
 > A month or a year has no fixed length, so a value meaning about a month is written in days, as `30d`.
 
+## Bounds
+
+A `duration` kind takes three optional [arguments](action.md#kind-arguments):
+
+| argument | value | the kind accepts |
+| --- | --- | --- |
+| `min` | a [duration](#duration-arguments) | a duration no shorter than `min` |
+| `max` | a [duration](#duration-arguments) | a duration no longer than `max` |
+| `precision` | one of the designators `d`, `h`, `m`, `s`, `ms`, `us` and `ns` | a duration that is a whole number of the unit `precision` designates |
+
+A `duration` kind is valid only if its `min` is no longer than its `max`, and some duration within them is a whole number of its `precision`'s unit.
+
+`std::parse_duration` MUST accept being called with or without a map of the arguments, holding any of `min`, `max` and `precision`.
+It MUST reject a value that falls outside its bounds, and its error SHOULD state the bound the value breaks.
+
+> [!NOTE]
+> A parameter feeding an option that takes [whole seconds](#duration-arguments) declares `precision: "s"`, so a value with a fraction of a second is refused when the operator enters it, not when the definition evaluates.
+
 ## Duration arguments
 
 An argument or options-map field documented as a `duration` MUST accept a `Duration`, and a string that `std::parse_duration` accepts, read as the `Duration` it returns.
