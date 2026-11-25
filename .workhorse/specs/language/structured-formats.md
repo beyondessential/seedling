@@ -61,6 +61,7 @@ An encoder MUST write each value as the table gives for its format.
 | string | string | string | string | the string |
 | `Version` or `SemVer` | its text, as a string | its text, as a string | its text, as a string | its text |
 | `IpAddress`, `IpSubnet` or `IpRange` | its [canonical form](ip.md#text-of-a-value), as a string | its canonical form, as a string | its canonical form, as a string | its canonical form |
+| `Regex` | its [pattern](regex.md#compiling-a-pattern), as a string | its pattern, as a string | its pattern, as a string | its pattern |
 | array | array | sequence | array | refused |
 | map | object | mapping | table | refused, except as the argument itself |
 

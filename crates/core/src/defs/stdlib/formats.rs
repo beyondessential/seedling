@@ -13,6 +13,7 @@ use super::{
 };
 use crate::defs::{
     ip::{IpAddress, IpRange, IpSubnet},
+    regex::Regex,
     take::take_map,
     version::{SemVer, Version},
 };
@@ -248,6 +249,10 @@ impl Holds {
         // take: dispatch
         if value.is::<IpRange>() {
             return Ok(Tree::Str(value.cast::<IpRange>().to_string()));
+        }
+        // take: dispatch
+        if value.is::<Regex>() {
+            return Ok(Tree::Str(value.cast::<Regex>().pattern().to_owned()));
         }
         // take: dispatch
         if value.is_array() {
