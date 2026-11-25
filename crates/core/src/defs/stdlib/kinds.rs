@@ -7,6 +7,7 @@ use crate::defs::{
     param_def::{ParamKind, ParsedValue},
     purl::{Purl, QualifierValue},
     take::take_string,
+    url::{Url, UrlOrigin},
 };
 
 // spec: ACN#kind-parsers
@@ -27,6 +28,8 @@ pub(super) fn register(module: &mut rhai::Module) {
                     ParsedValue::Version(version) => Dynamic::from(version),
                     ParsedValue::SemVer(version) => Dynamic::from(version),
                     ParsedValue::Purl(purl) => purl_map(purl),
+                    ParsedValue::Url(url) => url_map(url),
+                    ParsedValue::UrlOrigin(origin) => url_origin_map(origin),
                 })
             },
         );
@@ -66,6 +69,39 @@ fn purl_map(purl: Purl) -> Dynamic {
     if let Some(subpath) = purl.subpath {
         map.insert("subpath".into(), subpath.into());
     }
+    map.into()
+}
+
+/// A URL's components as a map, leaving out those it does not have.
+// spec: URL#components
+fn url_map(url: Url) -> Dynamic {
+    let mut map = rhai::Map::new();
+    map.insert("scheme".into(), url.scheme.into());
+    let optional = [
+        ("host", url.host),
+        ("query", url.query),
+        ("fragment", url.fragment),
+        ("username", url.username),
+        ("password", url.password),
+    ];
+    for (key, value) in optional {
+        if let Some(value) = value {
+            map.insert(key.into(), value.into());
+        }
+    }
+    if let Some(port) = url.port {
+        map.insert("port".into(), rhai::INT::from(port).into());
+    }
+    map.insert("path".into(), url.path.into());
+    map.into()
+}
+
+// spec: URL#url-origins
+fn url_origin_map(origin: UrlOrigin) -> Dynamic {
+    let mut map = rhai::Map::new();
+    map.insert("scheme".into(), origin.scheme.into());
+    map.insert("host".into(), origin.host.into());
+    map.insert("port".into(), rhai::INT::from(origin.port).into());
     map.into()
 }
 

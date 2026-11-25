@@ -4,6 +4,7 @@ use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use super::{
     purl::Purl,
+    url::{Url, UrlOrigin, parse_hostname},
     version::{SemVer, Version},
 };
 
@@ -52,6 +53,12 @@ pub enum ParamKind {
     VersionSemver,
     // spec: ACN#param-kinds
     Purl,
+    // spec: ACN#param-kinds
+    Url,
+    // spec: ACN#param-kinds
+    UrlOrigin,
+    // spec: ACN#param-kinds
+    Hostname,
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -97,6 +104,9 @@ impl ParamKind {
             Self::Version => return Version::parse(value).map(ParsedValue::Version),
             Self::VersionSemver => return SemVer::parse(value).map(ParsedValue::SemVer),
             Self::Purl => return Purl::parse(value).map(ParsedValue::Purl),
+            Self::Url => return Url::parse(value).map(ParsedValue::Url),
+            Self::UrlOrigin => return UrlOrigin::parse(value).map(ParsedValue::UrlOrigin),
+            Self::Hostname => return parse_hostname(value).map(ParsedValue::Value),
             // spec: ACN#kind-parsers
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|e| e.to_string())?;
@@ -121,6 +131,9 @@ impl ParamKind {
             Self::Version => "version",
             Self::VersionSemver => "version-semver",
             Self::Purl => "purl",
+            Self::Url => "url",
+            Self::UrlOrigin => "url-origin",
+            Self::Hostname => "hostname",
             Self::Volume => "volume",
         }
     }
@@ -140,6 +153,9 @@ impl std::str::FromStr for ParamKind {
             "version" => Ok(Self::Version),
             "version-semver" => Ok(Self::VersionSemver),
             "purl" => Ok(Self::Purl),
+            "url" => Ok(Self::Url),
+            "url-origin" => Ok(Self::UrlOrigin),
+            "hostname" => Ok(Self::Hostname),
             "volume" => Ok(Self::Volume),
             _ => Err(()),
         }
@@ -158,6 +174,8 @@ pub enum ParsedValue {
     Version(Version),
     SemVer(SemVer),
     Purl(Purl),
+    Url(Url),
+    UrlOrigin(UrlOrigin),
 }
 
 // spec: ACN#kind-parsers

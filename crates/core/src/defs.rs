@@ -111,6 +111,7 @@ pub mod service;
 pub mod stdlib;
 pub mod summary;
 pub mod take;
+pub mod url;
 pub mod version;
 pub mod volume;
 
