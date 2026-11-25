@@ -37,14 +37,11 @@ fn harness() -> Harness {
         Arc::clone(&containers) as Arc<dyn crate::system::ContainerRuntime>,
         process,
     );
-    let driver = Arc::new(System {
-        container: backends.container(),
-        process: backends.process(),
-        proxy: Arc::new(crate::system::stub::StubNetworkProxy),
-        data_plane: Arc::new(crate::system::stub::StubDataPlane),
-        volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+    let driver = Arc::new(System::for_tests(
         backends,
-    });
+        Arc::new(crate::system::stub::StubNetworkProxy),
+        dir.path(),
+    ));
     Harness {
         driver,
         containers,

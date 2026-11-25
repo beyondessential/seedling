@@ -5005,6 +5005,7 @@ dependencies = [
  "quinn",
  "rustls",
  "seedling-core",
+ "seedling-linux",
  "seedling-protocol",
  "serde_json",
  "tempfile",
@@ -5096,7 +5097,6 @@ dependencies = [
  "snafu",
  "strum",
  "subtle",
- "systemd",
  "tar",
  "tempfile",
  "time",
@@ -5138,6 +5138,18 @@ dependencies = [
  "toml 1.2.1+spec-1.1.0",
  "tracing",
  "whoami",
+]
+
+[[package]]
+name = "seedling-linux"
+version = "0.12.0"
+dependencies = [
+ "jiff",
+ "seedling-core",
+ "seedling-protocol",
+ "systemd",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

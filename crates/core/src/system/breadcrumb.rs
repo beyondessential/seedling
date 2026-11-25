@@ -1,12 +1,12 @@
-//! Inject Seedling-side action breadcrumbs into the systemd journal so they
-//! appear in `apps logs` alongside container output.
+//! Inject Seedling-side action breadcrumbs into the host's system journal so
+//! they appear in `apps logs` alongside container output.
 //!
-//! Each breadcrumb is a single journald record carrying the same
+//! Each breadcrumb is a single journal record carrying the same
 //! `SEEDLING_APP` / `SEEDLING_RESOURCE` / `SEEDLING_INSTANCE` fields the
 //! containers' stdout/stderr already get tagged with, plus a
 //! `SEEDLING_RT_CALL` field naming the rt.* primitive (or a synthetic
-//! kind for unit creation and replay markers). The journal reader in
-//! `system::journal` picks them up via the same field-match logic, so an
+//! kind for unit creation and replay markers). The journal source picks
+//! them up via the same field-match logic, so an
 //! operator running `seedling-ctl apps logs <app>` sees the closure's
 //! call sequence interleaved with the container output it produced.
 //!
@@ -100,8 +100,8 @@ pub struct Breadcrumb<'a> {
 }
 
 impl Breadcrumb<'_> {
-    /// Send the breadcrumb to journald. Silently no-ops if journald is
-    /// unavailable (dev runs outside systemd).
+    /// Send the breadcrumb to the journal. Silently no-ops if there is no
+    /// journal to take it.
     // spec: ACTU#breadcrumbs
     pub fn emit(&self) {
         // Build the per-target record set. Each target produces one
@@ -395,34 +395,37 @@ fn send_record(
     message: &str,
     pos: Option<&str>,
 ) {
-    // PRIORITY=6 (informational). We log Seedling-side flow at the
-    // same severity systemd uses for unit transitions; faults stay at
-    // their own (higher) priority via the existing fault path.
-    let mut fields: Vec<String> = vec![
-        "PRIORITY=6".to_owned(),
-        format!("MESSAGE={message}"),
-        format!("SEEDLING_RT_CALL={rt_call}"),
-    ];
+    use crate::system::journal::{
+        APP_FIELD, INSTANCE_FIELD, JournalRecord, LogLevel, RESOURCE_FIELD, RESOURCE_KIND_FIELD,
+        RT_CALL_FIELD, SCRIPT_POS_FIELD,
+    };
+
+    let mut fields = vec![(RT_CALL_FIELD.to_owned(), rt_call.to_owned())];
     if let Some(app) = app {
-        fields.push(format!("SEEDLING_APP={app}"));
+        fields.push((APP_FIELD.to_owned(), app.to_string()));
     }
     if let Some(r) = target.resource {
-        fields.push(format!("SEEDLING_RESOURCE={r}"));
+        fields.push((RESOURCE_FIELD.to_owned(), r.to_owned()));
     }
     if let Some(rk) = target.resource_kind {
-        fields.push(format!("SEEDLING_RESOURCE_KIND={rk}"));
+        fields.push((RESOURCE_KIND_FIELD.to_owned(), rk.to_owned()));
     }
     if let Some(i) = target.instance {
-        fields.push(format!("SEEDLING_INSTANCE={i}"));
+        fields.push((INSTANCE_FIELD.to_owned(), i.to_owned()));
     }
     if let Some(p) = pos {
-        fields.push(format!("SEEDLING_SCRIPT_POS={p}"));
+        fields.push((SCRIPT_POS_FIELD.to_owned(), p.to_owned()));
     }
-    let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
-    // sd_journal_send returns negative on error (e.g. journald not
-    // running). We don't surface those: dev environments without
-    // systemd just lose the breadcrumbs, which is harmless.
-    let _ = systemd::journal::send(&refs);
+    // Informational: Seedling-side flow sits at the same level as the
+    // supervisor's own unit transitions, and faults stay at theirs through
+    // the fault path. A journal that cannot take the entry is not surfaced:
+    // dev environments without one just lose the breadcrumbs, which is
+    // harmless.
+    let _ = crate::system::journal::send(&JournalRecord {
+        level: LogLevel::Info,
+        message: message.to_owned(),
+        fields,
+    });
 }
 
 #[cfg(test)]

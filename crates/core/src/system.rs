@@ -25,7 +25,7 @@ pub(crate) mod caddy;
 pub(crate) mod confined;
 pub(crate) mod data_plane;
 pub mod jool;
-pub(crate) mod journal;
+pub mod journal;
 pub(crate) mod podman;
 pub mod resolver;
 pub mod startup_cleanup;
@@ -281,6 +281,8 @@ pub struct System {
     pub proxy: Arc<dyn NetworkProxy>,
     pub data_plane: Arc<dyn DataPlane>,
     pub volume_store: volume_store::VolumeStore,
+    /// Where log streams are read from.
+    pub journal: Arc<dyn journal::JournalSource>,
     /// Whether the container runtime (podman) and process manager (systemd)
     /// are reachable. While either is not, the daemon runs degraded: the
     /// backend is an erroring stub (see [`unavailable`]), the OI, database and
@@ -340,6 +342,12 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
         .expect("48 is a valid IPv6 prefix length"))
 }
 
+/// What the host platform provides the runtime with, beyond what the runtime
+/// builds itself.
+pub struct Platform {
+    pub journal: Arc<dyn journal::JournalSource>,
+}
+
 /// Result of `System::setup` / `System::setup_stubbed`: the assembled system
 /// handle alongside the live Caddy admin client (or a placeholder under stub
 /// mode).
@@ -353,6 +361,7 @@ impl System {
     /// Errors from individual backends are returned as boxed trait objects so
     /// callers do not need to depend on internal error types.
     pub async fn setup(
+        platform: Platform,
         node_prefix: Ipv6Net,
         data_dir: &Path,
         use_btrfs: bool,
@@ -421,6 +430,7 @@ impl System {
             proxy,
             data_plane: data_plane_arc,
             volume_store,
+            journal: platform.journal,
             backends,
         });
         Ok((system, caddy_admin_client))
@@ -433,8 +443,13 @@ impl System {
     /// host-system effect is faked; OI handlers, reconciliation, DB, and
     /// event emission remain real. Intended for end-to-end UI tests
     /// (Playwright) and as a foundation for future integration tests of
-    /// individual subsystems.
-    pub fn setup_stubbed(data_dir: &Path, use_btrfs: bool) -> Result<SystemSetup, BoxError> {
+    /// individual subsystems. Logs are read from `journal`, so the daemon can
+    /// still show the breadcrumbs it writes.
+    pub fn setup_stubbed(
+        data_dir: &Path,
+        use_btrfs: bool,
+        journal: Arc<dyn journal::JournalSource>,
+    ) -> Result<SystemSetup, BoxError> {
         let volumes_root = data_dir.join("stub-volumes");
         std::fs::create_dir_all(&volumes_root)?;
 
@@ -463,6 +478,7 @@ impl System {
             proxy,
             data_plane: data_plane_arc,
             volume_store,
+            journal,
             backends,
         });
         Ok((system, caddy_admin_client))
@@ -489,9 +505,30 @@ impl System {
             proxy: Arc::new(stub::StubNetworkProxy),
             data_plane: Arc::new(stub::StubDataPlane),
             volume_store,
+            journal: Arc::new(stub::StubJournal),
             backends,
         });
         Ok((system, caddy_admin_client))
+    }
+
+    /// A `System` on `backends` and `proxy`, with stubs for everything else,
+    /// for tests that need a backend of their own.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        backends: backends::Backends,
+        proxy: Arc<dyn NetworkProxy>,
+        data_dir: &Path,
+    ) -> Self {
+        Self {
+            container: backends.container(),
+            process: backends.process(),
+            proxy,
+            data_plane: Arc::new(stub::StubDataPlane),
+            volume_store: volume_store::VolumeStore::new(data_dir, false)
+                .expect("the volume store opens"),
+            journal: Arc::new(stub::StubJournal),
+            backends,
+        }
     }
 }
 

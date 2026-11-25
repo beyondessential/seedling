@@ -326,9 +326,8 @@ mod tests {
         defs::resource::ResourceKind,
         system::{
             ContainerRuntime, ProcessManager,
-            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+            stub::{StubContainerRuntime, StubNetworkProxy, StubProcessManager},
             types::{TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind},
-            volume_store::VolumeStore,
         },
     };
     use seedling_protocol::names::AppName;
@@ -467,14 +466,11 @@ mod tests {
             Arc::clone(&container) as Arc<dyn ContainerRuntime>,
             Arc::clone(&process) as Arc<dyn ProcessManager>,
         );
-        let system = Arc::new(System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(StubNetworkProxy),
-            data_plane: Arc::new(StubDataPlane),
-            volume_store: VolumeStore::new(dir.path(), false).expect("volume store"),
+        let system = Arc::new(System::for_tests(
             backends,
-        });
+            Arc::new(StubNetworkProxy),
+            dir.path(),
+        ));
         (system, process, dir)
     }
 

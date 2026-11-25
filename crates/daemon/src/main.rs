@@ -18,7 +18,7 @@ use seedling_core::{
         registry::DbInstanceRegistry,
     },
     system::{
-        System,
+        Platform, System,
         host_probes::{Fact, HostConstants, HostProbes, HostSource},
         nat64::should_activate_nat64,
         netinfo::{detect_ipv4_egress, detect_ipv6_egress},
@@ -472,12 +472,15 @@ async fn main() {
     };
     let _dns_forwarder_handle = forwarder_handle;
 
+    let journal = Arc::new(seedling_linux::journal::Journal);
+    seedling_core::system::journal::install_sink(journal.clone());
     let (driver, caddy_admin_client) = if args.stub_backends {
         tracing::info!("booting with stubbed system backends (no podman/systemd/nftables)");
-        System::setup_stubbed(&data_dir, use_btrfs)
+        System::setup_stubbed(&data_dir, use_btrfs, journal)
             .unwrap_or_else(|e| fatal!("stubbed system setup failed: {e}"))
     } else {
-        System::setup(node_prefix, &data_dir, use_btrfs)
+        let platform = Platform { journal };
+        System::setup(platform, node_prefix, &data_dir, use_btrfs)
             .await
             .unwrap_or_else(|e| fatal!("system setup failed: {e}"))
     };
@@ -1696,8 +1699,12 @@ mod tests {
         use seedling_core::system::System;
 
         let data_dir = tempfile::tempdir().expect("temp data dir");
-        let (driver, _caddy_admin) =
-            System::setup_stubbed(data_dir.path(), false).expect("stub system");
+        let (driver, _caddy_admin) = System::setup_stubbed(
+            data_dir.path(),
+            false,
+            std::sync::Arc::new(seedling_core::system::stub::StubJournal),
+        )
+        .expect("stub system");
         let db = DbHandle::open_in_memory().expect("in-memory db");
 
         // Two resources spared for the operation that will not replay, and
@@ -1732,8 +1739,12 @@ mod tests {
         use seedling_protocol::names::AppName;
 
         let data_dir = tempfile::tempdir().expect("temp data dir");
-        let (driver, _caddy_admin) =
-            System::setup_stubbed(data_dir.path(), false).expect("stub system");
+        let (driver, _caddy_admin) = System::setup_stubbed(
+            data_dir.path(),
+            false,
+            std::sync::Arc::new(seedling_core::system::stub::StubJournal),
+        )
+        .expect("stub system");
         let db = DbHandle::open_in_memory().expect("in-memory db");
         insert_dynamic_resources(&db, &[(INST_A, "op-abandoned")]);
         let volume = AnonymousVolume {

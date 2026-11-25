@@ -1,5 +1,5 @@
-//! In-memory fakes for the four system traits, used to boot the daemon
-//! without podman / systemd / nftables / Caddy.
+//! In-memory fakes for the system traits, used to boot the daemon without
+//! the host's container runtime, process supervisor, packet filter or proxy.
 //!
 //! Constructed by [`System::setup_stubbed`] when the daemon is started with
 //! `--stub-backends`. Every operation succeeds; observed state matches what
@@ -883,6 +883,19 @@ impl DataPlane for StubDataPlane {
 
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
         async { Ok(()) }.boxed()
+    }
+}
+
+/// Stub journal source: a journal with nothing in it.
+pub struct StubJournal;
+
+impl super::journal::JournalSource for StubJournal {
+    fn open(
+        &self,
+        _opts: super::journal::LogStreamOptions,
+    ) -> Result<tokio::sync::mpsc::Receiver<super::journal::LogEntry>, BoxError> {
+        let (_, rx) = tokio::sync::mpsc::channel(1);
+        Ok(rx)
     }
 }
 

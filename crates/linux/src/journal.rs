@@ -1,0 +1,468 @@
+//! The system journal: systemd's journal, written through `sd_journal_send`
+//! and read on a dedicated thread.
+
+use std::collections::BTreeMap;
+
+use seedling_core::system::{
+    BoxError,
+    journal::{
+        APP_FIELD, INFRA_FIELD, INSTANCE_FIELD, InfraComponent, JournalRecord, JournalSink,
+        JournalSource, LogEntry, LogLevel, LogStreamOptions, LogTarget, RESOURCE_FIELD,
+        RESOURCE_KIND_FIELD, RT_CALL_FIELD, SCRIPT_POS_FIELD,
+    },
+};
+
+/// The host's systemd journal.
+pub struct Journal;
+
+impl JournalSink for Journal {
+    fn send(&self, record: &JournalRecord) -> Result<(), BoxError> {
+        let fields = record_fields(record);
+        let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
+        systemd::journal::send(&refs)?;
+        Ok(())
+    }
+}
+
+impl JournalSource for Journal {
+    fn open(
+        &self,
+        opts: LogStreamOptions,
+    ) -> Result<tokio::sync::mpsc::Receiver<LogEntry>, BoxError> {
+        spawn_log_reader(opts)
+    }
+}
+
+/// The `KEY=VALUE` fields of `record` as the journal takes them.
+///
+/// Error level is the journal's error priority, which is how a reader tells
+/// standard error from standard output; everything else is informational.
+// spec: LINUX#logs
+fn record_fields(record: &JournalRecord) -> Vec<String> {
+    let priority = match record.level {
+        LogLevel::Info => 6,
+        LogLevel::Error => 3,
+    };
+    let mut fields: Vec<String> = record
+        .fields
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    fields.push(format!("PRIORITY={priority}"));
+    fields.push(format!("MESSAGE={}", record.message));
+    fields
+}
+
+/// Spawn a journal reader on a dedicated OS thread and return a channel of
+/// log entries.
+///
+/// The reader applies journal field matches based on the target, seeks to the
+/// appropriate tail position, reads historical entries, then optionally follows
+/// for new entries.
+fn spawn_log_reader(
+    opts: LogStreamOptions,
+) -> Result<tokio::sync::mpsc::Receiver<LogEntry>, BoxError> {
+    let (tx, rx) = tokio::sync::mpsc::channel(256);
+    // spec: LOG#log-stream-request
+    // The journal is opened on the reader thread, which owns it, so whether it
+    // opened is handed back before the caller answers the request.
+    let (opened_tx, opened_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+
+    std::thread::Builder::new()
+        .name("journal-reader".into())
+        .spawn(move || {
+            if let Err(e) = journal_reader_thread(opts, tx, opened_tx) {
+                tracing::error!("journal reader thread failed: {e}");
+            }
+        })?;
+
+    match opened_rx.recv() {
+        Ok(Ok(())) => Ok(rx),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => Err("the journal reader ended before opening the journal".into()),
+    }
+}
+
+/// Open the system journal, narrowed to the entries `opts` asks for and
+/// positioned at the start of its tail window.
+// spec: LINUX#logs
+fn open_journal(opts: &LogStreamOptions) -> Result<systemd::journal::Journal, BoxError> {
+    use systemd::journal::OpenOptions;
+
+    let mut journal = OpenOptions::default().system(true).open()?;
+
+    match &opts.target {
+        LogTarget::App {
+            app,
+            resource,
+            instance,
+        } => {
+            journal.match_add(APP_FIELD, app.as_bytes())?;
+            if let Some(res) = resource {
+                journal.match_add(RESOURCE_FIELD, res.as_bytes())?;
+            }
+            if let Some(inst) = instance {
+                journal.match_add(INSTANCE_FIELD, inst.as_bytes())?;
+            }
+        }
+        LogTarget::Infra(component) => {
+            let value = match component {
+                InfraComponent::Proxy => "proxy",
+                InfraComponent::Resolver => "resolver",
+            };
+            journal.match_add(INFRA_FIELD, value)?;
+        }
+    }
+
+    // spec: LOG#entry-selection
+    seek_tail_window(&mut journal, opts.tail)?;
+    Ok(journal)
+}
+
+fn journal_reader_thread(
+    opts: LogStreamOptions,
+    tx: tokio::sync::mpsc::Sender<LogEntry>,
+    opened: std::sync::mpsc::SyncSender<Result<(), String>>,
+) -> Result<(), BoxError> {
+    let mut journal = match open_journal(&opts) {
+        Ok(journal) => {
+            let _ = opened.send(Ok(()));
+            journal
+        }
+        Err(e) => {
+            let _ = opened.send(Err(e.to_string()));
+            return Err(e);
+        }
+    };
+
+    loop {
+        match journal.next_entry()? {
+            Some(entry) => {
+                // timestamp_usec() reads from the entry the cursor is currently
+                // positioned on. next_entry() leaves the cursor on the entry it
+                // just returned, so this call refers to the correct entry.
+                let timestamp_us = journal.timestamp_usec().unwrap_or(0);
+                let log_entry = record_to_entry(timestamp_us, &entry);
+                if tx.blocking_send(log_entry).is_err() {
+                    break;
+                }
+            }
+            None => {
+                if !opts.follow {
+                    break;
+                }
+                journal.wait(Some(std::time::Duration::from_secs(1)))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// The journal cursor moves [`seek_tail_window`] needs, so its arithmetic can
+/// be tested without a running journal.
+trait JournalCursor {
+    fn seek_head(&mut self) -> systemd::Result<()>;
+    fn seek_tail(&mut self) -> systemd::Result<()>;
+    /// Step back one entry, returning whether there was one to step onto.
+    fn previous(&mut self) -> systemd::Result<bool>;
+}
+
+impl JournalCursor for systemd::Journal {
+    fn seek_head(&mut self) -> systemd::Result<()> {
+        self.seek(systemd::journal::JournalSeek::Head)
+    }
+
+    fn seek_tail(&mut self) -> systemd::Result<()> {
+        self.seek(systemd::journal::JournalSeek::Tail)
+    }
+
+    fn previous(&mut self) -> systemd::Result<bool> {
+        Ok(systemd::journal::JournalRef::previous(self)? != 0)
+    }
+}
+
+/// Position `journal` so that the next entry read is the oldest of its last
+/// `tail` entries.
+///
+/// Reading advances before it reads, so the cursor goes one entry further
+/// back than the window. Running out of entries first means the window is
+/// the whole journal, which is then read from the head.
+fn seek_tail_window(journal: &mut impl JournalCursor, tail: u64) -> systemd::Result<()> {
+    journal.seek_tail()?;
+    let mut stepped = 0;
+    while stepped <= tail && journal.previous()? {
+        stepped += 1;
+    }
+    if stepped <= tail {
+        journal.seek_head()?;
+    }
+    Ok(())
+}
+
+fn record_to_entry(timestamp_us: u64, fields: &BTreeMap<String, String>) -> LogEntry {
+    let timestamp = jiff::Timestamp::from_microsecond(timestamp_us as i64)
+        .ok()
+        .map(|ts| ts.to_string())
+        .unwrap_or_default();
+
+    let message = fields.get("MESSAGE").cloned().unwrap_or_default();
+
+    let unit = fields.get("_SYSTEMD_UNIT").cloned().unwrap_or_default();
+
+    // Infer stdout vs stderr from syslog priority.
+    // Priority <= 3 (error and below) maps to stderr, everything else to stdout.
+    let stream = fields
+        .get("PRIORITY")
+        .and_then(|p| p.parse::<u8>().ok())
+        .map(|p| if p <= 3 { "stderr" } else { "stdout" })
+        .unwrap_or("stdout")
+        .to_owned();
+
+    LogEntry {
+        timestamp,
+        message,
+        unit,
+        stream,
+        app: fields.get(APP_FIELD).cloned(),
+        resource_kind: fields.get(RESOURCE_KIND_FIELD).cloned(),
+        resource: fields.get(RESOURCE_FIELD).cloned(),
+        instance: fields.get(INSTANCE_FIELD).cloned(),
+        infra: fields.get(INFRA_FIELD).cloned(),
+        rt_call: fields.get(RT_CALL_FIELD).cloned(),
+        script_pos: fields.get(SCRIPT_POS_FIELD).cloned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    use seedling_core::{
+        defs::resource::ResourceKind,
+        runtime::ResourceInstance,
+        system::journal::{exec_output_entries, instance_log_fields},
+    };
+    use systemd::journal::OpenOptions;
+
+    use super::*;
+
+    const MARKER_FIELD: &str = "SEEDLING_TEST_MARKER";
+
+    /// An in-memory journal with sd_journal's cursor semantics: a seek leaves
+    /// the cursor between entries, `previous` steps onto the entry before it,
+    /// and reading steps onto the entry after it before reading.
+    struct FakeJournal {
+        len: usize,
+        /// Index of the entry the cursor is on, or the gap before `0` when
+        /// `None`; a tail seek sits past the last entry at `Some(len)`.
+        at: Option<usize>,
+    }
+
+    impl FakeJournal {
+        fn new(len: usize) -> Self {
+            Self { len, at: None }
+        }
+
+        fn read_all(&mut self) -> Vec<usize> {
+            let mut read = Vec::new();
+            loop {
+                let next = self.at.map_or(0, |i| i + 1);
+                if next >= self.len {
+                    return read;
+                }
+                self.at = Some(next);
+                read.push(next);
+            }
+        }
+    }
+
+    impl JournalCursor for FakeJournal {
+        fn seek_head(&mut self) -> systemd::Result<()> {
+            self.at = None;
+            Ok(())
+        }
+
+        fn seek_tail(&mut self) -> systemd::Result<()> {
+            self.at = Some(self.len);
+            Ok(())
+        }
+
+        fn previous(&mut self) -> systemd::Result<bool> {
+            match self.at {
+                Some(i) if i > 0 => {
+                    self.at = Some(i - 1);
+                    Ok(true)
+                }
+                _ => Ok(false),
+            }
+        }
+    }
+
+    fn fake_window(len: usize, tail: u64) -> Vec<usize> {
+        let mut journal = FakeJournal::new(len);
+        seek_tail_window(&mut journal, tail).unwrap();
+        journal.read_all()
+    }
+
+    // spec: LOG#entry-selection
+    #[test]
+    fn tail_window_arithmetic() {
+        assert!(fake_window(3, 0).is_empty());
+        assert_eq!(fake_window(3, 1), [2]);
+        assert_eq!(fake_window(3, 2), [1, 2]);
+        assert_eq!(fake_window(3, 3), [0, 1, 2]);
+        assert_eq!(fake_window(3, 10), [0, 1, 2]);
+        assert!(fake_window(0, 5).is_empty());
+    }
+
+    // spec: RT#command-execution
+    #[test]
+    fn exec_output_is_sent_under_the_containers_own_fields_by_line_and_priority() {
+        let instance = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("demo").unwrap(),
+            ResourceKind::Deployment,
+            "api",
+        );
+        let entries: Vec<Vec<String>> = exec_output_entries(&instance, b"one\ntwo\n", b"oops\n")
+            .iter()
+            .map(record_fields)
+            .collect();
+        assert_eq!(entries.len(), 3);
+        let has = |entry: &[String], field: &str| entry.iter().any(|f| f == field);
+        for entry in &entries {
+            for (k, v) in instance_log_fields(&instance) {
+                assert!(
+                    has(entry, &format!("{k}={v}")),
+                    "{k} missing from {entry:?}"
+                );
+            }
+        }
+        assert!(has(&entries[0], "MESSAGE=one") && has(&entries[0], "PRIORITY=6"));
+        assert!(has(&entries[2], "MESSAGE=oops") && has(&entries[2], "PRIORITY=3"));
+    }
+
+    fn open_marked(marker: &str) -> systemd::Journal {
+        let mut journal = OpenOptions::default()
+            .current_user(true)
+            .open()
+            .expect("open journal");
+        journal.match_add(MARKER_FIELD, marker).expect("match");
+        journal
+    }
+
+    fn count_marked(marker: &str) -> usize {
+        let mut journal = open_marked(marker);
+        let mut count = 0;
+        while journal.next().expect("read") != 0 {
+            count += 1;
+        }
+        count
+    }
+
+    fn read_window(marker: &str, tail: u64) -> Vec<String> {
+        let mut journal = open_marked(marker);
+        seek_tail_window(&mut journal, tail).expect("seek");
+        let mut messages = Vec::new();
+        while let Some(entry) = journal.next_entry().expect("read") {
+            messages.push(entry["MESSAGE"].clone());
+        }
+        messages
+    }
+
+    // spec: LOG#entry-selection
+    #[test]
+    #[ignore = "needs a running journald"]
+    fn tail_window_holds_the_last_entries() {
+        let marker = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        for i in 0..3 {
+            systemd::journal::send(&[
+                &format!("MESSAGE=entry {i}"),
+                &format!("{MARKER_FIELD}={marker}"),
+            ])
+            .expect("the journal accepts an entry");
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while count_marked(&marker) < 3 {
+            assert!(
+                Instant::now() < deadline,
+                "entries never reached the journal"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        assert!(read_window(&marker, 0).is_empty());
+        assert_eq!(read_window(&marker, 1), ["entry 2"]);
+        assert_eq!(read_window(&marker, 2), ["entry 1", "entry 2"]);
+        assert_eq!(read_window(&marker, 3), ["entry 0", "entry 1", "entry 2"]);
+        assert_eq!(read_window(&marker, 10), ["entry 0", "entry 1", "entry 2"]);
+    }
+
+    // spec: RT#command-execution
+    #[test]
+    #[ignore = "needs a running journald"]
+    fn exec_output_is_read_back_as_the_containers_own_log_entries() {
+        let unique = format!(
+            "exec{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let instance = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("demo").unwrap(),
+            ResourceKind::Deployment,
+            &unique,
+        );
+        for record in exec_output_entries(&instance, b"out line\n", b"err line\n") {
+            Journal.send(&record).expect("the journal accepts an entry");
+        }
+
+        let read = || {
+            let mut journal = OpenOptions::default()
+                .current_user(true)
+                .open()
+                .expect("open journal");
+            journal
+                .match_add(RESOURCE_FIELD, unique.as_bytes())
+                .expect("match");
+            let mut entries = Vec::new();
+            while let Some(fields) = journal.next_entry().expect("read") {
+                let at = journal.timestamp_usec().unwrap_or(0);
+                entries.push(record_to_entry(at, &fields));
+            }
+            entries
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut entries = read();
+        while entries.len() < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "entries never reached the journal"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            entries = read();
+        }
+
+        let out = entries.iter().find(|e| e.message == "out line").unwrap();
+        let err = entries.iter().find(|e| e.message == "err line").unwrap();
+        assert_eq!(out.stream, "stdout");
+        assert_eq!(err.stream, "stderr");
+        for entry in [out, err] {
+            assert_eq!(entry.app.as_deref(), Some("demo"));
+            assert_eq!(entry.resource.as_deref(), Some(unique.as_str()));
+            assert_eq!(
+                entry.instance.as_deref(),
+                Some(instance.display_name.as_str())
+            );
+            assert!(entry.rt_call.is_none(), "not a breadcrumb");
+        }
+    }
+}

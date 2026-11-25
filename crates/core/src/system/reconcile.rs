@@ -3901,14 +3901,11 @@ mod tests {
             crate::system::stub::StubContainerRuntime::new(dir.path().join("vols")),
         )));
         let backends = crate::system::backends::Backends::working(container, process);
-        let system = Arc::new(crate::system::System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
-            data_plane: Arc::new(crate::system::stub::StubDataPlane),
-            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(crate::system::System::for_tests(
             backends,
-        });
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(system);
         oi.call(
             "/apps/create",
@@ -3939,14 +3936,11 @@ mod tests {
         let flaky = Flaky::down();
         let backends = down_backends(&flaky);
         let dir = tempfile::tempdir().unwrap();
-        let system = Arc::new(crate::system::System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
-            data_plane: Arc::new(crate::system::stub::StubDataPlane),
-            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(crate::system::System::for_tests(
             backends,
-        });
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(Arc::clone(&system));
         let mut reconciler = test_reconciler(&oi);
         let held = |oi: &crate::oi::test_support::TestOi| -> bool {
@@ -4678,14 +4672,11 @@ mod tests {
             Arc::clone(&container) as Arc<dyn crate::system::ContainerRuntime>,
             process,
         );
-        let system = Arc::new(crate::system::System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
-            data_plane: Arc::new(crate::system::stub::StubDataPlane),
-            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(crate::system::System::for_tests(
             backends,
-        });
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        ));
         (
             crate::oi::test_support::TestOi::with_driver(system),
             container,
@@ -6617,8 +6608,7 @@ mod tests {
     fn dtls_session_refused_is_filed_on_a_recent_refusal_and_cleared_when_it_is_not_one() {
         use crate::system::{
             ContainerRuntime, ProcessManager,
-            stub::{StubContainerRuntime, StubDataPlane, StubProcessManager},
-            volume_store::VolumeStore,
+            stub::{StubContainerRuntime, StubProcessManager},
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -6633,14 +6623,11 @@ mod tests {
         let proxy = Arc::new(RefusingProxy(parking_lot::Mutex::new(Ok(
             Default::default(),
         ))));
-        let system = Arc::new(System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::clone(&proxy) as Arc<dyn crate::system::NetworkProxy>,
-            data_plane: Arc::new(StubDataPlane),
-            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(System::for_tests(
             backends,
-        });
+            Arc::clone(&proxy) as Arc<dyn crate::system::NetworkProxy>,
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(system);
         let reconciler = test_reconciler(&oi);
 
@@ -6697,9 +6684,8 @@ mod tests {
     fn a_crash_looping_instance_the_supervisor_would_restart_is_stopped() {
         use crate::system::{
             ContainerRuntime, ProcessManager,
-            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+            stub::{StubContainerRuntime, StubNetworkProxy, StubProcessManager},
             types::ActiveState,
-            volume_store::VolumeStore,
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -6711,14 +6697,11 @@ mod tests {
             Arc::clone(&container) as Arc<dyn ContainerRuntime>,
             Arc::clone(&process) as Arc<dyn ProcessManager>,
         );
-        let system = Arc::new(System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(StubNetworkProxy),
-            data_plane: Arc::new(StubDataPlane),
-            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(System::for_tests(
             backends,
-        });
+            Arc::new(StubNetworkProxy),
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(system);
         oi.call(
             "/apps/create",
@@ -6827,8 +6810,7 @@ mod tests {
     fn a_workloads_spec_hash_moves_with_the_key_of_a_gate_it_is_ordered_directly_after_only() {
         use crate::system::{
             ContainerRuntime, ProcessManager,
-            stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
-            volume_store::VolumeStore,
+            stub::{StubContainerRuntime, StubNetworkProxy, StubProcessManager},
         };
 
         let dir = tempfile::tempdir().unwrap();
@@ -6840,14 +6822,11 @@ mod tests {
             Arc::clone(&container) as Arc<dyn ContainerRuntime>,
             Arc::clone(&process) as Arc<dyn ProcessManager>,
         );
-        let system = Arc::new(System {
-            container: backends.container(),
-            process: backends.process(),
-            proxy: Arc::new(StubNetworkProxy),
-            data_plane: Arc::new(StubDataPlane),
-            volume_store: VolumeStore::new(dir.path(), false).unwrap(),
+        let system = Arc::new(System::for_tests(
             backends,
-        });
+            Arc::new(StubNetworkProxy),
+            dir.path(),
+        ));
         let oi = crate::oi::test_support::TestOi::with_driver(system);
         oi.call(
             "/apps/create",

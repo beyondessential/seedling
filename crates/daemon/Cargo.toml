@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 seedling-core = { path = "../core" }
+seedling-linux = { path = "../linux" }
 seedling-protocol = { path = "../protocol" }
 
 clap.workspace = true
