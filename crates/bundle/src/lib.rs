@@ -1,4 +1,12 @@
-use std::{collections::BTreeMap, fmt, io::Read, ops::Bound};
+//! App definition bundles: the bundle rules, the content hash, and the forms
+//! a bundle travels in.
+
+use std::{
+    collections::BTreeMap,
+    fmt,
+    io::{Read, Write},
+    ops::Bound,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bytes::Bytes;
@@ -7,7 +15,9 @@ use semver::Version;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::version::VersionRequirement;
+pub use version::VersionRequirement;
+
+mod version;
 
 /// Upper bound on a bundle's total file size.
 ///
@@ -24,6 +34,21 @@ pub const BUNDLE_SIZE_LIMIT: usize = 2 * 1024 * 1024;
 pub const BUNDLE_FILE_LIMIT: usize = 4096;
 
 pub const METADATA_FILE: &str = "seedling.toml";
+
+/// The artifact type of a definition artefact, an OCI manifest holding a
+/// bundle as its single layer.
+// spec: DEFN#fetching
+pub const ARTIFACT_TYPE: &str = "application/vnd.bes.seedling.definition.v1";
+
+/// The media type of a definition artefact's layer, the form
+/// [`Bundle::to_tar_gz`] writes and [`Bundle::from_tar_gz`] reads.
+// spec: DEFN#fetching
+pub const LAYER_MEDIA_TYPE: &str = "application/vnd.bes.seedling.definition.v1.tar+gzip";
+
+/// The annotation carrying a definition's Seedling version requirement on its
+/// manifest or index entry.
+// spec: DEFN#fetching
+pub const VERSIONS_ANNOTATION: &str = "vnd.bes.seedling.versions";
 pub const DEFAULT_SCRIPT: &str = "app.seed.rhai";
 
 /// Why a bundle cannot be installed.
@@ -342,17 +367,8 @@ impl Bundle {
             .map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
         let mut files = Vec::new();
         let mut total = 0usize;
-        let mut seen = 0usize;
+        let mut others = 0usize;
         for entry in entries {
-            // Headers cost nothing to decompress and little to hold, so the
-            // byte cap alone would let a small blob expand into millions of
-            // entries; the count is capped as the entries are read.
-            seen += 1;
-            if seen > BUNDLE_FILE_LIMIT {
-                return Err(invalid(format!(
-                    "bundle archive holds more than the {BUNDLE_FILE_LIMIT}-file limit"
-                )));
-            }
             let mut entry =
                 entry.map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
             let path = entry
@@ -360,13 +376,31 @@ impl Bundle {
                 .map_err(|e| invalid(format!("bundle archive has an unreadable path: {e}")))?
                 .to_string_lossy()
                 .into_owned();
+            // Headers cost nothing to decompress and little to hold, so the
+            // byte cap alone would let a small blob expand into millions of
+            // entries; the count is capped as the entries are read. The file
+            // limit counts files, as the bundle rules do, and the entries
+            // that hold no file are capped as many again.
             match entry.header().entry_type() {
-                tar::EntryType::Regular | tar::EntryType::Continuous => {}
-                tar::EntryType::Directory => {
-                    normalise_path(&path).map_err(invalid)?;
+                tar::EntryType::Regular | tar::EntryType::Continuous => {
+                    if files.len() >= BUNDLE_FILE_LIMIT {
+                        return Err(invalid(format!(
+                            "bundle archive holds more than the {BUNDLE_FILE_LIMIT}-file limit"
+                        )));
+                    }
+                }
+                tar::EntryType::Directory | tar::EntryType::XGlobalHeader => {
+                    others += 1;
+                    if others > BUNDLE_FILE_LIMIT {
+                        return Err(invalid(format!(
+                            "bundle archive holds more than {BUNDLE_FILE_LIMIT} entries that are not files"
+                        )));
+                    }
+                    if entry.header().entry_type() == tar::EntryType::Directory {
+                        normalise_path(&path).map_err(invalid)?;
+                    }
                     continue;
                 }
-                tar::EntryType::XGlobalHeader => continue,
                 other => {
                     return Err(invalid(format!(
                         "{path:?} is not a regular file or directory ({other:?})"
@@ -388,6 +422,32 @@ impl Bundle {
             files.push((path, contents));
         }
         Self::from_files(files)
+    }
+
+    /// Encode the bundle as a definition artefact's layer, the form
+    /// [`Self::from_tar_gz`] reads.
+    ///
+    /// Every header field that could vary between runs is fixed and files go
+    /// in path order, so the same bundle always gives the same bytes and so
+    /// the same digest. Only files are written: a directory is implied by
+    /// what it holds, and an entry for it would spend the archive's
+    /// allowance of entries that hold no file.
+    // spec: CLI#definition-packing
+    pub fn to_tar_gz(&self) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, contents) in &self.files {
+            append_file(&mut builder, path, contents);
+        }
+        let tar = builder
+            .into_inner()
+            .expect("writing a tar to memory is infallible");
+        let mut gz = flate2::GzBuilder::new().mtime(0).write(
+            Vec::with_capacity(tar.len()),
+            flate2::Compression::default(),
+        );
+        gz.write_all(&tar)
+            .expect("compressing to memory is infallible");
+        gz.finish().expect("compressing to memory is infallible")
     }
 
     /// This bundle with the text of its only script file replaced, every
@@ -514,12 +574,26 @@ impl Bundle {
     }
 }
 
+/// Append one file with every varying header field fixed.
+fn append_file(builder: &mut tar::Builder<Vec<u8>>, path: &str, contents: &[u8]) {
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_size(contents.len() as u64);
+    header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_uid(0);
+    header.set_gid(0);
+    builder
+        .append_data(&mut header, path, contents)
+        .expect("writing a tar to memory is infallible");
+}
+
 /// The accepted path that `path` is inside, or that is inside `path`.
 ///
 /// Neither relationship needs a scan of what has been accepted: every file
 /// beneath `path` sorts contiguously from the prefix `path/`, and every
 /// directory `path` sits under is one of its own ancestors.
-fn overlapping<'a>(out: &'a BTreeMap<String, Bytes>, path: &str) -> Option<&'a String> {
+fn overlapping<'a, V>(out: &'a BTreeMap<String, V>, path: &str) -> Option<&'a String> {
     let beneath = format!("{path}/");
     let from_beneath = (Bound::Included(beneath.as_str()), Bound::Unbounded);
     if let Some((key, _)) = out.range::<str, _>(from_beneath).next()
@@ -608,6 +682,7 @@ fn read_script(
             // Read, and checked, by `read_requirement`.
             "seedling" => {}
             "script" => names = script_list(value)?,
+            "include" => read_include(files, value)?,
             "metadata" => {
                 metadata.as_ref().map_err(Clone::clone)?;
             }
@@ -649,6 +724,77 @@ fn read_script(
         texts.push((path.as_str(), text));
     }
     Ok(Script::concatenate(texts))
+}
+
+/// The `include` table a metadata file declares, each normalised key mapped
+/// to the source path a client assembles it from, or an empty map where the
+/// file declares none.
+///
+/// Only the table is read: the rest of the metadata is left to the bundle
+/// rules, so a client can assemble a bundle the server then judges whole.
+// spec: BND#included-files
+pub fn included(metadata_file: &[u8]) -> Result<BTreeMap<String, String>, BundleError> {
+    match read_metadata_file(Some(metadata_file))?.remove("include") {
+        Some(value) => include_table(value),
+        None => Ok(BTreeMap::new()),
+    }
+}
+
+/// Check the `include` table against the files the bundle holds. Its values
+/// are where a client assembled each file from, which only the client reads.
+// spec: BND#included-files
+fn read_include(files: &BTreeMap<String, Bytes>, value: toml::Value) -> Result<(), BundleError> {
+    for path in include_table(value)?.keys() {
+        let beneath = format!("{path}/");
+        let present = files.contains_key(path)
+            || files
+                .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
+                .next()
+                .is_some_and(|(k, _)| k.starts_with(&beneath));
+        if !present {
+            return Err(invalid(format!(
+                "{METADATA_FILE} field `include` key {path:?} holds no file in the bundle"
+            )));
+        }
+    }
+    Ok(())
+}
+
+// spec: BND#included-files
+fn include_table(value: toml::Value) -> Result<BTreeMap<String, String>, BundleError> {
+    let toml::Value::Table(table) = value else {
+        return Err(invalid(format!(
+            "{METADATA_FILE} field `include` must be a table of strings, got {}",
+            value.type_str()
+        )));
+    };
+    let mut keys: BTreeMap<String, String> = BTreeMap::new();
+    for (key, source) in table {
+        let at =
+            |msg: String| invalid(format!("{METADATA_FILE} field `include` key {key:?} {msg}"));
+        let source = match source {
+            toml::Value::String(s) if !s.is_empty() => s,
+            toml::Value::String(_) => return Err(at("has an empty source path".to_owned())),
+            other => return Err(at(format!("must be a string, got {}", other.type_str()))),
+        };
+        let path = normalise_path(&key).map_err(|e| at(format!("is invalid: {e}")))?;
+        if path.is_empty() {
+            return Err(at("names the bundle root".to_owned()));
+        }
+        if path == METADATA_FILE {
+            return Err(at(format!("names {METADATA_FILE}")));
+        }
+        if keys.contains_key(&path) {
+            return Err(at(format!("names {path:?}, as another key does")));
+        }
+        if let Some(other) = overlapping(&keys, &path) {
+            return Err(at(format!(
+                "overlaps the key {other:?}: one is inside the other"
+            )));
+        }
+        keys.insert(path, source);
+    }
+    Ok(keys)
 }
 
 fn metadata_map(table: &toml::Table, at: &str) -> Result<Map<String, Value>, BundleError> {

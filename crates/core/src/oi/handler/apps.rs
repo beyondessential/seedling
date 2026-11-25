@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use seedling_bundle::{Bundle, Declared};
 use seedling_protocol::error::{ErrorCode, OiError};
 use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, ParamName};
@@ -13,7 +14,7 @@ use crate::{
     runtime::{
         AppPhase,
         apps::{AppEntry, AppRegistry, AppStatus, status as app_status},
-        definition::{Bundle, Declared, Source, version},
+        definition::{Source, version},
         desired::{DynamicCreator, list_dynamic_resources_for_app},
         faults,
         health::{InstanceHealth, declares_healthcheck, read_health},

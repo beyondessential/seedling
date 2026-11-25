@@ -893,7 +893,7 @@ Seedling then reports the app to Canopy as an application of that type, keyed by
 
 ## Definition bundles
 
-A definition is a *bundle*: a folder holding the script and any files it needs, such as error pages or seed data. A lone script is a bundle holding only `app.seed.rhai`.
+A definition is a *bundle*: a folder holding the script and any files it needs, such as error pages or seed data. A lone script pushed with `seedling-ctl` becomes a bundle holding that file under its own name, with a `seedling.toml` naming it as the script.
 
 ```
 tamanu/
@@ -904,7 +904,7 @@ tamanu/
     └── logo.png
 ```
 
-`seedling.toml` is optional and has three optional fields:
+`seedling.toml` is optional and has four optional fields:
 
 ```toml
 seedling = ">=0.13, <0.15"          # Seedling versions this definition supports; `||` separates alternatives
@@ -912,6 +912,10 @@ script = ["lib.rhai", "app.seed.rhai"] # script files, concatenated in order; de
 
 [metadata]                           # free-form values for the script; Seedling does not interpret them
 version = "2.12.0"
+
+[include]                            # files and folders copied in from elsewhere in the repository
+"lib.rhai" = "../common/lib.rhai"
+"pages" = "../common/pages"
 ```
 
 A definition for a Seedling version the host is not running is refused when it is installed. An error in any script file is reported against that file and its own line number.
@@ -948,6 +952,18 @@ let banner = app.file("banner.txt").text();       // throws if the file is not U
 - `volume.write` and `rt.write` accept a `File` as well as a string. `volume.write_dir(path, dir)` writes a whole directory, and may target the volume root.
 
 Bundles are limited to regular files and folders, 2 MiB in total. See [Deploying](deploying.md#app-definitions) for pushing a folder and publishing a bundle to a registry.
+
+### Sharing files between definitions
+
+Sibling definitions in one repository share helpers and sidecars through `[include]`. Each key is where the file or folder lands in the bundle; each value is where `seedling-ctl` copies it from, relative to the definition folder. A shared script joins the definition by being listed in `script`, ahead of the files that use it, so it runs in the same scope as they do.
+
+`seedling-ctl` copies included files in when it reads the folder, so the host only ever sees a self-contained bundle; the host refuses a bundle whose `[include]` names a path it does not hold, as a folder published without `seedling-ctl definitions pack` would. Sources are confined:
+
+- to the repository the folder sits in (the nearest folder above holding `.git` or `.jj`), or to the definition folder itself outside a repository;
+- for a GitHub URL, to that repository at the same commit;
+- never through a symlink, and never into `.git` or `.jj`.
+
+An included folder is read like a definition folder, honouring its own `.seedignore`, and may not hold a `seedling.toml`: only the definition folder's own is read. A copy already in the folder must match its source; where the source cannot be reached, as when pushing a folder written by `apps export`, the copy is used as it stands.
 
 ## Running a command inside a container: `rt.exec`
 

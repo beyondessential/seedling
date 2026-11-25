@@ -107,7 +107,7 @@ The CLI MUST send a definition as [definition sources](definitions.md#definition
 
 | source | sent as |
 | --- | --- |
-| a path to a file | the file's text as `script`, or as `body` for a template |
+| a path to a file | a bundle holding the file under its own name and a [metadata file](../language/bundle.md#metadata-file) whose only field is `script`, naming that file, as `bundle` |
 | a path to a folder | the folder as `bundle`, read as [Definition folders](#definition-folders) specifies |
 | `https://github.com/<owner>/<repo>/tree/<ref>/<folder>` | the named folder at the named branch, tag or commit as `bundle` |
 | `--ref <reference>` | the reference as `reference`, for the server to fetch |
@@ -115,15 +115,56 @@ The CLI MUST send a definition as [definition sources](definitions.md#definition
 For a GitHub URL, the CLI MUST resolve the branch, tag or commit to a commit, download the folder at that commit itself, and send `origin` with `url` set to the URL as given and `revision` set to the commit's id.
 Where the URL's path could split into a ref and a folder in several ways, the CLI MUST try the shortest ref first.
 The CLI MAY authenticate to GitHub with the token in the `GITHUB_TOKEN` environment variable.
-The CLI MUST report an error and send no request when the folder holds no files, or when the downloaded archive holds an entry that is not a regular file or directory or that lies outside the folder.
+The CLI MUST report an error and send no request when the folder holds no files, or when an entry the CLI reads from the downloaded archive is not a regular file or directory, or lies outside the repository.
+
+The CLI MUST report an error and send no request when a path to a file names a file called `seedling.toml`, or one whose name is not valid UTF-8.
 
 > [!NOTE]
 > Downloading the folder on the client means the host needs no access to GitHub.
+
+> [!NOTE]
+> Sending a file under its own name means its script errors name the file its author wrote, and an [export](#definition-export) gives that file back.
 
 ## Definition folders
 
 When reading a folder, the CLI MUST leave out version-control metadata directories, such as `.git` and `.jj`, and anything a `.seedignore` file in the folder or one of its subfolders excludes, read as gitignore patterns.
 If a symlink or other non-regular file is not left out, the CLI MUST report an error naming it and send no request.
+
+### Include assembly
+
+When the folder's [metadata file](../language/bundle.md#metadata-file) has an `include` table, the CLI MUST assemble the bundle from each key's source:
+
+- where the source names a regular file, the CLI MUST place its contents at the key's bundle path;
+- where the source names a directory, the CLI MUST read it as it reads a definition folder, and place each file it yields at the key's bundle path joined with the file's path relative to the directory.
+
+The include boundary is the directory within which every source the CLI reads lies:
+
+- for a folder on disk, the nearest directory at or above the folder that holds a `.git` or `.jj` entry, or the folder itself where none does;
+- for a GitHub URL, the root of the repository at the resolved commit, from which the CLI MUST read each source at that same commit.
+
+A key's source path is the folder's path relative to the include boundary joined with the key's value, read with `/` as its separator, and normalised lexically as a [bundle path](../language/bundle.md#bundle-paths) is.
+A key's source is out of bounds when its value is absolute or contains a null byte, when its source path rises above the include boundary at any `..` segment during normalisation, or when a segment of its source path names a version-control metadata directory, such as `.git` or `.jj`.
+The CLI MUST NOT read a source that is out of bounds.
+
+The CLI MUST report an error naming the key and send no request when a source it reads:
+
+- is reached from the include boundary through a symlink, or is itself a symlink or anything other than a regular file or a directory;
+- is a directory that yields no file, or yields a file named `seedling.toml` at any depth.
+
+Where the folder itself holds files at or beneath a key's bundle path, once `.seedignore` exclusions are applied, the CLI MUST use the folder's files when the key's source is out of bounds or names nothing.
+Otherwise, the CLI MUST report an error naming the key and send no request unless the folder's files there have the same paths and contents as the files the source yields.
+
+Where the folder holds no file at or beneath a key's bundle path, the CLI MUST report an error naming the key and send no request when the key's source is out of bounds or names nothing.
+An [included file](../language/bundle.md#included-file) MUST be placed in the bundle whether or not a `.seedignore` pattern in the folder matches its bundle path.
+
+> [!NOTE]
+> Confining sources to the repository means a definition read from a GitHub URL and the same definition pushed from a clone of that repository assemble from the same files, and a badly written `include` cannot reach past the repository on either path.
+
+> [!NOTE]
+> Only the folder's own metadata file is read, so a `seedling.toml` in a shared directory is refused rather than copied in where it would look as though it applied.
+
+> [!NOTE]
+> Using the folder's own copy where the source is out of bounds or absent lets an [exported](#definition-export) bundle be pushed again as it stands, wherever it was exported to, while a stale copy is caught whenever its source can be read.
 
 ## Parameter changes
 
@@ -144,6 +185,20 @@ Without it, the CLI MUST send no request, and MUST report that every value deriv
 `apps export <app> <folder> [--generation <n>]` MUST write the app's [definition bundle](../overview.md#definition-bundle) at generation `n`, or at the current generation, into `folder`, reproducing the bundle's files exactly.
 If `folder` exists and is not empty, the CLI MUST report an error and write nothing.
 If a path in the bundle is absolute, or has an empty or `..` segment, the CLI MUST report an error and write nothing.
+
+## Definition packing
+
+`definitions pack <source> <file>` MUST write the bundle that `source` yields, read and assembled as a definition source sent as `bundle` is, to `file` as the layer of a [definition artefact](definitions.md#fetching): a gzip-compressed tar archive whose root is the bundle root, holding only regular files and the directories containing them.
+`source` MUST be a path to a file, a path to a folder, or a GitHub URL, as [definition sources](#definition-sources) give them.
+If `file` exists, the CLI MUST report an error and write nothing.
+The CLI MUST apply every [bundle rule](definitions.md#bundle-rules) to the bundle, and MUST report an error naming the offending path or field and write nothing when one is broken.
+Once it has written `file`, the CLI MUST report the bundle's declared [Seedling version requirement](../language/bundle.md#seedling-version-requirement), where it declares one, as the text to give the `vnd.bes.seedling.versions` annotation.
+Packing the same bundle twice with the same CLI MUST write the same bytes.
+
+> [!NOTE]
+> A packed bundle is pushed to a registry with a general-purpose OCI tool, so the CLI holds no registry credentials of its own.
+> Writing the same bytes for the same bundle gives an unchanged definition the same digest when it is published again.
+> A host refuses a fetched bundle whose annotation differs from its declared requirement, so reporting the requirement lets it be carried to the push unchanged.
 
 ## Registry tags
 

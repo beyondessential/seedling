@@ -118,11 +118,7 @@ fn a_definition_from_an_index_entry_records_the_entry_digest() {
         REPO,
         &[
             (&image, None, None),
-            (
-                &def,
-                Some(crate::runtime::definition::fetch::ARTIFACT_TYPE),
-                None,
-            ),
+            (&def, Some(seedling_bundle::ARTIFACT_TYPE), None),
         ],
     );
     oi.registry.tag(REPO, "2", &index);

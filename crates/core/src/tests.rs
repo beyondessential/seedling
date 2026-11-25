@@ -65,9 +65,8 @@ pub fn run_test_script_in(
         .map(|(p, c)| ((*p).to_owned(), c.to_vec()))
         .collect();
     all.push(("app.seed.rhai".to_owned(), source.as_bytes().to_vec()));
-    let bundle = std::sync::Arc::new(
-        crate::runtime::definition::Bundle::from_files(all).expect("a valid test bundle"),
-    );
+    let bundle =
+        std::sync::Arc::new(seedling_bundle::Bundle::from_files(all).expect("a valid test bundle"));
     let (engine, mut scope, mut app) =
         crate::setup_language(&crate::ScriptLimits::default(), bundle).expect("the scope builds");
     app.seed = Some(crate::runtime::seeds::AppSeed::for_tests());

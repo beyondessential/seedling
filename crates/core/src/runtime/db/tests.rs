@@ -198,7 +198,9 @@ fn action_log_has_unique_constraint() {
 // spec: DEFN#provenance-reporting
 #[test]
 fn stored_scripts_become_one_file_bundles_pushed_by_nobody_known() {
-    use crate::runtime::definition::{Bundle, Source};
+    use seedling_bundle::Bundle;
+
+    use crate::runtime::definition::Source;
 
     let db = Db::open_in_memory_through(57).expect("open at v57");
     let script = r#"app.deployment("web").image("docker.io/library/nginx:1.29");"#;

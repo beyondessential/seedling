@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use seedling_bundle::Bundle;
 use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
 use seedling_protocol::names::{AppName, TemplateName};
 use serde::Deserialize;
@@ -18,7 +19,7 @@ use crate::{
     runtime::{
         self,
         apps::evaluate,
-        definition::{Bundle, Origin, version},
+        definition::{Origin, version},
     },
 };
 

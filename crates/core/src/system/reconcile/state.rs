@@ -831,7 +831,7 @@ mod tests {
     fn register(reg: &mut AppRegistry, name: &str, phase: AppPhase) {
         reg.register(
             app(name),
-            std::sync::Arc::new(crate::runtime::definition::Bundle::from_stored_script("")),
+            std::sync::Arc::new(seedling_bundle::Bundle::from_stored_script("")),
             crate::runtime::definition::Source::unknown_push(),
             std::sync::Arc::new(tokio::sync::Notify::new()),
             &crate::ScriptLimits::default(),

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rhai::{AST, CustomType, Dynamic, Engine, EvalAltResult, FnPtr, Map, Position, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, GateName, ParamName, ShellName};
 
-use crate::runtime::definition::Bundle;
+use seedling_bundle::Bundle;
 
 use super::{
     Holder,

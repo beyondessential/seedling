@@ -12,7 +12,9 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{ARTIFACT_TYPE, LAYER_MEDIA_TYPE, Registry, VERSIONS_ANNOTATION};
+use seedling_bundle::{ARTIFACT_TYPE, LAYER_MEDIA_TYPE, VERSIONS_ANNOTATION};
+
+use super::Registry;
 
 pub fn digest_of(bytes: &[u8]) -> String {
     let hex: String = Sha256::digest(bytes)

@@ -5,6 +5,7 @@ use std::{
 
 use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
+use seedling_bundle::Bundle;
 use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{AppName, ParamName, SessionId};
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ use crate::{
     },
     runtime::{
         db::{Db, DbHandle},
-        definition::{Bundle, Source},
+        definition::Source,
         desired::OperationProgress,
         generations, scaling,
         secrets::Cipher,
@@ -1082,7 +1083,7 @@ fn check_kinds(
 fn run_validators(
     engine: &rhai::Engine,
     ast: &rhai::AST,
-    script: &crate::runtime::definition::Script,
+    script: &seedling_bundle::Script,
     validators: &BTreeMap<seedling_protocol::names::ParamName, rhai::FnPtr>,
     parsed: BTreeMap<String, ParsedValue>,
 ) -> Vec<Rejection> {

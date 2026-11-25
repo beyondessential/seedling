@@ -415,3 +415,189 @@ fn an_unsupported_bundle_with_unreadable_metadata_is_reported_unsupported() {
         Err(BundleError::Unsupported { .. })
     ));
 }
+
+fn packable() -> Vec<(String, Vec<u8>)> {
+    let deep = format!("{}/page.html", ["nested"; 20].join("/"));
+    files(&[
+        ("app.seed.rhai", b"let x = 1;"),
+        ("pages/error.html", b"<p>oops</p>"),
+        ("pages/a.txt", b""),
+        ("a.txt", b"top"),
+        (&deep, b"deep"),
+    ])
+}
+
+// spec: CLI#definition-packing
+#[test]
+fn a_packed_bundle_reads_back_as_the_same_bundle() {
+    let bundle = Bundle::from_files(packable()).unwrap();
+    let read = Bundle::from_tar_gz(&bundle.to_tar_gz()).unwrap();
+    assert_eq!(read, bundle);
+    assert_eq!(read.hash(), bundle.hash());
+}
+
+// spec: CLI#definition-packing
+#[test]
+fn packing_the_same_bundle_gives_the_same_bytes() {
+    let forwards = Bundle::from_files(packable()).unwrap().to_tar_gz();
+    let backwards = Bundle::from_files(packable().into_iter().rev())
+        .unwrap()
+        .to_tar_gz();
+    assert_eq!(forwards, backwards);
+}
+
+// spec: CLI#definition-packing
+#[test]
+fn a_packed_bundle_holds_only_its_files_with_fixed_headers() {
+    let data = Bundle::from_files(packable()).unwrap().to_tar_gz();
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(data.as_slice()));
+    let mut seen: Vec<String> = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let entry = entry.unwrap();
+        let header = entry.header();
+        assert_eq!(header.entry_type(), tar::EntryType::Regular);
+        assert_eq!(header.mtime().unwrap(), 0);
+        assert_eq!(header.uid().unwrap(), 0);
+        seen.push(entry.path().unwrap().to_string_lossy().into_owned());
+    }
+    let mut sorted = seen.clone();
+    sorted.sort();
+    assert_eq!(seen, sorted);
+    assert_eq!(seen.len(), packable().len());
+}
+
+// spec: CLI#definition-packing
+// spec: DEFN#bundle-rules
+#[test]
+fn a_full_bundle_in_folders_reads_back_from_its_packed_layer() {
+    let full: Vec<(String, Vec<u8>)> = (0..BUNDLE_FILE_LIMIT)
+        .map(|i| (format!("d{}/e{}/f{i}", i % 64, i % 7), Vec::new()))
+        .collect();
+    let bundle = Bundle::from_files(full).unwrap();
+    assert_eq!(Bundle::from_tar_gz(&bundle.to_tar_gz()).unwrap(), bundle);
+}
+
+// spec: DEFN#bundle-rules
+#[test]
+fn an_archive_with_directory_entries_and_the_full_file_count_is_accepted() {
+    let data = tar_gz(|b| {
+        for d in 0..16 {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            b.append_data(&mut header, format!("d{d}/"), &[][..])
+                .unwrap();
+        }
+        for i in 0..BUNDLE_FILE_LIMIT {
+            add_file(b, &format!("d{}/f{i}", i % 16), b"");
+        }
+    });
+    assert_eq!(
+        Bundle::from_tar_gz(&data).unwrap().files().len(),
+        BUNDLE_FILE_LIMIT
+    );
+    let over = tar_gz(|b| {
+        for i in 0..=BUNDLE_FILE_LIMIT {
+            add_file(b, &format!("f{i}"), b"");
+        }
+    });
+    assert!(invalid_message(Bundle::from_tar_gz(&over)).contains("file limit"));
+    let hollow = tar_gz(|b| {
+        for d in 0..=BUNDLE_FILE_LIMIT {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            b.append_data(&mut header, format!("d{d}/"), &[][..])
+                .unwrap();
+        }
+    });
+    assert!(invalid_message(Bundle::from_tar_gz(&hollow)).contains("not files"));
+}
+
+fn with_include(meta: &[u8]) -> Result<Bundle, BundleError> {
+    Bundle::from_files(files(&[
+        ("seedling.toml", meta),
+        ("app.seed.rhai", b""),
+        ("lib/db.seed.rhai", b""),
+        ("pages/error.html", b""),
+    ]))
+    .and_then(|b| b.script().cloned().map(|_| b))
+}
+
+// spec: BND#included-files
+#[test]
+fn included_files_and_directories_present_in_the_bundle_are_accepted() {
+    with_include(
+        b"script = [\"lib/db.seed.rhai\", \"app.seed.rhai\"]\n\
+          [include]\n\"lib/db.seed.rhai\" = \"../common/db.seed.rhai\"\n\"./pages/\" = \"../pages\"",
+    )
+    .unwrap();
+}
+
+// spec: BND#included-files
+// spec: DEFN#bundle-rules
+#[test]
+fn an_include_table_breaking_the_rules_is_refused_naming_the_key() {
+    let cases: &[(&[u8], &str)] = &[
+        (b"include = [\"lib\"]", "table of strings"),
+        (b"[include]\n\"lib\" = 1", "\"lib\" must be a string"),
+        (
+            b"[include]\n\"lib\" = \"\"",
+            "\"lib\" has an empty source path",
+        ),
+        (b"[include]\n\"../lib\" = \"x\"", "\"../lib\" is invalid"),
+        (b"[include]\n\"/lib\" = \"x\"", "\"/lib\" is invalid"),
+        (b"[include]\n\".\" = \"x\"", "\".\" names the bundle root"),
+        (
+            b"[include]\n\"seedling.toml\" = \"x\"",
+            "names seedling.toml",
+        ),
+        (
+            b"[include]\n\"lib\" = \"x\"\n\"./lib\" = \"y\"",
+            "as another key does",
+        ),
+        (
+            b"[include]\n\"lib\" = \"x\"\n\"lib/db.seed.rhai\" = \"y\"",
+            "overlaps the key \"lib\"",
+        ),
+        (
+            b"[include]\n\"missing.rhai\" = \"x\"",
+            "\"missing.rhai\" holds no file",
+        ),
+        (b"[include]\n\"li\" = \"x\"", "\"li\" holds no file"),
+    ];
+    for (meta, needle) in cases {
+        let m = invalid_message(with_include(meta));
+        assert!(m.contains(needle), "{needle}: {m}");
+    }
+}
+
+// spec: BND#included-files
+// spec: DEFN#seedling-version-support
+#[test]
+fn an_unsupported_bundle_with_a_malformed_include_is_reported_unsupported() {
+    let held = Bundle::from_files(files(&[
+        ("seedling.toml", b"seedling = \">=99\"\ninclude = 1"),
+        ("app.seed.rhai", b""),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        held.check_installable(&semver::Version::new(0, 12, 0)),
+        Err(BundleError::Unsupported { .. })
+    ));
+}
+
+// spec: BND#included-files
+#[test]
+fn the_include_table_reads_as_normalised_keys_and_their_sources() {
+    let table = included(b"seedling = \">=99\"\nfuture = 1\n[include]\n\"./lib/\" = \"../common\"")
+        .unwrap();
+    assert_eq!(
+        table,
+        BTreeMap::from([("lib".to_owned(), "../common".to_owned())])
+    );
+    assert!(included(b"").unwrap().is_empty());
+    assert!(included(b"[include]\n\"lib\" = 1").is_err());
+}

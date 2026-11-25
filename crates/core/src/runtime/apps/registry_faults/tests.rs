@@ -21,9 +21,7 @@ fn entry_with_script(name: &str, script: &str) -> AppEntry {
     assert!(err.is_none(), "script error: {err:?}");
     AppEntry {
         name: app(name),
-        bundle: Arc::new(crate::runtime::definition::Bundle::from_stored_script(
-            script,
-        )),
+        bundle: Arc::new(seedling_bundle::Bundle::from_stored_script(script)),
         source: crate::runtime::definition::Source::unknown_push(),
         app: app_def,
         phase: Arc::new(parking_lot::Mutex::new(AppPhase::NotInstalled)),

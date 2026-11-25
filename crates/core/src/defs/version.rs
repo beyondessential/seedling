@@ -5,7 +5,7 @@ use std::{cmp::Ordering, fmt};
 use rhai::{CustomType, Dynamic, EvalAltResult, INT, TypeBuilder};
 
 use super::compare::refuse_mixed_comparisons;
-use crate::runtime::definition::VersionRequirement;
+use seedling_bundle::VersionRequirement;
 
 /// A version of any scheme, ordered as libversion orders it.
 // spec: VER#generic-versions

@@ -63,6 +63,7 @@ The server MUST refuse a bundle, pushed or fetched, with `bundle_invalid`, stori
 - a `bundle` member's value is not a base64 string;
 - its [metadata file](../language/bundle.md#metadata-file) cannot be parsed, has a field of the wrong type, or has a field the metadata file does not define;
 - its list of script files breaks the metadata file's rules;
+- its `include` table breaks the [included files](../language/bundle.md#included-files) rules;
 - its [metadata table](../language/bundle.md#metadata-table) holds a floating-point number that is not finite.
 
 The error's `message` MUST name the offending path or field.

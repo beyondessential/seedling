@@ -7,7 +7,7 @@ use super::{
     },
     App,
 };
-use crate::runtime::definition::bundle::normalise_path;
+use seedling_bundle::normalise_path;
 
 fn bundle_path(path: &str) -> Result<String, Box<EvalAltResult>> {
     normalise_path(path).map_err(|e| format!("bundle {e}").into())

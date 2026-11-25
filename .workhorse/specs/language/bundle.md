@@ -20,6 +20,10 @@ A bundle file whose contents form part of the app's script.
 
 A bundle file that is not a script file.
 
+### Included file
+
+A bundle file that a client copies into the bundle, when it assembles it, from a source path the metadata file names, either as that file or as a file beneath that directory.
+
 ## Bundle paths
 
 A definition bundle is a tree of files, each identified by its bundle path.
@@ -39,6 +43,7 @@ The metadata file MUST be a [TOML](https://toml.io/en/) document holding only th
 | `seedling` | string | no | a [Seedling version requirement](#seedling-version-requirement) naming the Seedling versions the definition supports |
 | `script` | array of strings | no | the bundle paths of the script files, in concatenation order |
 | `metadata` | table | no | the [metadata table](#metadata-table), free-form values for the script to read |
+| `include` | table of strings | no | the [included files](#included-files), each key the bundle path of a file or directory and each value the path it is assembled from |
 
 A definition whose metadata has no `seedling` field supports every Seedling version.
 If the metadata has no `script` field, the script files MUST be taken to be `["app.seed.rhai"]`.
@@ -49,6 +54,19 @@ It MUST NOT name the same file twice once its entries are normalised, and MUST N
 Each file it names MUST be present in the bundle and MUST be valid UTF-8.
 
 When an app is registered with a definition or updated to one, the server MUST refuse a definition whose metadata file breaks these rules with [`bundle_invalid`](../interface/wire.md#error-codes), as [bundle rules](../interface/definitions.md#bundle-rules) specifies.
+
+## Included files
+
+Each key of the `include` table MUST be a valid bundle path, MUST NOT name the bundle root or `seedling.toml`, and MUST NOT name the same path as another key, or a path beneath another key, once the keys are normalised.
+Each value MUST be a non-empty string.
+Each key MUST name a file present in the bundle, or a directory beneath which the bundle holds at least one file.
+
+The runtime MUST NOT interpret the table's values, which a client resolves when it assembles the bundle, as the [reference client's include assembly](../interface/client.md#include-assembly) does.
+The server MUST refuse a definition whose `include` table breaks these rules with `bundle_invalid`, as [bundle rules](../interface/definitions.md#bundle-rules) specifies.
+An included file is otherwise a bundle file like any other, and is a script file when the `script` array names it.
+
+> [!NOTE]
+> Requiring every included file to be present means a bundle published without being assembled is refused when it is pushed or fetched, rather than failing when its script is evaluated.
 
 ## Metadata table
 

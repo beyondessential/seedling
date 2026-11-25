@@ -3,11 +3,21 @@
 
 use std::{
     collections::BTreeMap,
+    io::Write,
     path::{Path, PathBuf},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use seedling_bundle::{Bundle, METADATA_FILE, VERSIONS_ANNOTATION};
 use serde_json::{Map, Value, json};
+
+use assembly::{Bounds, assemble, relative, repository_of, source_paths};
+use github::GithubUrl;
+use tree::{Budget, Disk, read_file, read_folder};
+
+mod assembly;
+mod github;
+mod tree;
 
 /// Where a definition comes from.
 // spec: CLI#definition-sources
@@ -24,9 +34,8 @@ pub(super) struct DefinitionArgs {
 /// A definition resolved on this side, before it is sent.
 #[derive(Debug, PartialEq)]
 pub(super) enum Definition {
-    Script(String),
     Bundle {
-        files: BTreeMap<String, Vec<u8>>,
+        bundle: Box<Bundle>,
         origin: Option<(String, String)>,
     },
     Reference(String),
@@ -39,7 +48,6 @@ pub(super) enum Definition {
 // spec: CLI#definition-sources
 #[derive(Clone, Copy)]
 pub(super) struct DefinitionKeys {
-    pub script: &'static str,
     pub bundle: &'static str,
     pub reference: &'static str,
     /// `None` where the request has nowhere to report an origin.
@@ -49,14 +57,12 @@ pub(super) struct DefinitionKeys {
 impl DefinitionKeys {
     /// `/apps/create` and `/apps/update`.
     pub const APP: Self = Self {
-        script: "script",
         bundle: "bundle",
         reference: "reference",
         origin: Some("origin"),
     };
     /// `/templates/create` and `/templates/update`.
     pub const TEMPLATE: Self = Self {
-        script: "body",
         bundle: "bundle",
         reference: "reference",
         origin: Some("origin"),
@@ -64,7 +70,6 @@ impl DefinitionKeys {
     /// The definition `/apps/plan` is asked to compare against, which it
     /// never installs and so records no origin for.
     pub const PROPOSED: Self = Self {
-        script: "proposed_script",
         bundle: "proposed_bundle",
         reference: "proposed_reference",
         origin: None,
@@ -76,15 +81,8 @@ impl Definition {
     pub fn fields(&self, keys: DefinitionKeys) -> Map<String, Value> {
         let mut out = Map::new();
         match self {
-            Self::Script(text) => {
-                out.insert(keys.script.to_owned(), json!(text));
-            }
-            Self::Bundle { files, origin } => {
-                let encoded: Map<String, Value> = files
-                    .iter()
-                    .map(|(p, c)| (p.clone(), json!(BASE64.encode(c))))
-                    .collect();
-                out.insert(keys.bundle.to_owned(), Value::Object(encoded));
+            Self::Bundle { bundle, origin } => {
+                out.insert(keys.bundle.to_owned(), Value::Object(bundle.to_wire()));
                 if let (Some((url, revision)), Some(key)) = (origin, keys.origin) {
                     out.insert(key.to_owned(), json!({ "url": url, "revision": revision }));
                 }
@@ -106,22 +104,137 @@ impl DefinitionArgs {
         let Some(source) = &self.source else {
             return Ok(None);
         };
-        if let Some(url) = GithubUrl::parse(source) {
-            return github::download(&url).await.map(Some);
-        }
-        let path = PathBuf::from(source);
-        let meta = std::fs::metadata(&path).map_err(|e| format!("cannot read {source}: {e}"))?;
-        if meta.is_dir() {
-            Ok(Some(Definition::Bundle {
-                files: read_folder(&path)?,
-                origin: None,
-            }))
+        let (files, origin) = if let Some(url) = GithubUrl::parse(source) {
+            let (files, origin) = github::download(&url).await?;
+            (files, Some(origin))
         } else {
-            std::fs::read_to_string(&path)
-                .map(|t| Some(Definition::Script(t)))
-                .map_err(|e| format!("cannot read {source}: {e}"))
-        }
+            let path = PathBuf::from(source);
+            let meta =
+                std::fs::metadata(&path).map_err(|e| format!("cannot read {source}: {e}"))?;
+            let files = if meta.is_dir() {
+                read_assembled_folder(&path)?
+            } else {
+                read_lone_file(&path)?
+            };
+            (files, None)
+        };
+        // Only the rules a server holds every stored definition to, as it
+        // applies them: the metadata fields and script files are judged by
+        // the Seedling a definition is installed on, since a template may be
+        // stored for a later Seedling whose metadata this CLI cannot read.
+        let bundle = Bundle::from_files(files).map_err(|e| e.to_string())?;
+        Ok(Some(Definition::Bundle {
+            bundle: Box::new(bundle),
+            origin,
+        }))
     }
+}
+
+/// Read a definition folder on disk and assemble what it includes from the
+/// repository it sits in.
+// spec: CLI#include-assembly
+pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let folder = path
+        .canonicalize()
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let repository = repository_of(&folder)?;
+    let (boundary, bounds) = match &repository {
+        Some(root) => (root.as_path(), Bounds::Repository(root)),
+        None => (folder.as_path(), Bounds::Folder),
+    };
+    let tree = Disk::new(boundary);
+    let within = relative(&folder, boundary)?;
+    let mut budget = Budget::full();
+    let mut files = read_folder(&tree, &within, &mut budget)?;
+    assemble(&mut files, &tree, &within, bounds, &mut budget)?;
+    Ok(files)
+}
+
+/// Read a lone file as a bundle holding it under its own name, with a
+/// metadata file naming it as the only script file.
+// spec: CLI#definition-sources
+pub(super) fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("{} names no file", path.display()))?
+        .to_str()
+        .ok_or_else(|| format!("{}: the file's name is not valid UTF-8", path.display()))?;
+    if name == METADATA_FILE {
+        return Err(format!(
+            "{}: a lone {METADATA_FILE} is not a definition; push its folder instead",
+            path.display()
+        ));
+    }
+    let contents = read_file(path, &mut Budget::full())?;
+    let metadata = toml::Table::from_iter([(
+        "script".to_owned(),
+        toml::Value::Array(vec![toml::Value::String(name.to_owned())]),
+    )]);
+    Ok(BTreeMap::from([
+        (name.to_owned(), contents),
+        (METADATA_FILE.to_owned(), metadata.to_string().into_bytes()),
+    ]))
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub(super) enum DefinitionsCommand {
+    /// Write a definition as the layer of a definition artefact, for pushing
+    /// to a registry with an OCI tool. Prints the version annotation to give
+    /// the artefact, where the definition declares one
+    Pack {
+        /// A script file, a definition folder, or a GitHub URL naming a folder
+        /// at a branch, tag, or commit
+        source: String,
+        /// The gzipped tar to write, which must not exist yet
+        file: PathBuf,
+    },
+}
+
+pub(super) async fn dispatch(command: &DefinitionsCommand) {
+    match command {
+        DefinitionsCommand::Pack { source, file } => match pack(source, file).await {
+            Ok(Some(requirement)) => println!("{VERSIONS_ANNOTATION}={requirement}"),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            }
+        },
+    }
+}
+
+/// Read and assemble `source` as a push would, hold it to the bundle rules,
+/// and write it to `out` as a definition layer. Returns the bundle's declared
+/// Seedling version requirement.
+// spec: CLI#definition-packing
+pub(super) async fn pack(source: &str, out: &Path) -> Result<Option<String>, String> {
+    if out.symlink_metadata().is_ok() {
+        return Err(format!("{} already exists", out.display()));
+    }
+    let args = DefinitionArgs {
+        source: Some(source.to_owned()),
+        reference: None,
+    };
+    let Some(Definition::Bundle { bundle, .. }) = args.resolve().await? else {
+        return Err(format!("{source} is not a definition source to pack"));
+    };
+    bundle.script().map_err(|e| e.to_string())?;
+    // Written beside `out` and moved into place whole, so a failed write
+    // leaves nothing for the next attempt to refuse as already existing.
+    let dir = match out.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let mut staged = tempfile::NamedTempFile::new_in(dir)
+        .map_err(|e| format!("cannot create a file beside {}: {e}", out.display()))?;
+    staged
+        .write_all(&bundle.to_tar_gz())
+        .and_then(|()| staged.as_file().sync_all())
+        .map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+    staged
+        .persist_noclobber(out)
+        .map_err(|e| format!("cannot create {}: {}", out.display(), e.error))?;
+    Ok(bundle.seedling_versions().map(|r| r.to_string()))
 }
 
 /// Resolve `args` or exit with the error.
@@ -130,249 +243,6 @@ pub(super) async fn resolve_or_exit(args: &DefinitionArgs) -> Option<Definition>
         tracing::error!("{e}");
         std::process::exit(1);
     })
-}
-
-/// Directories version-control systems keep their metadata in.
-const VCS_METADATA_DIRS: &[&str] = &[
-    ".git", ".jj", ".hg", ".sl", ".svn", ".bzr", ".pijul", "_darcs", "CVS",
-];
-
-/// Whether `entry` is version-control metadata: one of the directories above,
-/// or the `.git` file a linked work tree keeps in its place.
-fn is_vcs_metadata(entry: &ignore::DirEntry) -> bool {
-    let Some(name) = entry.file_name().to_str() else {
-        return false;
-    };
-    name == ".git"
-        || (entry.file_type().is_some_and(|t| t.is_dir()) && VCS_METADATA_DIRS.contains(&name))
-}
-
-/// Read a definition folder: every regular file, leaving out version-control
-/// metadata and what `.seedignore` excludes. Anything else that is not left
-/// out is an error, so nothing is sent.
-// spec: CLI#definition-folders
-pub(super) fn read_folder(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let walker = ignore::WalkBuilder::new(root)
-        .standard_filters(false)
-        .hidden(false)
-        .follow_links(false)
-        .add_custom_ignore_filename(".seedignore")
-        .filter_entry(|e| !is_vcs_metadata(e))
-        .build();
-    let mut files = BTreeMap::new();
-    for entry in walker {
-        let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
-        let path = entry.path();
-        let rel = path
-            .strip_prefix(root)
-            .expect("walked paths are beneath the root");
-        let Some(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            continue;
-        }
-        if !file_type.is_file() {
-            return Err(format!(
-                "{} is not a regular file; definitions may only hold files and folders",
-                path.display()
-            ));
-        }
-        let rel = rel
-            .to_str()
-            .ok_or_else(|| format!("{} is not a UTF-8 path", path.display()))?
-            .to_owned();
-        let contents =
-            std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        files.insert(rel, contents);
-    }
-    Ok(files)
-}
-
-/// A GitHub URL naming a folder: `https://github.com/<owner>/<repo>/tree/<rest>`,
-/// where `<rest>` is a ref followed by a path and the split between them is
-/// only known once the ref is resolved.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct GithubUrl {
-    pub url: String,
-    pub owner: String,
-    pub repo: String,
-    pub rest: Vec<String>,
-}
-
-impl GithubUrl {
-    pub fn parse(raw: &str) -> Option<Self> {
-        let path = raw
-            .strip_prefix("https://github.com/")
-            .or_else(|| raw.strip_prefix("http://github.com/"))?;
-        let mut parts = path.trim_end_matches('/').split('/');
-        let owner = parts.next()?.to_owned();
-        let repo = parts.next()?.to_owned();
-        if parts.next()? != "tree" {
-            return None;
-        }
-        let rest: Vec<String> = parts.map(str::to_owned).collect();
-        if rest.is_empty() || owner.is_empty() || repo.is_empty() {
-            return None;
-        }
-        Some(Self {
-            url: raw.to_owned(),
-            owner,
-            repo,
-            rest,
-        })
-    }
-
-    /// Each way of splitting the rest into a ref and a folder, longest ref
-    /// last, the order GitHub itself tries them in being unknowable here.
-    pub fn splits(&self) -> impl Iterator<Item = (String, String)> + '_ {
-        (1..=self.rest.len()).map(|n| (self.rest[..n].join("/"), self.rest[n..].join("/")))
-    }
-}
-
-mod github {
-    use std::io::Read;
-
-    use super::{Definition, GithubUrl, read_folder};
-
-    fn client() -> Result<reqwest::Client, String> {
-        reqwest::Client::builder()
-            .user_agent(concat!("seedling-ctl/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|e| format!("cannot build an HTTP client: {e}"))
-    }
-
-    fn authorise(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        match std::env::var("GITHUB_TOKEN") {
-            Ok(token) if !token.is_empty() => req.bearer_auth(token),
-            _ => req,
-        }
-    }
-
-    /// Resolve the URL's ref to a commit, download that commit, and read the
-    /// folder out of it, recording the URL and commit as the origin.
-    // spec: CLI#definition-sources
-    pub(super) async fn download(url: &GithubUrl) -> Result<Definition, String> {
-        let client = client()?;
-        let mut resolved = None;
-        for (git_ref, folder) in url.splits() {
-            let api = format!(
-                "https://api.github.com/repos/{}/{}/commits/{}",
-                url.owner, url.repo, git_ref
-            );
-            let resp = authorise(client.get(&api))
-                .header("Accept", "application/vnd.github.sha")
-                .send()
-                .await
-                .map_err(|e| format!("cannot reach GitHub: {e}"))?;
-            if resp.status().is_success() {
-                let sha = resp
-                    .text()
-                    .await
-                    .map_err(|e| format!("cannot read GitHub's response: {e}"))?;
-                resolved = Some((sha.trim().to_owned(), folder));
-                break;
-            }
-            if resp.status() != reqwest::StatusCode::NOT_FOUND
-                && resp.status() != reqwest::StatusCode::UNPROCESSABLE_ENTITY
-            {
-                return Err(format!("GitHub refused {api}: {}", resp.status()));
-            }
-        }
-        let (sha, folder) =
-            resolved.ok_or_else(|| format!("{} names no branch, tag, or commit", url.url))?;
-
-        let tarball = format!(
-            "https://api.github.com/repos/{}/{}/tarball/{sha}",
-            url.owner, url.repo
-        );
-        let resp = authorise(client.get(&tarball))
-            .send()
-            .await
-            .map_err(|e| format!("cannot download {tarball}: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("GitHub refused {tarball}: {}", resp.status()));
-        }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("cannot download {tarball}: {e}"))?;
-
-        let dir =
-            tempfile::tempdir().map_err(|e| format!("cannot make a temporary folder: {e}"))?;
-        extract_folder(&bytes, &folder, dir.path())?;
-        let files = read_folder(dir.path())?;
-        if files.is_empty() {
-            return Err(format!("{} holds no files", url.url));
-        }
-        Ok(Definition::Bundle {
-            files,
-            origin: Some((url.url.clone(), sha)),
-        })
-    }
-
-    /// Unpack the entries of a GitHub tarball beneath `folder` into `dest`.
-    /// GitHub prefixes every entry with one top-level directory, which is
-    /// dropped.
-    pub(super) fn extract_folder(
-        tarball: &[u8],
-        folder: &str,
-        dest: &std::path::Path,
-    ) -> Result<(), String> {
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tarball));
-        let bad = |e: std::io::Error| format!("the downloaded archive is unreadable: {e}");
-        for entry in archive.entries().map_err(bad)? {
-            let mut entry = entry.map_err(bad)?;
-            let path = entry.path().map_err(bad)?.into_owned();
-            let mut components = path.components();
-            components.next();
-            let inner = components.as_path();
-            let Ok(rel) = inner.strip_prefix(folder) else {
-                continue;
-            };
-            if rel.as_os_str().is_empty() {
-                continue;
-            }
-            // Every entry is written beneath `dest`, so nothing but plain
-            // names may reach the join: an archive is not a trusted source
-            // of paths, whatever produced it.
-            if rel
-                .components()
-                .any(|c| !matches!(c, std::path::Component::Normal(_)))
-            {
-                return Err(format!(
-                    "the downloaded archive holds an entry outside the folder: {}",
-                    rel.display()
-                ));
-            }
-            let target = dest.join(rel);
-            match entry.header().entry_type() {
-                tar::EntryType::Directory => {
-                    std::fs::create_dir_all(&target).map_err(bad)?;
-                }
-                tar::EntryType::Regular | tar::EntryType::Continuous => {
-                    if let Some(parent) = target.parent() {
-                        std::fs::create_dir_all(parent).map_err(bad)?;
-                    }
-                    let mut contents = Vec::new();
-                    entry.read_to_end(&mut contents).map_err(bad)?;
-                    std::fs::write(&target, contents).map_err(bad)?;
-                }
-                tar::EntryType::XGlobalHeader | tar::EntryType::XHeader => {}
-                // A symlink names its own target and a hardlink resolves one
-                // relative to where it lands, so neither is reproduced: the
-                // folder rules refuse them anyway, and this reports them
-                // without ever writing one.
-                other => {
-                    return Err(format!(
-                        "{} is not a regular file; definitions may only hold files and folders ({other:?})",
-                        rel.display()
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 /// The `params` object of a parameter change: each `name=value` of `set`

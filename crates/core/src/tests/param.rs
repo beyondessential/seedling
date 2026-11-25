@@ -767,9 +767,7 @@ fn rejections(
         .collect();
     let (_, outcome) = crate::runtime::apps::evaluate_validated(
         &seedling_protocol::names::AppName::new_unchecked("demo"),
-        &Arc::new(crate::runtime::definition::Bundle::from_stored_script(
-            script,
-        )),
+        &Arc::new(seedling_bundle::Bundle::from_stored_script(script)),
         &crate::runtime::apps::canonical_values(&proposed),
         &proposed,
         &crate::runtime::seeds::AppSeed::for_tests(),

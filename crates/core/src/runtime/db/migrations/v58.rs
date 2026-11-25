@@ -1,6 +1,7 @@
 use rusqlite::{Connection, Result as SqlResult};
+use seedling_bundle::Bundle;
 
-use crate::runtime::definition::{Bundle, Source};
+use crate::runtime::definition::Source;
 
 pub const SQL: &str = include_str!("v58.sql");
 

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use seedling_bundle::Bundle;
 use seedling_protocol::names::{AppName, GateName};
 
 use crate::defs::{
@@ -10,7 +11,6 @@ use crate::defs::{
 };
 use crate::runtime::{
     EphemeralInstanceRegistry,
-    definition::Bundle,
     probe::{ProbeRequest, ProbeResponse, probe_app},
 };
 

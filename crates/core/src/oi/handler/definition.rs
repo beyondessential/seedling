@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use seedling_bundle::Bundle;
 use seedling_protocol::error::{ErrorCode, OiError};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -9,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::definition::{
-        Bundle, Origin, Source,
+        Origin, Source,
         fetch::{self, DefinitionRef, FetchError},
         version,
     },
