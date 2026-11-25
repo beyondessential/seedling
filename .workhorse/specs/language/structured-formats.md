@@ -156,6 +156,7 @@ Each value MUST decode to a string holding the characters between its quotes, or
 ## Decoding
 
 A decoder MUST raise a script error when `text` is not valid UTF-8, or not a document of its format.
+When `text` is not a document of its format, the script error MUST name the line at which it stops being one.
 A decoder MUST ignore a byte order mark at the start of `text`.
 A decoder MUST NOT return a partial or corrected value in place of raising a script error.
 
