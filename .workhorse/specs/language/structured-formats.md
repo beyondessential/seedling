@@ -105,7 +105,7 @@ The runtime MUST raise a script error, naming `std::encode_json`, when a script 
 ### YAML
 
 `encode_yaml` MUST write arrays and maps in block style, indented by two spaces for each level of nesting, and an empty array or map as `[]` or `{}`.
-It MUST write a string quoted when any of these holds of it:
+It MUST write a string, map keys included, quoted when any of these holds of it:
 
 - it is empty, or begins or ends with whitespace;
 - a reader applying the core schema would read it plain as other than that string;
