@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use rhai::{AST, ASTNode, Engine, EvalAltResult, Expr, OptimizationLevel, Scope};
+use rhai::{AST, Engine, EvalAltResult, OptimizationLevel, Scope};
 
 use crate::runtime::barrier::{runtime, shell};
 
@@ -178,7 +178,7 @@ pub fn register(engine: &mut Engine) {
     });
 
     // spec: STD#the-std-module
-    engine.register_static_module("std", stdlib::module().into());
+    engine.register_static_module(stdlib::MODULE, stdlib::module().into());
 
     // spec: BSL#evaluation
     // Refused at compile time: the optimiser drops an `import` whose alias is
@@ -226,41 +226,8 @@ pub fn compile(engine: &Engine, source: &str) -> Result<AST, Box<EvalAltResult>>
         reason = "the one place a script is compiled"
     )]
     let ast = engine.compile(source)?;
-    let limits = regex::engine_limits(engine)?;
-    let mut refused = None;
-    ast.walk(&mut |path: &[ASTNode]| {
-        let Some(ASTNode::Expr(Expr::FnCall(call, pos))) = path.last() else {
-            return true;
-        };
-        let in_std = matches!(&*call.namespace.path, [module] if module.name == "std");
-        let (true, [Expr::StringConstant(pattern, _)]) = (in_std, &*call.args) else {
-            return true;
-        };
-        let mut budget = regex::Budget::of(&limits);
-        let result = match call.name.as_str() {
-            "regex" => regex::compile(pattern, &mut budget)
-                .map(drop)
-                .map_err(|e| format!("`pattern`: {e}")),
-            "parse_regex" => param_def::ParamKind::Regex
-                .parse(pattern, &mut budget)
-                .map(drop),
-            _ => return true,
-        };
-        match result {
-            Ok(()) => true,
-            Err(e) => {
-                refused = Some(EvalAltResult::ErrorRuntime(
-                    format!("std::{}: {e}", call.name).into(),
-                    *pos,
-                ));
-                false
-            }
-        }
-    });
-    match refused {
-        Some(e) => Err(e.into()),
-        None => Ok(engine.optimize_ast(&Scope::new(), ast, OptimizationLevel::Simple)),
-    }
+    regex::check_literal_calls(&ast, &regex::engine_limits(engine)?)?;
+    Ok(engine.optimize_ast(&Scope::new(), ast, OptimizationLevel::Simple))
 }
 
 // spec: BSL#evaluation

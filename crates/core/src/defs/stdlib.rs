@@ -14,6 +14,10 @@ pub(crate) mod kinds;
 mod quoting;
 mod random;
 
+/// The name a script reaches the helpers by.
+// spec: STD#the-std-module
+pub const MODULE: &str = "std";
+
 // spec: STD#the-std-module
 /// The `std` module, holding every helper BSL offers.
 pub fn module() -> rhai::Module {

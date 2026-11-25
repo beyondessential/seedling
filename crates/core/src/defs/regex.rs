@@ -13,8 +13,8 @@ use regex_automata::{
     util::captures::Captures,
 };
 use rhai::{
-    CustomType, Dynamic, EvalAltResult, FnPtr, FuncRegistration, INT, NativeCallContext,
-    TypeBuilder,
+    AST, ASTNode, CustomType, Dynamic, EvalAltResult, Expr, FnPtr, FuncRegistration, INT,
+    NativeCallContext, TypeBuilder,
 };
 use winnow::{
     Parser,
@@ -24,7 +24,8 @@ use winnow::{
 
 use crate::{
     defs::{
-        stdlib::{ARRAY, HelperLimits, STRING, helper_limits, max_string, within},
+        param_def::{ParamKind, ParamKindName},
+        stdlib::{ARRAY, HelperLimits, MODULE, STRING, helper_limits, kinds, max_string, within},
         take::{take_closure, take_string},
     },
     runtime::seeds,
@@ -287,10 +288,13 @@ fn too_large(remaining: usize) -> String {
     )
 }
 
+/// The helper that compiles a pattern.
+const HELPER: &str = "regex";
+
 // spec: REX#compiling-a-pattern
 pub(super) fn register(module: &mut rhai::Module) {
     // Each call counts toward the evaluation's budget, so none is folded.
-    FuncRegistration::new("regex")
+    FuncRegistration::new(HELPER)
         .with_volatility(true)
         .set_into_module(
             module,
@@ -300,6 +304,48 @@ pub(super) fn register(module: &mut rhai::Module) {
                     .map_err(|e| format!("`pattern`: {e}").into())
             },
         );
+}
+
+// spec: REX#compiling-a-pattern
+/// Refuse a script that calls `std::regex` or `std::parse_regex` with a
+/// string literal that helper would throw for, with nothing yet counted
+/// toward the compiled size limit, whether or not the call would run.
+///
+/// `ast` is read before optimisation, which would carry a `const` into a
+/// call's argument as though it were written there.
+pub fn check_literal_calls(ast: &AST, limits: &HelperLimits) -> Result<(), Box<EvalAltResult>> {
+    let parser = kinds::helper_name(ParamKindName::Regex);
+    let mut refused = None;
+    ast.walk(&mut |path: &[ASTNode]| {
+        let Some(ASTNode::Expr(Expr::FnCall(call, pos))) = path.last() else {
+            return true;
+        };
+        let in_std = matches!(&*call.namespace.path, [module] if module.name == MODULE);
+        let (true, [Expr::StringConstant(pattern, _)]) = (in_std, &*call.args) else {
+            return true;
+        };
+        let mut budget = Budget::of(limits);
+        let result = if call.name == HELPER {
+            compile(pattern, &mut budget)
+                .map(drop)
+                .map_err(|e| format!("`pattern`: {e}"))
+        } else if call.name == parser {
+            ParamKind::Regex.parse(pattern, &mut budget).map(drop)
+        } else {
+            return true;
+        };
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                refused = Some(EvalAltResult::ErrorRuntime(
+                    format!("{MODULE}::{}: {e}", call.name).into(),
+                    *pos,
+                ));
+                false
+            }
+        }
+    });
+    refused.map_or(Ok(()), |e| Err(e.into()))
 }
 
 impl CustomType for Regex {
