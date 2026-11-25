@@ -38,8 +38,7 @@ The stdlib is covered once across the set: a helper a tour uses naturally counts
 ## Params and hostnames
 
 Every demo installs with no params set: each param has a default, except the required param params-tour exists to show.
-Hostnames default to `<demo>.demo.test`; `.test` never resolves publicly.
-The dev-VM walkthrough sets one internal-CA TLS policy for `*.demo.test`.
+Hostnames default to `<demo>.demo.internal`: `.internal` is reserved for private use and never resolves publicly, and an internal name takes its certificate from the proxy's internal CA with no TLS policy to set.
 
 ## Images
 

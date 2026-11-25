@@ -16,9 +16,7 @@
 
 ## On a dev VM
 
-With an internal-CA TLS policy for `*.demo.test`.
-
-- [ ] hello-world installs from its folder with no params set and answers on `hello-world.demo.test`.
+- [ ] hello-world installs from its folder with no params set and answers on `hello-world.demo.internal`.
 - [ ] http-tour: each route shows its feature in the echoed request or response (redirect, header operations, compression, rate limit, balancing across replicas, HTTP to HTTPS redirect).
 - [ ] protocol-tour: plain TCP, TLS to TCP, DTLS to UDP, HTTPS to HTTP/1.1 and HTTPS to h2c each echo through their ingress.
 - [ ] protocol-tour: a site ingress attaches to its attachable ingress and carries traffic.
