@@ -1,8 +1,7 @@
+use seedling_bundle::Bundle;
 use seedling_protocol::actor::Actor;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-
-use super::bundle::Bundle;
 
 /// Where the client says it obtained a pushed bundle. Recorded as reported,
 /// never verified.

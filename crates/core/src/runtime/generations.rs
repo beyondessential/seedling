@@ -1,16 +1,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use secrecy::{ExposeSecret, SecretString};
+use seedling_bundle::{Bundle, Declared};
 use seedling_protocol::names::{AppName, ParamName};
 
 use crate::{
     defs::app::App,
-    runtime::{
-        apps,
-        db::Db,
-        definition::{Bundle, Declared, Source},
-        secrets::Cipher,
-    },
+    runtime::{apps, db::Db, definition::Source, secrets::Cipher},
 };
 
 /// Whether any generation of `app` was made after `since`.

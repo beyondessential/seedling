@@ -115,8 +115,9 @@ fn bundle_paths_are_confined_and_must_exist() {
 // spec: BND#bundle-files
 #[test]
 fn old_reads_the_previous_generations_bundle() {
-    use crate::runtime::definition::{Bundle, Source};
-    use crate::runtime::{db::Db, generations};
+    use seedling_bundle::Bundle;
+
+    use crate::runtime::{db::Db, definition::Source, generations};
     let db = Db::open_in_memory().unwrap();
     let name = seedling_protocol::names::AppName::new("web").unwrap();
     db.conn

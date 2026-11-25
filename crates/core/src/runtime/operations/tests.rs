@@ -889,7 +889,7 @@ fn last_metadata_reads_the_bundle_of_the_last_success() {
     "#;
     let evaluated_with = |version: &str| {
         let bundle = Arc::new(
-            crate::runtime::definition::Bundle::from_files([
+            seedling_bundle::Bundle::from_files([
                 ("app.seed.rhai".to_owned(), script.as_bytes().to_vec()),
                 (
                     "seedling.toml".to_owned(),

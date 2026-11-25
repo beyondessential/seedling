@@ -51,7 +51,7 @@ impl Default for ScriptLimits {
 /// into; fails where the scope cannot be built, as [`defs::scope`] does.
 pub fn setup_language(
     limits: &ScriptLimits,
-    bundle: std::sync::Arc<runtime::definition::Bundle>,
+    bundle: std::sync::Arc<seedling_bundle::Bundle>,
 ) -> Result<(Engine, Scope<'static>, defs::app::App), String> {
     let mut engine = Engine::new();
 

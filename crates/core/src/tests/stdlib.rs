@@ -233,9 +233,7 @@ fn evaluate_with(
 ) {
     crate::runtime::apps::evaluate(
         &seedling_protocol::names::AppName::new_unchecked("demo"),
-        &std::sync::Arc::new(crate::runtime::definition::Bundle::from_stored_script(
-            script,
-        )),
+        &std::sync::Arc::new(seedling_bundle::Bundle::from_stored_script(script)),
         &std::collections::BTreeMap::new(),
         seed,
         &crate::ScriptLimits::default(),
@@ -291,9 +289,7 @@ fn a_validator_derives_what_the_top_level_derives() {
     let proposed = std::collections::BTreeMap::from([("token".to_owned(), "x".to_owned())]);
     let (_, outcome) = crate::runtime::apps::evaluate_validated(
         &seedling_protocol::names::AppName::new_unchecked("demo"),
-        &std::sync::Arc::new(crate::runtime::definition::Bundle::from_stored_script(
-            script,
-        )),
+        &std::sync::Arc::new(seedling_bundle::Bundle::from_stored_script(script)),
         &proposed,
         &crate::runtime::apps::supplied_values(&proposed),
         &seed(1),
@@ -396,9 +392,9 @@ fn a_multibyte_string_is_held_to_the_engine_limit_in_bytes() {
     let evaluate = |length: usize| {
         crate::runtime::apps::evaluate(
             &seedling_protocol::names::AppName::new_unchecked("demo"),
-            &std::sync::Arc::new(crate::runtime::definition::Bundle::from_stored_script(
-                &format!(r#"std::random_string("x", {length}, "aé");"#),
-            )),
+            &std::sync::Arc::new(seedling_bundle::Bundle::from_stored_script(&format!(
+                r#"std::random_string("x", {length}, "aé");"#
+            ))),
             &std::collections::BTreeMap::new(),
             &seed(1),
             &limits,
@@ -419,9 +415,9 @@ fn an_evaluation_is_held_to_its_limit_on_derived_values() {
     let evaluate = |max_derived_values: usize, calls: usize| {
         crate::runtime::apps::evaluate(
             &seedling_protocol::names::AppName::new_unchecked("demo"),
-            &std::sync::Arc::new(crate::runtime::definition::Bundle::from_stored_script(
-                &format!(r#"for i in 0..{calls} {{ std::uuid_v4(`id-${{i}}`); }}"#),
-            )),
+            &std::sync::Arc::new(seedling_bundle::Bundle::from_stored_script(&format!(
+                r#"for i in 0..{calls} {{ std::uuid_v4(`id-${{i}}`); }}"#
+            ))),
             &std::collections::BTreeMap::new(),
             &seed(1),
             &crate::ScriptLimits {
@@ -669,7 +665,7 @@ fn the_new_kinds_refuse_control_characters() {
 }
 
 fn evaluate_bundle(
-    bundle: crate::runtime::definition::Bundle,
+    bundle: seedling_bundle::Bundle,
     params: &[(&str, &str)],
     limits: &crate::ScriptLimits,
 ) -> (
@@ -691,7 +687,7 @@ fn evaluate_bundle(
 /// The description `script` gives, and whether the evaluation withholds it.
 fn withheld(script: &str, params: &[(&str, &str)]) -> (String, bool) {
     let (app, err) = evaluate_bundle(
-        crate::runtime::definition::Bundle::from_stored_script(script),
+        seedling_bundle::Bundle::from_stored_script(script),
         params,
         &crate::ScriptLimits::default(),
     );
@@ -778,7 +774,7 @@ fn an_empty_secret_value_withholds_nothing() {
 // spec: SEC#redaction
 #[test]
 fn a_bundle_file_holds_no_withheld_value() {
-    let bundle = crate::runtime::definition::Bundle::from_files([
+    let bundle = seedling_bundle::Bundle::from_files([
         (
             "app.seed.rhai".to_owned(),
             br#"
@@ -801,7 +797,7 @@ fn a_bundle_file_holds_no_withheld_value() {
 #[test]
 fn a_derived_blob_is_withheld_in_every_encoding_bsl_offers() {
     let (app, err) = evaluate_bundle(
-        crate::runtime::definition::Bundle::from_stored_script(
+        seedling_bundle::Bundle::from_stored_script(
             r#"app.description(std::random_bytes("raw", 9).to_string());"#,
         ),
         &[],
@@ -831,7 +827,7 @@ fn a_derived_blob_is_withheld_in_every_encoding_bsl_offers() {
 fn withheld_results_count_toward_the_derived_values_limit() {
     let evaluate = |max_derived_values: usize, script: &str| {
         evaluate_bundle(
-            crate::runtime::definition::Bundle::from_stored_script(script),
+            seedling_bundle::Bundle::from_stored_script(script),
             &[("token", "s3cret")],
             &crate::ScriptLimits {
                 max_derived_values,
@@ -928,7 +924,7 @@ fn a_password_hash_is_derived_and_withheld() {
 fn an_evaluation_is_held_to_its_limit_on_password_hashes() {
     let evaluate = |limits: crate::ScriptLimits, script: &str| {
         evaluate_bundle(
-            crate::runtime::definition::Bundle::from_stored_script(script),
+            seedling_bundle::Bundle::from_stored_script(script),
             &[],
             &limits,
         )
@@ -960,7 +956,7 @@ fn an_evaluation_is_held_to_its_limit_on_password_hashes() {
 // spec: ENC#byte-arguments
 #[test]
 fn a_bytes_argument_takes_a_bundle_file_and_directory() {
-    let bundle = crate::runtime::definition::Bundle::from_files([
+    let bundle = seedling_bundle::Bundle::from_files([
         (
             "app.seed.rhai".to_owned(),
             br#"app.description(

@@ -1,3 +1,6 @@
+//! App definition bundles: the bundle rules, the content hash, and the forms
+//! a bundle travels in.
+
 use std::{collections::BTreeMap, fmt, io::Read, ops::Bound};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -7,7 +10,9 @@ use semver::Version;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::version::VersionRequirement;
+pub use version::VersionRequirement;
+
+mod version;
 
 /// Upper bound on a bundle's total file size.
 ///

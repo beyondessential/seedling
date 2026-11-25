@@ -1,12 +1,10 @@
 use std::sync::atomic::Ordering;
 
+use seedling_bundle::Bundle;
 use tokio::sync::Notify;
 
 use super::*;
-use crate::runtime::{
-    definition::{Bundle, fetch::testing::FakeRegistry},
-    faults::list_active_faults,
-};
+use crate::runtime::{definition::fetch::testing::FakeRegistry, faults::list_active_faults};
 
 const REPO: &str = "ghcr.io/org/app-def";
 const MIN: Duration = Duration::from_secs(60);

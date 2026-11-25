@@ -2,10 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use seedling_bundle::Bundle;
 use seedling_protocol::names::AppName;
 use semver::Version;
 
-use super::Bundle;
 use crate::runtime::{
     db::Db,
     faults::{self, FaultKey, FaultMeta, FaultScope},

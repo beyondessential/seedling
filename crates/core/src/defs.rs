@@ -219,15 +219,13 @@ pub fn finish_evaluation(app: &app::App) -> Result<(), String> {
 ///
 /// Fails where a host constant the evaluation cannot stand without is
 /// undetermined.
-pub fn scope(
-    bundle: Arc<crate::runtime::definition::Bundle>,
-) -> Result<(Scope<'static>, app::App), String> {
+pub fn scope(bundle: Arc<seedling_bundle::Bundle>) -> Result<(Scope<'static>, app::App), String> {
     scope_with(&crate::sysconst::get(), bundle)
 }
 
 pub(crate) fn scope_with(
     facts: &crate::sysconst::SystemFacts,
-    bundle: Arc<crate::runtime::definition::Bundle>,
+    bundle: Arc<seedling_bundle::Bundle>,
 ) -> Result<(Scope<'static>, app::App), String> {
     // spec: CONST#host-constants
     // Undetermined memory or host name fails the evaluation rather than

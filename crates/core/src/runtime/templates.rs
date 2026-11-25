@@ -1,13 +1,10 @@
 use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, params};
+use seedling_bundle::Bundle;
 use seedling_protocol::names::TemplateName;
 
-use crate::runtime::{
-    db::Db,
-    definition::{Bundle, Source},
-    generations,
-};
+use crate::runtime::{db::Db, definition::Source, generations};
 
 // spec: TPL#template-definitions
 #[derive(Debug, Clone)]
