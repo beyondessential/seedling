@@ -415,3 +415,56 @@ fn an_unsupported_bundle_with_unreadable_metadata_is_reported_unsupported() {
         Err(BundleError::Unsupported { .. })
     ));
 }
+
+fn packable() -> Vec<(String, Vec<u8>)> {
+    let deep = format!("{}/page.html", ["nested"; 20].join("/"));
+    files(&[
+        ("app.seed.rhai", b"let x = 1;"),
+        ("pages/error.html", b"<p>oops</p>"),
+        ("pages/a.txt", b""),
+        ("a.txt", b"top"),
+        (&deep, b"deep"),
+    ])
+}
+
+// spec: CLI#definition-packing
+#[test]
+fn a_packed_bundle_reads_back_as_the_same_bundle() {
+    let bundle = Bundle::from_files(packable()).unwrap();
+    let read = Bundle::from_tar_gz(&bundle.to_tar_gz()).unwrap();
+    assert_eq!(read, bundle);
+    assert_eq!(read.hash(), bundle.hash());
+}
+
+// spec: CLI#definition-packing
+#[test]
+fn packing_the_same_bundle_gives_the_same_bytes() {
+    let forwards = Bundle::from_files(packable()).unwrap().to_tar_gz();
+    let backwards = Bundle::from_files(packable().into_iter().rev())
+        .unwrap()
+        .to_tar_gz();
+    assert_eq!(forwards, backwards);
+}
+
+// spec: CLI#definition-packing
+#[test]
+fn a_packed_bundle_lists_each_directory_before_its_contents() {
+    let data = Bundle::from_files(packable()).unwrap().to_tar_gz();
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(data.as_slice()));
+    let mut seen: Vec<String> = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let entry = entry.unwrap();
+        let header = entry.header();
+        assert_eq!(header.mtime().unwrap(), 0);
+        assert_eq!(header.uid().unwrap(), 0);
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        if let Some((parent, _)) = path.trim_end_matches('/').rsplit_once('/') {
+            assert!(
+                seen.iter().any(|p| p == &format!("{parent}/")),
+                "{path} comes before its directory {parent}/"
+            );
+        }
+        seen.push(path);
+    }
+    assert!(seen.contains(&"pages/".to_owned()));
+}

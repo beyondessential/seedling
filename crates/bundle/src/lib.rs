@@ -1,7 +1,12 @@
 //! App definition bundles: the bundle rules, the content hash, and the forms
 //! a bundle travels in.
 
-use std::{collections::BTreeMap, fmt, io::Read, ops::Bound};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    io::{Read, Write},
+    ops::Bound,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bytes::Bytes;
@@ -395,6 +400,42 @@ impl Bundle {
         Self::from_files(files)
     }
 
+    /// Encode the bundle as a definition artefact's layer, the form
+    /// [`Self::from_tar_gz`] reads.
+    ///
+    /// Every header field that could vary between runs is fixed and entries
+    /// go in path order, each directory before what it holds, so the same
+    /// bundle always gives the same bytes and so the same digest.
+    // spec: CLI#definition-packing
+    pub fn to_tar_gz(&self) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut dirs: BTreeSet<&str> = BTreeSet::new();
+        for (path, contents) in &self.files {
+            let ancestors = path.match_indices('/').map(|(i, _)| &path[..i]);
+            for dir in ancestors {
+                if dirs.insert(dir) {
+                    append_entry(
+                        &mut builder,
+                        tar::EntryType::Directory,
+                        &format!("{dir}/"),
+                        &[],
+                    );
+                }
+            }
+            append_entry(&mut builder, tar::EntryType::Regular, path, contents);
+        }
+        let tar = builder
+            .into_inner()
+            .expect("writing a tar to memory is infallible");
+        let mut gz = flate2::GzBuilder::new().mtime(0).write(
+            Vec::with_capacity(tar.len()),
+            flate2::Compression::default(),
+        );
+        gz.write_all(&tar)
+            .expect("compressing to memory is infallible");
+        gz.finish().expect("compressing to memory is infallible")
+    }
+
     /// This bundle with the text of its only script file replaced, every
     /// other file carried over unchanged.
     pub fn with_script(&self, text: &str) -> Result<Self, BundleError> {
@@ -517,6 +558,29 @@ impl Bundle {
         self.check_supported(version)?;
         self.script()
     }
+}
+
+/// Append one entry with every varying header field fixed.
+fn append_entry(
+    builder: &mut tar::Builder<Vec<u8>>,
+    kind: tar::EntryType,
+    path: &str,
+    contents: &[u8],
+) {
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(kind);
+    header.set_size(contents.len() as u64);
+    header.set_mode(if kind == tar::EntryType::Directory {
+        0o755
+    } else {
+        0o644
+    });
+    header.set_mtime(0);
+    header.set_uid(0);
+    header.set_gid(0);
+    builder
+        .append_data(&mut header, path, contents)
+        .expect("writing a tar to memory is infallible");
 }
 
 /// The accepted path that `path` is inside, or that is inside `path`.
