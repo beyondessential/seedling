@@ -897,9 +897,10 @@ impl super::AddressTranslator for StubTranslator {
     }
 }
 
-/// Stub volume storage: plain directories, none of them snapshottable, and
-/// confinement judged from the path's own components. Unlike a host's
-/// storage it cannot tell a symlink part-way along a path from a directory.
+/// Stub volume storage: plain directories, none of them snapshottable.
+/// Confinement refuses a path whose `..` or symlinks would leave the root, as
+/// a host's storage does, though it judges the path before writing rather than
+/// as one step, and does not look for mount crossings.
 pub struct StubVolumeStorage;
 
 impl super::volume_store::VolumeStorage for StubVolumeStorage {
@@ -968,6 +969,22 @@ impl super::volume_store::VolumeStorage for StubVolumeStorage {
                 .fail();
             }
             let path = root.join(rel);
+            // A symlink along the path, or at its end, is followed to where it
+            // leads, which must still be beneath the root.
+            let escape = || EscapeSnafu { path: path.clone() }.build();
+            let io = |e: std::io::Error| IoSnafu { path: path.clone() }.into_error(e);
+            let canonical_root = tokio::fs::canonicalize(root).await.map_err(io)?;
+            let mut existing = path.as_path();
+            while tokio::fs::symlink_metadata(existing).await.is_err() {
+                existing = existing.parent().ok_or_else(escape)?;
+            }
+            match tokio::fs::canonicalize(existing).await {
+                Ok(resolved) if resolved.starts_with(&canonical_root) => {}
+                Ok(_) => return Err(escape()),
+                // A link whose target is gone leads nowhere the root holds.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(escape()),
+                Err(e) => return Err(io(e)),
+            }
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent)
                     .await
@@ -991,6 +1008,83 @@ impl super::journal::JournalSource for StubJournal {
     ) -> Result<tokio::sync::mpsc::Receiver<super::journal::LogEntry>, BoxError> {
         let (_, rx) = tokio::sync::mpsc::channel(1);
         Ok(rx)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod volume_storage_tests {
+    use super::StubVolumeStorage;
+    use crate::system::volume_store::{ConfinedWriteError, VolumeStorage};
+
+    // spec: ACTU#storage-confinement
+    #[tokio::test]
+    async fn a_symlink_leaving_the_root_is_refused_and_creates_nothing_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("data")).unwrap();
+
+        let err = StubVolumeStorage
+            .write_confined(dir.path(), "data/newdir/f.txt", b"evil")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ConfinedWriteError::Escape { .. }), "{err}");
+        assert!(!outside.path().join("newdir").exists());
+    }
+
+    // spec: ACTU#storage-confinement
+    #[tokio::test]
+    async fn a_symlinked_file_leaving_the_root_is_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("f.txt");
+        std::fs::write(&target, b"theirs").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("f.txt")).unwrap();
+
+        let err = StubVolumeStorage
+            .write_confined(dir.path(), "f.txt", b"evil")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ConfinedWriteError::Escape { .. }), "{err}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
+    }
+
+    // spec: ACTU#storage-confinement
+    #[tokio::test]
+    async fn a_symlink_within_the_root_and_dotdot_inside_it_are_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("real")).unwrap();
+        std::os::unix::fs::symlink("real", dir.path().join("link")).unwrap();
+
+        StubVolumeStorage
+            .write_confined(dir.path(), "link/f.txt", b"inside")
+            .await
+            .unwrap();
+        StubVolumeStorage
+            .write_confined(dir.path(), "sub/../sib/g.txt", b"inside")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(dir.path().join("real/f.txt")).unwrap(),
+            b"inside"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("sib/g.txt")).unwrap(),
+            b"inside"
+        );
+    }
+
+    // spec: ACTU#storage-confinement
+    #[tokio::test]
+    async fn dotdot_leaving_the_root_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = StubVolumeStorage
+            .write_confined(dir.path(), "sub/../../escape", b"evil")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConfinedWriteError::Escape { .. }), "{err}");
     }
 }
 
