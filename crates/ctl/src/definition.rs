@@ -3,11 +3,12 @@
 
 use std::{
     collections::BTreeMap,
+    io::Write,
     path::{Path, PathBuf},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use seedling_bundle::METADATA_FILE;
+use seedling_bundle::{Bundle, METADATA_FILE, VERSIONS_ANNOTATION};
 use serde_json::{Map, Value, json};
 
 use assembly::{Unwritten, assemble, boundary_of};
@@ -164,6 +165,60 @@ pub(super) fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, S
         (name.to_owned(), contents),
         (METADATA_FILE.to_owned(), metadata.to_string().into_bytes()),
     ]))
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub(super) enum DefinitionsCommand {
+    /// Write a definition as the layer of a definition artefact, for pushing
+    /// to a registry with an OCI tool. Prints the version annotation to give
+    /// the artefact, where the definition declares one
+    Pack {
+        /// A script file, a definition folder, or a GitHub URL naming a folder
+        /// at a branch, tag, or commit
+        source: String,
+        /// The gzipped tar to write, which must not exist yet
+        file: PathBuf,
+    },
+}
+
+pub(super) async fn dispatch(command: &DefinitionsCommand) {
+    match command {
+        DefinitionsCommand::Pack { source, file } => match pack(source, file).await {
+            Ok(Some(requirement)) => println!("{VERSIONS_ANNOTATION}={requirement}"),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            }
+        },
+    }
+}
+
+/// Read and assemble `source` as a push would, hold it to the bundle rules,
+/// and write it to `out` as a definition layer. Returns the bundle's declared
+/// Seedling version requirement.
+// spec: CLI#definition-packing
+pub(super) async fn pack(source: &str, out: &Path) -> Result<Option<String>, String> {
+    if out.symlink_metadata().is_ok() {
+        return Err(format!("{} already exists", out.display()));
+    }
+    let args = DefinitionArgs {
+        source: Some(source.to_owned()),
+        reference: None,
+    };
+    let Some(Definition::Bundle { files, .. }) = args.resolve().await? else {
+        return Err(format!("{source} is not a definition source to pack"));
+    };
+    let bundle = Bundle::from_files(files).map_err(|e| e.to_string())?;
+    bundle.script().map_err(|e| e.to_string())?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out)
+        .map_err(|e| format!("cannot create {}: {e}", out.display()))?;
+    file.write_all(&bundle.to_tar_gz())
+        .map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+    Ok(bundle.seedling_versions().map(|r| r.to_string()))
 }
 
 /// Resolve `args` or exit with the error.

@@ -34,6 +34,21 @@ pub const BUNDLE_SIZE_LIMIT: usize = 2 * 1024 * 1024;
 pub const BUNDLE_FILE_LIMIT: usize = 4096;
 
 pub const METADATA_FILE: &str = "seedling.toml";
+
+/// The artifact type of a definition artefact, an OCI manifest holding a
+/// bundle as its single layer.
+// spec: DEFN#fetching
+pub const ARTIFACT_TYPE: &str = "application/vnd.bes.seedling.definition.v1";
+
+/// The media type of a definition artefact's layer, the form
+/// [`Bundle::to_tar_gz`] writes and [`Bundle::from_tar_gz`] reads.
+// spec: DEFN#fetching
+pub const LAYER_MEDIA_TYPE: &str = "application/vnd.bes.seedling.definition.v1.tar+gzip";
+
+/// The annotation carrying a definition's Seedling version requirement on its
+/// manifest or index entry.
+// spec: DEFN#fetching
+pub const VERSIONS_ANNOTATION: &str = "vnd.bes.seedling.versions";
 pub const DEFAULT_SCRIPT: &str = "app.seed.rhai";
 
 /// Why a bundle cannot be installed.

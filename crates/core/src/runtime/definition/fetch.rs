@@ -9,17 +9,16 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, future::BoxFuture};
-use seedling_bundle::{BUNDLE_SIZE_LIMIT, Bundle, BundleError, VersionRequirement};
+use seedling_bundle::{
+    ARTIFACT_TYPE, BUNDLE_SIZE_LIMIT, Bundle, BundleError, LAYER_MEDIA_TYPE, VERSIONS_ANNOTATION,
+    VersionRequirement,
+};
 use seedling_protocol::error::{ErrorCode, OiError};
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use super::auth::{self, Credentials};
-
-pub const ARTIFACT_TYPE: &str = "application/vnd.bes.seedling.definition.v1";
-pub const LAYER_MEDIA_TYPE: &str = "application/vnd.bes.seedling.definition.v1.tar+gzip";
-pub const VERSIONS_ANNOTATION: &str = "vnd.bes.seedling.versions";
 
 /// Headroom over the uncompressed bundle limit for a layer blob, since gzip
 /// can make incompressible content slightly larger.

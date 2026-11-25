@@ -460,3 +460,76 @@ fn an_exported_bundle_with_includes_pushes_again_unchanged() {
     export(&wire, &target).unwrap();
     assert_eq!(read_assembled_folder(&target).unwrap(), files);
 }
+
+// spec: CLI#definition-packing
+#[tokio::test]
+async fn a_packed_folder_is_the_bundle_a_push_would_send() {
+    let dir = repo(".git", "errors", "../pages");
+    let folder = dir.path().join("apps/def");
+    let out = tempfile::tempdir().unwrap();
+    let first = out.path().join("first.tar.gz");
+    assert_eq!(pack(folder.to_str().unwrap(), &first).await.unwrap(), None);
+    let packed = Bundle::from_tar_gz(&std::fs::read(&first).unwrap()).unwrap();
+    let pushed = Bundle::from_files(read_assembled_folder(&folder).unwrap()).unwrap();
+    assert_eq!(packed.hash(), pushed.hash());
+
+    let second = out.path().join("second.tar.gz");
+    pack(folder.to_str().unwrap(), &second).await.unwrap();
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&second).unwrap()
+    );
+}
+
+// spec: CLI#definition-packing
+#[tokio::test]
+async fn packing_reports_the_declared_version_requirement() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "app.seed.rhai", b"app;");
+    write(dir.path(), "seedling.toml", b"seedling = \">=0.12, <0.14\"");
+    let out = dir.path().join("out.tar.gz");
+    let requirement = pack(dir.path().to_str().unwrap(), &out).await.unwrap();
+    assert_eq!(requirement.as_deref(), Some(">=0.12, <0.14"));
+}
+
+// spec: CLI#definition-packing
+#[tokio::test]
+async fn packing_writes_nothing_for_a_broken_bundle_or_over_an_existing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "def/app.seed.rhai", b"app;");
+    write(
+        dir.path(),
+        "def/seedling.toml",
+        b"script = [\"missing.rhai\"]",
+    );
+    let out = dir.path().join("out.tar.gz");
+    let e = pack(dir.path().join("def").to_str().unwrap(), &out)
+        .await
+        .unwrap_err();
+    assert!(e.contains("missing.rhai"), "{e}");
+    assert!(!out.exists());
+
+    write(dir.path(), "def/seedling.toml", b"");
+    write(dir.path(), "out.tar.gz", b"keep");
+    let e = pack(dir.path().join("def").to_str().unwrap(), &out)
+        .await
+        .unwrap_err();
+    assert!(e.contains("already exists"), "{e}");
+    assert_eq!(std::fs::read(&out).unwrap(), b"keep");
+}
+
+// spec: CLI#definition-packing
+#[tokio::test]
+async fn a_packed_lone_file_keeps_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "web.seed.rhai", b"app;");
+    let out = dir.path().join("out.tar.gz");
+    pack(dir.path().join("web.seed.rhai").to_str().unwrap(), &out)
+        .await
+        .unwrap();
+    let packed = Bundle::from_tar_gz(&std::fs::read(&out).unwrap()).unwrap();
+    assert_eq!(
+        packed.script().unwrap().files().collect::<Vec<_>>(),
+        ["web.seed.rhai"]
+    );
+}

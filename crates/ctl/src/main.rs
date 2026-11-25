@@ -120,6 +120,11 @@ enum Command {
         #[command(subcommand)]
         command: op::ImagesCommand,
     },
+    /// Definitions on this machine, before they reach a server
+    Definitions {
+        #[command(subcommand)]
+        command: definition::DefinitionsCommand,
+    },
     /// BSL script templates
     Templates {
         #[command(subcommand)]
@@ -209,6 +214,13 @@ async fn main() {
 
     if std::env::var_os("SSLKEYLOGFILE").is_some() {
         tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
+    }
+
+    // Packing reads only local files and GitHub, so it neither needs a server
+    // nor makes a client key.
+    if let Some(Command::Definitions { command }) = &cli.command {
+        definition::dispatch(command).await;
+        return;
     }
 
     // Load (or generate) the client identity early; `client fingerprint` needs it
@@ -437,7 +449,9 @@ async fn main() {
             )
             .await;
         }
-        Command::Client { .. } => unreachable!("handled before connect"),
+        Command::Client { .. } | Command::Definitions { .. } => {
+            unreachable!("handled before connect")
+        }
     }
 }
 
