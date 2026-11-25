@@ -79,17 +79,18 @@ fn from_value(value: Value<&str, Cow<'_, str>>) -> Result<Tree, Box<EvalAltResul
                 .collect::<Result<_, _>>()?,
         ),
         Value::Object(members) => {
-            let mut keys = HashSet::new();
-            let mut entries = Vec::with_capacity(members.len());
-            for (key, value) in members {
-                let key = key.into_owned();
-                // spec: FMT#decoding
-                if !keys.insert(key.clone()) {
-                    return Err("`text` holds the same key twice in one object".into());
-                }
-                entries.push((key, from_value(value)?));
+            // spec: FMT#decoding
+            let mut keys = HashSet::with_capacity(members.len());
+            if !members.iter().all(|(key, _)| keys.insert(key.as_ref())) {
+                return Err("`text` holds the same key twice in one object".into());
             }
-            Tree::Map(entries)
+            drop(keys);
+            Tree::Map(
+                members
+                    .into_iter()
+                    .map(|(key, value)| Ok((key.into_owned(), from_value(value)?)))
+                    .collect::<Result<_, Box<EvalAltResult>>>()?,
+            )
         }
     })
 }

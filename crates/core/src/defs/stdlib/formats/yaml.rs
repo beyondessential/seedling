@@ -202,8 +202,8 @@ impl<'i> Loader<'i> {
             Event::MappingStart(anchor, tag) => {
                 collection_tag(tag.as_deref(), "map", span)?;
                 let levels = nested(levels, span)?;
-                let mut keys = HashSet::new();
                 let mut entries = Vec::new();
+                let mut key_spans = Vec::new();
                 let (mut values, mut height) = (1, 1);
                 loop {
                     let (event, key_span) = self.next()?;
@@ -215,16 +215,21 @@ impl<'i> Loader<'i> {
                     let Tree::Str(key_text) = key.tree else {
                         return Err(failure("a mapping key that is not a string", key_span));
                     };
-                    // spec: FMT#decoding
-                    if !keys.insert(key_text.clone()) {
-                        return Err(failure("the same key twice in one mapping", key_span));
-                    }
                     let (event, span) = self.next()?;
                     let value = self.node(event, span, levels)?;
                     values += key.values + value.values;
                     height = height.max(value.height + 1);
                     entries.push((key_text, value.tree));
+                    key_spans.push(key_span);
                 }
+                // spec: FMT#decoding
+                let mut keys = HashSet::with_capacity(entries.len());
+                for ((key, _), span) in entries.iter().zip(key_spans) {
+                    if !keys.insert(key.as_str()) {
+                        return Err(failure("the same key twice in one mapping", span));
+                    }
+                }
+                drop(keys);
                 let tree = Tree::Map(entries);
                 (
                     Loaded {
