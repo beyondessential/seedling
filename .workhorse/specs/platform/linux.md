@@ -147,7 +147,7 @@ The runtime MUST hold all its packet-filtering rules in one nftables table, `see
 The runtime MUST replace the whole contents of that table on each apply, and MUST NOT alter any other table.
 
 > [!NOTE]
-> Operators keep rules of their own in other tables, which the runtime leaves untouched.
+> A fixed table of its own lets the runtime replace its rules atomically without flushing the host's ruleset, so an operator's firewall in other tables keeps working, and makes Seedling's rules easy to tell apart when inspecting the host.
 
 ## Forwarding
 
