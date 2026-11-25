@@ -452,23 +452,24 @@ mod github {
         for entry in archive.entries().map_err(bad)? {
             let mut entry = entry.map_err(bad)?;
             let path = entry.path().map_err(bad)?.into_owned();
-            let mut components = path.components();
-            components.next();
-            let rel = components.as_path();
-            if rel.as_os_str().is_empty() {
-                continue;
-            }
             // Every entry is written beneath `dest`, so nothing but plain
             // names may reach the join: an archive is not a trusted source
-            // of paths, whatever produced it.
-            if rel
+            // of paths, whatever produced it. The prefix directory is checked
+            // too, so that a leading `..` is refused rather than dropped.
+            if path
                 .components()
                 .any(|c| !matches!(c, std::path::Component::Normal(_)))
             {
                 return Err(format!(
                     "the downloaded archive holds an entry outside the repository: {}",
-                    rel.display()
+                    path.display()
                 ));
+            }
+            let mut components = path.components();
+            components.next();
+            let rel = components.as_path();
+            if rel.as_os_str().is_empty() {
+                continue;
             }
             let name = rel.to_string_lossy().into_owned();
             if let Some(special) = std::iter::successors(Some(name.as_str()), |p| {

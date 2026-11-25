@@ -241,6 +241,23 @@ fn a_tarball_entry_may_not_escape_the_repository_or_be_a_link_in_the_folder() {
     assert!(e.contains("outside the repository"), "{e}");
     assert!(!dir.path().parent().unwrap().join("escaped").exists());
 
+    // Dropping GitHub's prefix directory would otherwise drop a leading
+    // `..` with it, and write the entry inside the repository.
+    let leading = tarball(|b| {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(5);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        let raw = b"../planted";
+        header.as_gnu_mut().unwrap().name[..raw.len()].copy_from_slice(raw);
+        header.set_cksum();
+        b.append(&header, &b"owned"[..]).unwrap();
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let e = github::extract_repository(&leading, dir.path()).unwrap_err();
+    assert!(e.contains("outside the repository"), "{e}");
+    assert!(!dir.path().join("planted").exists());
+
     for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
         let linked = tarball(|b| {
             tar_file(b, "org-repo-abc/apps/web/app.seed.rhai", b"app;");
