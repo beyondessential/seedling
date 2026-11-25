@@ -32,6 +32,7 @@ mod constants;
 mod container;
 mod definitions;
 mod deployment;
+mod duration;
 mod description;
 mod exec;
 mod gate;

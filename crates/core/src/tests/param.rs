@@ -905,6 +905,59 @@ fn kind_refuses_a_kind_map_that_is_not_valid() {
     }
 }
 
+// spec: DUR#bounds
+// spec: ACN#kind-arguments
+#[test]
+fn a_duration_kind_takes_min_max_and_precision() {
+    use crate::defs::{
+        duration::{Duration, DurationBounds, Precision},
+        param_def::ParamKind,
+    };
+
+    assert_eq!(
+        kind_of(r#"app.param("ttl").kind("duration");"#, "ttl"),
+        ParamKind::Duration(DurationBounds::default())
+    );
+    assert_eq!(
+        kind_of(
+            r#"app.param("ttl").kind(#{ name: "duration", min: "1s", max: std::parse_duration("1d"), precision: "s" });"#,
+            "ttl"
+        ),
+        ParamKind::Duration(DurationBounds {
+            min: Some(Duration::from_secs(1)),
+            max: Some(Duration::from_secs(86_400)),
+            precision: Some(Precision::Seconds),
+        })
+    );
+    for (kind, reason) in [
+        (r#"#{ name: "duration", min: "1h", max: "1m" }"#, "longer than"),
+        (r#"#{ name: "duration", min: 1 }"#, ".min` must be a Duration"),
+        (r#"#{ name: "duration", precision: "sec" }"#, "designators"),
+        (r#"#{ name: "duration", range: 1..2 }"#, "unknown key"),
+        (
+            r#"#{ name: "duration", min: "100ms", max: "900ms", precision: "s" }"#,
+            "whole number of seconds",
+        ),
+    ] {
+        let err = run_test_script_err(&format!(r#"app.param("prm").kind({kind});"#)).to_string();
+        assert!(err.contains(reason), "{kind}: {err}");
+    }
+}
+
+// spec: PARAM#kind-checks
+// spec: DUR#bounds
+#[test]
+fn a_duration_param_is_checked_against_its_bounds() {
+    let script = r#"app.param("ttl").kind(#{ name: "duration", min: "1m", precision: "m" });"#;
+    assert_eq!(evaluation_error(script, &[("ttl", "2h")]), None);
+    let short = evaluation_error(
+        &format!("{script} app.param(\"ttl\").parsed();"),
+        &[("ttl", "30s")],
+    )
+    .expect("30s is below the minimum");
+    assert!(short.contains("at least 1m"), "{short}");
+}
+
 // spec: PARAM#values
 #[test]
 fn parsed_gives_the_parser_result_of_the_kind_as_declared() {
@@ -914,6 +967,8 @@ fn parsed_gives_the_parser_result_of_the_kind_as_declared() {
         let tier = app.param("tier").kind(#{ name: "choice", options: ["small", "large"] });
         let contact = app.param("contact").kind("email");
         let size = app.param("size").kind("quantity");
+        let ttl = app.param("ttl").kind("duration");
+        if ttl.parsed() != std::parse_duration("90m") { throw "ttl"; }
         if flag.parsed() != true { throw "flag"; }
         if size.parsed() != 1536 { throw "size"; }
         if port.parsed() != 8080 { throw "port"; }
@@ -928,7 +983,8 @@ fn parsed_gives_the_parser_result_of_the_kind_as_declared() {
                 ("port", "8080"),
                 ("tier", "large"),
                 ("contact", "ops@example.org"),
-                ("size", "1.5Ki")
+                ("size", "1.5Ki"),
+                ("ttl", "1h 30m")
             ]
         ),
         None
@@ -955,6 +1011,29 @@ fn parsed_throws_where_the_kind_rejects_the_value_or_none_is_set() {
     let unset = evaluation_error(r#"app.param("port").kind("integer").parsed();"#, &[])
         .expect("nothing to parse");
     assert!(unset.contains("not set"), "{unset}");
+}
+
+// spec: PARAM#schema
+// spec: ACN#kind-parsers
+#[test]
+fn default_value_takes_a_duration_as_its_text_form() {
+    let app = run_test_script_app(
+        r#"
+        let base = std::parse_duration("90m");
+        app.param("ttl").kind("duration").default_value(base * 2);
+        "#,
+    );
+    let def = app.def.load();
+    assert_eq!(
+        def.params.get("ttl").unwrap().default_text().as_deref(),
+        Some("3h")
+    );
+    let err = evaluation_error(
+        r#"app.param("name").default_value(std::parse_duration("1s"));"#,
+        &[],
+    )
+    .expect("a Duration default on a text param");
+    assert!(err.contains("a Duration is given for a param of kind text"), "{err}");
 }
 
 // spec: PARAM#schema
