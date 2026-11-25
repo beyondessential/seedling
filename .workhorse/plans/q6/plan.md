@@ -19,6 +19,12 @@ Each demo exists to show and exercise a slice of BSL and the runtime.
 - Each demo's header comment and `app.description` say it is a demo and what it shows.
 - The paired apps are two bundles, `demos/paired-provider/` and `demos/paired-consumer/`.
 
+## Images
+
+Demos use well-known public images pinned by tag (e.g. `traefik/whoami` for HTTP echo, a small base image running `socat` for TCP/UDP echo).
+Check each supports what its route needs, h2c in particular, before relying on it.
+No demo image is built or published from this repo.
+
 ## Demos as test fixtures
 
 The demos replace the current definitions as the fixtures in `crates/core/src/tests/definitions.rs`, so they keep evaluating as the language changes.
