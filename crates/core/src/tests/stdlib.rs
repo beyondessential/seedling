@@ -331,8 +331,8 @@ fn an_evaluation_records_what_it_derived() {
     let (pw, raw) = description.split_once(' ').unwrap();
     assert_eq!(
         def.derived.len(),
-        7,
-        "the string, and the Blob's bytes, UTF-8 reading, string form, hex, base64 and base64url"
+        8,
+        "the string, and the Blob's bytes, UTF-8 reading, string form, hex, base64, base64url and percent-encoding"
     );
     assert!(def.derived.found_in(&format!("password={pw};")));
     assert!(
