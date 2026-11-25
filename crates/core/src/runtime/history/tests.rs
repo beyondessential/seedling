@@ -42,7 +42,7 @@ fn a_gate_run_is_persisted_and_read_back_as_a_gate_run() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -57,7 +57,7 @@ fn a_gate_run_is_persisted_and_read_back_as_a_gate_run() {
             target: action_name("start").into(),
             ..op
         },
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -80,7 +80,7 @@ fn a_queued_gate_run_is_restored_as_a_gate_run_in_order() {
         app: app_name(app),
         target,
         operation_id: OperationId(id.into()),
-        params: serde_json::Map::new(),
+        params: crate::runtime::param_map::ParamMap::default(),
         generation: 3,
         trigger: "gate".into(),
         actor: None,
@@ -134,7 +134,7 @@ fn save_and_load_current_operation() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -167,7 +167,7 @@ fn clear_current_operation_removes_record() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -192,7 +192,7 @@ fn cancel_requested_round_trips_through_db() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -212,7 +212,7 @@ fn cancel_requested_round_trips_through_db() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -256,14 +256,28 @@ fn volume_bindings_persist_with_the_current_operation() {
             read_only: true,
         },
     )]);
-    save_current_operation(&db, &cipher, &op, &params, &bindings).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &crate::runtime::param_map::ParamMap::from_values(params.clone()),
+        &bindings,
+    )
+    .unwrap();
     assert_eq!(
         load_current_operation_volume_bindings(&db).unwrap(),
         bindings
     );
 
     // A later save without bindings leaves none behind.
-    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &crate::runtime::param_map::ParamMap::from_values(params.clone()),
+        &Default::default(),
+    )
+    .unwrap();
     assert!(
         load_current_operation_volume_bindings(&db)
             .unwrap()
@@ -299,7 +313,14 @@ fn operation_params_round_trip_through_cipher() {
     params.insert("passphrase".into(), serde_json::json!("hunter2"));
     params.insert("bucket".into(), serde_json::json!("my-backups"));
 
-    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
+    save_current_operation(
+        &db,
+        &cipher,
+        &op,
+        &crate::runtime::param_map::ParamMap::from_values(params.clone()),
+        &Default::default(),
+    )
+    .unwrap();
 
     // Metadata loads via the normal path.
     let meta = load_current_operation(&db).unwrap().unwrap();
@@ -309,7 +330,10 @@ fn operation_params_round_trip_through_cipher() {
     let restored = load_current_operation_params(&db, &cipher)
         .unwrap()
         .unwrap();
-    assert_eq!(restored, params);
+    assert_eq!(
+        restored,
+        crate::runtime::param_map::ParamMap::from_values(params)
+    );
 
     // Clearing the row clears the ciphertext too.
     clear_current_operation(&db).unwrap();
@@ -337,7 +361,7 @@ fn empty_params_round_trip() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -372,7 +396,7 @@ fn save_overwrites_previous_current_operation() {
         &db,
         &cipher,
         &op1,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -380,7 +404,7 @@ fn save_overwrites_previous_current_operation() {
         &db,
         &cipher,
         &op2,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -968,7 +992,7 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -980,7 +1004,7 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -1118,7 +1142,7 @@ fn the_persisted_operation_state_carries_a_persisted_cancel() {
         &db,
         &cipher,
         &op,
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -1184,7 +1208,7 @@ fn save(db: &Db, cipher: &crate::runtime::secrets::Cipher, id: &str) {
         db,
         cipher,
         &op(id),
-        &serde_json::Map::new(),
+        &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     )
     .unwrap();
@@ -1231,4 +1255,73 @@ fn an_unreadable_operation_seed_is_not_replaced() {
     let id = OperationId("op-1".into());
     assert!(load_operation_seed(&db, &cipher, &id).is_err());
     assert!(load_operation_seed(&db, &cipher, &id).is_err());
+}
+
+// spec: OPS#persistence
+#[test]
+fn a_persisted_version_param_is_restored_as_a_version() {
+    use crate::{
+        defs::{
+            param_def::ParsedValue,
+            purl::Purl,
+            version::{SemVer, Version},
+        },
+        runtime::{param_map::ParamMap, secrets::Cipher},
+    };
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("upgrade-op".into()),
+        app: app_name("myapp"),
+        target: action_name("upgrade").into(),
+        generation: 1,
+    };
+    let mut params = ParamMap::default();
+    params.insert_parsed(
+        "base".into(),
+        ParsedValue::Version(Version::parse("v16.4").unwrap()),
+    );
+    params.insert_parsed(
+        "release".into(),
+        ParsedValue::SemVer(SemVer::parse("2.1.0").unwrap()),
+    );
+    params.insert_parsed("canary".into(), ParsedValue::Bool(true));
+    params.insert_parsed(
+        "package".into(),
+        ParsedValue::Purl(Purl::parse("pkg:npm/foo@1.0?arch=x64").unwrap()),
+    );
+
+    save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
+    let restored = load_current_operation_params(&db, &cipher)
+        .unwrap()
+        .expect("params on record");
+    assert_eq!(restored, params);
+
+    let delivered = restored.to_rhai().unwrap();
+    let base = delivered["base"]
+        .clone()
+        .try_cast::<Version>()
+        .expect("a Version");
+    assert_eq!(base.to_string(), "v16.4");
+    let release = delivered["release"]
+        .clone()
+        .try_cast::<SemVer>()
+        .expect("a SemVer");
+    assert_eq!(release.to_string(), "2.1.0");
+    assert!(delivered["canary"].as_bool().unwrap());
+    let package = delivered["package"].clone().cast::<rhai::Map>();
+    let version = package["version"]
+        .clone()
+        .try_cast::<Version>()
+        .expect("a purl's version is a Version");
+    assert_eq!(version.to_string(), "1.0");
+    assert_eq!(package["name"].clone().into_string().unwrap(), "foo");
+    assert_eq!(
+        package["qualifiers"].clone().cast::<rhai::Map>()["arch"]
+            .clone()
+            .into_string()
+            .unwrap(),
+        "x64"
+    );
 }

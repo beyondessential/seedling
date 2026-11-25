@@ -391,30 +391,6 @@ pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
     }
 }
 
-pub(crate) fn serialize_param_schema(
-    schema: &std::collections::BTreeMap<
-        seedling_protocol::names::ParamName,
-        crate::defs::param_def::ParamDef,
-    >,
-) -> serde_json::Map<String, Value> {
-    schema
-        .iter()
-        .map(|(k, req)| {
-            (
-                k.as_str().to_owned(),
-                json!({
-                    "kind": req.kind.as_str(),
-                    "required": req.required,
-                    "description": req.description,
-                    // spec: APPS#parameters
-                    "default_value": req.default_value.as_ref().filter(|_| !req.is_secret()),
-                    "secret": req.is_secret(),
-                }),
-            )
-        })
-        .collect()
-}
-
 // spec: APPS#listing
 // spec: CTL#resource-stop
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
@@ -1316,17 +1292,18 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         .map_err(|e| OiError::internal(format!("db params: {e}")))?;
 
     // Build the proposed param map from current with the proposals overlaid.
-    let proposed_param_map = match &params.proposed_params {
-        Some(changes) => changes.applied_to(&current_params),
-        None => current_params.clone(),
+    let proposed_supplied = match &params.proposed_params {
+        Some(changes) => changes.proposed(&current_params),
+        None => crate::runtime::apps::supplied_values(&current_params),
     };
+    let proposed_param_map = crate::runtime::apps::canonical_values(&proposed_supplied);
 
     let seed = registered_seed(state, &params.app)?;
     let (proposed_app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
         &proposed_bundle,
         &proposed_param_map,
-        &proposed_param_map,
+        &proposed_supplied,
         &seed,
         &state.script_limits,
     );
@@ -1906,10 +1883,11 @@ pub(crate) fn update_app(
 
     // spec: APPS#update — the parameter changes are carried in the same step
     // as the definition.
-    let proposed = match &params.params {
-        Some(changes) => changes.applied_to(&current_params),
-        None => current_params.clone(),
+    let proposed_supplied = match &params.params {
+        Some(changes) => changes.proposed(&current_params),
+        None => crate::runtime::apps::supplied_values(&current_params),
     };
+    let proposed = crate::runtime::apps::canonical_values(&proposed_supplied);
     let edits = match &params.params {
         Some(changes) => changes.edits(&current_params),
         None => Vec::new(),
@@ -1922,7 +1900,7 @@ pub(crate) fn update_app(
         &params.app,
         &bundle,
         &proposed,
-        &proposed,
+        &proposed_supplied,
         &seed,
         &state.script_limits,
     );

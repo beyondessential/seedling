@@ -329,7 +329,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     oi.state.scheduler.lock().admit(
         &app,
         &OperationTarget::Action(action),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -380,7 +380,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     sched.admit(
         &other,
         &OperationTarget::Action(backup.clone()),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &installed(),
@@ -389,7 +389,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     let queued = sched.admit(
         &demo,
         &OperationTarget::Action(backup),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &installed(),
@@ -1366,7 +1366,7 @@ fn admit(oi: &TestOi, app: &str, action: &str) {
     oi.state.scheduler.lock().admit(
         &AppName::new(app).expect("app name"),
         &OperationTarget::Action(ActionName::new(action).expect("action name")),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -2716,7 +2716,7 @@ fn rotation_is_refused_while_an_operation_or_change_holds_the_app() {
         oi.state.scheduler.lock().admit(
             app,
             &backup,
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "test",
             &installed(),
@@ -2783,4 +2783,66 @@ fn rotation_that_cannot_read_the_parameters_changes_nothing() {
         .unwrap_err();
     assert_eq!(code, "internal");
     assert_eq!(stored_seed(&oi, "demo"), seed, "the seed is unchanged");
+}
+
+// spec: APPS#parameters
+// spec: APPS#actions
+#[test]
+fn a_description_reports_each_param_range_and_options() {
+    let oi = TestOi::new();
+    let script = r#"
+        app.param("port").kind(#{ name: "integer", range: 1..=65535 }).required(false);
+        app.param("above").kind(#{ name: "integer", range: 1.. }).required(false);
+        app.param("upto").kind(#{ name: "integer", range: ..5 }).required(false);
+        app.param("from").kind(#{ name: "integer", range: -3..= }).required(false);
+        app.param("count").kind("integer").default_value(3);
+        app.param("tier").kind(#{ name: "choice", options: ["small", "large", "medium"] })
+            .required(false);
+        app.param("flag").kind("boolean").default_value(true);
+        app.on_action("scale", |rt, p| {}, #{ params: #{
+            open: #{ kind: #{ name: "integer", range: 1..=10 } },
+            size: #{ kind: #{ name: "choice", options: ["b", "a"] } },
+        } });
+        app.deployment("web");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let param = |name: &str| {
+        desc["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("{name} described"))
+            .clone()
+    };
+    assert_eq!(param("port")["range"], json!({ "min": 1, "max": 65535 }));
+    assert_eq!(param("above")["range"], json!({ "min": 1, "max": null }));
+    assert_eq!(param("upto")["range"], json!({ "min": 0, "max": 4 }));
+    assert_eq!(param("from")["range"], json!({ "min": -3, "max": null }));
+    assert_eq!(param("count")["range"], json!(null));
+    assert_eq!(param("count")["kind"], "integer");
+    assert_eq!(param("count")["default_value"], "3");
+    assert_eq!(param("flag")["default_value"], "true");
+    assert_eq!(
+        param("tier")["options"],
+        json!(["small", "large", "medium"])
+    );
+    assert_eq!(param("tier")["range"], json!(null));
+    assert_eq!(param("port")["options"], json!(null));
+
+    let scale = desc["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "scale")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        scale["params"]["open"]["range"],
+        json!({ "min": 1, "max": 10 })
+    );
+    assert_eq!(scale["params"]["size"]["options"], json!(["b", "a"]));
 }

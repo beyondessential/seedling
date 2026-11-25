@@ -12,6 +12,7 @@ use crate::runtime::apps::AppPhase;
 use crate::runtime::barrier::OperationId;
 use crate::runtime::db::{self, Db};
 use crate::runtime::faults::{self, FaultKey, FaultMeta};
+use crate::runtime::param_map::ParamMap;
 use crate::runtime::scheduler::{ScheduleResult, Scheduler};
 
 /// What firing a schedule needs to know about its app: the generation to fire
@@ -32,6 +33,9 @@ pub struct FiredSchedule {
     pub accepted: bool,
     pub operation_id: Option<OperationId>,
     pub generation: u64,
+    /// The param map the run's closure receives.
+    // spec: ACN#scheduled-actions
+    pub params: ParamMap,
     /// The expression the schedule fired on, for stamping its fire time once
     /// a queued fire is persisted.
     pub cronexpr: String,
@@ -175,7 +179,7 @@ pub fn check_due_schedules(
                     );
                 }
             };
-            match validation {
+            let params = match validation {
                 Err(why) => {
                     let meta = FaultMeta::default();
                     let description = format!(
@@ -191,10 +195,11 @@ pub fn check_due_schedules(
                     stamp_fire(db);
                     continue;
                 }
-                Ok(()) => {
+                Ok(params) => {
                     let _ = faults::clear_fault_by_key(db, &key);
+                    params
                 }
-            }
+            };
 
             // spec: TRD#uninstall-admission
             // The phase behind `installed_app` was read before the scheduler
@@ -203,7 +208,7 @@ pub fn check_due_schedules(
             let result = scheduler.admit(
                 &row.app,
                 &OperationTarget::Action(row.action.clone()),
-                serde_json::Map::new(),
+                params.clone(),
                 generation,
                 "schedule",
                 &phase,
@@ -259,6 +264,7 @@ pub fn check_due_schedules(
                         accepted,
                         operation_id: op_id,
                         generation,
+                        params,
                         cronexpr: row.cronexpr.clone(),
                     });
                 }
@@ -300,15 +306,17 @@ pub fn clear_faults_of_unscheduled_actions(
     Ok(())
 }
 
-/// Check an action's param schema against an invocation that supplies no
-/// params, as a scheduled run is.
+/// Validate an invocation that supplies no params, as a scheduled run is,
+/// giving the param map its closure receives.
 // spec: ACN#scheduled-actions
-fn validate_empty_invocation(schema: Option<&BTreeMap<ParamName, ParamDef>>) -> Result<(), String> {
+fn validate_empty_invocation(
+    schema: Option<&BTreeMap<ParamName, ParamDef>>,
+) -> Result<ParamMap, String> {
     let Some(schema) = schema else {
-        return Ok(());
+        return Ok(ParamMap::default());
     };
-    let mut params = serde_json::Map::new();
-    crate::runtime::action_params::apply_schema(schema, &mut params).map_err(|e| e.to_string())
+    crate::runtime::action_params::apply_schema(schema, serde_json::Map::new())
+        .map_err(|e| e.to_string())
 }
 
 /// Wrapper for the main loop to call periodically. Tracks its own last-check
@@ -629,13 +637,21 @@ mod tests {
         with_default
             .get_mut(&ParamName::new("target").unwrap())
             .unwrap()
-            .default_value = Some("all".to_owned());
+            .default_value = Some(crate::defs::param_def::SuppliedValue::Text(
+            "all".to_owned(),
+        ));
         let schemas = Arc::new(BTreeMap::from([(action_name("backup"), with_default)]));
         let later: Timestamp = "2026-04-21T19:37:22Z".parse().unwrap();
         let fired = check_due_schedules(&db, &mut scheduler, later, &|_| {
             Some((1, installed(), Arc::clone(&schemas)))
         });
         assert_eq!(fired.len(), 1, "the declared default satisfies the schema");
+        // spec: ACN#param-delivery
+        assert_eq!(
+            fired[0].params.get("target"),
+            Some(&serde_json::json!("all")),
+            "the run's closure receives the default"
+        );
         assert!(
             faults::list_active_faults(&db, Some(&app_name("myapp")))
                 .unwrap()

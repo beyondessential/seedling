@@ -18,6 +18,7 @@ import { useOiQuery } from "../hooks/useOi";
 import { generateRandomHex, paramFieldType, type ParamEntries } from "../lib/params";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import type { ParamSchema, SiteVolume } from "../lib/types";
+import { KindInput, hasKindInput } from "./KindInput";
 import { OiErrorAlert } from "./OiErrorAlert";
 
 function VolumeParamField({
@@ -88,6 +89,17 @@ export function ParamFields({
         if (def.kind === "volume") {
           return (
             <VolumeParamField
+              key={key}
+              name={key}
+              def={def}
+              value={value}
+              onChange={(v) => onChange(key, v)}
+            />
+          );
+        }
+        if (hasKindInput(def.kind)) {
+          return (
+            <KindInput
               key={key}
               name={key}
               def={def}

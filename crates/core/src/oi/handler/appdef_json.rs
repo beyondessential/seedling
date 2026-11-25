@@ -6,11 +6,9 @@ use serde_json::{Value, json, to_value};
 
 use crate::defs::{
     action::{ActionDef, ShellDef},
-    param_def::ParamDef,
+    param_def::{ParamDef, ParamKind},
     resource::{Resource, ResourceKind},
 };
-
-use super::apps::serialize_param_schema;
 
 /// JSON entries for an action's declared schedules with no live timing data.
 /// Used directly by template previews (no associated app means no DB rows to
@@ -156,16 +154,54 @@ pub(crate) fn resource_static_json(
 }
 
 /// Schema-only JSON for a single param: no runtime `value` or `is_set`.
+// spec: APPS#parameters
 pub(crate) fn param_schema_entry_json(name: &str, schema: &ParamDef) -> Value {
-    json!({
-        "name": name,
+    let mut entry = param_schema_json(schema);
+    entry.insert("name".to_owned(), json!(name));
+    Value::Object(entry)
+}
+
+/// The schema of each param of an action or shell, keyed by name.
+// spec: APPS#actions
+pub(crate) fn serialize_param_schema(
+    schema: &std::collections::BTreeMap<seedling_protocol::names::ParamName, ParamDef>,
+) -> serde_json::Map<String, Value> {
+    schema
+        .iter()
+        .map(|(name, def)| {
+            (
+                name.as_str().to_owned(),
+                Value::Object(param_schema_json(def)),
+            )
+        })
+        .collect()
+}
+
+// spec: APPS#parameters
+fn param_schema_json(schema: &ParamDef) -> serde_json::Map<String, Value> {
+    let range = match &schema.kind {
+        ParamKind::Integer { range: Some(range) } => {
+            json!({ "min": range.min(), "max": range.max() })
+        }
+        _ => Value::Null,
+    };
+    let options = match &schema.kind {
+        ParamKind::Choice { options } => json!(options),
+        _ => Value::Null,
+    };
+    let Value::Object(entry) = json!({
         "kind": schema.kind.as_str(),
+        "range": range,
+        "options": options,
         "required": schema.required,
         "description": schema.description,
         // spec: APPS#parameters
-        "default_value": schema.default_value.as_ref().filter(|_| !schema.is_secret()),
+        "default_value": schema.default_text().filter(|_| !schema.is_secret()),
         "secret": schema.is_secret(),
-    })
+    }) else {
+        unreachable!("a json! object literal is an object")
+    };
+    entry
 }
 
 /// JSON for an action.

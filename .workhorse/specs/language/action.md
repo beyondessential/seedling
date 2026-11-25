@@ -66,8 +66,13 @@ A `name` naming no declared action MUST throw.
 The runtime MUST call the invoked closure with the caller's runtime handle.
 How the invoked closure shares the caller's operation is specified by [action composition](../runtime/operations.md#action-composition).
 
-Every value in `params` MUST be representable in JSON: a unit, a boolean, an integer, a finite floating-point number, a string, or an array or map of such values.
+Every value in `params` MUST be a unit, a boolean, an integer, a finite floating-point number, a string, a `Version`, a `SemVer`, or an array or map of such values.
 Any other value MUST make `invoke` throw.
+A `Version` or `SemVer` MUST be taken as its [text](version.md#text-of-a-version).
+
+> [!NOTE]
+> A closure can pass the param map it received to `invoke` unchanged.
+
 Before running the closure, the runtime MUST validate `params` against the action's param schema exactly as it validates an operator's invocation of the action.
 If validation fails, `invoke` MUST throw without running the closure.
 
@@ -81,6 +86,8 @@ The error MUST name each action on the stack, in call order, followed by the act
 
 The runtime MUST pass an action's or shell's closure the params its invoker supplied, after validation against its param schema, as the param map.
 If the invoker supplies no params, the param map MUST be empty.
+In the param map, a declared param that has a value after validation MUST hold its kind's [parser result](#param-kinds) for that value, except as [volume params](#volume-params) specify.
+A declared param that has no value after validation MUST be absent from the param map.
 
 Param keys ending in `_volume` or `_filename` are reserved for the runtime.
 The runtime MUST reject any invocation, by an operator, by a shell request or by `invoke`, whose supplied params include a reserved key.
@@ -95,24 +102,29 @@ A param schema is an object map from param name to a param definition, which is 
 
 | key | type | default | meaning |
 | --- | --- | --- | --- |
-| `kind` | string | `"text"` | how the value is presented and validated, one of the [param kinds](#param-kinds) |
+| `kind` | string or map | `"text"` | how the value is presented and validated, as a [kind](#kind-arguments) |
 | `required` | boolean | `true` | whether the param needs a value |
-| `default_value` | string | none | the value taken when none is supplied |
+| `default_value` | string, boolean or integer | none | the value taken when none is supplied |
 | `description` | string | none | free-form text telling operators the value's meaning or purpose |
 | `secret` | boolean | by kind | whether the value is sensitive |
 
-Declaring a param schema MUST throw if any param name is not a valid name, any definition is not a map, a definition carries any other key, a key's value is not of the type in the table, or `kind` names no param kind.
+Declaring a param schema MUST throw if any param name is not a valid name, any definition is not a map, a definition carries any other key, a key's value is not of the type in the table, `kind` is not a valid [kind](#kind-arguments), or a non-empty `default_value` is one its kind's [parser](#kind-parsers) rejects.
+An empty `default_value` MUST be treated as no `default_value`.
+Declaring a param schema MUST throw if a `default_value` is a boolean and the kind is not `boolean`, or is an integer and the kind is not `integer`.
+A boolean or integer `default_value` MUST be taken as its [canonical form](#kind-parsers).
 
 `secret` defaults to `true` for the `password` and `weak-password` kinds and to `false` for every other kind.
+Declaring a param schema MUST throw if a param whose kind is `boolean` or `choice` has `secret` set to `true`, as such a param cannot be [secret](parameter.md#secret-parameters).
 The runtime MUST handle a param whose `secret` is `true` as it handles a [secret parameter](parameter.md#secret-parameters).
 
 The runtime MUST validate an invocation's params against the schema, in this order, before the closure runs:
 
-1. A declared param supplied as anything other than a string MUST be rejected.
-2. A declared param that is absent or supplied as the empty string MUST take its `default_value`, if it has one.
-3. A required param that is still absent or empty MUST be rejected.
-4. A declared param that is still absent or empty MUST NOT be validated against its kind.
-5. Every other declared param's value MUST then be validated as its kind specifies.
+1. A boolean supplied for a `boolean` param, or an integer supplied for an `integer` param, MUST be taken as its canonical form.
+2. Any other declared param supplied as anything other than a string MUST be rejected.
+3. A declared param that is absent or supplied as the empty string MUST take its `default_value`, if it has one.
+4. A required param that is still absent or empty MUST be rejected.
+5. A declared param that is still absent or empty MUST NOT be validated against its kind.
+6. Every other declared param's value MUST then be validated as its kind specifies.
 
 A param the schema does not declare MUST be passed to the closure as supplied.
 
@@ -121,28 +133,49 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 
 ### Param kinds
 
-| kind | value | parser result |
-| --- | --- | --- |
-| `text` | a single line of text | the value |
-| `multiline` | text that may span several lines | the value |
-| `email` | an email address | a map of `local`, the part before the first `@`, and `domain`, the part after it |
-| `password` | a strong password | the value |
-| `weak-password` | a password of any strength | the value |
-| `random` | free-form text, usually a generated random value | the value |
-| `version` | a version of any scheme | a `Version`, as [generic versions](version.md#generic-versions) specify |
-| `version-semver` | a [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version | a `SemVer`, as [SemVer versions](version.md#semver-versions) specify |
-| `purl` | a [Package URL](https://ecma-tc54.github.io/ECMA-427/) | a map of its components, as [Package URLs](purl.md#components) specify |
-| `volume` | the name of a site volume, as [volume params](#volume-params) specify | the value |
+| kind | arguments | value | parser result |
+| --- | --- | --- | --- |
+| `text` | none | a single line of text | the value |
+| `multiline` | none | text that may span several lines | the value |
+| `email` | none | an email address | a map of `local`, the part before the first `@`, and `domain`, the part after it |
+| `password` | none | a strong password | the value |
+| `weak-password` | none | a password of any strength | the value |
+| `random` | none | free-form text, usually a generated random value | the value |
+| `version` | none | a version of any scheme | a `Version`, as [generic versions](version.md#generic-versions) specify |
+| `version-semver` | none | a [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version | a `SemVer`, as [SemVer versions](version.md#semver-versions) specify |
+| `purl` | none | a [Package URL](https://ecma-tc54.github.io/ECMA-427/) | a map of its components, as [Package URLs](purl.md#components) specify |
+| `boolean` | none | `true` or `false` | the value as a boolean |
+| `integer` | `range`, optional | a whole number, within `range` where one is given | the value as an integer |
+| `choice` | `options`, required | one of `options` | the value |
+| `volume` | none | the name of a site volume, as [volume params](#volume-params) specify | the value |
+
+### Kind arguments
+
+A kind is given either as a kind name from the table above, or as a kind map whose `name` key holds a kind name and whose other keys are that kind's arguments.
+A kind name MUST be equivalent to a kind map holding only `name`.
+
+A kind is valid only if it names a kind, carries no key that is neither `name` nor one of that kind's arguments, carries every argument the table marks required, and satisfies the rules below for each argument it carries.
+
+An `integer` kind's `range` is valid only if it is an exclusive or inclusive integer range containing at least one integer.
+
+> [!NOTE]
+> BSL reads a range with no start, such as `..10`, as one starting at 0, so an `integer` kind given only an upper bound accepts no negative value.
+> A range with no end runs to the largest integer where it is inclusive, such as `1..=`, and to one short of it where it is exclusive, such as `1..`.
+
+A `choice` kind's `options` is valid only if it is a non-empty array of non-empty strings, no two of which are equal, each of which `std::parse_text` accepts.
 
 ### Kind parsers
 
 Every kind MUST have a parser, the [helper](std.md#helper) `std::parse_<kind>`, where `<kind>` is the kind's name with each `-` written as `_`.
-A parser takes the value as its one argument, returns the parser result the kind table gives, and raises a script error for a value the kind does not accept.
+A parser takes the value as its first argument, followed by the kind's argument where the kind has one, returns the parser result the kind table gives, and raises a script error for a value the kind does not accept.
+`std::parse_integer` MUST accept being called with or without `range`.
+`std::parse_choice` MUST throw when called without `options`.
+A parser MUST throw when given an argument that a kind map carrying it would make invalid.
 The runtime MUST reject a value that its kind's parser rejects, with the parser's error as the reason.
 The runtime MUST accept a value that its kind's parser accepts, except where [volume params](#volume-params) add a check.
 
 > [!NOTE]
-> A validator or action closure calls the same parser to apply the runtime's own check, or to read the parts of a compound value without parsing it again.
+> A script calls a parser to apply the runtime's own check to a value the runtime has not checked, such as one it computed or one it read with `param.value()`.
 
 Every parser but `std::parse_multiline` MUST reject a value containing any character whose Unicode general category is Control (Cc), Line Separator (Zl) or Paragraph Separator (Zp).
 `std::parse_text`, `std::parse_weak_password` and `std::parse_random` MUST accept every other value.
@@ -159,9 +192,25 @@ It SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/use
 
 `std::parse_volume` MUST reject a value that breaks the [name rules](overview.md#names).
 
+`std::parse_boolean` MUST accept exactly `true` and `false`.
+
+`std::parse_integer` MUST accept exactly the decimal forms of signed 64-bit integers within `range`, or of any signed 64-bit integer where it is given no `range`.
+The decimal form of an integer is its digits with no leading zero, preceded by `-` where the integer is negative, with zero written `0`.
+
+The canonical form of a boolean is `true` or `false`, and the canonical form of an integer is its decimal form.
+Where `std::parse_integer` rejects an integer for falling outside `range`, its error SHOULD state the range.
+
+`std::parse_choice` MUST accept exactly the strings equal to one of `options`, compared case-sensitively.
+
+> [!NOTE]
+> Each `boolean` and `integer` value has a single accepted spelling, so a value round-trips through an operator interface's control unchanged.
+> A client or script that takes looser input normalises it before supplying it.
+
 ### Presentation of kinds
 
 A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver` or `purl` param, and a multi-line input for a `multiline` param.
+A presentation layer SHOULD offer a toggle for a `boolean` param, a numeric input limited to `range` for an `integer` param, and a selection among `options`, in the order the script declared them, for a `choice` param.
+A presentation layer MUST let an operator leave a param that is not required without a value, whatever its kind.
 A presentation layer MAY warn about an `email` value that is valid but unlikely to be meant, such as `" "@example.org`.
 A presentation layer SHOULD indicate the strength of a `weak-password` value as it is entered, and MUST NOT refuse a `weak-password` value for its strength.
 A presentation layer SHOULD offer a generator of strong passwords for `password` and `weak-password` params.

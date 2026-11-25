@@ -115,7 +115,7 @@ fn an_action_param_schema_declares_kinds_and_defaults() {
     assert_eq!(params.len(), 2);
     let email = &params["admin-email"];
     assert!(matches!(email.kind, defs::param_def::ParamKind::Email));
-    assert_eq!(email.default_value.as_deref(), Some("admin@example.com"));
+    assert_eq!(email.default_text().as_deref(), Some("admin@example.com"));
     let pw = &params["admin-password"];
     assert!(matches!(pw.kind, defs::param_def::ParamKind::Password));
     assert!(pw.default_value.is_none());
@@ -204,7 +204,7 @@ fn on_action_with_params() {
     assert_eq!(action.params.len(), 1);
     let p = &action.params["contact-email"];
     assert!(matches!(p.kind, defs::param_def::ParamKind::Email));
-    assert_eq!(p.default_value.as_deref(), Some("admin@example.com"));
+    assert_eq!(p.default_text().as_deref(), Some("admin@example.com"));
 }
 
 // spec: ACN#param-schemas

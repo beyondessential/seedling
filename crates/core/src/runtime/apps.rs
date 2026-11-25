@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use crate::{
-    defs::app::App,
+    defs::{
+        app::App,
+        param_def::{ParsedValue, SuppliedValue},
+    },
     runtime::{
         db::{Db, DbHandle},
         definition::{Bundle, Source},
@@ -840,8 +843,8 @@ pub fn evaluate(
 }
 
 /// Evaluate a definition with `params`, then check the kind of every
-/// parameter set in `proposed` and run the validator of each one its kind
-/// accepts, against `proposed`.
+/// parameter set in `proposed` and, if every kind accepts its value, run the
+/// validator of each, against `proposed`.
 ///
 /// `params` and `proposed` are the same map except when validators are taken
 /// from an earlier evaluation because the proposed values fail to evaluate.
@@ -850,7 +853,7 @@ pub fn evaluate_validated(
     name: &AppName,
     bundle: &Arc<Bundle>,
     params: &BTreeMap<String, String>,
-    proposed: &BTreeMap<String, String>,
+    proposed: &BTreeMap<String, SuppliedValue>,
     seed: &crate::runtime::seeds::AppSeed,
     limits: &crate::ScriptLimits,
 ) -> (App, Result<Vec<Rejection>, ScriptError>) {
@@ -882,7 +885,7 @@ fn run_definition(
     bundle: &Arc<Bundle>,
     params: &BTreeMap<String, String>,
     seed: &crate::runtime::seeds::AppSeed,
-    validate: Option<&BTreeMap<String, String>>,
+    validate: Option<&BTreeMap<String, SuppliedValue>>,
     limits: &crate::ScriptLimits,
 ) -> (App, Result<Vec<Rejection>, ScriptError>) {
     let frame = crate::runtime::seeds::AppSeedFrame::enter(seed);
@@ -922,7 +925,11 @@ fn run_definition(
     // sees them, and those of the proposed values it validated.
     let mut sensitive = app.sensitive();
     if let Some(proposed) = validate {
-        sensitive.extend(&app.def.load().sensitive(proposed));
+        let proposed = proposed
+            .iter()
+            .map(|(name, value)| (name.clone(), value.canonical()))
+            .collect();
+        sensitive.extend(&app.def.load().sensitive(&proposed));
     }
     let result = match result {
         Ok(rejections) => Ok(rejections
@@ -941,7 +948,7 @@ fn run_seeded_definition(
     name: &AppName,
     bundle: &Arc<Bundle>,
     params: &BTreeMap<String, String>,
-    validate: Option<&BTreeMap<String, String>>,
+    validate: Option<&BTreeMap<String, SuppliedValue>>,
     limits: &crate::ScriptLimits,
 ) -> (App, Result<Vec<Rejection>, ScriptError>) {
     let (engine, mut scope, app) = match setup_language(limits, Arc::clone(bundle)) {
@@ -1002,34 +1009,73 @@ fn run_seeded_definition(
     let (Some(proposed), Some(mut validators)) = (validate, validators) else {
         return (app, Ok(Vec::new()));
     };
-    let mut rejections = check_kinds(&app.def.load().params, proposed);
-    // spec: PARAM#kind-checks
-    // A value its kind rejects never reaches its validator.
-    validators.retain(|name, _| !rejections.iter().any(|r| r.name == name.as_str()));
-    rejections.extend(run_validators(&engine, &ast, script, &validators, proposed));
+    let parsed = match check_kinds(&app.def.load().params, proposed) {
+        Ok(parsed) => parsed,
+        // spec: PARAM#kind-checks
+        // No validator runs while any kind rejects its value.
+        Err(rejections) => return (app, Ok(rejections)),
+    };
+    validators.retain(|name, _| parsed.contains_key(name.as_str()));
+    let mut rejections = run_validators(&engine, &ast, script, &validators, parsed);
     rejections.sort_by(|a, b| a.name.cmp(&b.name));
     (app, Ok(rejections))
 }
 
+/// Stored values, as values supplied as strings.
+pub fn supplied_values(values: &BTreeMap<String, String>) -> BTreeMap<String, SuppliedValue> {
+    values
+        .iter()
+        .map(|(k, v)| (k.clone(), SuppliedValue::Text(v.clone())))
+        .collect()
+}
+
+/// Each value as the text it is stored as.
+// spec: PRM#parameter-storage
+pub fn canonical_values(values: &BTreeMap<String, SuppliedValue>) -> BTreeMap<String, String> {
+    values
+        .iter()
+        .map(|(k, v)| (k.clone(), v.canonical()))
+        .collect()
+}
+
 /// Check every parameter set in `proposed` against the kind `declared` gives
-/// it, rejecting each value its kind's parser refuses.
+/// it, giving each declared one's parser result, or a rejection for each
+/// value its kind refuses and each boolean or integer given for a parameter
+/// that is not declared.
 // spec: PARAM#kind-checks
+// spec: PRM#validation
 fn check_kinds(
     declared: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
-    proposed: &BTreeMap<String, String>,
-) -> Vec<Rejection> {
-    declared
-        .iter()
-        .filter_map(|(name, def)| {
-            // An unset parameter is not checked; an empty stored value is.
-            let value = proposed.get(name.as_str())?;
-            let reason = def.kind.parse(value).err()?;
-            Some(Rejection {
-                name: name.as_str().to_owned(),
+    proposed: &BTreeMap<String, SuppliedValue>,
+) -> Result<BTreeMap<String, ParsedValue>, Vec<Rejection>> {
+    let mut parsed = BTreeMap::new();
+    let mut rejections = Vec::new();
+    for (name, value) in proposed {
+        // An unset parameter is not checked; an empty stored value is.
+        let result = match declared.get(name.as_str()) {
+            Some(def) => def.kind.parse_supplied(value),
+            None if matches!(value, SuppliedValue::Text(_)) => continue,
+            None => Err(
+                "a boolean or integer is given for a parameter the definition does not \
+                 declare"
+                    .to_owned(),
+            ),
+        };
+        match result {
+            Ok(value) => {
+                parsed.insert(name.clone(), value);
+            }
+            Err(reason) => rejections.push(Rejection {
+                name: name.clone(),
                 reason,
-            })
-        })
-        .collect()
+            }),
+        }
+    }
+    if rejections.is_empty() {
+        Ok(parsed)
+    } else {
+        Err(rejections)
+    }
 }
 
 // spec: PARAM#validators
@@ -1038,16 +1084,16 @@ fn run_validators(
     ast: &rhai::AST,
     script: &crate::runtime::definition::Script,
     validators: &BTreeMap<seedling_protocol::names::ParamName, rhai::FnPtr>,
-    proposed: &BTreeMap<String, String>,
+    parsed: BTreeMap<String, ParsedValue>,
 ) -> Vec<Rejection> {
-    let values: rhai::Map = proposed
-        .iter()
-        .map(|(k, v)| (k.as_str().into(), rhai::Dynamic::from(v.clone())))
+    let values: rhai::Map = parsed
+        .into_iter()
+        .map(|(k, v)| (k.as_str().into(), v.into_dynamic()))
         .collect();
     let mut rejections = Vec::new();
     for (name, validator) in validators {
         // An unset parameter always passes; `required` governs presence.
-        let Some(value) = proposed.get(name.as_str()) else {
+        let Some(value) = values.get(name.as_str()) else {
             continue;
         };
         let _frame = crate::defs::app::ValidatorFrame::enter();

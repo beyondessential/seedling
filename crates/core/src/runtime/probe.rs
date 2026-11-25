@@ -21,11 +21,13 @@ use crate::{
     },
     runtime::{
         InstanceRegistry,
+        action_params::apply_schema,
         barrier::{
             CancelToken, OperationId, ReplayContext,
             oracle::TestWorldOracle,
             runtime::{ActionClosureGuard, ProbeGuard, RuntimeInstance, clear_barrier_hit},
         },
+        param_map::ParamMap,
     },
 };
 
@@ -65,8 +67,8 @@ pub struct HandlerProbe {
 pub struct ProbeRequest {
     /// Per-handler supplied param values. Outer key: handler kind, as
     /// [`HandlerKind::as_str`] writes it. Next: handler name. Inner map: param
-    /// name → string value.
-    pub action_params: HashMap<String, HashMap<String, HashMap<String, String>>>,
+    /// name → value as supplied.
+    pub action_params: HashMap<String, HashMap<String, serde_json::Map<String, serde_json::Value>>>,
     /// `true` → handlers with unresolved required params are _skipped_.
     /// `false` → the same condition is reported as an error.
     pub lenient: bool,
@@ -256,27 +258,34 @@ fn probe_handler(
         .get(kind.as_str())
         .and_then(|by_name| by_name.get(handler_name));
     let stored = app.stored.lock().clone();
-    let (resolved_params, missing_required) = resolve_params(schema, supplied, &stored);
-
-    if !missing_required.is_empty() {
-        let msg = format!("requires params: {}", missing_required.join(", "));
-        return HandlerProbe {
-            name: handler_name.to_owned(),
-            kind,
-            images: BTreeSet::new(),
-            error: if request.lenient {
-                None
-            } else {
-                Some(msg.clone())
-            },
-            skipped_reason: if request.lenient { Some(msg) } else { None },
-        };
-    }
-
-    let param_map: rhai::Map = resolved_params
-        .iter()
-        .map(|(k, v)| (k.as_str().into(), Dynamic::from(v.clone())))
-        .collect();
+    let resolved_params = match resolve_params(schema, supplied, &stored) {
+        Ok(params) => params,
+        Err(msg) => {
+            return HandlerProbe {
+                name: handler_name.to_owned(),
+                kind,
+                images: BTreeSet::new(),
+                error: if request.lenient {
+                    None
+                } else {
+                    Some(msg.clone())
+                },
+                skipped_reason: if request.lenient { Some(msg) } else { None },
+            };
+        }
+    };
+    let param_map = match resolved_params.to_rhai() {
+        Ok(param_map) => param_map,
+        Err(msg) => {
+            return HandlerProbe {
+                name: handler_name.to_owned(),
+                kind,
+                images: BTreeSet::new(),
+                error: Some(msg),
+                skipped_reason: None,
+            };
+        }
+    };
     let call = match kind {
         HandlerKind::Shell => ProbeCall::Shell(param_map),
         HandlerKind::Action | HandlerKind::Gate => ProbeCall::Action(param_map),
@@ -399,33 +408,34 @@ fn run_probe(
     }
 }
 
-/// Merge supplied, stored, and default-valued params. Returns the
-/// resolved map and the list of required-but-missing names.
+/// Resolve each declared param from the supplied value, then the stored
+/// one, then its default, and validate the result as an invocation's params
+/// are, giving the param map or the reason the handler cannot be probed.
+// spec: IMG#probe-parameters
 fn resolve_params(
     schema: &BTreeMap<ParamName, ParamDef>,
-    supplied: Option<&HashMap<String, String>>,
+    supplied: Option<&serde_json::Map<String, serde_json::Value>>,
     stored: &BTreeMap<String, String>,
-) -> (BTreeMap<ParamName, String>, Vec<String>) {
-    let mut resolved = BTreeMap::new();
-    let mut missing = Vec::new();
-
-    for (name, pdef) in schema {
+) -> Result<ParamMap, String> {
+    let has_value = |v: &&serde_json::Value| v.as_str() != Some("");
+    let mut params = serde_json::Map::new();
+    for name in schema.keys() {
+        let key = name.as_str();
         let value = supplied
-            .and_then(|m| m.get(name.as_str()).cloned())
-            .or_else(|| stored.get(name.as_str()).cloned())
-            .or_else(|| pdef.default_value.clone());
-        match value {
-            Some(v) => {
-                resolved.insert(name.clone(), v);
-            }
-            None if pdef.required => {
-                missing.push(name.as_str().to_owned());
-            }
-            None => {}
+            .and_then(|m| m.get(key))
+            .filter(has_value)
+            .cloned()
+            .or_else(|| {
+                stored
+                    .get(key)
+                    .filter(|v| !v.is_empty())
+                    .map(|v| serde_json::Value::String(v.clone()))
+            });
+        if let Some(value) = value {
+            params.insert(key.to_owned(), value);
         }
     }
-
-    (resolved, missing)
+    apply_schema(schema, params).map_err(|e| e.to_string())
 }
 
 /// How many parameters the closure `pointer` declares, or `None` where the
@@ -729,7 +739,7 @@ mod tests {
                 kind.to_owned(),
                 HashMap::from([(
                     "deploy".to_owned(),
-                    HashMap::from([("version".to_owned(), "1.2".to_owned())]),
+                    serde_json::Map::from_iter([("version".to_owned(), serde_json::json!("1.2"))]),
                 )]),
             )]),
             lenient: false,
@@ -754,6 +764,80 @@ mod tests {
         assert!(
             deploy.error.is_some(),
             "a value filed under another kind must not reach the action"
+        );
+    }
+
+    // spec: IMG#probe-parameters
+    // spec: ACN#param-delivery
+    #[test]
+    fn a_probe_passes_parser_results_and_checks_kinds() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("deploy", |rt, param| {
+                if type_of(param.major) != "i64" { throw `major is ${type_of(param.major)}`; }
+                if param.canary != true { throw "canary is not a boolean"; }
+                rt.start(app.deployment().image(`registry.example.com/api:${param.major}`)).ready();
+            }, #{ params: #{
+                major: #{ kind: #{ name: "integer", range: 1..=99 } },
+                canary: #{ kind: "boolean", default_value: true },
+            } });
+        "#,
+        );
+        let request = |major: serde_json::Value, lenient| ProbeRequest {
+            action_params: HashMap::from([(
+                "action".to_owned(),
+                HashMap::from([(
+                    "deploy".to_owned(),
+                    serde_json::Map::from_iter([("major".to_owned(), major)]),
+                )]),
+            )]),
+            lenient,
+        };
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+
+        let response = probe(
+            &engine,
+            &ast,
+            &app,
+            Arc::clone(&registry),
+            &request(serde_json::json!(16), false),
+        )
+        .expect("probe");
+        assert!(
+            response.all_images.contains("registry.example.com/api:16"),
+            "{response:?}"
+        );
+
+        let response = probe(
+            &engine,
+            &ast,
+            &app,
+            Arc::clone(&registry),
+            &request(serde_json::json!("100"), false),
+        )
+        .expect("probe");
+        let error = response.per_handler[0]
+            .error
+            .as_deref()
+            .expect("strict errs");
+        assert!(error.contains("major: must be between 1 and 99"), "{error}");
+
+        let response = probe(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &request(serde_json::json!("100"), true),
+        )
+        .expect("probe");
+        let deploy = &response.per_handler[0];
+        assert!(deploy.error.is_none());
+        assert!(
+            deploy
+                .skipped_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("major: must be between 1 and 99")),
+            "{deploy:?}"
         );
     }
 

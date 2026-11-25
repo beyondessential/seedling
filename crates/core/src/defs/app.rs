@@ -497,7 +497,7 @@ impl AppDef {
                 values.insert(value);
             }
             if let Some(default) = &schema.default_value {
-                values.insert(default);
+                values.insert(default.canonical());
             }
         }
         let schemas = self
@@ -509,7 +509,7 @@ impl AppDef {
             if schema.is_secret()
                 && let Some(default) = &schema.default_value
             {
-                values.insert(default);
+                values.insert(default.canonical());
             }
         }
         values

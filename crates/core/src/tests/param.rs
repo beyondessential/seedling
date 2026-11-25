@@ -103,7 +103,7 @@ fn unset_param_value_falls_back_to_default_value() {
 
     let def = app.def.load();
     let schema = def.params.get("max-connections").unwrap();
-    assert_eq!(schema.default_value.as_deref(), Some("100"));
+    assert_eq!(schema.default_text().as_deref(), Some("100"));
 }
 
 // spec: PARAM#values
@@ -273,7 +273,7 @@ fn param_schema_builder_methods_set_fields() {
         crate::defs::param_def::ParamKind::Email
     ));
     assert!(schema.required);
-    assert_eq!(schema.default_value.as_deref(), Some("admin@example.com"));
+    assert_eq!(schema.default_text().as_deref(), Some("admin@example.com"));
     assert_eq!(schema.description.as_deref(), Some("Admin email address"));
 }
 
@@ -402,6 +402,7 @@ fn action_param_kind_version_accepted() {
             ))
             .expect("param declared")
             .kind
+            .clone()
     };
     assert_eq!(
         kind_of("generic"),
@@ -588,6 +589,30 @@ fn param_schema_random_kind_with_secret_true_is_secret() {
     assert!(schema.is_secret());
 }
 
+// spec: PARAM#secret-parameters
+#[test]
+fn a_secret_boolean_or_choice_param_fails_the_evaluation_once_it_completes() {
+    for script in [
+        // Declared in either order, the pair is checked once both are known.
+        r#"app.param("flag").kind("boolean").secret(true);"#,
+        r#"app.param("flag").secret(true).kind("boolean");"#,
+        r#"app.param("flag").kind(#{ name: "choice", options: ["a", "b"] }).secret(true);"#,
+    ] {
+        let err = evaluation_error(script, &[]).unwrap_or_else(|| panic!("{script}"));
+        assert!(
+            err.contains("parameter 'flag'") && err.contains("cannot be secret"),
+            "{script}: {err}"
+        );
+    }
+    for script in [
+        r#"app.param("flag").secret(true).kind("boolean").secret(false);"#,
+        r#"app.param("flag").kind("password").kind("boolean");"#,
+        r#"app.param("pin").kind("integer").secret(true);"#,
+    ] {
+        assert_eq!(evaluation_error(script, &[]), None, "{script}");
+    }
+}
+
 // spec: PARAM#validators
 // spec: APP#validator-immutability
 // Only declarations threw in a validator, so a builder call on a captured
@@ -666,4 +691,342 @@ fn a_validator_cannot_change_the_app_or_its_resources() {
         .eval_with_scope::<bool>(&mut scope, r#"app.param("declared").is_set()"#)
         .expect("a validator may look up a declared parameter");
     assert!(!is_set);
+}
+
+// -----------------------------------------------------------------------
+// kinds that take arguments, parsed values and typed validators
+// -----------------------------------------------------------------------
+
+fn kind_of(source: &str, name: &str) -> crate::defs::param_def::ParamKind {
+    let app = run_test_script_app(source);
+    let def = app.def.load();
+    def.params
+        .get(name)
+        .unwrap_or_else(|| panic!("{name} declared"))
+        .kind
+        .clone()
+}
+
+/// Evaluate `script` with `stored`, giving the evaluation's error, if any.
+fn evaluation_error(script: &str, stored: &[(&str, &str)]) -> Option<String> {
+    let stored = stored
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    let (_, err) = crate::runtime::apps::evaluate_script(
+        &seedling_protocol::names::AppName::new_unchecked("demo"),
+        script,
+        &stored,
+        &crate::ScriptLimits::default(),
+    );
+    err.map(|e| e.to_string())
+}
+
+/// The rejections validating `proposed` against `script` gives, by name.
+fn rejections(
+    script: &str,
+    proposed: &[(&str, crate::defs::param_def::SuppliedValue)],
+) -> Vec<(String, String)> {
+    let proposed: std::collections::BTreeMap<_, _> = proposed
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), v.clone()))
+        .collect();
+    let (_, outcome) = crate::runtime::apps::evaluate_validated(
+        &seedling_protocol::names::AppName::new_unchecked("demo"),
+        &Arc::new(crate::runtime::definition::Bundle::from_stored_script(
+            script,
+        )),
+        &crate::runtime::apps::canonical_values(&proposed),
+        &proposed,
+        &crate::runtime::seeds::AppSeed::for_tests(),
+        &crate::ScriptLimits::default(),
+    );
+    outcome
+        .expect("evaluates")
+        .into_iter()
+        .map(|r| (r.name, r.reason))
+        .collect()
+}
+
+fn text(value: &str) -> crate::defs::param_def::SuppliedValue {
+    crate::defs::param_def::SuppliedValue::Text(value.to_owned())
+}
+
+// spec: PARAM#schema
+// spec: ACN#kind-arguments
+#[test]
+fn kind_takes_a_kind_name_or_a_kind_map() {
+    use crate::defs::param_def::{IntRange, ParamKind};
+
+    assert_eq!(
+        kind_of(r#"app.param("flag").kind("boolean");"#, "flag"),
+        ParamKind::Boolean
+    );
+    assert_eq!(
+        kind_of(r#"app.param("num").kind(#{ name: "boolean" });"#, "num"),
+        ParamKind::Boolean
+    );
+    assert_eq!(
+        kind_of(r#"app.param("num").kind("integer");"#, "num"),
+        ParamKind::Integer { range: None }
+    );
+    assert_eq!(
+        kind_of(
+            r#"app.param("port").kind(#{ name: "integer", range: 1..=65535 });"#,
+            "port"
+        ),
+        ParamKind::Integer {
+            range: IntRange::new(1, 65535, true)
+        }
+    );
+    assert_eq!(
+        kind_of(
+            r#"app.param("tier").kind(#{ name: "choice", options: ["small", "large"] });"#,
+            "tier"
+        ),
+        ParamKind::Choice {
+            options: vec!["small".into(), "large".into()]
+        }
+    );
+}
+
+// spec: ACN#kind-arguments
+#[test]
+fn kind_refuses_a_kind_map_that_is_not_valid() {
+    for (kind, reason) in [
+        (r#"#{ name: "integer", options: ["a"] }"#, "unknown key"),
+        (r#"#{ name: "text", range: 1..2 }"#, "unknown key"),
+        (r#"#{ name: "integer", range: 3..3 }"#, "holds no integer"),
+        (r#"#{ name: "integer", range: "1..2" }"#, "integer range"),
+        (r#""choice""#, "options"),
+        (r#"#{ name: "choice" }"#, "options"),
+        (r#"#{ name: "choice", options: [] }"#, "at least one option"),
+        (r#"#{ name: "choice", options: [""] }"#, "an empty option"),
+        (
+            r#"#{ name: "choice", options: ["a", "a"] }"#,
+            "more than once",
+        ),
+        (r#"#{ range: 1..2 }"#, "without a `name`"),
+        (r#"#{ name: "integr" }"#, "unknown param kind"),
+        (
+            r#"#{ name: "volume" }"#,
+            "not allowed on the static parameter",
+        ),
+    ] {
+        let err = run_test_script_err(&format!(r#"app.param("prm").kind({kind});"#)).to_string();
+        assert!(err.contains(reason), "{kind}: {err}");
+    }
+}
+
+// spec: PARAM#values
+#[test]
+fn parsed_gives_the_parser_result_of_the_kind_as_declared() {
+    let script = r#"
+        let flag = app.param("flag").kind("boolean");
+        let port = app.param("port").kind(#{ name: "integer", range: 1..=65535 });
+        let tier = app.param("tier").kind(#{ name: "choice", options: ["small", "large"] });
+        let contact = app.param("contact").kind("email");
+        if flag.parsed() != true { throw "flag"; }
+        if port.parsed() != 8080 { throw "port"; }
+        if tier.parsed() != "large" { throw "tier"; }
+        if contact.parsed().domain != "example.org" { throw "contact"; }
+    "#;
+    assert_eq!(
+        evaluation_error(
+            script,
+            &[
+                ("flag", "true"),
+                ("port", "8080"),
+                ("tier", "large"),
+                ("contact", "ops@example.org")
+            ]
+        ),
+        None
+    );
+}
+
+// spec: PARAM#values
+#[test]
+fn parsed_throws_where_the_kind_rejects_the_value_or_none_is_set() {
+    let rejected = evaluation_error(
+        r#"app.param("port").kind(#{ name: "integer", range: 1..=10 }).parsed();"#,
+        &[("port", "11")],
+    )
+    .expect("11 is out of range");
+    assert!(rejected.contains("between 1 and 10"), "{rejected}");
+
+    let unset = evaluation_error(r#"app.param("port").kind("integer").parsed();"#, &[])
+        .expect("nothing to parse");
+    assert!(unset.contains("not set"), "{unset}");
+}
+
+// spec: PARAM#schema
+#[test]
+fn default_value_takes_a_boolean_or_integer_as_its_canonical_form() {
+    let app = run_test_script_app(
+        r#"
+        app.param("flag").kind("boolean").default_value(true);
+        app.param("num").kind("integer").default_value(-3);
+        app.param("cleared").default_value("x").default_value("");
+        "#,
+    );
+    let def = app.def.load();
+    let default = |name: &str| def.params.get(name).unwrap().default_text();
+    assert_eq!(default("flag").as_deref(), Some("true"));
+    assert_eq!(default("num").as_deref(), Some("-3"));
+    assert_eq!(default("cleared"), None);
+    assert!(
+        run_test_script_err(r#"app.param("xyz").default_value(1.5);"#)
+            .to_string()
+            .contains("a string, a boolean or an integer")
+    );
+}
+
+// spec: PARAM#kind-checks
+#[test]
+fn a_default_its_kind_rejects_fails_the_evaluation_once_it_completes() {
+    for script in [
+        // Declared in either order, the pair is checked once both are known.
+        r#"app.param("num").default_value("ten").kind("integer");"#,
+        r#"app.param("num").kind("integer").default_value("ten");"#,
+        r#"app.param("num").default_value(true).kind("integer");"#,
+        r#"app.param("num").default_value(3);"#,
+    ] {
+        let err = evaluation_error(script, &[]).unwrap_or_else(|| panic!("{script}"));
+        assert!(err.contains("parameter 'num'"), "{script}: {err}");
+    }
+    assert_eq!(
+        evaluation_error(
+            r#"app.param("num").default_value("ten"); app.param("num").kind("integer").default_value(10);"#,
+            &[]
+        ),
+        None,
+        "a default replaced before the evaluation ends is not checked"
+    );
+}
+
+// spec: ACN#param-schemas
+#[test]
+fn a_secret_boolean_or_choice_action_param_throws_at_declaration() {
+    for params in [
+        r#"#{ flag: #{ kind: "boolean", secret: true } }"#,
+        r#"#{ flag: #{ kind: #{ name: "choice", options: ["a"] }, secret: true } }"#,
+    ] {
+        let err = run_test_script_err(&format!(
+            r#"app.on_action("run", |rt, p| {{}}, #{{ params: {params} }});"#
+        ))
+        .to_string();
+        assert!(
+            err.contains("param `flag` secret") && err.contains("cannot be secret"),
+            "{params}: {err}"
+        );
+    }
+    let app = run_test_script_app(
+        r#"app.on_action("run", |rt, p| {}, #{ params: #{
+            flag: #{ kind: "boolean", secret: false },
+            pin: #{ kind: "integer", secret: true },
+        } });"#,
+    );
+    let def = app.def.load();
+    let params = &def.actions.get("run").unwrap().params;
+    assert!(params.get("pin").unwrap().is_secret());
+}
+
+// spec: ACN#param-schemas
+#[test]
+fn an_action_param_default_its_kind_rejects_throws_at_declaration() {
+    for params in [
+        r#"#{ num: #{ kind: "integer", default_value: "ten" } }"#,
+        r#"#{ num: #{ kind: "text", default_value: 3 } }"#,
+        r#"#{ num: #{ kind: "integer", default_value: true } }"#,
+        r#"#{ num: #{ kind: #{ name: "choice", options: ["a"] }, default_value: "b" } }"#,
+    ] {
+        let err = run_test_script_err(&format!(
+            r#"app.on_action("run", |rt, p| {{}}, #{{ params: {params} }});"#
+        ))
+        .to_string();
+        assert!(err.contains("default_value"), "{params}: {err}");
+    }
+    let app = run_test_script_app(
+        r#"app.on_action("run", |rt, p| {}, #{ params: #{
+            flag: #{ kind: "boolean", default_value: false },
+            num: #{ kind: "integer", default_value: 4 },
+            empty: #{ kind: "integer", default_value: "" },
+        } });"#,
+    );
+    let def = app.def.load();
+    let params = &def.actions.get("run").unwrap().params;
+    let default = |name: &str| params.get(name).unwrap().default_text();
+    assert_eq!(default("flag").as_deref(), Some("false"));
+    assert_eq!(default("num").as_deref(), Some("4"));
+    assert_eq!(default("empty"), None);
+}
+
+// spec: PARAM#validators
+#[test]
+fn validators_receive_parser_results_of_declared_set_parameters() {
+    let script = r#"
+        app.param("port").kind("integer").validate(|value, all| {
+            if type_of(value) != "i64" { throw `value is ${type_of(value)}`; }
+            if type_of(all.flag) != "bool" { throw `flag is ${type_of(all.flag)}`; }
+            if all.contact.domain != "example.org" { throw "contact"; }
+            if "stray" in all { throw "an undeclared parameter is in all"; }
+        });
+        app.param("flag").kind("boolean");
+        app.param("contact").kind("email");
+    "#;
+    assert_eq!(
+        rejections(
+            script,
+            &[
+                ("port", crate::defs::param_def::SuppliedValue::Int(80)),
+                ("flag", text("true")),
+                ("contact", text("ops@example.org")),
+                ("stray", text("x")),
+            ]
+        ),
+        vec![]
+    );
+}
+
+// spec: PARAM#kind-checks
+#[test]
+fn no_validator_runs_while_any_kind_rejects_its_value() {
+    let script = r#"
+        app.param("name").validate(|value, all| { throw "the validator ran"; });
+        app.param("flag").kind("boolean");
+    "#;
+    assert_eq!(
+        rejections(script, &[("name", text("x")), ("flag", text("yes"))]),
+        vec![("flag".to_owned(), "must be true or false".to_owned())]
+    );
+}
+
+// spec: PRM#validation
+#[test]
+fn a_native_value_fails_validation_for_a_kind_that_is_not_its_own() {
+    use crate::defs::param_def::SuppliedValue;
+
+    let script = r#"app.param("name"); app.param("flag").kind("boolean");"#;
+    assert_eq!(
+        rejections(
+            script,
+            &[
+                ("name", SuppliedValue::Bool(true)),
+                ("flag", SuppliedValue::Bool(true)),
+                ("ghost", SuppliedValue::Int(1)),
+            ]
+        ),
+        vec![
+            (
+                "ghost".to_owned(),
+                "a boolean or integer is given for a parameter the definition does not declare"
+                    .to_owned()
+            ),
+            (
+                "name".to_owned(),
+                "a boolean is given for a param of kind text".to_owned()
+            ),
+        ]
+    );
 }

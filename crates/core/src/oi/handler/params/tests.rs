@@ -469,7 +469,7 @@ fn a_param_change_is_accepted_while_an_operation_runs_for_the_app() {
     oi.state.scheduler.lock().admit(
         &AppName::new_unchecked("demo"),
         &OperationTarget::Action(ActionName::new_unchecked("backup")),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -710,12 +710,13 @@ fn a_change_the_server_refuses_as_malformed_stores_nothing() {
     assert!(message.contains("not a name"), "{message}");
     refused(r#"{"_hidden":"y"}"#);
     refused(r#"{"ab":"y"}"#);
-    let message = refused(r#"{"greeting":1}"#);
+    let message = refused(r#"{"greeting":1.5}"#);
     assert!(message.contains("greeting"), "{message}");
-    refused(r#"{"greeting":true}"#);
+    refused(r#"{"greeting":1e3}"#);
+    refused(r#"{"greeting":9223372036854775808}"#);
     refused(r#"{"greeting":{"a":"b"}}"#);
     refused(r#"{"greeting":["a"]}"#);
-    refused(r#"{"mystery":"x","greeting":2}"#);
+    refused(r#"{"mystery":"x","greeting":2.5}"#);
 
     assert_eq!(stored_values(&oi), vec![]);
     assert_eq!(generation_count(&oi), 1);
@@ -829,7 +830,7 @@ fn a_change_is_accepted_while_an_operation_runs_for_the_app() {
     oi.state.scheduler.lock().admit(
         &AppName::new_unchecked("demo"),
         &OperationTarget::Action(ActionName::new_unchecked("backup")),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -933,7 +934,7 @@ fn a_plan_treats_proposed_params_with_no_members_as_none_and_refuses_what_a_chan
     assert!(message.contains("greeting"), "{message}");
     let (code, _) = plan(r#"{"not a name":"y"}"#).unwrap_err();
     assert_eq!(code, "requirements_invalid");
-    let (code, _) = plan(r#"{"greeting":3}"#).unwrap_err();
+    let (code, _) = plan(r#"{"greeting":3.5}"#).unwrap_err();
     assert_eq!(code, "requirements_invalid");
 }
 
@@ -954,7 +955,7 @@ fn an_update_refuses_what_a_parameter_change_refuses() {
     refused("{}");
     refused(r#"{"greeting":"a","greeting":"b"}"#);
     refused(r#"{"not a name":"y"}"#);
-    refused(r#"{"greeting":3}"#);
+    refused(r#"{"greeting":3.5}"#);
 
     assert_eq!(generation_count(&oi), 1);
     assert_eq!(stored_values(&oi), vec![]);
@@ -1273,4 +1274,134 @@ fn a_secret_value_is_not_inherited_by_the_next_app_of_the_name() {
         .expect("api-key param")["is_set"]
         .clone();
     assert_eq!(api_key_set, false);
+}
+
+const TYPED_SCRIPT: &str = r#"
+    app.param("enabled").kind("boolean").required(false);
+    app.param("replicas").kind(#{ name: "integer", range: 1..=9 }).required(false);
+    app.param("tier").kind(#{ name: "choice", options: ["small", "large"] }).required(false);
+    app.param("greeting").required(false);
+    app.deployment("web").image("docker.io/library/nginx:1.29");
+"#;
+
+fn oi_with_typed_app() -> TestOi {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": TYPED_SCRIPT }),
+    )
+    .expect("register app");
+    oi
+}
+
+// spec: PRM#parameter-storage
+// spec: PRM#parameter-changes
+#[test]
+fn a_boolean_or_integer_is_stored_as_its_canonical_form() {
+    let oi = oi_with_typed_app();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "enabled": true, "replicas": 3, "tier": "large" } }),
+    )
+    .unwrap();
+    assert_eq!(
+        stored_values(&oi),
+        vec![
+            ("enabled".to_owned(), "true".to_owned()),
+            ("replicas".to_owned(), "3".to_owned()),
+            ("tier".to_owned(), "large".to_owned()),
+        ]
+    );
+
+    // The same value given as its canonical text changes nothing.
+    let generation = generation_count(&oi);
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "enabled": "true", "replicas": "3" } }),
+    )
+    .unwrap();
+    assert_eq!(generation_count(&oi), generation);
+}
+
+// spec: PRM#validation
+#[test]
+fn a_value_the_kind_rejects_or_a_native_value_of_the_wrong_kind_fails_validation() {
+    let oi = oi_with_typed_app();
+    for (params, reason) in [
+        (
+            json!({ "enabled": "yes" }),
+            "enabled: must be true or false",
+        ),
+        (
+            json!({ "replicas": 10 }),
+            "replicas: must be between 1 and 9",
+        ),
+        (
+            json!({ "replicas": "03" }),
+            "replicas: must be an integer in decimal form",
+        ),
+        (
+            json!({ "tier": "Large" }),
+            "tier: must be one of the options",
+        ),
+        (
+            json!({ "greeting": true }),
+            "greeting: a boolean is given for a param of kind text",
+        ),
+        (
+            json!({ "enabled": 1 }),
+            "enabled: an integer is given for a param of kind boolean",
+        ),
+        (
+            json!({ "unknown": 1 }),
+            "unknown: a boolean or integer is given for a parameter the definition does not declare",
+        ),
+    ] {
+        let (code, message) = oi
+            .call(
+                "/apps/params/set",
+                json!({ "app": "demo", "params": params }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "validation_failed", "{params}: {message}");
+        assert!(message.contains(reason), "{params}: {message}");
+    }
+    assert_eq!(stored_values(&oi), vec![]);
+
+    // A string for a parameter the definition does not declare is stored.
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "unknown": "kept" } }),
+    )
+    .unwrap();
+    assert_eq!(
+        stored_values(&oi),
+        vec![("unknown".to_owned(), "kept".to_owned())]
+    );
+}
+
+// spec: PRM#change-planning
+// spec: APPS#update
+#[test]
+fn a_plan_and_an_update_take_native_values_as_a_change_does() {
+    let oi = oi_with_typed_app();
+    let plan = oi
+        .call(
+            "/apps/plan",
+            json!({ "app": "demo", "proposed_params": { "enabled": 1 } }),
+        )
+        .unwrap();
+    let rejections = plan["rejections"].as_array().unwrap();
+    assert_eq!(rejections.len(), 1, "{plan}");
+    assert_eq!(rejections[0]["name"], "enabled");
+
+    oi.call(
+        "/apps/update",
+        json!({ "app": "demo", "script": TYPED_SCRIPT, "params": { "replicas": 2 } }),
+    )
+    .unwrap();
+    assert_eq!(
+        stored_values(&oi),
+        vec![("replicas".to_owned(), "2".to_owned())]
+    );
 }

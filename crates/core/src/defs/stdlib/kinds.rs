@@ -4,73 +4,65 @@ use rhai::{Dynamic, EvalAltResult, FuncRegistration};
 use strum::VariantArray;
 
 use crate::defs::{
-    param_def::{ParamKind, ParsedValue},
-    purl::{Purl, QualifierValue},
+    param_def::{ParamKind, ParamKindName, take_options, take_range},
     take::take_string,
 };
 
 // spec: ACN#kind-parsers
 pub(super) fn register(module: &mut rhai::Module) {
-    for &kind in ParamKind::VARIANTS {
-        FuncRegistration::new(helper_name(kind)).set_into_module(
-            module,
-            move |value: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
-                let value = take_string("value", value)?;
-                Ok(match kind.parse(&value)? {
-                    ParsedValue::Value(value) => value.into(),
-                    ParsedValue::Email { local, domain } => {
-                        let mut parts = rhai::Map::new();
-                        parts.insert("local".into(), local.into());
-                        parts.insert("domain".into(), domain.into());
-                        parts.into()
-                    }
-                    ParsedValue::Version(version) => Dynamic::from(version),
-                    ParsedValue::SemVer(version) => Dynamic::from(version),
-                    ParsedValue::Purl(purl) => purl_map(purl),
-                })
-            },
-        );
+    for &name in ParamKindName::VARIANTS {
+        let helper = helper_name(name);
+        match name {
+            // spec: ACN#kind-parsers
+            ParamKindName::Integer => {
+                register_parser(module, &helper, ParamKind::Integer { range: None });
+                FuncRegistration::new(&helper).set_into_module(
+                    module,
+                    |value: Dynamic, range: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                        let range = take_range("range", range)?;
+                        parse(&ParamKind::Integer { range: Some(range) }, value)
+                    },
+                );
+            }
+            // spec: ACN#kind-parsers
+            ParamKindName::Choice => {
+                FuncRegistration::new(&helper).set_into_module(
+                    module,
+                    |_: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                        Err("std::parse_choice takes the value and its `options`".into())
+                    },
+                );
+                FuncRegistration::new(&helper).set_into_module(
+                    module,
+                    |value: Dynamic, options: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                        let options = take_options("options", options)?;
+                        parse(&ParamKind::Choice { options }, value)
+                    },
+                );
+            }
+            _ => {
+                let kind =
+                    ParamKind::without_arguments(name).expect("only choice requires an argument");
+                register_parser(module, &helper, kind);
+            }
+        }
     }
 }
 
-/// A Package URL's components as a map, leaving out those it does not have.
-// spec: PURL#components
-fn purl_map(purl: Purl) -> Dynamic {
-    let mut map = rhai::Map::new();
-    map.insert("type".into(), purl.ty.into());
-    if let Some(namespace) = purl.namespace {
-        map.insert("namespace".into(), namespace.into());
-    }
-    map.insert("name".into(), purl.name.into());
-    if let Some(version) = purl.version {
-        map.insert("version".into(), Dynamic::from(version));
-    }
-    if !purl.qualifiers.is_empty() {
-        let qualifiers: rhai::Map = purl
-            .qualifiers
-            .into_iter()
-            .map(|(key, value)| {
-                let value = match value {
-                    QualifierValue::Text(text) => text.into(),
-                    QualifierValue::Checksums(entries) => entries
-                        .into_iter()
-                        .map(Dynamic::from)
-                        .collect::<rhai::Array>()
-                        .into(),
-                };
-                (key.into(), value)
-            })
-            .collect();
-        map.insert("qualifiers".into(), qualifiers.into());
-    }
-    if let Some(subpath) = purl.subpath {
-        map.insert("subpath".into(), subpath.into());
-    }
-    map.into()
+fn register_parser(module: &mut rhai::Module, helper: &str, kind: ParamKind) {
+    FuncRegistration::new(helper).set_into_module(
+        module,
+        move |value: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> { parse(&kind, value) },
+    );
 }
 
-/// The name of the helper that parses `kind`.
+fn parse(kind: &ParamKind, value: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
+    let value = take_string("value", value)?;
+    Ok(kind.parse(&value)?.into_dynamic())
+}
+
+/// The name of the helper that parses the kind `name`.
 // spec: ACN#kind-parsers
-pub(crate) fn helper_name(kind: ParamKind) -> String {
-    format!("parse_{}", kind.as_str().replace('-', "_"))
+pub(crate) fn helper_name(name: ParamKindName) -> String {
+    format!("parse_{}", name.as_str().replace('-', "_"))
 }

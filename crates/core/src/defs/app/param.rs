@@ -1,9 +1,9 @@
-use std::{collections::BTreeMap, str::FromStr as _};
+use std::collections::BTreeMap;
 
 use rhai::{EvalAltResult, Map, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
-use super::super::param_def::{ParamDef, ParamKind};
+use super::super::param_def::{ParamDef, ParamKind, SuppliedValue, take_kind};
 use super::super::take::{reject_unknown_keys, take_bool, take_map, take_string};
 use super::App;
 
@@ -62,15 +62,12 @@ pub(super) fn parse_param_defs(
             &["kind", "required", "default_value", "description", "secret"],
         )?;
 
-        let kind = match req_map.get("kind").cloned() {
-            Some(v) => {
-                let s = take_string(&format!("param `{key}` kind"), v)?;
-                ParamKind::from_str(&s).map_err(|_| {
-                    Box::<EvalAltResult>::from(format!("unknown param kind: \"{s}\""))
-                })?
-            }
-            None => ParamKind::default(),
-        };
+        let kind = req_map
+            .get("kind")
+            .cloned()
+            .map(|v| take_kind(&format!("param `{key}` kind"), v))
+            .transpose()?
+            .unwrap_or_default();
         let required = req_map
             .get("required")
             .cloned()
@@ -78,11 +75,13 @@ pub(super) fn parse_param_defs(
             .transpose()?
             .unwrap_or(true);
 
+        // spec: ACN#param-schemas
         let default_value = req_map
             .get("default_value")
             .cloned()
-            .map(|v| take_string(&format!("param `{key}` default_value"), v))
-            .transpose()?;
+            .map(|v| SuppliedValue::take(&format!("param `{key}` default_value"), v))
+            .transpose()?
+            .filter(|v| !v.is_empty());
 
         let description = req_map
             .get("description")
@@ -98,16 +97,21 @@ pub(super) fn parse_param_defs(
 
         let param_name = ParamName::new(key.as_str())
             .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
-        reqs.insert(
-            param_name,
-            ParamDef {
-                kind,
-                required,
-                default_value,
-                description,
-                secret,
-            },
-        );
+        let def = ParamDef {
+            kind,
+            required,
+            default_value,
+            description,
+            secret,
+        };
+        // spec: ACN#param-schemas
+        def.check_default().map_err(|e| -> Box<EvalAltResult> {
+            format!("param `{key}` default_value: {e}").into()
+        })?;
+        // spec: ACN#param-schemas
+        def.check_secret()
+            .map_err(|e| -> Box<EvalAltResult> { format!("param `{key}` secret: {e}").into() })?;
+        reqs.insert(param_name, def);
     }
     Ok(reqs)
 }

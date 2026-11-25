@@ -552,7 +552,7 @@ fn a_run_the_concurrency_rules_do_not_admit_is_retried_and_has_not_failed() {
     oi.state.scheduler.lock().admit(
         &app(),
         &OperationTarget::Action(seedling_protocol::names::ActionName::new("busy").unwrap()),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &phase,
@@ -701,7 +701,7 @@ fn a_queued_run_of_a_gate_the_definition_no_longer_declares_is_withdrawn() {
     oi.state.scheduler.lock().admit(
         &other,
         &OperationTarget::Action(seedling_protocol::names::ActionName::new("busy").unwrap()),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &phase,
@@ -710,7 +710,7 @@ fn a_queued_run_of_a_gate_the_definition_no_longer_declares_is_withdrawn() {
     let result = oi.state.scheduler.lock().admit(
         &app(),
         &OperationTarget::Gate(gate("gone")),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "gate",
         &phase,
@@ -955,7 +955,7 @@ fn a_check_with_an_interval_runs_for_an_unsatisfied_gate_whose_run_is_queued() {
         oi.state.scheduler.lock().admit(
             &app,
             &target,
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "test",
             &phase,

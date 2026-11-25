@@ -79,9 +79,9 @@ fn accepts(helper: &str, value: &str) -> String {
 fn every_kind_has_a_parser_named_for_it() {
     use strum::VariantArray;
 
-    use crate::defs::param_def::ParamKind;
+    use crate::defs::param_def::ParamKindName;
 
-    for &kind in ParamKind::VARIANTS {
+    for &kind in ParamKindName::VARIANTS {
         let name = crate::defs::stdlib::kinds::helper_name(kind);
         let err = eval(&format!("std::{name}(())")).expect_err("a unit is not a value");
         assert!(
@@ -288,7 +288,7 @@ fn a_validator_derives_what_the_top_level_derives() {
             script,
         )),
         &proposed,
-        &proposed,
+        &crate::runtime::apps::supplied_values(&proposed),
         &seed(1),
         &crate::ScriptLimits::default(),
     );
@@ -511,6 +511,116 @@ fn an_invoked_action_derives_from_its_callers_operation_seed() {
     assert_eq!(uuid(&invoked), uuid(&direct));
 }
 
+// spec: ACN#kind-parsers
+#[test]
+fn boolean_accepts_exactly_true_and_false() {
+    assert!(
+        eval(r#"std::parse_boolean("true")"#)
+            .unwrap()
+            .as_bool()
+            .unwrap()
+    );
+    assert!(
+        !eval(r#"std::parse_boolean("false")"#)
+            .unwrap()
+            .as_bool()
+            .unwrap()
+    );
+    for value in ["True", "FALSE", "1", "0", "yes", " true", ""] {
+        assert_eq!(
+            refusal("parse_boolean", &format!("{value:?}")),
+            "must be true or false",
+            "{value:?}"
+        );
+    }
+}
+
+// spec: ACN#kind-parsers
+#[test]
+fn integer_accepts_only_the_decimal_form() {
+    for (value, n) in [
+        ("0", 0),
+        ("42", 42),
+        ("-7", -7),
+        ("9223372036854775807", i64::MAX),
+        ("-9223372036854775808", i64::MIN),
+    ] {
+        let parsed = eval(&format!("std::parse_integer({value:?})")).unwrap();
+        assert_eq!(parsed.as_int().unwrap(), n, "{value}");
+    }
+    for value in ["+1", "01", "-0", "1.0", "1e3", " 1", "", "-", "0x10"] {
+        assert_eq!(
+            refusal("parse_integer", &format!("{value:?}")),
+            "must be an integer in decimal form",
+            "{value:?}"
+        );
+    }
+    assert_eq!(
+        refusal("parse_integer", r#""9223372036854775808""#),
+        "must be an integer within the signed 64-bit range"
+    );
+}
+
+// spec: ACN#kind-parsers
+// spec: ACN#kind-arguments
+#[test]
+fn integer_takes_a_range_and_names_it_when_refusing() {
+    assert_eq!(
+        eval(r#"std::parse_integer("65535", 1..=65535)"#)
+            .unwrap()
+            .as_int()
+            .unwrap(),
+        65535
+    );
+    assert_eq!(
+        refusal("parse_integer", r#""65535", 1..65535"#),
+        "must be between 1 and 65534"
+    );
+    assert_eq!(
+        refusal("parse_integer", r#""0", 1..=65535"#),
+        "must be between 1 and 65535"
+    );
+    assert_eq!(
+        refusal("parse_integer", r#""-1", ..10"#),
+        "must be between 0 and 9"
+    );
+    assert!(refusal("parse_integer", r#""1", 5..5"#).contains("holds no integer"));
+    assert!(refusal("parse_integer", r#""1", 5..=4"#).contains("holds no integer"));
+    assert!(refusal("parse_integer", r#""1", [1, 2]"#).contains("must be an integer range"));
+}
+
+// spec: ACN#kind-parsers
+// spec: ACN#kind-arguments
+#[test]
+fn choice_accepts_exactly_one_of_its_options() {
+    assert_eq!(
+        accepts("parse_choice", r#""prod", ["dev", "prod"]"#),
+        "prod"
+    );
+    assert_eq!(
+        refusal("parse_choice", r#""Prod", ["dev", "prod"]"#),
+        r#"must be one of the options "dev", "prod""#
+    );
+    assert!(refusal("parse_choice", r#""dev""#).contains("options"));
+    for (options, reason) in [
+        ("[]", "at least one option"),
+        (r#"["a", ""]"#, "an empty option"),
+        (r#"["a", "a"]"#, "more than once"),
+        (r#"["a\nb"]"#, "U+000A"),
+        (r#"["a", 1]"#, "array of strings"),
+    ] {
+        let refused = refusal("parse_choice", &format!(r#""a", {options}"#));
+        assert!(refused.contains(reason), "{options}: {refused}");
+    }
+}
+
+// spec: ACN#kind-parsers
+#[test]
+fn the_new_kinds_refuse_control_characters() {
+    assert!(refusal("parse_boolean", r#""true\n""#).contains("U+000A"));
+    assert!(refusal("parse_integer", r#""1\n""#).contains("U+000A"));
+}
+
 fn evaluate_bundle(
     bundle: crate::runtime::definition::Bundle,
     params: &[(&str, &str)],
@@ -576,6 +686,19 @@ fn a_result_computed_from_a_secret_parameter_is_withheld_however_late_it_is_decl
         &[("token", "s3cret")],
     );
     assert!(!found, "a parameter that is not secret is shown");
+}
+
+// spec: SEC#redaction
+#[test]
+fn a_result_computed_from_a_secret_parameters_parsed_value_is_withheld() {
+    let (_, found) = withheld(
+        r#"
+            let key = app.param("key").kind("weak-password");
+            app.description(std::encode_hex(key.parsed()));
+        "#,
+        &[("key", "Moa-Kettle")],
+    );
+    assert!(found);
 }
 
 // spec: SEC#redaction

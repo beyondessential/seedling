@@ -1034,7 +1034,7 @@ async fn main() {
                                 seedling_protocol::events::OperationTarget::Action(fire.action),
                                 op_id,
                                 seedling_core::oi::handler::actions::lifecycle::OperationParams::Requested(
-                                    serde_json::Map::new(),
+                                    fire.params,
                                 ),
                                 fire.generation,
                                 "schedule".to_owned(),
@@ -1458,7 +1458,10 @@ fn start_replay(
                     operation = %target,
                     "interrupted operation has no persisted params (legacy row); replaying with empty map"
                 );
-                (serde_json::Map::new(), Default::default())
+                (
+                    seedling_core::runtime::param_map::ParamMap::default(),
+                    Default::default(),
+                )
             }
             Err(e) => {
                 tracing::error!(

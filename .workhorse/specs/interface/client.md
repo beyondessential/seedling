@@ -90,7 +90,7 @@ When the forward ends, the CLI MUST print a summary of these counts to standard 
 
 `apps action <app> <name> [key[=value]]...` invokes an action, and `apps shell <app> <name> [key[=value]]...` opens a shell, with the parameters given after the name.
 In both, a `key=value` argument MUST become the parameter `key` with the string value `value`, split at the first `=`.
-A bare `key` MUST become the parameter `key` with the value `true`.
+A bare `key` MUST become the parameter `key` with the JSON boolean `true`.
 
 `apps cancel-action <app>` MUST [cancel](actions.md#cancellation) the app's lifecycle operation.
 

@@ -81,7 +81,12 @@ Before an operation first does anything, the runtime MUST persist durably the op
 If the runtime cannot persist them, it MUST NOT start the operation.
 
 The runtime MUST encrypt the persisted parameters and seed with the cipher it uses for [stored secret parameters](secrets.md#storage).
-On replay, the runtime MUST pass the action closure the persisted parameters.
+The persisted parameters MUST be the [param map](../language/action.md#param-map) the action closure receives, holding parser results as [param delivery](../language/action.md#param-delivery) specifies.
+On replay, the runtime MUST pass the action closure the persisted parameters, without validating or parsing them again.
+The runtime MUST restore each `Version` or `SemVer` in the persisted parameters as a value of the same type with the same [text](../language/version.md#text-of-a-version).
+
+> [!NOTE]
+> Restoring a version depends on its text alone, so it cannot reject a value that was accepted when the operation began.
 
 The runtime MUST clear the persisted operation when the operation ends.
 
@@ -169,7 +174,7 @@ The runtime MUST identify the actions on the stack by name.
 
 The supplied parameters are validated before the invoked closure runs, as [action invocation](../language/action.md#action-invocation) specifies.
 
-On replay, the runtime MUST run a call already recorded in the [action log](history.md#action-calls) with the parameters its entry holds, and MUST NOT validate them again.
+On replay, the runtime MUST run a call already recorded in the [action log](history.md#action-calls) with the parameters its entry holds, restored as [persistence](#persistence) specifies, and MUST NOT validate them again.
 If the entry at the call's position records a different action than the one being invoked, the runtime MUST fail the replay as a [divergence](suspension.md#positional-replay).
 
 > [!NOTE]

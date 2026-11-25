@@ -305,13 +305,20 @@ Each entry of `params` has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `name` | string | the parameter's name |
-| `kind` | string | `text`, `multiline`, `email`, `password`, `weak-password`, `random`, `version`, `version-semver`, `purl` or `volume` |
+| `kind` | string | the name of its [kind](../language/action.md#param-kinds) |
+| `range` | object or null | for an `integer` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values or `null` as the rule below gives, and `null` otherwise |
+| `options` | array of strings or null | for a `choice` kind, its options in the order the script declared them, and `null` otherwise |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
 | `default_value` | string or null | its default value, or `null` where it is secret |
 | `secret` | boolean | its effective [secret flag](../language/parameter.md#secret-parameters) |
 | `is_set` | boolean | whether it has a stored value |
 | `value` | string or null | its stored value, or `null` where it is unset, secret or withheld |
+
+In `range`, `min` MUST be `null` where the range starts at the smallest signed 64-bit integer, and `max` MUST be `null` where it ends at the largest, whether that end is inclusive or exclusive.
+
+> [!NOTE]
+> Many JSON clients hold numbers as double-precision floats, which represent integers exactly only up to 2^53 in magnitude, so a bound beyond that may be read imprecisely.
 
 When a parameter's effective secret flag is true, its `value` and `default_value` MUST be `null` whether or not either is set.
 A parameter's `value` MUST also be `null` where it contains a [sensitive value](../runtime/secrets.md#sensitive-value) of the app, matched as [matching](../runtime/secrets.md#matching) specifies.
@@ -330,7 +337,7 @@ Each entry of `actions` has these members.
 | `name` | string | the action's name |
 | `description` | string or null | its description |
 | `kind` | string | `action` or `shell` |
-| `params` | object | for each parameter its schema declares, `{ "kind", "required", "description", "default_value", "secret" }` as in `params` above |
+| `params` | object | for each parameter its schema declares, `{ "kind", "range", "options", "required", "description", "default_value", "secret" }` as in `params` above |
 | `schedules` | array | one `{ "cronexpr", "last_fired_at", "next_fire_at" }` for each [schedule](../language/action.md#scheduled-actions) attached to the action |
 
 Shells have no schedules.

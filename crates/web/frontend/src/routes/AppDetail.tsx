@@ -61,6 +61,7 @@ import { Markdown } from "../components/Markdown";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { PlanParamDialog } from "../components/PlanParamDialog";
+import { KindInput, hasKindInput } from "../components/KindInput";
 import { ParamFields } from "../components/ParamFields";
 import { useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
@@ -74,7 +75,7 @@ import {
   logsUrlForTarget,
   parseFaultTargets,
 } from "../lib/faultTargets";
-import { generateRandomHex, initialParamValues, paramFieldType, paramsBlocker, type ParamEntries } from "../lib/params";
+import { generateRandomHex, initialParamValues, integerProblem, paramFieldType, paramsBlocker, type ParamEntries } from "../lib/params";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import {
   appPriorityColor,
@@ -1114,10 +1115,51 @@ function ParamsSection({
   const save = () => {
     if (!editing) return;
     const p = params.find((q) => q.name === editing);
-    if (p && blankSecret(p)) return;
+    if (p && unstageable(p)) return;
     stage(editing, draft);
     setEditing(null);
   };
+
+  // A kind with an input of its own takes no empty value: unsetting is its
+  // own action.
+  const unstageable = (p: AppParam) =>
+    blankSecret(p) ||
+    (hasKindInput(p.kind) &&
+      (draft === "" || (p.kind === "integer" && integerProblem(draft, p.range) !== null)));
+
+  const editActions = (p: AppParam) => (
+    <>
+      <Tooltip title="Plan this change">
+        <span>
+          <IconButton
+            size="small"
+            aria-label="Plan this change"
+            disabled={unstageable(p)}
+            onClick={() => setPlanning({ ...staged, [p.name]: draft })}
+          >
+            <ArticleIcon fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title="Stage this change">
+        <span>
+          <IconButton
+            size="small"
+            aria-label="Stage this change"
+            onClick={save}
+            disabled={loading || unstageable(p)}
+          >
+            <CheckIcon fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title="Cancel">
+        <IconButton size="small" onClick={cancel}>
+          <ClearIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    </>
+  );
 
   const unset = (paramName: string) => {
     stage(paramName, null);
@@ -1313,55 +1355,67 @@ function ParamsSection({
                     <Chip label={p.kind} size="small" variant="outlined" />
                   </TableCell>
                   <TableCell colSpan={2}>
-                    <TextField
-                      size="small"
-                      fullWidth
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && p.kind !== "multiline")
-                          save();
-                        if (e.key === "Escape") cancel();
-                      }}
-                      autoFocus
-                      multiline={p.kind === "multiline"}
-                      minRows={p.kind === "multiline" ? 3 : undefined}
-                      type={
-                        p.kind === "multiline"
-                          ? undefined
-                          : showPassword
-                            ? "text"
-                            : paramFieldType(p.kind, p.secret)
-                      }
-                      error={
-                        p.kind === "password" &&
-                        draft.length > 0 &&
-                        !isStrongPassword(draft)
-                      }
-                      helperText={
-                        p.kind === "password" && draft.length > 0
-                          ? isStrongPassword(draft)
-                            ? (p.description ?? undefined)
-                            : "Password is too weak"
-                          : p.kind === "weak-password" && draft.length > 0
-                            ? `Strength: ${passwordScore(draft)}/4${p.description ? ` — ${p.description}` : ""}`
-                            : (p.description ?? undefined)
-                      }
-                      slotProps={{
-                        input: {
-                          endAdornment: (
-                            <InputAdornment position="end">
-                              {p.kind === "random" && (
-                                <Tooltip title="Generate (32 bytes, hex)">
-                                  <IconButton
-                                    size="small"
-                                    onClick={() =>
-                                      setDraft(generateRandomHex())
-                                    }
-                                  >
-                                    <CasinoIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
+                    {hasKindInput(p.kind) ? (
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                        <KindInput
+                          name={p.name}
+                          def={{ ...p, required: true }}
+                          value={draft}
+                          onChange={setDraft}
+                          autoFocus
+                        />
+                        {editActions(p)}
+                      </Stack>
+                    ) : (
+                      <TextField
+                        size="small"
+                        fullWidth
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && p.kind !== "multiline")
+                            save();
+                          if (e.key === "Escape") cancel();
+                        }}
+                        autoFocus
+                        multiline={p.kind === "multiline"}
+                        minRows={p.kind === "multiline" ? 3 : undefined}
+                        type={
+                          p.kind === "multiline"
+                            ? undefined
+                            : showPassword
+                              ? "text"
+                              : paramFieldType(p.kind, p.secret)
+                        }
+                        error={
+                          p.kind === "password" &&
+                          draft.length > 0 &&
+                          !isStrongPassword(draft)
+                        }
+                        helperText={
+                          p.kind === "password" && draft.length > 0
+                            ? isStrongPassword(draft)
+                              ? (p.description ?? undefined)
+                              : "Password is too weak"
+                            : p.kind === "weak-password" && draft.length > 0
+                              ? `Strength: ${passwordScore(draft)}/4${p.description ? ` — ${p.description}` : ""}`
+                              : (p.description ?? undefined)
+                        }
+                        slotProps={{
+                          input: {
+                            endAdornment: (
+                              <InputAdornment position="end">
+                                {p.kind === "random" && (
+                                  <Tooltip title="Generate (32 bytes, hex)">
+                                    <IconButton
+                                      size="small"
+                                      onClick={() =>
+                                        setDraft(generateRandomHex())
+                                      }
+                                    >
+                                      <CasinoIcon fontSize="small" />
+                                    </IconButton>
+                                  </Tooltip>
                               )}
                               {(p.secret ||
                                 p.kind === "password" ||
@@ -1380,35 +1434,7 @@ function ParamsSection({
                                   </IconButton>
                                 </Tooltip>
                               )}
-                              <Tooltip title="Plan this change">
-                                <IconButton
-                                  size="small"
-                                  aria-label="Plan this change"
-                                  disabled={blankSecret(p)}
-                                  onClick={() =>
-                                    setPlanning({ ...staged, [p.name]: draft })
-                                  }
-                                >
-                                  <ArticleIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                              <Tooltip title="Stage this change">
-                                <span>
-                                  <IconButton
-                                    size="small"
-                                    aria-label="Stage this change"
-                                    onClick={save}
-                                    disabled={loading || blankSecret(p)}
-                                  >
-                                    <CheckIcon fontSize="small" />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                              <Tooltip title="Cancel">
-                                <IconButton size="small" onClick={cancel}>
-                                  <ClearIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
+                              {editActions(p)}
                             </InputAdornment>
                           ),
                         },
@@ -1416,6 +1442,7 @@ function ParamsSection({
                         htmlInput: { style: { fontFamily: "monospace" } },
                       }}
                     />
+                    )}
                   </TableCell>
                 </TableRow>
               ) : (
