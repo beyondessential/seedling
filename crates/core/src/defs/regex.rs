@@ -2,7 +2,7 @@
 //! budget their compiling counts toward.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fmt,
     sync::{Arc, LazyLock, Mutex},
 };
@@ -30,8 +30,8 @@ use crate::{
     runtime::seeds,
 };
 
-/// The most bytes of compiled patterns the cache holds before it starts
-/// again empty.
+/// The most bytes of compiled patterns the cache holds, evicting the oldest
+/// to make room for a new one.
 const CACHE_CAPACITY: usize = 64 << 20;
 
 /// The DFA size the `regex` crate allows by default, which the engine builds
@@ -134,7 +134,31 @@ static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Mutex::default);
 #[derive(Default)]
 struct Cache {
     patterns: HashMap<String, Arc<Compiled>>,
+    /// The cached patterns, oldest first.
+    order: VecDeque<String>,
     size: usize,
+}
+
+impl Cache {
+    /// Hold `compiled`, evicting the oldest patterns until it fits. Another
+    /// evaluation may have cached the same pattern meanwhile, which is kept.
+    fn insert(&mut self, compiled: &Arc<Compiled>) {
+        if self.patterns.contains_key(&compiled.pattern) {
+            return;
+        }
+        while self.size + compiled.size > CACHE_CAPACITY {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(evicted) = self.patterns.remove(&oldest) {
+                self.size -= evicted.size;
+            }
+        }
+        self.size += compiled.size;
+        self.order.push_back(compiled.pattern.clone());
+        self.patterns
+            .insert(compiled.pattern.clone(), Arc::clone(compiled));
+    }
 }
 
 // spec: REX#compiling-a-pattern
@@ -153,14 +177,10 @@ pub fn compile(pattern: &str, budget: &mut Budget) -> Result<Regex, String> {
         Some(compiled) => compiled,
         None => {
             let compiled = Arc::new(build(pattern, budget)?);
-            let mut cache = CACHE.lock().expect("the regex cache is never poisoned");
-            if cache.size + compiled.size > CACHE_CAPACITY {
-                *cache = Cache::default();
-            }
-            cache.size += compiled.size;
-            cache
-                .patterns
-                .insert(pattern.to_owned(), Arc::clone(&compiled));
+            CACHE
+                .lock()
+                .expect("the regex cache is never poisoned")
+                .insert(&compiled);
             compiled
         }
     };
@@ -558,5 +578,44 @@ impl Regex {
                 .filter(|&i| i < info.group_len(PatternID::ZERO));
         }
         info.to_index(PatternID::ZERO, name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compiled(pattern: &str, size: usize) -> Arc<Compiled> {
+        Arc::new(Compiled {
+            pattern: pattern.to_owned(),
+            regex: meta::Regex::new(pattern).expect("a valid pattern"),
+            size,
+        })
+    }
+
+    #[test]
+    fn the_cache_evicts_the_oldest_patterns_to_make_room() {
+        let mut cache = Cache::default();
+        let third = CACHE_CAPACITY / 3;
+        cache.insert(&compiled("a", third));
+        cache.insert(&compiled("b", third));
+        cache.insert(&compiled("c", third));
+        cache.insert(&compiled("d", third));
+        assert!(!cache.patterns.contains_key("a"));
+        assert!(
+            ["b", "c", "d"]
+                .iter()
+                .all(|p| cache.patterns.contains_key(*p))
+        );
+        assert_eq!(cache.size, 3 * third);
+    }
+
+    #[test]
+    fn caching_a_pattern_twice_counts_it_once() {
+        let mut cache = Cache::default();
+        cache.insert(&compiled("a", 100));
+        cache.insert(&compiled("a", 100));
+        assert_eq!(cache.size, 100);
+        assert_eq!(cache.order.len(), 1);
     }
 }
