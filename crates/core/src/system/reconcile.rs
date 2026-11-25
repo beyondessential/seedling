@@ -5060,7 +5060,7 @@ mod tests {
         };
 
         let before = reads();
-        oi.block_on(gates::drive::drive(&oi.state));
+        oi.block_on(gates::drive::drive(&oi.state.engine));
         let driven = view();
         let after = reads();
         assert_eq!(
@@ -5074,7 +5074,7 @@ mod tests {
         );
         assert!(driven.waiting.is_empty(), "{:?}", driven.waiting);
 
-        oi.block_on(gates::drive::drive(&oi.state));
+        oi.block_on(gates::drive::drive(&oi.state.engine));
         hold();
         let before = reads();
         assert!(

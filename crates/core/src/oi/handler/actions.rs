@@ -213,7 +213,7 @@ pub(crate) fn invoke_action(
     // the phase under its own lock and refuses an app being torn down, so the
     // decision is made where every admission passes rather than here.
     let admission = admit_and_spawn(
-        state,
+        &state.engine,
         app_name,
         target,
         action_params,

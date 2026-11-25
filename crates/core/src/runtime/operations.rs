@@ -1,20 +1,25 @@
 //! Running a lifecycle operation: an action's closure or a gate's body, from
 //! its dispatch through every replay to its end.
 
-use std::{borrow::Cow, collections::HashMap, path::Path, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use seedling_protocol::{
-    events::{OperationEventCtx, OperationTarget},
+    events::{EventSender, OperationEventCtx, OperationTarget},
     names::AppName,
 };
 use tokio::sync::Notify;
 
 use crate::{
     defs::{app::App, volume::OperationVolumeBinding},
-    oi::state::OiState,
     runtime::{
-        InstanceRegistry,
+        InstanceRegistry, Scheduler,
+        apps::AppRegistry,
         barrier::{
             CancelToken, OperationId,
             oracle::DbWorldOracle,
@@ -26,13 +31,38 @@ use crate::{
         desired::OperationProgress,
         dynamic_cleanup::{cleanup_dynamic_resources, dynamic_poll_interval},
         faults,
+        gates::GateRuntime,
         history::{CurrentOperation, clear_current_operation, save_current_operation},
         registry::DbInstanceRegistry,
+        secrets::Cipher,
     },
+    system::{ContainerRuntime, System},
 };
 
 pub(crate) mod adapters;
 pub mod admission;
+
+/// What the operation engine and the gate runtime run with: the daemon's
+/// shared handles to apps, the scheduler, the database and the system.
+pub struct Engine {
+    pub registry: Arc<RwLock<AppRegistry>>,
+    pub db: DbHandle,
+    /// Where the database is, for an operation's blocking task to open its
+    /// own connection.
+    pub db_path: PathBuf,
+    pub scheduler: Arc<Mutex<Scheduler>>,
+    pub tick_notify: Arc<Notify>,
+    pub container_runtime: Arc<dyn ContainerRuntime>,
+    pub driver: Arc<System>,
+    pub event_tx: EventSender,
+    pub script_limits: crate::ScriptLimits,
+    // spec: SEC#secret-key
+    pub cipher: Arc<Cipher>,
+    /// What the runtime holds in memory about its gates' checks, shared with
+    /// the reconciler.
+    // spec: GRUN#checks
+    pub gate_runtime: Arc<GateRuntime>,
+}
 
 fn open_operation_dbs(db_path: &Path, app_name: &AppName) -> Option<DbHandle> {
     match DbHandle::open(db_path) {
@@ -75,7 +105,7 @@ pub(crate) struct BoundParams {
 /// not one, or a record that cannot be read. Running it with the key missing
 /// would have it act on a volume nobody chose.
 pub(crate) fn bind_volume_params(
-    state: &OiState,
+    state: &Engine,
     schema: &std::collections::BTreeMap<
         seedling_protocol::names::ParamName,
         crate::defs::param_def::ParamDef,
@@ -591,7 +621,7 @@ fn now_secs() -> u64 {
     reason = "internal helper grouping all operation state"
 )]
 pub fn spawn_accepted_operation(
-    state: Arc<OiState>,
+    state: Arc<Engine>,
     app_name: AppName,
     target: OperationTarget,
     operation_id: OperationId,
@@ -780,7 +810,7 @@ pub fn spawn_accepted_operation(
 /// The registry is read before the scheduler is locked: the scheduler lock is
 /// never held while waiting on the registry.
 // spec: OPS#initiating-events
-fn complete_and_dequeue(state: &OiState) -> Option<crate::runtime::scheduler::QueuedOperation> {
+fn complete_and_dequeue(state: &Engine) -> Option<crate::runtime::scheduler::QueuedOperation> {
     let registry = state.registry.read();
     state
         .scheduler

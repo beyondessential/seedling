@@ -650,7 +650,7 @@ pub(super) async fn run_app_shell(
         params: validated_params,
         bindings: operation_volume_bindings,
     } = match crate::runtime::operations::bind_volume_params(
-        state,
+        &state.engine,
         schema,
         validated_params,
         &operation_id.0,

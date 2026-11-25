@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use seedling_protocol::names::AppName;
 
-use crate::oi::state::OiState;
+use super::Engine;
 
 // spec: RT#signal-delivery
 /// Adapter from the system actuator's async `signal_container` to the
@@ -33,7 +33,7 @@ impl crate::runtime::barrier::ContainerSignaler for OperationSignaler {
 }
 
 pub(crate) fn make_container_signaler(
-    state: &OiState,
+    state: &Engine,
 ) -> Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>> {
     Some(Arc::new(OperationSignaler {
         container: Arc::clone(&state.driver.container),
@@ -154,7 +154,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
 }
 
 pub(crate) fn make_volume_writer(
-    state: &OiState,
+    state: &Engine,
 ) -> Option<Arc<dyn crate::runtime::barrier::VolumeWriter>> {
     Some(Arc::new(OperationVolumeWriter {
         driver: Arc::clone(&state.driver),
@@ -219,7 +219,7 @@ impl crate::runtime::barrier::Executor for OperationExecutor {
     }
 }
 
-pub(crate) fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Executor>> {
+pub(crate) fn make_executor(state: &Engine) -> Option<Arc<dyn crate::runtime::barrier::Executor>> {
     Some(Arc::new(OperationExecutor {
         container: Arc::clone(&state.driver.container),
     }))

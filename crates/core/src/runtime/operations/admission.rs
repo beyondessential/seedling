@@ -4,11 +4,8 @@ use std::sync::Arc;
 
 use seedling_protocol::{events::OperationTarget, names::AppName};
 
-use super::{OperationParams, spawn_accepted_operation};
-use crate::{
-    oi::state::OiState,
-    runtime::{AppPhase, barrier::OperationId},
-};
+use super::{Engine, OperationParams, spawn_accepted_operation};
+use crate::runtime::{AppPhase, barrier::OperationId};
 
 /// What came of asking for a lifecycle operation.
 pub(crate) enum Admission {
@@ -33,7 +30,7 @@ pub(crate) enum Admission {
     reason = "the request is what the scheduler needs to admit it"
 )]
 pub(crate) fn admit_and_spawn(
-    state: &Arc<OiState>,
+    state: &Arc<Engine>,
     app: &AppName,
     target: OperationTarget,
     params: crate::runtime::param_map::ParamMap,
@@ -98,7 +95,7 @@ pub(crate) fn admit_and_spawn(
 /// persisted leaves no record behind.
 // spec: OPS#concurrency
 pub fn persist_queued(
-    state: &OiState,
+    state: &Engine,
     operation_id: &OperationId,
 ) -> Result<(), seedling_protocol::error::OiError> {
     let queued = state.scheduler.lock().queued(operation_id).cloned();
@@ -130,10 +127,7 @@ pub fn persist_queued(
 /// A request whose app is no longer registered is discarded. With nothing in
 /// progress the first restored request starts, and the rest queue behind it.
 // spec: OPS#concurrency
-pub fn restore_queue(
-    state: &Arc<OiState>,
-    queued: Vec<crate::runtime::scheduler::QueuedOperation>,
-) {
+pub fn restore_queue(state: &Arc<Engine>, queued: Vec<crate::runtime::scheduler::QueuedOperation>) {
     use crate::runtime::scheduler::ScheduleResult;
     for op in queued {
         // spec: OPS#initiating-events
@@ -193,7 +187,7 @@ pub fn restore_queue(
 // spec: SCHED#fire-times
 // spec: OPS#concurrency
 pub fn persist_queued_fire(
-    state: &OiState,
+    state: &Engine,
     fire: &crate::runtime::schedules::FiredSchedule,
     now: jiff::Timestamp,
 ) {

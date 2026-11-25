@@ -68,6 +68,9 @@ pub struct OiState {
     /// the reconciler.
     // spec: GRUN#checks
     pub gate_runtime: Arc<crate::runtime::gates::GateRuntime>,
+    /// What operations and gates run with. The handles it shares with the
+    /// fields above are the same ones, taken from it when the state is built.
+    pub engine: Arc<crate::runtime::operations::Engine>,
 }
 
 /// The daemon's state as the source of the facts a TLS chain depends on.

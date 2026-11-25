@@ -28,7 +28,6 @@ use crate::{
         gate::GateDef,
         resource::{Resource, ResourceId, ResourceKind},
     },
-    oi::state::OiState,
     runtime::{
         apps::CheckId,
         autonomous_ops,
@@ -46,7 +45,7 @@ use crate::{
         identity::ResourceInstance,
         lifecycle::LifecycleState,
         operations::{
-            BoundParams, GateInput, OperationEnd, Persisted, adapters, app_at_generation,
+            BoundParams, Engine, GateInput, OperationEnd, Persisted, adapters, app_at_generation,
             clear_superseded_operation_faults, language_for, run_operation_loop,
         },
         probe::probe_gate_body,
@@ -130,7 +129,7 @@ impl From<String> for Stopped {
 // spec: GRUN#outcome
 // spec: GRUN#retries
 // spec: GRUN#pauses
-pub async fn run_gate(state: &Arc<OiState>, input: GateRunInput) {
+pub async fn run_gate(state: &Arc<Engine>, input: GateRunInput) {
     // A run that panics ends its own task rather than the dispatcher's, and
     // ends as a failed run, so that its operation is still completed and the
     // gate's next run is spaced as after any other failure.
@@ -164,7 +163,7 @@ pub async fn run_gate(state: &Arc<OiState>, input: GateRunInput) {
     }
 }
 
-async fn execute_and_finish(state: &Arc<OiState>, input: GateRunInput) {
+async fn execute_and_finish(state: &Arc<Engine>, input: GateRunInput) {
     let GateRunInput {
         app,
         gate,
@@ -192,7 +191,7 @@ async fn execute_and_finish(state: &Arc<OiState>, input: GateRunInput) {
 }
 
 struct Run<'a> {
-    state: &'a Arc<OiState>,
+    state: &'a Arc<Engine>,
     app_name: AppName,
     gate: GateName,
     op_ctx: OperationEventCtx,
@@ -869,7 +868,7 @@ pub enum CheckOutcome {
 // spec: GRUN#checks
 // spec: RCN#gate-holds
 pub async fn run_check(
-    state: &Arc<OiState>,
+    state: &Arc<Engine>,
     app: &AppName,
     gate: &GateName,
     job: Resource,
@@ -948,7 +947,7 @@ pub async fn run_check(
 }
 
 async fn wait_for_check(
-    state: &Arc<OiState>,
+    state: &Arc<Engine>,
     instance: &ResourceInstance,
     deadline: Option<Duration>,
     cancel: Option<&Arc<CancelToken>>,

@@ -796,32 +796,46 @@ async fn main() {
         }
     }
 
-    let oi_state = Arc::new(OiState {
+    let engine = Arc::new(seedling_core::runtime::operations::Engine {
         registry: Arc::clone(&registry),
+        db: db.clone(),
+        db_path: db_path.clone(),
+        scheduler: Arc::clone(&scheduler),
+        tick_notify: Arc::clone(&tick_notify),
+        container_runtime: Arc::clone(&driver.container),
+        driver: Arc::clone(&driver),
+        event_tx: event_tx.clone(),
+        script_limits,
+        cipher,
+        gate_runtime,
+    });
+    let oi_state = Arc::new(OiState {
+        registry: Arc::clone(&engine.registry),
         spki_fingerprint: std::sync::OnceLock::new(),
         start_time: Instant::now(),
         started_at: jiff::Timestamp::now(),
-        db: db.clone(),
-        scheduler: Arc::clone(&scheduler),
-        tick_notify: Arc::clone(&tick_notify),
-        db_path: db_path.clone(),
+        db: engine.db.clone(),
+        scheduler: Arc::clone(&engine.scheduler),
+        tick_notify: Arc::clone(&engine.tick_notify),
+        db_path: engine.db_path.clone(),
         trusted_keys: seedling_core::oi::auth::new_trusted_keys(),
         shells,
         forwards: seedling_core::oi::forwards::ForwardRegistry::new(),
         canopy: canopy_state,
-        container_runtime: Arc::clone(&driver.container),
-        driver: Arc::clone(&driver),
+        container_runtime: Arc::clone(&engine.container_runtime),
+        driver: Arc::clone(&engine.driver),
         node_prefix,
-        event_tx: event_tx.clone(),
-        script_limits,
+        event_tx: engine.event_tx.clone(),
+        script_limits: engine.script_limits.clone(),
         dns_servers,
-        cipher,
+        cipher: Arc::clone(&engine.cipher),
         tls_coordinator: Arc::clone(&tls_coordinator),
         caddy_data_path: tokio::sync::OnceCell::new(),
         tailscale_provider: Some(Arc::clone(&tailscale_provider)),
         site_resolver: Some(Arc::clone(&site_resolver)),
         definition_registry: Arc::new(seedling_core::runtime::definition::fetch::OciRegistry::new()),
-        gate_runtime,
+        gate_runtime: Arc::clone(&engine.gate_runtime),
+        engine,
     });
     // The coordinator and the cert endpoint were built before the state they
     // read the facts of a strategy chain from, and have decided nothing until
@@ -1021,7 +1035,7 @@ async fn main() {
                             // A fire queued behind another app's operation is
                             // persisted like any queued request.
                             seedling_core::runtime::operations::admission::persist_queued_fire(
-                                &oi_state_for_sched,
+                                &oi_state_for_sched.engine,
                                 &fire,
                                 now,
                             );
@@ -1029,7 +1043,7 @@ async fn main() {
                         }
                         if let Some(op_id) = fire.operation_id {
                             seedling_core::runtime::operations::spawn_accepted_operation(
-                                Arc::clone(&oi_state_for_sched),
+                                Arc::clone(&oi_state_for_sched.engine),
                                 fire.app,
                                 seedling_protocol::events::OperationTarget::Action(fire.action),
                                 op_id,
@@ -1048,7 +1062,7 @@ async fn main() {
                 // Gates are brought up to date and their runs and checks
                 // initiated before the iteration acts on the host, so that
                 // what a gate holds is what the iteration reads.
-                seedling_core::runtime::gates::drive::drive(&oi_state_for_sched).await;
+                seedling_core::runtime::gates::drive::drive(&oi_state_for_sched.engine).await;
 
                 let tick = AssertUnwindSafe(reconciler.tick()).catch_unwind().await;
                 if reconciler.take_host_facts_changed() {
@@ -1373,7 +1387,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
     }
 
     // spec: OPS#concurrency
-    seedling_core::runtime::operations::admission::restore_queue(oi_state, state.queued);
+    seedling_core::runtime::operations::admission::restore_queue(&oi_state.engine, state.queued);
 }
 
 // spec: SUSP#abandoned-replay
@@ -1539,7 +1553,7 @@ fn start_replay(
     );
 
     seedling_core::runtime::operations::spawn_accepted_operation(
-        state,
+        Arc::clone(&state.engine),
         app_name,
         target,
         op.operation_id,

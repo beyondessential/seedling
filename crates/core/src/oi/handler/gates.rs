@@ -263,7 +263,7 @@ pub(crate) fn run_gate(
     }
 
     let admission = admit_and_spawn(
-        state,
+        &state.engine,
         app_name,
         OperationTarget::Gate(gate_name.clone()),
         crate::runtime::param_map::ParamMap::default(),

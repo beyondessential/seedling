@@ -1047,7 +1047,8 @@ fn the_operation_writer_resolves_external_volumes_through_the_host_mappings() {
     let oi = TestOi::new();
     register_app(&oi, "consumer", r#"app.external_volume("backing");"#);
     make_site_volume(&oi, "store");
-    let writer = crate::runtime::operations::adapters::make_volume_writer(&oi.state).unwrap();
+    let writer =
+        crate::runtime::operations::adapters::make_volume_writer(&oi.state.engine).unwrap();
 
     assert_eq!(
         writer.resolve_external("consumer", "backing").unwrap(),
@@ -1093,7 +1094,8 @@ fn the_operation_writer_creates_and_seeds_a_missing_named_volume_before_writing(
     use crate::runtime::{barrier::VolumeWriteTarget, identity::VolumeName};
 
     let oi = TestOi::new();
-    let writer = crate::runtime::operations::adapters::make_volume_writer(&oi.state).unwrap();
+    let writer =
+        crate::runtime::operations::adapters::make_volume_writer(&oi.state.engine).unwrap();
     let target = VolumeWriteTarget::NamedVolume {
         name: "cfg".to_owned(),
         tmpfs: false,
@@ -1128,7 +1130,8 @@ fn the_operation_writer_leaves_existing_named_volume_storage_unseeded() {
     let name = VolumeName::for_app("consumer", "cfg");
     oi.block_on(oi.state.driver.volume_store.create(&name))
         .expect("storage is created");
-    let writer = crate::runtime::operations::adapters::make_volume_writer(&oi.state).unwrap();
+    let writer =
+        crate::runtime::operations::adapters::make_volume_writer(&oi.state.engine).unwrap();
     let target = VolumeWriteTarget::NamedVolume {
         name: "cfg".to_owned(),
         tmpfs: false,
