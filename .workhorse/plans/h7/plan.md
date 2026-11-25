@@ -64,5 +64,5 @@ Adds the `url`, `url-origin` and `hostname` kinds and their `std::parse_*` helpe
 
 ## Docs and checks
 
-- [ ] `docs/bsl-scripting.md`: add the kinds to the `.kind(..)` list (line 171) and the parsers to the list at line 395; a subsection after the purl one on what `std::parse_url`, `std::parse_url_origin` and `std::parse_hostname` return, with an example and the advice to mark a URL carrying a password `secret(true)`
-- [ ] `cargo clippy --all-targets`, `cargo fmt`, `etc/ci/check-spec-style.sh`, `etc/ci/check-spec-citations.sh`, the frontend tests for `ParamFields`
+- [x] `docs/bsl-scripting.md`: add the kinds to the `.kind(..)` list (line 171) and the parsers to the list at line 395; a subsection after the purl one on what `std::parse_url`, `std::parse_url_origin` and `std::parse_hostname` return, with an example and the advice to mark a URL carrying a password `secret(true)`
+- [x] `cargo clippy --all-targets`, `cargo fmt`, `etc/ci/check-spec-style.sh`, `etc/ci/check-spec-citations.sh`, the frontend tests for `ParamFields`

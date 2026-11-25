@@ -168,7 +168,7 @@ let vol = app.volume("data")
 
 ```rhai
 let version = app.param("version")
-    .kind("text")           // text (one line) | multiline | email | password | weak-password | random | version | version-semver | purl
+    .kind("text")           // text (one line) | multiline | email | password | weak-password | random | version | version-semver | purl | url | url-origin | hostname
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -392,7 +392,7 @@ Calling a helper that does not exist throws, like any unknown function. Which he
 
 ### Parsing a kind
 
-Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl` and `std::parse_volume`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname` and `std::parse_volume`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
 
 ```rhai
 let contact = std::parse_email("ops@example.org");
@@ -402,7 +402,7 @@ contact.domain  // "example.org"
 app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
-`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_version` and `std::parse_version_semver` return a version, and `std::parse_purl` the components of a Package URL, both described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, and `std::parse_hostname` the hostname in its ASCII form, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
 
 ### Versions
 
@@ -451,6 +451,30 @@ app.param("dependency").kind("purl").validate(|v, all| {
 ```
 
 A parameter's value stays as the operator entered it, so a workload given `dependency.value()` receives their text, not a normalised form.
+
+### URLs and hostnames
+
+The `url` kind takes a URL of any scheme, parsed as a browser parses it under the [URL Standard](https://url.spec.whatwg.org/): `https://example.org/app`, `postgres://app:secret@db.internal:5432/app`, `file:///etc/hosts` and `mailto:ops@example.org` are all accepted. `std::parse_url` returns a map of its components. `scheme` and `path` are always present; `host`, `port`, `query`, `fragment`, `username` and `password` only when the URL has them, an empty query or fragment counting as none. `port` is an integer, filled from the scheme's default for `http`, `https`, `ws`, `wss` and `ftp` when the URL gives none; port `0` is refused. `host` is in lower case, with an internationalised name in its `xn--` form, whatever the scheme, so `postgres://DB.Example.org` and `https://db.example.org` name the same host. `username` and `password` are percent-decoded; `path`, `query` and `fragment` are left as written, so a script that needs the query's pairs splits them itself:
+
+```rhai
+let db = std::parse_url("postgres://app:p%40ss@DB.Internal:5432/app?sslmode=require");
+// #{ scheme: "postgres", host: "db.internal", port: 5432, path: "/app",
+//    query: "sslmode=require", username: "app", password: "p@ss" }
+
+app.param("database").kind("url").secret(true).validate(|v, all| {
+    if std::parse_url(v).scheme != "postgres" { throw "a postgres:// URL is needed"; }
+});
+```
+
+A URL can carry a password, and a `url` parameter is not secret unless the script says so, so mark one that might with `secret(true)`.
+
+The `url-origin` kind takes an `http` or `https` URL naming a host and optionally a port, and nothing else: no userinfo, query or fragment, and no path but a single `/`. `std::parse_url_origin` returns a map of `scheme`, `host` and `port`. The `hostname` kind takes a name an ingress can be declared on, and `std::parse_hostname` returns it in lower case, an internationalised name in its `xn--` form. Both refuse an IP address, and any name a URL would read as one, such as `app.0x1f`, so the host of a URL origin and a hostname can each be given to `service.ingress` as they are:
+
+```rhai
+let public = std::parse_url_origin("https://Bücher.example:8443/");
+// #{ scheme: "https", host: "xn--bcher-kva.example", port: 8443 }
+std::parse_hostname("App.Example.org")    // "app.example.org"
+```
 
 ### Derived random values
 
