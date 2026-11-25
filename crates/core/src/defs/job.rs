@@ -70,7 +70,7 @@ impl CustomType for Job {
             "deadline",
             |this: &mut Self, deadline: Dynamic| -> Result<Job, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let secs = take_whole_secs("deadline", deadline, 1..=Duration::MAX_SECS)?;
+                let secs = take_whole_secs("deadline", deadline, Duration::from_secs(1), None)?;
                 this.def.lock().deadline = Some(secs);
                 Ok(this.clone())
             },

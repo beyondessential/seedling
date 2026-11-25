@@ -36,7 +36,7 @@ use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 /// arrived computed would otherwise fail the barrier on its next pass.
 // spec: RT#barriers
 fn take_deadline(deadline: Dynamic) -> Result<u64, Box<EvalAltResult>> {
-    take_whole_secs("deadline", deadline, 1..=Duration::MAX_SECS)
+    take_whole_secs("deadline", deadline, Duration::from_secs(1), None)
 }
 
 pub const DEFAULT_SCHEDULED_DEADLINE_SECS: u64 = 30;

@@ -461,7 +461,7 @@ impl CustomType for Gate {
                         .get("interval")
                         .cloned()
                         .map(|v| {
-                            take_whole_secs("interval", v, 1..=ScriptDuration::MAX_SECS)
+                            take_whole_secs("interval", v, ScriptDuration::from_secs(1), None)
                                 .map(Duration::from_secs)
                         })
                         .transpose()?;

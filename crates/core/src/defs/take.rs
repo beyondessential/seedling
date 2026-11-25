@@ -62,26 +62,28 @@ pub fn take_duration(what: &str, value: Dynamic) -> Result<Duration, Box<EvalAlt
 }
 
 /// Convert as [`take_duration`] does, then require a whole number of seconds
-/// within `range`, giving that number.
+/// no shorter than `min` and, where one is given, no longer than `max`, giving
+/// that number.
 // spec: DUR#duration-arguments
 pub fn take_whole_secs(
     what: &str,
     value: Dynamic,
-    range: RangeInclusive<u64>,
+    min: Duration,
+    max: Option<Duration>,
 ) -> Result<u64, Box<EvalAltResult>> {
     let duration = take_duration(what, value)?;
     let Some(secs) = duration.whole_secs() else {
         return Err(format!("`{what}` must be a whole number of seconds, got {duration}").into());
     };
-    if !range.contains(&secs) {
-        return Err(format!(
-            "`{what}` must be from {} to {}, got {duration}",
-            Duration::from_secs(*range.start()),
-            Duration::from_secs(*range.end())
-        )
-        .into());
+    match max {
+        Some(max) if duration < min || duration > max => {
+            Err(format!("`{what}` must be from {min} to {max}, got {duration}").into())
+        }
+        None if duration < min => {
+            Err(format!("`{what}` must be at least {min}, got {duration}").into())
+        }
+        _ => Ok(secs),
     }
-    Ok(secs)
 }
 
 /// Convert to a map, or throw naming `what` and the actual type.
@@ -268,17 +270,29 @@ mod tests {
     // spec: DUR#duration-arguments
     #[test]
     fn take_whole_secs_refuses_a_fraction_and_holds_to_its_range() {
+        let (one, ten) = (Duration::from_secs(1), Some(Duration::from_secs(600)));
         assert_eq!(
-            take_whole_secs("deadline", Dynamic::from("2m"), 1..=600).unwrap(),
+            take_whole_secs("deadline", Dynamic::from("2m"), one, ten).unwrap(),
             120
         );
-        let fraction = take_whole_secs("deadline", Dynamic::from("1500ms"), 1..=600).unwrap_err();
+        let fraction = take_whole_secs("deadline", Dynamic::from("1500ms"), one, ten).unwrap_err();
         assert!(
             fraction.to_string().contains("whole number of seconds"),
             "{fraction}"
         );
-        let short = take_whole_secs("deadline", Dynamic::from("0s"), 1..=600).unwrap_err();
+        let short = take_whole_secs("deadline", Dynamic::from("0s"), one, ten).unwrap_err();
         assert!(short.to_string().contains("from 1s to 10m"), "{short}");
+        let long = take_whole_secs("deadline", Dynamic::from("11m"), one, ten).unwrap_err();
+        assert!(long.to_string().contains("from 1s to 10m"), "{long}");
+        let open = take_whole_secs("deadline", Dynamic::from("0s"), one, None).unwrap_err();
+        assert!(
+            open.to_string().contains("must be at least 1s, got 0s"),
+            "{open}"
+        );
+        assert_eq!(
+            take_whole_secs("deadline", Dynamic::from("106751d"), one, None).unwrap(),
+            106_751 * 86_400
+        );
     }
 
     #[test]

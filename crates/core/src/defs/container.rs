@@ -225,7 +225,7 @@ fn take_check_secs(
     least: u64,
 ) -> Result<u64, Box<EvalAltResult>> {
     match map.remove(key) {
-        Some(value) => take_whole_secs(key, value, least..=Duration::MAX_SECS),
+        Some(value) => take_whole_secs(key, value, Duration::from_secs(least), None),
         None => Ok(default),
     }
 }
@@ -710,7 +710,12 @@ impl ContainerDef {
             "stop_timeout",
             move |this: &mut T, timeout: Dynamic| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let secs = take_whole_secs("stop_timeout", timeout, 1..=u64::from(u32::MAX))?;
+                let secs = take_whole_secs(
+                    "stop_timeout",
+                    timeout,
+                    Duration::from_secs(1),
+                    Some(Duration::from_secs(u64::from(u32::MAX))),
+                )?;
                 ext(this).lock().stop_timeout_secs =
                     Some(u32::try_from(secs).expect("take_whole_secs holds it to the u32 range"));
                 Ok(this.clone())
