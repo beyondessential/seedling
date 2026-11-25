@@ -200,6 +200,61 @@ Packing the same bundle twice with the same CLI MUST write the same bytes.
 > Writing the same bytes for the same bundle gives an unchanged definition the same digest when it is published again.
 > A host refuses a fetched bundle whose annotation differs from its declared requirement, so reporting the requirement lets it be carried to the push unchanged.
 
+## Definition checks
+
+`definitions check <source>` MUST check a definition without connecting to a server, using the evaluator of the Seedling version the CLI belongs to.
+The source MUST be a path to a file or a folder, read as [definition sources](#definition-sources) specifies for `apps create`.
+
+The CLI MUST check, in this order, and MUST stop at the first check that fails:
+
+1. that the CLI's own Seedling version satisfies the bundle's [Seedling version requirement](../language/bundle.md#seedling-version-requirement), before any other part of the metadata is read;
+2. that the bundle keeps the [bundle rules](definitions.md#bundle-rules);
+3. that the script [evaluates](../language/overview.md#evaluation) without a script error;
+4. that the [sample parameter values](#sample-parameter-values) pass [validation](params.md#validation).
+
+The CLI MUST evaluate the script as the server evaluates an app's definition on [update](apps.md#update), with the sample parameter values in place of the app's stored values and the [check's host constants](#check-host-constants) in place of the host's.
+It MUST evaluate within the [engine limits](../runtime/engine-limits.md) at the daemon's default settings.
+It MUST NOT run any gate, gate check or action closure.
+
+When a check fails, the CLI MUST print an error to standard error and exit with a non-zero status:
+
+- for the version requirement, naming the requirement and the CLI's version;
+- for a bundle rule, naming the offending path or field;
+- for a script error, naming the script file and the line within it, as [script formation](../language/bundle.md#script-formation) specifies;
+- for validation, naming each rejecting parameter and its reason.
+
+When every check passes, the CLI MUST exit with status zero.
+
+### Sample parameter values
+
+`definitions check` MUST accept `--set name=value`, which MAY be repeated.
+Each MUST set the parameter `name` to the string `value`, split at the first `=`.
+The CLI MUST evaluate the script with the parameters so set as its only stored parameter values, and MUST then validate them as [proposed values](params.md#proposed-values).
+
+The CLI MUST report an error and check nothing when an argument to `--set` has no `=`, or when the same parameter is set more than once.
+
+### Check host constants
+
+`definitions check` MUST evaluate the script with each [host constant](../language/constants.md#host-constants) at its default below, unless an option sets it.
+
+| constant | default |
+| --- | --- |
+| `AVAILABLE_THREADS` | the number of compute threads available to the CLI |
+| `AVAILABLE_MEMORY` | the amount of memory, in bytes, of the machine the CLI runs on |
+| `CPU_ARCHITECTURE` | the CPU architecture of the machine the CLI runs on |
+| `HOST_HAS_IPV4`, `HOST_HAS_IPV6`, `NAT64_ACTIVE`, `HAS_SNAPSHOTS` | `false` |
+| `NODE_NAME` | the empty string |
+| `TIMEZONE` | `UTC` |
+
+`definitions check` MUST accept `--const NAME=value`, which MAY be repeated, setting the host constant `NAME` to `value`.
+The CLI MUST read `value` as the constant's type: a decimal integer for an integer constant, `true` or `false` for a boolean constant, and the text as given for a string constant.
+
+The CLI MUST report an error and check nothing when `NAME` is not a host constant, when the same constant is set more than once, or when `value` is not of the constant's type or breaks the rules [host constants](../language/constants.md#host-constants) give for it.
+If the CLI cannot determine a default that no option sets, it MUST report an error naming the constant and check nothing.
+
+> [!NOTE]
+> A definition that branches on the host is checked for each kind of host it will run on by running the check once per kind, such as with `--const CPU_ARCHITECTURE=aarch64`.
+
 ## Registry tags
 
 `registries tags <repository>` MUST list a repository's tags as [repository tags](definitions.md#repository-tags) does.

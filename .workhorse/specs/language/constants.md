@@ -60,7 +60,7 @@ If the host's routes cannot be read, whether the host has IPv4 egress is undeter
 `HAS_SNAPSHOTS` MUST be `false` while whether the host's volume storage supports copy-on-write snapshots is undetermined.
 
 `NODE_NAME` has no defined format.
-It MAY be empty where the host's identity has no meaning, such as when a script is validated outside a running daemon.
+It MAY be empty where the host's identity has no meaning, such as in a [definition check](../interface/client.md#definition-checks).
 If the name of the host is undetermined, the runtime MUST fail the evaluation.
 
 `TIMEZONE` MUST NOT be empty.
