@@ -125,6 +125,37 @@ The CLI MUST report an error and send no request when the folder holds no files,
 When reading a folder, the CLI MUST leave out version-control metadata directories, such as `.git` and `.jj`, and anything a `.seedignore` file in the folder or one of its subfolders excludes, read as gitignore patterns.
 If a symlink or other non-regular file is not left out, the CLI MUST report an error naming it and send no request.
 
+### Include assembly
+
+When the folder's [metadata file](../language/bundle.md#metadata-file) has an `include` table, the CLI MUST assemble the bundle by placing at each key's bundle path the contents of the file at the key's source path.
+A source path is the table's value for the key, read relative to the folder with `/` as its separator and normalised lexically as a [bundle path](../language/bundle.md#bundle-paths) is.
+
+The include boundary is the directory a source path is confined to:
+
+- for a folder on disk, the nearest directory at or above the folder that holds a `.git` or `.jj` entry, or the folder itself where none does;
+- for a GitHub URL, the root of the repository at the resolved commit, from which the CLI MUST read each source at that same commit.
+
+The CLI MUST report an error naming the key and send no request when its source path:
+
+- is absolute or contains a null byte;
+- rises above the include boundary at any `..` segment during normalisation;
+- has a segment that names a version-control metadata directory, such as `.git` or `.jj`;
+- passes through or names a symlink, or names anything other than a regular file.
+
+Where the folder itself holds a file at a key's bundle path, once `.seedignore` exclusions are applied:
+
+- if the source path names a file, the CLI MUST report an error naming both paths and send no request unless the two files' contents are identical;
+- if the source path names nothing, the CLI MUST use the folder's file.
+
+The CLI MUST report an error naming the key and send no request when neither the source path nor the folder holds the file.
+An included file MUST be placed in the bundle whether or not a `.seedignore` pattern matches its bundle path.
+
+> [!NOTE]
+> Confining sources to the repository means a definition read from a GitHub URL and the same definition pushed from a clone of that repository assemble from the same files, and a badly written `include` cannot reach past the repository on either path.
+
+> [!NOTE]
+> Using the folder's own copy where the source is absent lets an [exported](#definition-export) bundle be pushed again as it stands, while a stale copy is caught whenever its source can be read.
+
 ## Parameter changes
 
 `apps params set <app> [name=value]... [--unset <name>]...` MUST send every change it is given in one [parameter change](params.md#parameter-changes) request.

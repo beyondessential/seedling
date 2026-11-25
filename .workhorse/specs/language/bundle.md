@@ -22,7 +22,7 @@ A bundle file that is not a script file.
 
 ### Included file
 
-A bundle file that a client copies into the bundle from outside the definition's folder when it assembles the bundle.
+A bundle file that a client copies into the bundle, when it assembles it, from a source path the metadata file names.
 
 ## Bundle paths
 
