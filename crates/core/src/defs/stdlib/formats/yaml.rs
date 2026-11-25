@@ -91,11 +91,15 @@ fn unprintable(c: char) -> bool {
 }
 
 // spec: FMT#yaml-documents
-pub(super) fn decode(text: &str) -> Result<Tree, Box<EvalAltResult>> {
+/// `max_bytes` bounds the bytes of the strings that aliases copy, 0 being no
+/// bound.
+pub(super) fn decode(text: &str, max_bytes: usize) -> Result<Tree, Box<EvalAltResult>> {
     Loader {
         events: Parser::new_from_str(text),
         anchors: HashMap::new(),
         copies: 0,
+        copied_bytes: 0,
+        max_bytes,
     }
     .stream()
 }
@@ -107,6 +111,8 @@ struct Anchored {
     values: usize,
     /// The levels of sequences and mappings within it, itself included.
     height: usize,
+    /// The bytes of the strings within it, map keys included.
+    bytes: usize,
 }
 
 /// A decoded node and what an anchor on it records.
@@ -114,6 +120,7 @@ struct Loaded {
     tree: Tree,
     values: usize,
     height: usize,
+    bytes: usize,
 }
 
 struct Loader<'i> {
@@ -121,6 +128,9 @@ struct Loader<'i> {
     anchors: HashMap<usize, Anchored>,
     /// The values aliases have copied so far.
     copies: usize,
+    /// The bytes of the strings aliases have copied so far.
+    copied_bytes: usize,
+    max_bytes: usize,
 }
 
 impl<'i> Loader<'i> {
@@ -165,11 +175,16 @@ impl<'i> Loader<'i> {
         let (loaded, anchor) = match event {
             Event::Scalar(value, style, anchor, tag) => {
                 let tree = scalar(&value, style, tag.as_deref(), span)?;
+                let bytes = match &tree {
+                    Tree::Str(s) => s.len(),
+                    _ => 0,
+                };
                 (
                     Loaded {
                         tree,
                         values: 1,
                         height: 0,
+                        bytes,
                     },
                     anchor,
                 )
@@ -178,7 +193,7 @@ impl<'i> Loader<'i> {
                 collection_tag(tag.as_deref(), "seq", span)?;
                 let levels = nested(levels, span)?;
                 let mut items = Vec::new();
-                let (mut values, mut height) = (1, 1);
+                let (mut values, mut height, mut bytes) = (1, 1, 0);
                 loop {
                     let (event, span) = self.next()?;
                     if matches!(event, Event::SequenceEnd) {
@@ -187,6 +202,7 @@ impl<'i> Loader<'i> {
                     let item = self.node(event, span, levels)?;
                     values += item.values;
                     height = height.max(item.height + 1);
+                    bytes += item.bytes;
                     items.push(item.tree);
                 }
                 let tree = Tree::Array(items);
@@ -195,6 +211,7 @@ impl<'i> Loader<'i> {
                         tree,
                         values,
                         height,
+                        bytes,
                     },
                     anchor,
                 )
@@ -204,7 +221,7 @@ impl<'i> Loader<'i> {
                 let levels = nested(levels, span)?;
                 let mut entries = Vec::new();
                 let mut key_spans = Vec::new();
-                let (mut values, mut height) = (1, 1);
+                let (mut values, mut height, mut bytes) = (1, 1, 0);
                 loop {
                     let (event, key_span) = self.next()?;
                     if matches!(event, Event::MappingEnd) {
@@ -219,6 +236,7 @@ impl<'i> Loader<'i> {
                     let value = self.node(event, span, levels)?;
                     values += key.values + value.values;
                     height = height.max(value.height + 1);
+                    bytes += key.bytes + value.bytes;
                     entries.push((key_text, value.tree));
                     key_spans.push(key_span);
                 }
@@ -236,6 +254,7 @@ impl<'i> Loader<'i> {
                         tree,
                         values,
                         height,
+                        bytes,
                     },
                     anchor,
                 )
@@ -252,6 +271,14 @@ impl<'i> Loader<'i> {
                         span,
                     ));
                 }
+                // spec: LIM#limits
+                self.copied_bytes += anchored.bytes;
+                if self.max_bytes != 0 && self.copied_bytes > self.max_bytes {
+                    return Err(failure(
+                        "aliases copying more text than the string length limit allows",
+                        span,
+                    ));
+                }
                 // spec: FMT#helpers
                 if levels + anchored.height > MAX_DEPTH {
                     return Err(depth(span));
@@ -260,6 +287,7 @@ impl<'i> Loader<'i> {
                     tree: anchored.tree.clone(),
                     values: anchored.values,
                     height: anchored.height,
+                    bytes: anchored.bytes,
                 };
                 return Ok(loaded);
             }
@@ -272,6 +300,7 @@ impl<'i> Loader<'i> {
                     tree: loaded.tree.clone(),
                     values: loaded.values,
                     height: loaded.height,
+                    bytes: loaded.bytes,
                 },
             );
         }

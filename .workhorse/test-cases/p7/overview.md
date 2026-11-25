@@ -32,7 +32,7 @@
 - [x] YAML holding no document or more than one throws (verifies spec: FMT#yaml-documents)
 - [x] YAML core tags apply; a custom tag or a mismatched tag throws (verifies spec: FMT#yaml-documents)
 - [x] A non-string YAML key throws (verifies spec: FMT#yaml-documents)
-- [x] YAML aliases copy their anchor; an alias bomb, an unknown alias and a self-referencing alias throw (verifies spec: FMT#yaml-documents)
+- [x] YAML aliases copy their anchor; an alias bomb, aliases copying more text than the string limit, an unknown alias and a self-referencing alias throw (verifies spec: FMT#yaml-documents)
 - [x] Decoders take a Blob, and refuse a non-bytes argument (verifies spec: FMT#helpers)
 - [x] Results beyond the engine's string, array and map limits throw (verifies spec: FMT#helpers)
 

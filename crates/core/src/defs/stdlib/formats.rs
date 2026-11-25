@@ -60,7 +60,7 @@ pub(super) fn register(module: &mut rhai::Module) {
         module,
         |ctx: NativeCallContext, text: Dynamic| -> HelperResult {
             let text = take_byte_arg("text", text)?;
-            let tree = yaml::decode(document(&text)?)?;
+            let tree = yaml::decode(document(&text)?, max_string(&ctx))?;
             decoded(&ctx, &text, tree)
         },
     );

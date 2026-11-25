@@ -602,6 +602,29 @@ fn yaml_aliases_copy_their_anchor_within_a_budget() {
     let err = throws(&format!("std::decode_yaml({})", lit(&bomb)));
     assert!(err.contains("more than 100000 values"), "{err}");
     throws(&format!("std::decode_yaml({})", lit("a: *x")));
+
+    // A long string copied often enough holds more text than one string may.
+    let mut engine = engine();
+    engine.set_max_string_size(10_000);
+    let doc = |aliases: usize| {
+        let long = "x".repeat(2_000);
+        let key = "k".repeat(100);
+        format!(
+            "a: &x {{{key}: {long}}}\nb: [{}]\n",
+            vec!["*x"; aliases].join(", ")
+        )
+    };
+    let _ = engine
+        .eval::<Dynamic>(&format!("std::decode_yaml({})", lit(&doc(4))))
+        .expect("8400 bytes copied");
+    let err = engine
+        .eval::<Dynamic>(&format!("std::decode_yaml({})", lit(&doc(5))))
+        .expect_err("10500 bytes copied")
+        .to_string();
+    assert!(
+        err.contains("more text than the string length limit"),
+        "{err}"
+    );
     throws(&format!("std::decode_yaml({})", lit("a: &x [*x]")));
 }
 

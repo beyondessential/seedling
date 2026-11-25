@@ -183,10 +183,11 @@ A decoder MUST raise a script error at a map that holds the same key twice, comp
 It MUST raise a script error when `text` holds no document or more than one.
 It MUST raise a script error at a tag the core schema does not define, and at a tagged node that is not of its tag's type.
 It MUST raise a script error at a mapping key that does not decode to a string.
-It MUST resolve each alias to a copy of the node its anchor names, and MUST raise a script error when the values that aliases copy number more than 100 000 in total.
+It MUST resolve each alias to a copy of the node its anchor names.
+It MUST raise a script error when the values that aliases copy number more than 100 000 in total, or when the strings they copy, map keys included, hold more bytes in total than the [string length limit](../runtime/engine-limits.md#limits).
 
 > [!NOTE]
-> A small document can make a few aliases each copy a node that itself holds aliases, which multiplies without bound unless the copies are counted.
+> A small document can make a few aliases each copy a long string, or a node that itself holds aliases, which multiplies without bound unless the copies are measured.
 
 ## Withheld arguments
 
