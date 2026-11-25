@@ -884,6 +884,90 @@ impl DataPlane for StubDataPlane {
     }
 }
 
+/// Stub volume storage: plain directories, none of them snapshottable, and
+/// confinement judged from the path's own components. Unlike a host's
+/// storage it cannot tell a symlink part-way along a path from a directory.
+pub struct StubVolumeStorage;
+
+impl super::volume_store::VolumeStorage for StubVolumeStorage {
+    fn snapshotting(&self) -> bool {
+        false
+    }
+
+    fn create<'a>(&'a self, path: &'a std::path::Path) -> BoxFuture<'a, std::io::Result<()>> {
+        async move {
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::create_dir(path).await
+        }
+        .boxed()
+    }
+
+    fn remove<'a>(&'a self, path: &'a std::path::Path) -> BoxFuture<'a, std::io::Result<()>> {
+        tokio::fs::remove_dir_all(path).boxed()
+    }
+
+    fn is_snapshottable<'a>(&'a self, _path: &'a std::path::Path) -> BoxFuture<'a, bool> {
+        async { false }.boxed()
+    }
+
+    fn snapshot<'a>(
+        &'a self,
+        _source: &'a std::path::Path,
+        _dest: &'a std::path::Path,
+        _writable: bool,
+    ) -> BoxFuture<'a, std::io::Result<()>> {
+        async { Err(std::io::Error::other("stub volume storage cannot snapshot")) }.boxed()
+    }
+
+    fn write_confined<'a>(
+        &'a self,
+        root: &'a std::path::Path,
+        rel_path: &'a str,
+        contents: &'a [u8],
+    ) -> BoxFuture<'a, Result<(), super::volume_store::ConfinedWriteError>> {
+        use snafu::IntoError;
+        use std::path::Component;
+
+        use super::volume_store::{EscapeSnafu, IoSnafu};
+
+        async move {
+            let rel = rel_path.trim_start_matches('/');
+            let mut depth = 0_usize;
+            for component in std::path::Path::new(rel).components() {
+                match component {
+                    Component::Normal(_) => depth += 1,
+                    Component::CurDir => {}
+                    Component::ParentDir if depth > 0 => depth -= 1,
+                    _ => {
+                        return EscapeSnafu {
+                            path: root.join(rel),
+                        }
+                        .fail();
+                    }
+                }
+            }
+            if depth == 0 {
+                return EscapeSnafu {
+                    path: root.join(rel),
+                }
+                .fail();
+            }
+            let path = root.join(rel);
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| IoSnafu { path: parent }.into_error(e))?;
+            }
+            tokio::fs::write(&path, contents)
+                .await
+                .map_err(|e| IoSnafu { path: &path }.into_error(e))
+        }
+        .boxed()
+    }
+}
+
 /// Stub journal source: a journal with nothing in it.
 pub struct StubJournal;
 

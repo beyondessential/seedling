@@ -5144,10 +5144,13 @@ dependencies = [
 name = "seedling-linux"
 version = "0.12.0"
 dependencies = [
+ "futures-util",
  "jiff",
+ "rustix",
  "seedling-core",
  "seedling-protocol",
  "systemd",
+ "tempfile",
  "tokio",
  "tracing",
 ]

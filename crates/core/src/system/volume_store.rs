@@ -1,30 +1,130 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use seedling_protocol::names::HeldVolumeId;
 use serde::{Deserialize, Serialize};
+use snafu::Snafu;
 
-use crate::{runtime::identity::VolumeName, system::confined::owned_dir_async};
+use crate::{runtime::identity::VolumeName, system::BoxFuture};
+
+/// Error returned by confined write operations.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum ConfinedWriteError {
+    #[snafu(display("path escapes confined root: {path:?}"))]
+    Escape {
+        path: PathBuf,
+        backtrace: snafu::Backtrace,
+    },
+    #[snafu(display("confined write to {path:?}: {source}"))]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+        backtrace: snafu::Backtrace,
+    },
+}
+
+/// How the host stores volumes: as snapshottable volumes when the data
+/// directory is on the host's snapshotting volume store, and as plain
+/// directories otherwise.
+// spec: ACTU#volume-storage
+pub trait VolumeStorage: Send + Sync + 'static {
+    /// Whether the data directory is on the snapshotting volume store.
+    fn snapshotting(&self) -> bool;
+
+    /// Create a volume's storage at `path`: a snapshottable volume when the
+    /// data directory is on the snapshotting volume store, and a directory
+    /// otherwise. Fails when anything already stands at `path`.
+    fn create<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, std::io::Result<()>>;
+
+    /// Remove the storage at `path`, whichever way it was created.
+    fn remove<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, std::io::Result<()>>;
+
+    /// Whether the storage at `path` is a snapshottable volume.
+    fn is_snapshottable<'a>(&'a self, path: &'a Path) -> BoxFuture<'a, bool>;
+
+    /// Snapshot the snapshottable volume at `source` to `dest`, read-only or
+    /// writable.
+    fn snapshot<'a>(
+        &'a self,
+        source: &'a Path,
+        dest: &'a Path,
+        writable: bool,
+    ) -> BoxFuture<'a, std::io::Result<()>>;
+
+    /// Write `contents` to `rel_path` beneath `root`, creating parent
+    /// directories as needed, and refusing a path that would leave `root`
+    /// through any of its components.
+    // spec: ACTU#storage-confinement
+    fn write_confined<'a>(
+        &'a self,
+        root: &'a Path,
+        rel_path: &'a str,
+        contents: &'a [u8],
+    ) -> BoxFuture<'a, Result<(), ConfinedWriteError>>;
+}
+
+/// Whether `path` is a directory the daemon may act on as its own
+/// storage, `false` when nothing is there at all.
+///
+/// A path the daemon *is* the owner of, such as a volume's own directory as
+/// against a path inside one, is not resolved at all. A symlink is refused
+/// rather than followed: whatever it points at is somebody else's, so
+/// creating, moving or deleting through it would act outside the root that
+/// owns the name. So is any other kind of file, which is not storage the
+/// daemon wrote.
+// spec: ACTU#storage-confinement
+pub fn owned_dir(path: &Path) -> std::io::Result<bool> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if meta.is_dir() {
+        return Ok(true);
+    }
+    let kind = if meta.is_symlink() {
+        "a symlink"
+    } else {
+        "not a directory"
+    };
+    Err(std::io::Error::other(format!(
+        "{} is {kind}, so it is not storage seedling owns; \
+         resolve it by hand before asking seedling to act on it",
+        path.display()
+    )))
+}
+
+/// Async wrapper around [`owned_dir`].
+pub async fn owned_dir_async(path: &Path) -> std::io::Result<bool> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || owned_dir(&path))
+        .await
+        .map_err(std::io::Error::other)?
+}
 
 /// Manages host-backed storage for named volumes.
 ///
-/// Named non-tmpfs volumes are stored as directories (or BTRFS subvolumes)
-/// under `{data_dir}/volumes/`. They are bind-mounted into containers rather
-/// than using podman-managed volumes.
+/// Named non-tmpfs volumes are stored under `{data_dir}/volumes/`, as the
+/// host's [`VolumeStorage`] makes them. They are bind-mounted into containers
+/// rather than using volumes the container runtime manages.
 pub struct VolumeStore {
     volumes_dir: PathBuf,
-    use_btrfs: bool,
+    storage: Arc<dyn VolumeStorage>,
     /// Held while a site volume's name is found free and then taken.
     // spec: SITE#site-volume-names
     site_name_claim: parking_lot::Mutex<()>,
 }
 
 impl VolumeStore {
-    pub fn new(data_dir: &Path, use_btrfs: bool) -> std::io::Result<Self> {
+    pub fn new(data_dir: &Path, storage: Arc<dyn VolumeStorage>) -> std::io::Result<Self> {
         let volumes_dir = data_dir.join("volumes");
         std::fs::create_dir_all(&volumes_dir)?;
         Ok(Self {
             volumes_dir,
-            use_btrfs,
+            storage,
             site_name_claim: parking_lot::Mutex::new(()),
         })
     }
@@ -69,27 +169,16 @@ impl VolumeStore {
         if owned_dir_async(&path).await? {
             return Ok(false);
         }
-        if self.use_btrfs {
-            // `btrfs subvolume create` refuses a name already in use, and
-            // gives no machine-readable way to say so. Ask the filesystem
-            // afterwards instead: storage standing at the name means the
-            // race was lost, not that the create was wrong.
-            match btrfs_create_subvolume(&path).await {
-                Ok(()) => Ok(true),
-                Err(e) => match owned_dir_async(&path).await {
-                    Ok(true) => Ok(false),
-                    _ => Err(e),
-                },
-            }
-        } else {
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            match tokio::fs::create_dir(&path).await {
-                Ok(()) => Ok(true),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-                Err(e) => Err(e),
-            }
+        // Creating refuses a name already in use, and need give no
+        // machine-readable way to say so. Ask the filesystem afterwards
+        // instead: storage standing at the name means the race was lost, not
+        // that the create was wrong.
+        match self.storage.create(&path).await {
+            Ok(()) => Ok(true),
+            Err(e) => match owned_dir_async(&path).await {
+                Ok(true) => Ok(false),
+                _ => Err(e),
+            },
         }
     }
 
@@ -162,15 +251,7 @@ impl VolumeStore {
         if !owned_dir_async(&path).await? {
             return Ok(());
         }
-        // Always check whether the path is actually a BTRFS subvolume,
-        // regardless of the current use_btrfs setting. A volume created
-        // under BTRFS mode must be removed with `btrfs subvolume delete`
-        // even if seedling was restarted with --without-btrfs.
-        if is_btrfs_subvolume(&path).await {
-            btrfs_delete_subvolume(&path).await
-        } else {
-            tokio::fs::remove_dir_all(&path).await
-        }
+        self.storage.remove(&path).await
     }
 
     fn held_dir(&self) -> PathBuf {
@@ -412,14 +493,9 @@ impl VolumeStore {
             ));
         }
 
-        // Remove the data (could be a BTRFS subvolume or plain directory).
         // spec: ACTU#storage-confinement
         if owned_dir_async(&data_path).await? {
-            if is_btrfs_subvolume(&data_path).await {
-                btrfs_delete_subvolume(&data_path).await?;
-            } else {
-                tokio::fs::remove_dir_all(&data_path).await?;
-            }
+            self.storage.remove(&data_path).await?;
         }
 
         tokio::fs::remove_file(&meta_path).await?;
@@ -428,23 +504,39 @@ impl VolumeStore {
         Ok(())
     }
 
+    /// Whether the volume's storage is of the kind the data directory's
+    /// backend creates: a snapshottable volume on the snapshotting volume
+    /// store, and a plain directory otherwise.
+    // spec: OBS#volumes
     pub async fn is_backend_match(&self, name: &VolumeName) -> bool {
         let path = self.path(name);
         if !path.exists() {
             return true;
         }
-        let is_subvol = is_btrfs_subvolume(&path).await;
-        is_subvol == self.use_btrfs
+        self.storage.is_snapshottable(&path).await == self.storage.snapshotting()
     }
 
-    /// Whether the data directory is on BTRFS, so volumes are subvolumes.
-    pub fn uses_btrfs(&self) -> bool {
-        self.use_btrfs
+    /// Whether the data directory is on the snapshotting volume store.
+    // spec: ACTU#volume-storage
+    pub fn snapshotting(&self) -> bool {
+        self.storage.snapshotting()
     }
 
-    /// Whether `path` is a BTRFS subvolume.
-    pub async fn is_subvolume(&self, path: &Path) -> bool {
-        is_btrfs_subvolume(path).await
+    /// Whether the storage at `path` is a snapshottable volume.
+    pub async fn is_snapshottable(&self, path: &Path) -> bool {
+        self.storage.is_snapshottable(path).await
+    }
+
+    /// Write `contents` to `rel_path` beneath `root`, a volume's storage,
+    /// refusing a path that would leave it.
+    // spec: ACTU#storage-confinement
+    pub async fn write_confined(
+        &self,
+        root: &Path,
+        rel_path: &str,
+        contents: &[u8],
+    ) -> Result<(), ConfinedWriteError> {
+        self.storage.write_confined(root, rel_path, contents).await
     }
 
     pub fn site_path(&self, name: &str) -> PathBuf {
@@ -465,11 +557,7 @@ impl VolumeStore {
         let path = self.site_path(name);
         // spec: ACTU#storage-confinement
         owned_dir_async(&path).await?;
-        if self.use_btrfs {
-            btrfs_create_subvolume(&path).await
-        } else {
-            tokio::fs::create_dir_all(&path).await
-        }
+        self.storage.create(&path).await
     }
 
     pub async fn remove_site(&self, name: &str) -> std::io::Result<()> {
@@ -478,16 +566,12 @@ impl VolumeStore {
         if !owned_dir_async(&path).await? {
             return Ok(());
         }
-        if is_btrfs_subvolume(&path).await {
-            btrfs_delete_subvolume(&path).await
-        } else {
-            tokio::fs::remove_dir_all(&path).await
-        }
+        self.storage.remove(&path).await
     }
 
     // spec: SITE#site-volume-snapshots
-    /// Create a read-only BTRFS snapshot at `site-{name}` from `source_path`.
-    /// Errors if `source_path` is not a BTRFS subvolume.
+    /// Create a read-only snapshot at `site-{name}` from `source_path`.
+    /// Errors if `source_path` is not a snapshottable volume.
     pub async fn snapshot_site(
         &self,
         name: &str,
@@ -500,21 +584,22 @@ impl VolumeStore {
             ));
         }
         let dest = self.site_path(name);
-        btrfs_snapshot_readonly(source_path, &dest).await
+        self.storage.snapshot(source_path, &dest, false).await
     }
 
     // spec: SITE#snapshot-promotion
-    /// Create a writable BTRFS snapshot at `site-{name}` from `source_path`.
+    /// Create a writable snapshot at `site-{name}` from `source_path`.
     /// Used to promote a read-only snapshot site volume into a fresh
-    /// read-write managed site volume. Errors if BTRFS is not in use.
+    /// read-write managed site volume. Errors when the data directory is not
+    /// on the snapshotting volume store.
     pub async fn promote_site_snapshot(
         &self,
         name: &str,
         source_path: &std::path::Path,
     ) -> std::io::Result<()> {
-        if !self.use_btrfs {
+        if !self.storage.snapshotting() {
             return Err(std::io::Error::other(
-                "promoting a snapshot requires BTRFS; restart without --without-btrfs",
+                "promoting a snapshot needs the data directory on the snapshotting volume store",
             ));
         }
         if !source_path.exists() {
@@ -524,7 +609,7 @@ impl VolumeStore {
             ));
         }
         let dest = self.site_path(name);
-        btrfs_snapshot_writable(source_path, &dest).await
+        self.storage.snapshot(source_path, &dest, true).await
     }
 }
 
@@ -549,94 +634,17 @@ fn read_held_meta(path: &Path) -> std::io::Result<HeldVolumeMeta> {
     })
 }
 
-async fn is_btrfs_subvolume(path: &Path) -> bool {
-    // `btrfs subvolume show` exits 0 only for subvolumes.
-    tokio::process::Command::new("btrfs")
-        .args(["subvolume", "show"])
-        .arg(path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .is_ok_and(|s| s.success())
-}
-
-// spec: ACTU#snapshotting-check
-pub fn is_btrfs(path: &Path) -> std::io::Result<bool> {
-    const BTRFS_SUPER_MAGIC: u64 = 0x9123683E;
-    let stat = rustix::fs::statfs(path).map_err(std::io::Error::from)?;
-    Ok(stat.f_type as u64 == BTRFS_SUPER_MAGIC)
-}
-
-async fn btrfs_create_subvolume(path: &Path) -> std::io::Result<()> {
-    let output = tokio::process::Command::new("btrfs")
-        .args(["subvolume", "create"])
-        .arg(path)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(std::io::Error::other(format!(
-            "btrfs subvolume create failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
-}
-
-async fn btrfs_delete_subvolume(path: &Path) -> std::io::Result<()> {
-    let output = tokio::process::Command::new("btrfs")
-        .args(["subvolume", "delete"])
-        .arg(path)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(std::io::Error::other(format!(
-            "btrfs subvolume delete failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
-}
-
-async fn btrfs_snapshot_readonly(source: &Path, dest: &Path) -> std::io::Result<()> {
-    let output = tokio::process::Command::new("btrfs")
-        .args(["subvolume", "snapshot", "-r"])
-        .arg(source)
-        .arg(dest)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(std::io::Error::other(format!(
-            "btrfs subvolume snapshot failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
-}
-
-async fn btrfs_snapshot_writable(source: &Path, dest: &Path) -> std::io::Result<()> {
-    let output = tokio::process::Command::new("btrfs")
-        .args(["subvolume", "snapshot"])
-        .arg(source)
-        .arg(dest)
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(std::io::Error::other(format!(
-            "btrfs subvolume snapshot failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn store() -> (tempfile::TempDir, VolumeStore) {
         let data = tempfile::tempdir().unwrap();
-        let store = VolumeStore::new(data.path(), false).unwrap();
+        let store = VolumeStore::new(
+            data.path(),
+            Arc::new(crate::system::stub::StubVolumeStorage),
+        )
+        .unwrap();
         (data, store)
     }
 
@@ -839,5 +847,21 @@ mod tests {
         let name = VolumeName::for_app("app", "data");
         store.remove(&name).await.unwrap();
         store.remove_site("never-made").await.unwrap();
+    }
+
+    // spec: ACTU#storage-confinement
+    #[test]
+    fn owned_dir_refuses_a_symlink_and_reports_an_absent_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        assert!(!owned_dir(&dir.path().join("nothing")).unwrap());
+
+        std::fs::create_dir(dir.path().join("real")).unwrap();
+        assert!(owned_dir(&dir.path().join("real")).unwrap());
+
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
+        let err = owned_dir(&dir.path().join("link")).unwrap_err();
+        assert!(err.to_string().contains("symlink"), "{err}");
     }
 }

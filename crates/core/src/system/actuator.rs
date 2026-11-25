@@ -30,6 +30,7 @@ use crate::{
         System,
         priority::WorkloadStanding,
         translate::container::{ConfigStamp, deployment_spec, job_spec, podman_args, spec_hash},
+        volume_store::{ConfinedWriteError, VolumeStore, owned_dir_async},
     },
 };
 
@@ -150,7 +151,7 @@ async fn remove_tmpfs_dir(host_path: &Path) -> Result<(), ActuateError> {
     // spec: ACTU#storage-confinement — a symlink wearing the name is refused
     // rather than unlinked, so a stop never reports a cleanup that removed
     // only a link.
-    if super::confined::owned_dir_async(host_path)
+    if owned_dir_async(host_path)
         .await
         .context(VolumeWriteSnafu { path: host_path })?
         && let Err(e) = tokio::fs::remove_dir_all(host_path).await
@@ -162,19 +163,19 @@ async fn remove_tmpfs_dir(host_path: &Path) -> Result<(), ActuateError> {
 }
 
 // spec: VOL#write-paths
-/// Write a file into a volume using kernel-confined `openat2(RESOLVE_BENEATH)`.
+/// Write a file into a volume, confined beneath the volume's storage.
 pub(crate) async fn safe_volume_write(
+    vol_store: &VolumeStore,
     mountpoint: &Path,
     rel_path: &str,
     contents: &[u8],
 ) -> Result<(), ActuateError> {
-    super::confined::write_async(mountpoint, rel_path, contents)
+    vol_store
+        .write_confined(mountpoint, rel_path, contents)
         .await
         .map_err(|e| match e {
-            super::confined::ConfinedWriteError::Escape { path, .. } => {
-                VolumePathEscapeSnafu { path }.build()
-            }
-            super::confined::ConfinedWriteError::Io { path, source, .. } => {
+            ConfinedWriteError::Escape { path, .. } => VolumePathEscapeSnafu { path }.build(),
+            ConfinedWriteError::Io { path, source, .. } => {
                 VolumeWriteSnafu { path }.into_error(source)
             }
         })
@@ -200,7 +201,7 @@ pub(crate) async fn safe_volume_write(
 /// storage, and that answer is what settles who owes the writes.
 // spec: ACTU#volume-creation-and-seeding
 pub(crate) async fn ensure_named_volume(
-    vol_store: &crate::system::volume_store::VolumeStore,
+    vol_store: &VolumeStore,
     name: &VolumeName,
     writes: &[(String, bytes::Bytes)],
 ) -> Result<bool, ActuateError> {
@@ -216,7 +217,7 @@ pub(crate) async fn ensure_named_volume(
     }
 
     for (path, contents) in writes {
-        if let Err(e) = safe_volume_write(&mountpoint, path, contents).await {
+        if let Err(e) = safe_volume_write(vol_store, &mountpoint, path, contents).await {
             if let Err(cleanup) = vol_store.remove(name).await {
                 tracing::error!(
                     volume = %name,
@@ -241,7 +242,7 @@ pub(crate) async fn ensure_named_volume(
 /// than shadowed by a fresh, seeded copy.
 // spec: ACTU#volume-creation-and-seeding
 pub(crate) async fn ensure_named_volume_storage(
-    vol_store: &crate::system::volume_store::VolumeStore,
+    vol_store: &VolumeStore,
     app: &str,
     name: &str,
     writes: &[(String, bytes::Bytes)],
@@ -269,16 +270,14 @@ pub(crate) async fn ensure_named_volume_storage(
 /// the directory back out, so the next attempt creates and seeds it afresh.
 // spec: ACTU#volume-creation-and-seeding
 pub(crate) async fn ensure_tmpfs_volume_dir(
+    vol_store: &VolumeStore,
     host_path: &Path,
     writes: &[(String, bytes::Bytes)],
 ) -> Result<(), ActuateError> {
     // spec: ACTU#storage-confinement
-    if crate::system::confined::owned_dir_async(host_path)
-        .await
-        .context(VolumeWriteSnafu {
-            path: host_path.to_path_buf(),
-        })?
-    {
+    if owned_dir_async(host_path).await.context(VolumeWriteSnafu {
+        path: host_path.to_path_buf(),
+    })? {
         return Ok(());
     }
     if let Some(parent) = host_path.parent() {
@@ -300,7 +299,7 @@ pub(crate) async fn ensure_tmpfs_volume_dir(
         }
     }
     for (path, contents) in writes {
-        if let Err(e) = safe_volume_write(host_path, path, contents).await {
+        if let Err(e) = safe_volume_write(vol_store, host_path, path, contents).await {
             if let Err(cleanup) = tokio::fs::remove_dir_all(host_path).await {
                 tracing::error!(
                     path = %host_path.display(),
@@ -575,7 +574,7 @@ impl Actuator {
                     // making anything at it. `create_dir_all` succeeds
                     // straight through a symlink standing at the name, and
                     // the declared writes would then land wherever it points.
-                    crate::system::confined::owned_dir_async(&host_path)
+                    owned_dir_async(&host_path)
                         .await
                         .context(VolumeWriteSnafu {
                             path: host_path.clone(),
@@ -587,7 +586,8 @@ impl Actuator {
                         })?;
                     // Tmpfs contents don't survive a reboot; always re-apply writes.
                     for (path, contents) in &writes {
-                        safe_volume_write(&host_path, path, contents).await?;
+                        safe_volume_write(&self.driver.volume_store, &host_path, path, contents)
+                            .await?;
                     }
                 } else {
                     // spec: ACTU#volume-storage
@@ -952,7 +952,7 @@ impl Actuator {
 // spec: ACN#shells
 pub fn resolve_external_volumes(
     db: &DbHandle,
-    vol_store: &crate::system::volume_store::VolumeStore,
+    vol_store: &VolumeStore,
     app: &AppName,
 ) -> HashMap<ExternalVolumeName, crate::system::types::ResolvedExternalMount> {
     try_resolve_external_volumes(db, vol_store, app).unwrap_or_else(|e| {
@@ -966,7 +966,7 @@ pub fn resolve_external_volumes(
 // spec: VOL#external-volumes
 pub fn try_resolve_external_volumes(
     db: &DbHandle,
-    vol_store: &crate::system::volume_store::VolumeStore,
+    vol_store: &VolumeStore,
     app: &AppName,
 ) -> rusqlite::Result<HashMap<ExternalVolumeName, crate::system::types::ResolvedExternalMount>> {
     use crate::system::types::{MountSource, ResolvedExternalMount};
@@ -1035,11 +1035,14 @@ pub fn try_resolve_external_volumes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::system::volume_store::VolumeStore;
 
     fn store() -> (tempfile::TempDir, VolumeStore) {
         let data = tempfile::tempdir().unwrap();
-        let store = VolumeStore::new(data.path(), false).unwrap();
+        let store = VolumeStore::new(
+            data.path(),
+            std::sync::Arc::new(crate::system::stub::StubVolumeStorage),
+        )
+        .unwrap();
         (data, store)
     }
 
@@ -1144,15 +1147,19 @@ mod tests {
     // spec: ACTU#volume-creation-and-seeding
     #[tokio::test]
     async fn a_tmpfs_directory_is_seeded_only_by_the_call_that_creates_it() {
-        let data = tempfile::tempdir().unwrap();
+        let (data, store) = store();
         let dir = data.path().join("tmpfs").join("app-volume-scratch");
         let writes = vec![("note".to_owned(), bytes::Bytes::from("seed"))];
 
-        ensure_tmpfs_volume_dir(&dir, &writes).await.unwrap();
+        ensure_tmpfs_volume_dir(&store, &dir, &writes)
+            .await
+            .unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("note")).unwrap(), "seed");
 
         std::fs::write(dir.join("note"), "the app's own").unwrap();
-        ensure_tmpfs_volume_dir(&dir, &writes).await.unwrap();
+        ensure_tmpfs_volume_dir(&store, &dir, &writes)
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("note")).unwrap(),
             "the app's own"

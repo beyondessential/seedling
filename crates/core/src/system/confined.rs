@@ -1,16 +1,9 @@
-//! Host filesystem paths the daemon confines to a root it owns.
+//! Writes the daemon confines to a root it owns.
 //!
-//! One rule, in two shapes. A path the daemon resolves is resolved under
-//! the root at every component, not only at the last: `openat2` with
-//! `RESOLVE_BENEATH` makes the kernel atomically reject any component
-//! that would escape `root` via `..`, a symlink, or a mount-point
-//! crossing. Requires Linux >= 5.6.
-//!
-//! A path the daemon *is* the owner of — a volume's own directory, as
-//! against a path inside one — is not resolved at all: it is required to
-//! be a real directory. A symlink there is somebody else's storage
-//! wearing the name, so an operation on it is refused rather than
-//! followed.
+//! A path the daemon resolves is resolved under the root at every
+//! component, not only at the last: `openat2` with `RESOLVE_BENEATH` makes
+//! the kernel atomically reject any component that would escape `root` via
+//! `..`, a symlink, or a mount-point crossing. Requires Linux >= 5.6.
 
 use std::{
     io::Write,
@@ -19,29 +12,16 @@ use std::{
 };
 
 use rustix::fs::{self, Mode, OFlags, ResolveFlags, mkdirat};
-use snafu::{IntoError, Snafu};
+use snafu::IntoError;
+
+pub use super::volume_store::ConfinedWriteError;
+use super::volume_store::{EscapeSnafu, IoSnafu};
 
 /// Default file mode for written files: owner rw, group r (0640).
 const FILE_MODE: Mode = Mode::from_raw_mode(0o640);
 
 /// Default directory mode for created parent dirs: owner rwx, group rx (0750).
 const DIR_MODE: Mode = Mode::from_raw_mode(0o750);
-
-/// Error returned by confined write operations.
-#[derive(Debug, Snafu)]
-pub enum ConfinedWriteError {
-    #[snafu(display("path escapes confined root: {path:?}"))]
-    Escape {
-        path: PathBuf,
-        backtrace: snafu::Backtrace,
-    },
-    #[snafu(display("confined write to {path:?}: {source}"))]
-    Io {
-        path: PathBuf,
-        source: std::io::Error,
-        backtrace: snafu::Backtrace,
-    },
-}
 
 /// Write `contents` to `rel_path` beneath `root`, creating parent
 /// directories as needed. Both directory creation and the final file
@@ -173,43 +153,6 @@ fn resolve_error(e: rustix::io::Errno, path: PathBuf) -> ConfinedWriteError {
     IoSnafu { path }.into_error(std::io::Error::from(e))
 }
 
-/// Whether `path` is a directory the daemon may act on as its own
-/// storage, `false` when nothing is there at all.
-///
-/// A symlink is refused rather than followed: whatever it points at is
-/// somebody else's, so creating, moving or deleting through it would act
-/// outside the root that owns the name. So is any other kind of file,
-/// which is not storage the daemon wrote.
-// spec: ACTU#storage-confinement
-pub fn owned_dir(path: &Path) -> std::io::Result<bool> {
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    if meta.is_dir() {
-        return Ok(true);
-    }
-    let kind = if meta.is_symlink() {
-        "a symlink"
-    } else {
-        "not a directory"
-    };
-    Err(std::io::Error::other(format!(
-        "{} is {kind}, so it is not storage seedling owns; \
-         resolve it by hand before asking seedling to act on it",
-        path.display()
-    )))
-}
-
-/// Async wrapper around [`owned_dir`].
-pub async fn owned_dir_async(path: &Path) -> std::io::Result<bool> {
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || owned_dir(&path))
-        .await
-        .map_err(std::io::Error::other)?
-}
-
 /// Async wrapper around [`write`] that runs the blocking syscalls on
 /// Tokio's blocking thread pool.
 pub async fn write_async(
@@ -324,22 +267,6 @@ mod tests {
         write(dir.path(), "sub/../sib/f.txt", b"inside").unwrap();
         let contents = std::fs::read_to_string(dir.path().join("sib/f.txt")).unwrap();
         assert_eq!(contents, "inside");
-    }
-
-    // spec: ACTU#storage-confinement
-    #[test]
-    fn owned_dir_refuses_a_symlink_and_reports_an_absent_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-
-        assert!(!owned_dir(&dir.path().join("nothing")).unwrap());
-
-        std::fs::create_dir(dir.path().join("real")).unwrap();
-        assert!(owned_dir(&dir.path().join("real")).unwrap());
-
-        std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
-        let err = owned_dir(&dir.path().join("link")).unwrap_err();
-        assert!(err.to_string().contains("symlink"), "{err}");
     }
 
     #[test]

@@ -25,7 +25,7 @@ pub mod types;
 
 pub mod breadcrumb;
 pub(crate) mod caddy;
-pub(crate) mod confined;
+pub mod confined;
 pub(crate) mod data_plane;
 pub mod jool;
 pub mod journal;
@@ -93,7 +93,7 @@ pub use types::{
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Heap-allocated, Send future returned by dyn-compatible async trait methods.
-pub(crate) use futures_util::future::BoxFuture;
+pub use futures_util::future::BoxFuture;
 
 // ---------------------------------------------------------------------------
 // Backend traits
@@ -352,6 +352,7 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
 /// builds itself.
 pub struct Platform {
     pub journal: Arc<dyn journal::JournalSource>,
+    pub storage: Arc<dyn volume_store::VolumeStorage>,
 }
 
 /// Result of `System::setup` / `System::setup_stubbed`: the assembled system
@@ -370,7 +371,6 @@ impl System {
         platform: Platform,
         node_prefix: Ipv6Net,
         data_dir: &Path,
-        use_btrfs: bool,
     ) -> Result<SystemSetup, BoxError> {
         // spec: INFRA#unavailable-backends — bring up the container runtime (podman)
         // and process manager (systemd) best-effort. If either connection fails
@@ -428,7 +428,7 @@ impl System {
         let caddy_admin_client = caddy_proxy.admin_client_handle();
         let proxy: Arc<dyn NetworkProxy> = caddy_proxy;
 
-        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+        let volume_store = volume_store::VolumeStore::new(data_dir, platform.storage)?;
 
         let system = Arc::new(Self {
             container,
@@ -449,11 +449,12 @@ impl System {
     /// host-system effect is faked; OI handlers, reconciliation, DB, and
     /// event emission remain real. Intended for end-to-end UI tests
     /// (Playwright) and as a foundation for future integration tests of
-    /// individual subsystems. Logs are read from `journal`, so the daemon can
-    /// still show the breadcrumbs it writes.
+    /// individual subsystems. Volumes are kept in `storage` and logs are read
+    /// from `journal`, so the daemon can still keep volumes as the host does
+    /// and show the breadcrumbs it writes.
     pub fn setup_stubbed(
         data_dir: &Path,
-        use_btrfs: bool,
+        storage: Arc<dyn volume_store::VolumeStorage>,
         journal: Arc<dyn journal::JournalSource>,
     ) -> Result<SystemSetup, BoxError> {
         let volumes_root = data_dir.join("stub-volumes");
@@ -464,7 +465,7 @@ impl System {
         let data_plane_arc: Arc<dyn DataPlane> = Arc::new(stub::StubDataPlane);
         let proxy: Arc<dyn NetworkProxy> = Arc::new(stub::StubNetworkProxy);
 
-        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+        let volume_store = volume_store::VolumeStore::new(data_dir, storage)?;
 
         // The caddy_admin_client field on Reconciler holds the live HTTP
         // client used during blue/green Caddy upgrades. Stub mode never
@@ -497,8 +498,9 @@ impl System {
     /// The counterpart to [`Self::setup_stubbed`], which fakes success: this
     /// one lets a test exercise what the daemon does when the world will not
     /// answer, rather than only what it does when the world agrees.
-    pub fn setup_unavailable(data_dir: &Path, use_btrfs: bool) -> Result<SystemSetup, BoxError> {
-        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+    pub fn setup_unavailable(data_dir: &Path) -> Result<SystemSetup, BoxError> {
+        let volume_store =
+            volume_store::VolumeStore::new(data_dir, Arc::new(stub::StubVolumeStorage))?;
         let placeholder_client = reqwest::Client::builder()
             .build()
             .expect("default reqwest client builds");
@@ -530,8 +532,11 @@ impl System {
             process: backends.process(),
             proxy,
             data_plane: Arc::new(stub::StubDataPlane),
-            volume_store: volume_store::VolumeStore::new(data_dir, false)
-                .expect("the volume store opens"),
+            volume_store: volume_store::VolumeStore::new(
+                data_dir,
+                Arc::new(stub::StubVolumeStorage),
+            )
+            .expect("the volume store opens"),
             journal: Arc::new(stub::StubJournal),
             backends,
         }

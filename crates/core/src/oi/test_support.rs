@@ -106,7 +106,7 @@ impl TestOi {
         let driver = driver.unwrap_or_else(|| {
             System::setup_stubbed(
                 data_dir.path(),
-                false,
+                std::sync::Arc::new(crate::system::stub::StubVolumeStorage),
                 std::sync::Arc::new(crate::system::stub::StubJournal),
             )
             .expect("stub system setup")

@@ -442,8 +442,8 @@ pub(crate) fn delete_site_volume(
     // spec: SITE#site-volumes
     // Managed kinds carry runtime-owned data and route through the held-volume
     // mechanism so an operator must explicitly confirm the final removal.
-    // Snapshot kinds are deleted directly: snapshots are read-only BTRFS
-    // subvolumes (so the rename used by the hold path returns EROFS), and
+    // Snapshot kinds are deleted directly: snapshots are read-only (so the
+    // rename used by the hold path fails), and
     // their source volume remains intact so there is nothing to recover from
     // a held copy. Bind kinds only reference an operator-provided host path,
     // so dropping the row is sufficient.
@@ -507,8 +507,8 @@ pub(crate) fn delete_site_volume(
 /// operation runs against it.
 ///
 /// Both halves matter. A recorded name would only collide when the record is
-/// written, which for a snapshot is after btrfs has already placed the
-/// subvolume. Storage with no record is refused rather than reused because
+/// written, which for a snapshot is after the storage has already placed
+/// it. Storage with no record is refused rather than reused because
 /// the runtime cannot tell a leftover from an operator's volume whose record
 /// has yet to be written.
 ///
@@ -610,7 +610,8 @@ pub(crate) fn snapshot_site_volume(
 }
 
 /// Check that a snapshot's source can be snapshotted: it has storage, which
-/// is a BTRFS subvolume, and is not itself a bind or snapshot site volume.
+/// is a snapshottable volume, and is not itself a bind or snapshot site
+/// volume.
 // spec: VOLM#snapshotting-a-volume
 fn resolve_snapshot_source(
     state: &OiState,
@@ -655,29 +656,30 @@ fn resolve_snapshot_source(
         }
         Err(e) => return Err(internal("failed to look at the source's storage", e)),
     }
-    require_btrfs_subvolume(state, source_path)
+    require_snapshottable(state, source_path)
 }
 
-/// `requirements_invalid` when the volume at `path` is not stored as a BTRFS
-/// subvolume, wherever the data directory is.
+/// `requirements_invalid` when the volume at `path` is not stored as a
+/// snapshottable volume, wherever the data directory is.
 // spec: SITE#site-volume-snapshots
-fn require_btrfs_subvolume(state: &OiState, path: &std::path::Path) -> Result<(), OiError> {
-    if !run(state.driver.volume_store.is_subvolume(path)) {
+fn require_snapshottable(state: &OiState, path: &std::path::Path) -> Result<(), OiError> {
+    if !run(state.driver.volume_store.is_snapshottable(path)) {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            "snapshotting needs a BTRFS subvolume, and this volume is not stored as one",
+            "snapshotting needs a snapshottable volume, and this volume is not stored as one",
         ));
     }
     Ok(())
 }
 
-/// `requirements_invalid` on a host whose data directory is not on BTRFS.
+/// `requirements_invalid` on a host whose data directory is not on the
+/// snapshotting volume store.
 // spec: SITE#snapshot-promotion
-fn require_btrfs_data_dir(state: &OiState) -> Result<(), OiError> {
-    if !state.driver.volume_store.uses_btrfs() {
+fn require_snapshotting_store(state: &OiState) -> Result<(), OiError> {
+    if !state.driver.volume_store.snapshotting() {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            "promotion needs the data directory to be on BTRFS, and it is not",
+            "promotion needs the data directory on the snapshotting volume store, and it is not",
         ));
     }
     Ok(())
@@ -724,7 +726,7 @@ pub(crate) fn promote_site_volume(
     // spec: SITE#site-volume-names
     let _claim = check_site_name_free(state, &params.name)?;
 
-    require_btrfs_data_dir(state)?;
+    require_snapshotting_store(state)?;
 
     let source_path = state.driver.volume_store.site_path(params.source.as_str());
     let def = SiteVolumeDef {

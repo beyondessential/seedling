@@ -308,7 +308,7 @@ async fn main() {
     });
 
     // spec: ACTU#snapshotting-check
-    let use_btrfs = match seedling_core::system::volume_store::is_btrfs(&data_dir) {
+    let use_btrfs = match seedling_linux::volume_storage::is_btrfs(&data_dir) {
         Ok(true) => {
             tracing::info!("data directory is on BTRFS; using subvolumes for named volumes");
             true
@@ -474,13 +474,16 @@ async fn main() {
 
     let journal = Arc::new(seedling_linux::journal::Journal);
     seedling_core::system::journal::install_sink(journal.clone());
+    let storage = Arc::new(seedling_linux::volume_storage::HostVolumeStorage::new(
+        use_btrfs,
+    ));
     let (driver, caddy_admin_client) = if args.stub_backends {
         tracing::info!("booting with stubbed system backends (no podman/systemd/nftables)");
-        System::setup_stubbed(&data_dir, use_btrfs, journal)
+        System::setup_stubbed(&data_dir, storage, journal)
             .unwrap_or_else(|e| fatal!("stubbed system setup failed: {e}"))
     } else {
-        let platform = Platform { journal };
-        System::setup(platform, node_prefix, &data_dir, use_btrfs)
+        let platform = Platform { journal, storage };
+        System::setup(platform, node_prefix, &data_dir)
             .await
             .unwrap_or_else(|e| fatal!("system setup failed: {e}"))
     };
@@ -1701,7 +1704,7 @@ mod tests {
         let data_dir = tempfile::tempdir().expect("temp data dir");
         let (driver, _caddy_admin) = System::setup_stubbed(
             data_dir.path(),
-            false,
+            std::sync::Arc::new(seedling_core::system::stub::StubVolumeStorage),
             std::sync::Arc::new(seedling_core::system::stub::StubJournal),
         )
         .expect("stub system");
@@ -1741,7 +1744,7 @@ mod tests {
         let data_dir = tempfile::tempdir().expect("temp data dir");
         let (driver, _caddy_admin) = System::setup_stubbed(
             data_dir.path(),
-            false,
+            std::sync::Arc::new(seedling_core::system::stub::StubVolumeStorage),
             std::sync::Arc::new(seedling_core::system::stub::StubJournal),
         )
         .expect("stub system");
@@ -1796,7 +1799,7 @@ mod tests {
 
         let data_dir = tempfile::tempdir().expect("temp data dir");
         let (driver, _caddy_admin) =
-            System::setup_unavailable(data_dir.path(), false).expect("unavailable system");
+            System::setup_unavailable(data_dir.path()).expect("unavailable system");
         let db = DbHandle::open_in_memory().expect("in-memory db");
 
         insert_dynamic_resources(&db, &[(INST_A, "op-abandoned"), (INST_B, "op-abandoned")]);

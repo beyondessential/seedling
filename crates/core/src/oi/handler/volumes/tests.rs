@@ -471,13 +471,13 @@ fn declared_external_volumes_guard_unmap() {
     assert!(msg.contains("declared by app"), "{msg}");
 }
 
-/// btrfs snapshots *into* a destination that already exists rather than
-/// refusing it, so the name must be refused before btrfs is reached. The
-/// error distinguishes the two: reaching btrfs on a non-btrfs test host
-/// would report an internal failure instead.
+/// A snapshot may be placed *into* a destination that already exists rather
+/// than refusing it, so the name must be refused before the storage is
+/// reached. The error distinguishes the two: reaching the stub storage would
+/// report an internal failure instead.
 // spec: SITE#site-volume-names
 #[test]
-fn snapshotting_onto_a_name_already_taken_is_refused_before_any_btrfs_call() {
+fn snapshotting_onto_a_name_already_taken_is_refused_before_any_storage_call() {
     let oi = TestOi::new();
     oi.call(
         "/volumes/site/create",
@@ -829,7 +829,7 @@ fn snapshot_sources_are_checked_before_the_host_is() {
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
 
-    // A managed site volume that is not stored as a BTRFS subvolume.
+    // A managed site volume that is not stored as a snapshottable volume.
     make_site_volume(&oi, "managed");
     let (code, msg) = oi
         .call(
@@ -838,7 +838,7 @@ fn snapshot_sources_are_checked_before_the_host_is() {
         )
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
-    assert!(msg.contains("BTRFS subvolume"), "{msg}");
+    assert!(msg.contains("snapshottable volume"), "{msg}");
     assert!(
         !msg.contains("data directory"),
         "the refusal is about the volume, not where the data directory is: {msg}"
@@ -848,7 +848,7 @@ fn snapshot_sources_are_checked_before_the_host_is() {
 
 // spec: VOLM#promoting-a-snapshot
 #[test]
-fn promotion_on_a_host_not_on_btrfs_is_refused_without_touching_storage() {
+fn promotion_off_the_snapshotting_store_is_refused_without_touching_storage() {
     let oi = TestOi::new();
     record_snapshot(&oi, "snapped");
     let (code, msg) = oi
@@ -858,7 +858,7 @@ fn promotion_on_a_host_not_on_btrfs_is_refused_without_touching_storage() {
         )
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
-    assert!(msg.contains("BTRFS"), "{msg}");
+    assert!(msg.contains("snapshotting volume store"), "{msg}");
     assert!(!oi.state.driver.volume_store.site_exists("fresh"));
     assert_eq!(site_volume_names(&oi), vec!["snapped"]);
 }

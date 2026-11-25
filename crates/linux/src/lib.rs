@@ -2,3 +2,4 @@
 //! portable runtime in `seedling-core` reaches a Linux host.
 
 pub mod journal;
+pub mod volume_storage;

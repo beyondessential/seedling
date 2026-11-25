@@ -195,7 +195,7 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                         path: host_path.clone(),
                     })?;
                 for (path, contents) in &vol.def.writes {
-                    safe_volume_write(host_path, path, contents).await?;
+                    safe_volume_write(&driver.volume_store, host_path, path, contents).await?;
                 }
             } else {
                 // spec: ACTU#volume-storage
@@ -236,7 +236,7 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                     .await
                     .context(ContainerSnafu)?;
                 for (path, contents) in &vol.def.writes {
-                    safe_volume_write(&mountpoint, path, contents).await?;
+                    safe_volume_write(&driver.volume_store, &mountpoint, path, contents).await?;
                 }
             }
         }
