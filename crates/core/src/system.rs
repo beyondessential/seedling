@@ -323,20 +323,20 @@ impl System {
 }
 
 // spec: INFRA#host-prefix-derivation
-/// Derive the node's /48 ULA prefix from `/etc/machine-id`.
+/// Derive the node's /48 ULA prefix from the host's machine identifier, as
+/// the platform reads it.
 ///
-/// The raw machine-id content (whitespace-trimmed) is hashed with SHA-256;
-/// the first four bytes of the digest fill octets 2–5 of the prefix:
+/// The identifier (whitespace-trimmed) is hashed with SHA-256; the first four
+/// bytes of the digest fill octets 2–5 of the prefix:
 ///
 /// ```text
 /// fd5e : <hash[0]><hash[1]> : <hash[2]><hash[3]> :: /48
 /// ```
 ///
 /// Hashing instead of direct interpretation means the derivation is
-/// agnostic to the machine-id format (plain hex, UUID with dashes, etc.).
-pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
-    let raw = std::fs::read_to_string("/etc/machine-id")?;
-    let trimmed = raw.trim();
+/// agnostic to the identifier's format (plain hex, UUID with dashes, etc.).
+pub fn node_prefix_from_machine_id(machine_id: &str) -> std::io::Result<Ipv6Net> {
+    let trimmed = machine_id.trim();
     if trimmed.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -608,6 +608,33 @@ mod gateway_tests {
                 .parse::<std::net::Ipv6Addr>()
                 .unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod node_prefix_tests {
+    use super::node_prefix_from_machine_id;
+
+    // spec: INFRA#host-prefix-derivation
+    #[test]
+    fn the_prefix_is_a_ula_48_derived_from_the_trimmed_identifier() {
+        let prefix = node_prefix_from_machine_id("0123456789abcdef0123456789abcdef").unwrap();
+        assert_eq!(prefix.prefix_len(), 48);
+        assert_eq!(prefix.network().segments()[0], 0xfd5e);
+        assert_eq!(
+            node_prefix_from_machine_id("  0123456789abcdef0123456789abcdef\n").unwrap(),
+            prefix
+        );
+        assert_ne!(
+            node_prefix_from_machine_id("fedcba9876543210fedcba9876543210").unwrap(),
+            prefix
+        );
+    }
+
+    // spec: INFRA#host-prefix-derivation
+    #[test]
+    fn an_empty_identifier_is_refused() {
+        assert!(node_prefix_from_machine_id(" \n").is_err());
     }
 }
 

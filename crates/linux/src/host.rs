@@ -9,6 +9,12 @@ use seedling_core::{
 
 use crate::netinfo;
 
+/// The host's machine identifier.
+// spec: LINUX#host-facilities
+pub fn machine_id() -> std::io::Result<String> {
+    std::fs::read_to_string("/etc/machine-id")
+}
+
 /// The host's own resolver, routing tables and kernel.
 pub struct HostSource;
 

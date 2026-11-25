@@ -360,7 +360,8 @@ async fn main() {
     // System backends
     // ---------------------------------------------------------------------------
 
-    let node_prefix = node_prefix_from_machine_id()
+    let node_prefix = seedling_linux::host::machine_id()
+        .and_then(|id| node_prefix_from_machine_id(&id))
         .unwrap_or_else(|e| fatal!("cannot derive node prefix from machine-id: {e}"));
 
     let tick_notify = Arc::new(Notify::new());
