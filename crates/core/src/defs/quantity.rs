@@ -241,173 +241,55 @@ fn likely_suffix(unit: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::*;
 
+    /// The cases the console's port of these functions is tested against too,
+    /// so the two cannot drift apart.
+    fn vectors() -> Value {
+        serde_json::from_str(include_str!("quantity/vectors.json")).expect("vectors are JSON")
+    }
+
+    fn amount(value: &Value) -> i64 {
+        value
+            .as_str()
+            .expect("an amount is a string")
+            .parse()
+            .expect("an amount is an i64")
+    }
+
     #[test]
-    fn every_suffix_multiplies_the_number() {
-        for (text, amount) in [
-            ("0", 0),
-            ("7", 7),
-            ("1k", 1_000),
-            ("1M", 1_000_000),
-            ("1G", 1_000_000_000),
-            ("1T", 1_000_000_000_000),
-            ("1P", 1_000_000_000_000_000),
-            ("1E", 1_000_000_000_000_000_000),
-            ("1Ki", 1 << 10),
-            ("1Mi", 1 << 20),
-            ("1Gi", 1 << 30),
-            ("1Ti", 1 << 40),
-            ("1Pi", 1 << 50),
-            ("1Ei", 1 << 60),
-        ] {
-            assert_eq!(parse_quantity(text), Ok(amount), "{text}");
+    fn parsing_matches_the_shared_vectors() {
+        for group in vectors()["parse"].as_array().unwrap() {
+            for case in group["cases"].as_array().unwrap() {
+                let text = case["text"].as_str().unwrap();
+                let expected = match case.get("amount") {
+                    Some(n) => Ok(amount(n)),
+                    None => Err(case["error"].as_str().unwrap().to_owned()),
+                };
+                assert_eq!(
+                    parse_quantity(text),
+                    expected,
+                    "{}: {text:?}",
+                    group["case"]
+                );
+            }
         }
     }
 
     #[test]
-    fn an_exponent_scales_by_a_power_of_ten() {
-        for (text, amount) in [
-            ("1e3", 1_000),
-            ("1E3", 1_000),
-            ("1e+3", 1_000),
-            ("15000e-3", 15),
-            ("2.5e2", 250),
-            ("0e99999999999999999999", 0),
-        ] {
-            assert_eq!(parse_quantity(text), Ok(amount), "{text}");
-        }
-    }
-
-    #[test]
-    fn e_alone_is_exa_and_with_digits_an_exponent() {
-        assert_eq!(parse_quantity("2E"), Ok(2_000_000_000_000_000_000));
-        assert_eq!(parse_quantity("2E2"), Ok(200));
-    }
-
-    #[test]
-    fn a_number_may_put_its_point_anywhere() {
-        assert_eq!(parse_quantity(".5Gi"), Ok(1 << 29));
-        assert_eq!(parse_quantity("5.Gi"), Ok(5 << 30));
-        assert_eq!(parse_quantity("1.5Gi"), Ok(1_610_612_736));
-        assert_eq!(parse_quantity("1.5k"), Ok(1_500));
-        assert_eq!(parse_quantity("007"), Ok(7));
-    }
-
-    #[test]
-    fn a_sign_is_taken() {
-        assert_eq!(parse_quantity("-512Mi"), Ok(-(512 << 20)));
-        assert_eq!(parse_quantity("+1k"), Ok(1_000));
-        assert_eq!(parse_quantity("-0"), Ok(0));
-    }
-
-    #[test]
-    fn the_signed_64_bit_range_bounds_the_amount() {
-        assert_eq!(parse_quantity("9223372036854775807"), Ok(i64::MAX));
-        assert_eq!(parse_quantity("-9223372036854775808"), Ok(i64::MIN));
-        assert_eq!(parse_quantity("-8Ei"), Ok(i64::MIN));
-        for text in [
-            "9223372036854775808",
-            "8Ei",
-            "10E",
-            "1e19",
-            "1e99999999999999999999",
-        ] {
-            assert_eq!(
-                parse_quantity(text),
-                Err("must be within the signed 64-bit range".to_owned()),
-                "{text}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_fractional_amount_is_rejected() {
-        for text in ["1.1Ki", "1e-3", "1500e-3", "0.5", "1e-99999999999999999999"] {
-            assert_eq!(
-                parse_quantity(text),
-                Err("must come to a whole number".to_owned()),
-                "{text}"
-            );
-        }
-        assert_eq!(parse_quantity("0.5Ki"), Ok(512));
-        assert_eq!(
-            parse_quantity("0.000000000000000000867361737988403547205962240695953369140625Ei"),
-            Ok(1)
-        );
-    }
-
-    #[test]
-    fn anything_else_is_not_a_quantity() {
-        for text in [
-            "", " 1", "1 ", "1 Ki", ".", "+", "1..2", "1.2.3", "1e", "1e+", "1e3Ki", "1kk", "1u",
-            "1n", "0x10", "1,000", "--1",
-        ] {
-            assert_eq!(
-                parse_quantity(text),
-                Err("must be a quantity, such as 512Mi or 1.5G".to_owned()),
-                "{text:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_wrong_suffix_suggests_the_one_likely_meant() {
-        for (text, error) in [
-            ("512m", "m is milli; did you mean 512Mi?"),
-            ("512mi", "did you mean 512Mi?"),
-            ("1ki", "did you mean 1Ki?"),
-            ("1K", "did you mean 1Ki?"),
-            ("512MiB", "did you mean 512Mi?"),
-            ("1MB", "did you mean 1M?"),
-            ("1KB", "did you mean 1k?"),
-            ("1g", "did you mean 1Gi?"),
-            ("-1.5g", "did you mean -1.5Gi?"),
-            ("64B", "did you mean 64?"),
-        ] {
-            assert_eq!(parse_quantity(text), Err(error.to_owned()), "{text}");
-        }
-    }
-
-    #[test]
-    fn formatting_picks_the_shortest_exact_quantity() {
-        for (n, text) in [
-            (0, "0"),
-            (7, "7"),
-            (1_000, "1k"),
-            (1_500, "1.5k"),
-            (1 << 20, "1Mi"),
-            (64 << 20, "64Mi"),
-            (15872 << 20, "15.5Gi"),
-            (1_610_612_736, "1.5Gi"),
-            (-(512 << 20), "-512Mi"),
-            (1_230, "1230"),
-            (1_000_000_000, "1G"),
-            (1_500_000_000, "1.5G"),
-            (1 << 30, "1Gi"),
-            (1_000 << 20, "1000Mi"),
-            (1_234, "1234"),
-            (1_001, "1001"),
-            (i64::MIN, "-8Ei"),
-            (i64::MAX, "9223372036854775807"),
-        ] {
-            assert_eq!(format_quantity(n), text, "{n}");
+    fn formatting_matches_the_shared_vectors() {
+        for case in vectors()["format"].as_array().unwrap() {
+            let n = amount(&case["amount"]);
+            assert_eq!(format_quantity(n), case["text"].as_str().unwrap(), "{n}");
         }
     }
 
     #[test]
     fn a_formatted_quantity_parses_back() {
-        for n in [
-            0,
-            1,
-            1_000,
-            1_500,
-            64 << 20,
-            15872 << 20,
-            -(1 << 40),
-            i64::MIN,
-            i64::MAX,
-        ] {
+        for case in vectors()["format"].as_array().unwrap() {
+            let n = amount(&case["amount"]);
             assert_eq!(parse_quantity(&format_quantity(n)), Ok(n), "{n}");
         }
     }
