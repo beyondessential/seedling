@@ -76,12 +76,15 @@ pub(super) fn assemble(
         let at = |msg: String| format!("include {key:?} from {value:?}: {msg}");
         let source = source_path(folder, value);
         let has_copy = at_or_beneath(files, key).next().is_some();
-        // A source matching the folder's copy adds nothing to the bundle, so
-        // the copy's share of the budget is lent to reading it, and the
-        // budget is as it was wherever the copy is what the bundle keeps.
-        let before = *budget;
-        budget.give_back(at_or_beneath(files, key));
         let yielded = match &source {
+            // Where the folder holds a copy, the bundle keeps the copy
+            // whatever the source holds, so the source is read on the copy's
+            // share of the budget rather than taking more.
+            Some(path) if has_copy => budget
+                .lending(at_or_beneath(files, key), |budget| {
+                    read_source(tree, path, budget)
+                })
+                .map_err(at)?,
             Some(path) => read_source(tree, path, budget).map_err(at)?,
             None => None,
         };
@@ -90,7 +93,6 @@ pub(super) fn assemble(
             // An exported bundle carries its included files, and its
             // sources may well not exist wherever it was exported to.
             if has_copy {
-                *budget = before;
                 continue;
             }
             return Err(at(match source {
@@ -111,9 +113,7 @@ pub(super) fn assemble(
             .collect();
         if !has_copy {
             files.extend(placed);
-        } else if at_or_beneath(files, key).eq(placed.iter()) {
-            *budget = before;
-        } else {
+        } else if !at_or_beneath(files, key).eq(placed.iter()) {
             return Err(at(
                 "the folder already holds different files there; remove them or bring them in line"
                     .to_owned(),

@@ -305,13 +305,23 @@ impl Budget {
         Ok(contents)
     }
 
-    /// Return files already taken, as when files read from a source turn
-    /// out to be the ones a folder already holds.
-    pub fn give_back<'a>(&mut self, files: impl Iterator<Item = (&'a String, &'a Vec<u8>)>) {
+    /// Run `read` with the share of the budget `files` took lent to it, and
+    /// leave the budget as it was before, whatever `read` took or returned.
+    /// For reading what is compared with files already held and then
+    /// dropped, so that it costs nothing beyond what they did.
+    pub fn lending<'a, T>(
+        &mut self,
+        files: impl Iterator<Item = (&'a String, &'a Vec<u8>)>,
+        read: impl FnOnce(&mut Budget) -> T,
+    ) -> T {
+        let before = *self;
         for (path, contents) in files {
             self.files += 1;
             self.bytes += path.len() + contents.len();
         }
+        let out = read(self);
+        *self = before;
+        out
     }
 }
 
