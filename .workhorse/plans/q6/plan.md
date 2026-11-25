@@ -35,6 +35,12 @@ The stdlib is covered once across the set: a helper a tour uses naturally counts
 - Each demo's header comment and `app.description` say it is a demo and what it shows.
 - The paired apps are two bundles, `demos/paired-provider/` and `demos/paired-consumer/`.
 
+## Params and hostnames
+
+Every demo installs with no params set: each param has a default, except the required param params-tour exists to show.
+Hostnames default to `<demo>.demo.test`; `.test` never resolves publicly.
+The dev-VM walkthrough sets one internal-CA TLS policy for `*.demo.test`.
+
 ## Images
 
 Demos use well-known public images pinned by tag (e.g. `traefik/whoami` for HTTP echo, a small base image running `socat` for TCP/UDP echo).

@@ -2,7 +2,7 @@
 
 ## Automated
 
-- [ ] Each bundle under `demos/` loads as a bundle and evaluates with the params its tests set, with no error.
+- [ ] Each bundle under `demos/` loads as a bundle and evaluates with no params set (params-tour: with only its required param), with no error.
 - [ ] bundle-tour and bundle-share are assembled through the same include assembly the CLI uses, and both carry the files from `demos/shared/`.
 - [ ] ctl's `apps create` from a demo folder still assembles includes after the assembly moves.
 - [ ] actions-and-gates: a gate exclusive with a deployment lists that deployment.
@@ -16,7 +16,9 @@
 
 ## On a dev VM
 
-- [ ] hello-world installs from its folder and answers on its ingress.
+With an internal-CA TLS policy for `*.demo.test`.
+
+- [ ] hello-world installs from its folder with no params set and answers on `hello-world.demo.test`.
 - [ ] http-tour: each route shows its feature in the echoed request or response (redirect, header operations, compression, rate limit, balancing across replicas, HTTP to HTTPS redirect).
 - [ ] protocol-tour: plain TCP, TLS to TCP, DTLS to UDP, HTTPS to HTTP/1.1 and HTTPS to h2c each echo through their ingress.
 - [ ] protocol-tour: a site ingress attaches to its attachable ingress and carries traffic.
