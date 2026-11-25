@@ -225,15 +225,37 @@ It MUST refuse a value the daemon would refuse to start with, report an error, a
 > [!NOTE]
 > A definition written for hosts whose daemons set their own limits is checked with those limits given, so that the check is neither stricter nor looser than those hosts.
 
-When the source cannot be read or fetched, or a check fails, the CLI MUST print an error to standard error and exit with a non-zero status:
+### Check results
 
-- for a source, naming the cause;
-- for the version requirement, naming the requirement and the CLI's version;
-- for a bundle rule, naming the offending path or field;
-- for a script error, naming the script file and the line within it, as [script formation](../language/bundle.md#script-formation) specifies;
-- for validation, naming each rejecting parameter and its reason.
-
+When the source cannot be read or fetched, or a check fails, the CLI MUST report the errors below and exit with a non-zero status.
 When every check passes, the CLI MUST exit with status zero.
+
+| kind | reported when | the error names |
+| --- | --- | --- |
+| `source` | the source cannot be read or fetched | the cause |
+| `version` | the version requirement is not satisfied | the requirement and the CLI's version |
+| `bundle` | the bundle breaks a bundle rule | the offending path or field |
+| `script` | evaluation fails | the script file and the line within it, as [script formation](../language/bundle.md#script-formation) specifies |
+| `validation` | a sample parameter value is rejected | the rejecting parameter and its reason, with one error for each such parameter |
+
+The location of an error is the file it lies in and, where it has one, the line within that file.
+For a file or folder source, the file MUST be given as the path the source names joined with the file's bundle path, and otherwise as the bundle path alone.
+
+Without `--json`, the CLI MUST print each error to standard error, beginning on a line of its own.
+An error with a location MUST begin with the file, then `:` and the line where it has one, then `: ` and the error's message.
+
+With `--json`, the CLI MUST print to standard output a single JSON object, `{ "errors": [...] }`, holding one object per error, and an empty array when every check passes.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `kind` | string | the error's kind, from the table above |
+| `message` | string | the error's message |
+| `file` | string or null | the file of the error's location, or `null` where it has none |
+| `line` | integer or null | the line of the error's location, or `null` where it has none |
+| `parameter` | string or null | for a `validation` error, the rejecting parameter, and otherwise `null` |
+
+> [!NOTE]
+> The `file:line: message` form is the one editors and CI annotation matchers read from compilers.
 
 ### Sample parameter values
 

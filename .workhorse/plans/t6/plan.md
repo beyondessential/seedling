@@ -11,6 +11,7 @@
 - The engine-limit options are defined once, in the portable core, and used by both the daemon and `definitions check`, so their names and defaults cannot drift apart.
 - `--ref` reuses `runtime/definition/fetch.rs` and `auth.rs` from the portable core, with the CLI's own version as the running version.
   `auth_file_candidates` falls back to `/run/containers/<uid>/auth.json` through `rustix::process::getuid`, which needs a non-Unix path for Windows; `~/.docker/config.json` is the file that applies there and on macOS.
+- `ScriptError` is a string, with `Bundle::remap_error` rewriting positions in the text. The check's `file:line` and JSON `file`/`line` need the error's own position as data, so the evaluator carries the remapped file and line of the error's position alongside the message, rather than the check parsing them back out of the text.
 
 ## Steps
 
