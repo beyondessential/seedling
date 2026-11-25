@@ -566,6 +566,7 @@ These helpers turn bytes into text and back, digest them, authenticate them unde
 | `std::encode_base64(data)` / `std::decode_base64(text)` | base64 with padding / a Blob |
 | `std::encode_base64url(data)` / `std::decode_base64url(text)` | URL-safe base64 without padding / a Blob |
 | `std::encode_utf8(text)` / `std::decode_utf8(data)` | a Blob / a string |
+| `std::encode_percent(data)` / `std::decode_percent(text)` | percent-encoding of every byte but `A`-`Z`, `a`-`z`, `0`-`9`, `-`, `.`, `_` and `~`, with uppercase digits / a Blob |
 | `std::digest_sha256(data)`, `std::digest_sha512(data)` | a 32 or 64 byte Blob |
 | `std::digest_blake2b(data)`, `std::digest_blake3(data)` | a 64 or 32 byte Blob |
 | `std::hmac_sha256(key, message)`, `std::hmac_sha512(key, message)` | a 32 or 64 byte Blob |
@@ -574,6 +575,9 @@ These helpers turn bytes into text and back, digest them, authenticate them unde
 ```rhai
 // A basic-auth header.
 let auth = "Basic " + std::encode_base64("admin:" + admin_password);
+
+// A password placed in a URL, which may hold `@`, `/` or `:`.
+let db_url = "postgres://app:" + std::encode_percent(db_password) + "@db/app";
 
 // An environment value that changes when the config file does, restarting the workload with it.
 let config_rev = std::encode_hex(std::digest_sha256(app.file("nginx.conf")));
@@ -585,7 +589,25 @@ let tenant_id = std::uuid_v5("6ba7b811-9dad-11d1-80b4-00c04fd430c8", "https://ex
 
 Decoders are strict: whitespace, wrong padding, a stray character or invalid UTF-8 throws rather than being skipped or repaired. To read bytes as text with invalid sequences replaced instead, use the Blob's own `as_string()`, which substitutes U+FFFD for each one.
 
+`std::decode_percent` is the exception: it takes a URL component as a URL carries it, such as a path or query that `std::parse_url` leaves encoded, so any character other than `%` stands for its own UTF-8 bytes, and `+` stays `+`. A `%` that does not begin two hexadecimal digits still throws.
+
 A result computed from a secret parameter or a derived value is withheld like the value itself, so the header above reads as `null` when an operator describes the app.
+
+### Quoting
+
+`std::quote_shell(words)` quotes a string so the shell reads it as one word holding exactly that string, wherever it is placed in a command. Given an array of strings, it quotes each and joins them with spaces, one word per element, and an empty array gives an empty string. A string of only ASCII letters, digits and `_ - . / : , + @ %` is returned as it is; anything else is put in single quotes, with each `'` in it written as `'\''`. A string holding a NUL character throws, since no shell word can hold one.
+
+```rhai
+let backup = app.job("backup")
+    .image("docker.io/library/alpine:3.22")
+    .command(["sh", "-c",
+        "tar -czf /backup/" + std::quote_shell(name) + ".tgz -- " + std::quote_shell(paths)
+        + " && sync"]);
+```
+
+Quoting stops the shell from changing a value, not the program from reading it: a value beginning with `-` still reaches the program as an option, so put `--` before values that might, as above.
+
+A quoted result is withheld like any other helper's when an argument holds a secret parameter or a derived value.
 
 ## Gates
 

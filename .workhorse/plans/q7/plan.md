@@ -16,10 +16,10 @@ Adds `std::quote_shell` (spec QUOT) and `std::encode_percent` / `std::decode_per
 
 ## Percent-encoding
 
-- [ ] Add `encode_percent` to `encoding::register` in `crates/core/src/defs/stdlib/encoding.rs`: take a byte argument, check the worst-case length (three bytes out per byte in) against the string limit before encoding, encode with the unreserved set, and return through `text_result`. Cite `ENC#encodings`.
-- [ ] Add `decode_percent`: take `text`, refuse a `%` not followed by two hex digits with a `not_encoded("percent-encoding", …)` error naming its position, decode, and return through `blob_result`. Cite `ENC#encodings`.
-- [ ] Add the percent-encoded form to `blob_forms` in `crates/core/src/defs/stdlib.rs`, since SEC withholds a Blob derived value in every text encoding BSL offers.
-- [ ] Tests in `crates/core/src/defs/stdlib/encoding/tests.rs`:
+- [x] Add `encode_percent` to `encoding::register` in `crates/core/src/defs/stdlib/encoding.rs`: take a byte argument, check the worst-case length (three bytes out per byte in) against the string limit before encoding, encode with the unreserved set, and return through `text_result`. Cite `ENC#encodings`.
+- [x] Add `decode_percent`: take `text`, refuse a `%` not followed by two hex digits with a `not_encoded("percent-encoding", …)` error naming its position, decode, and return through `blob_result`. Cite `ENC#encodings`.
+- [x] Add the percent-encoded form to `blob_forms` in `crates/core/src/defs/stdlib.rs`, since SEC withholds a Blob derived value in every text encoding BSL offers.
+- [x] Tests in `crates/core/src/defs/stdlib/encoding/tests.rs`:
   - every unreserved character passes through, and every other ASCII byte and a non-ASCII byte are encoded with uppercase digits; a space is `%20`
   - `decode_percent` reads `%2f` and `%2F` alike, leaves `+`, `=`, `&`, `:` and `!` as they are, and returns a Blob
   - `%`, `%4`, `%zz` and a trailing `%` throw, naming the position but not the text
@@ -29,11 +29,11 @@ Adds `std::quote_shell` (spec QUOT) and `std::encode_percent` / `std::decode_per
 
 ## Shell quoting
 
-- [ ] Add `crates/core/src/defs/stdlib/quoting.rs` with `register`, called from `stdlib::module`.
-- [ ] Register `quote_shell`, dispatching on its argument: a string, or an array taken with `take_string_array("words", …)` so a non-string element throws. Mark the string-or-array dispatch `// take: dispatch`, ending in a throw that names both accepted types. Cite `QUOT#shell-words`.
-- [ ] Implement the quoting of one string: throw on NUL without echoing the string, return it unchanged when non-empty and all in the safe set, otherwise wrap in `'…'` with `'\''` for each `'`. Join array elements with single spaces; an empty array gives `""`.
-- [ ] Return through `text_result` with each quoted string as a `ByteArg::text`, checking the result against the string limit. Cite `QUOT#results`.
-- [ ] Tests in `crates/core/src/defs/stdlib/quoting/tests.rs`:
+- [x] Add `crates/core/src/defs/stdlib/quoting.rs` with `register`, called from `stdlib::module`.
+- [x] Register `quote_shell`, dispatching on its argument: a string, or an array taken with `take_string_array("words", …)` so a non-string element throws. Mark the string-or-array dispatch `// take: dispatch`, ending in a throw that names both accepted types. Cite `QUOT#shell-words`.
+- [x] Implement the quoting of one string: throw on NUL without echoing the string, return it unchanged when non-empty and all in the safe set, otherwise wrap in `'…'` with `'\''` for each `'`. Join array elements with single spaces; an empty array gives `""`.
+- [x] Return through `text_result` with each quoted string as a `ByteArg::text`, checking the result against the string limit. Cite `QUOT#results`.
+- [x] Tests in `crates/core/src/defs/stdlib/quoting/tests.rs`:
   - each safe character and a mix of them comes back unchanged
   - `=`, `~`, space, `*`, `$`, `` ` ``, `"`, `\`, `#`, `;`, `!`, `{`, newline and a non-ASCII character each cause quoting
   - `""` gives `''`; `"it's"` gives `'it'\''s'`
@@ -44,13 +44,13 @@ Adds `std::quote_shell` (spec QUOT) and `std::encode_percent` / `std::decode_per
 
 ## Redaction
 
-- [ ] Add to `an_env_value_containing_a_derived_value_is_null` in `crates/core/src/oi/handler/apps/tests.rs`: an env value built from `std::quote_shell(["--pw", pw])`, from `std::encode_percent(pw)` and from `std::encode_percent(raw)` reads as `null`, and one from `std::quote_shell("plain")` does not.
+- [x] Add to `an_env_value_containing_a_derived_value_is_null` in `crates/core/src/oi/handler/apps/tests.rs`: an env value built from `std::quote_shell(["--pw", pw])`, from `std::encode_percent(pw)` and from `std::encode_percent(raw)` reads as `null`, and one from `std::quote_shell("plain")` does not.
 
 ## Docs
 
-- [ ] `docs/bsl-scripting.md`, *Digests and encodings*: add `encode_percent` / `decode_percent` to the table, and say under the strict-decoder paragraph that `decode_percent` takes a URL component as a URL carries it.
-- [ ] `docs/bsl-scripting.md`: add a *Quoting* subsection under *Standard helpers* for `std::quote_shell`, with an `sh -c` example built from an array and a line on `--` before a value that may begin with `-`.
+- [x] `docs/bsl-scripting.md`, *Digests and encodings*: add `encode_percent` / `decode_percent` to the table, and say under the strict-decoder paragraph that `decode_percent` takes a URL component as a URL carries it.
+- [x] `docs/bsl-scripting.md`: add a *Quoting* subsection under *Standard helpers* for `std::quote_shell`, with an `sh -c` example built from an array and a line on `--` before a value that may begin with `-`.
 
 ## Finish
 
-- [ ] `cargo clippy`, `cargo fmt`, `etc/ci/check-spec-style.sh`, `etc/ci/check-spec-citations.sh` and `etc/ci/check-defs-coercion.sh` clean.
+- [x] `cargo clippy`, `cargo fmt`, `etc/ci/check-spec-style.sh`, `etc/ci/check-spec-citations.sh` and `etc/ci/check-defs-coercion.sh` clean.
