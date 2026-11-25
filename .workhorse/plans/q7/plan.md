@@ -11,8 +11,8 @@ Adds `std::quote_shell` (spec QUOT) and `std::encode_percent` / `std::decode_per
 
 ## Shared result helpers
 
-- [ ] Move `text_result`, `blob_result`, `settle`, `max_string`, `max_blob`, `unary` and `HelperResult` from `crates/core/src/defs/stdlib/encoding.rs` to `crates/core/src/defs/stdlib.rs` as `pub(super)` items, updating every call site in `encoding.rs`.
-- [ ] Re-cite the moved result helpers to both `ENC#results` and `QUOT#results`.
+- [x] Move `text_result`, `blob_result`, `settle`, `max_string`, `max_blob`, `unary` and `HelperResult` from `crates/core/src/defs/stdlib/encoding.rs` to `crates/core/src/defs/stdlib.rs`, where the child modules reach them, updating every call site in `encoding.rs`.
+- [x] Re-cite the moved result helpers to both `ENC#results` and `QUOT#results`.
 
 ## Percent-encoding
 
