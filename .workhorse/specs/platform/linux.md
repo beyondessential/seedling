@@ -136,7 +136,7 @@ The platform's [opt-out from snapshotting](../runtime/actuation.md#snapshotting-
 
 The runtime MUST create each snapshottable volume as a subvolume, and MUST remove one by deleting the subvolume.
 A [snapshot site volume](../runtime/site-resources.md#site-volume-snapshots) MUST be a read-only snapshot of its source subvolume.
-A [promoted snapshot](../runtime/site-resources.md#snapshot-promotion) MUST be a writable snapshot of the snapshot site volume's subvolume.
+The managed site volume a [promotion](../runtime/site-resources.md#snapshot-promotion) creates MUST be a writable snapshot of the snapshot site volume's subvolume.
 
 > [!NOTE]
 > Snapshots of subvolumes share unchanged data with their source, so a snapshot or promotion takes no time or space in proportion to the volume's size.
