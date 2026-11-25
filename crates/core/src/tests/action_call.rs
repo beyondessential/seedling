@@ -620,6 +620,31 @@ fn a_closure_can_pass_on_the_param_map_it_received() {
     .expect("versions pass on as their text");
 }
 
+// spec: ACN#action-invocation
+#[test]
+fn ip_values_pass_to_invoke_as_their_canonical_text() {
+    invoke_action(
+        r#"
+            app.on_action("inner", |rt, p| {
+                if type_of(p.allowed) != "IpSubnet" { throw `allowed is ${type_of(p.allowed)}`; }
+                if p.allowed.to_string() != "10.0.0.5/32" { throw `allowed is ${p.allowed}`; }
+                if p.pool != "2001:db8::-2001:db8::ff" { throw `pool is ${p.pool}`; }
+            }, #{
+                params: #{ allowed: #{ kind: "ip-subnet" }, pool: #{ kind: "text" } },
+            });
+            app.on_action("outer", |rt, _p| {
+                app.action("inner").invoke(#{
+                    allowed: std::parse_ip_address("10.0.0.5"),
+                    pool: std::parse_ip_range("2001:DB8::-2001:db8::FF"),
+                });
+            });
+        "#,
+        "outer",
+        rhai::Map::new(),
+    )
+    .expect("IP values pass on as their text");
+}
+
 // spec: OPS#persistence
 // spec: OPS#sub-action-parameters
 #[test]
@@ -647,6 +672,31 @@ fn a_recorded_version_param_replays_as_a_version() {
         .replace("SUPPLIED", r#""17""#);
     let (result, _) = run_outer_in_replay_context(&second, pending, None);
     result.expect("replay restores the recorded version");
+}
+
+// spec: OPS#persistence
+// spec: OPS#sub-action-parameters
+#[test]
+fn a_recorded_ip_param_replays_as_its_type() {
+    let source = r#"
+        app.on_action("inner", |rt, p| {
+            if type_of(p.pool) != "IpRange" { throw `pool is ${type_of(p.pool)}`; }
+            if p.pool.to_string() != "10.0.0.0-10.0.0.3" { throw `pool is ${p.pool}`; }
+        }, #{ params: #{ pool: #{ kind: "ip-range" } } });
+        app.on_action("outer", |rt, _p| {
+            app.action("inner").invoke(#{ pool: SUPPLIED });
+        });
+    "#;
+    let first = source.replace("SUPPLIED", r#""10.0.0.0/30""#);
+    let (result, pending) = run_outer_in_replay_context(&first, Vec::new(), None);
+    result.expect("outer must run");
+    let extra = sub_action_payload(&pending);
+    assert!(extra.contains(r#""types":{"pool":"ip-range"}"#), "{extra}");
+
+    // A script now supplying another value replays with the recorded one.
+    let second = source.replace("SUPPLIED", r#""10.9.9.9""#);
+    let (result, _) = run_outer_in_replay_context(&second, pending, None);
+    result.expect("replay restores the recorded range");
 }
 
 // spec: HIST#action-calls

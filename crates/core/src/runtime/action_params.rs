@@ -583,4 +583,66 @@ mod tests {
             assert_eq!(map.get("target"), Some(&delivered));
         }
     }
+
+    // spec: ACN#param-delivery
+    // spec: IP#family-argument
+    // spec: OPS#persistence
+    #[test]
+    fn an_ip_param_is_checked_by_its_kind_and_delivered_as_its_type() {
+        use crate::defs::ip::{Family, IpAddress, IpRange, IpSubnet};
+
+        let mut sch = schema("proxy", of_kind(ParamKind::IpAddress { family: None }));
+        sch.extend(schema(
+            "allowed",
+            of_kind(ParamKind::IpSubnet { family: None }),
+        ));
+        sch.extend(schema(
+            "pool",
+            of_kind(ParamKind::IpRange {
+                family: Some(Family::V4),
+            }),
+        ));
+        let mut params = supplied("proxy", json!("2001:DB8::1"));
+        params.insert("allowed".into(), json!("10.0.0.7"));
+        params.insert("pool".into(), json!("10.0.0.0/30"));
+        let map = apply_schema(&sch, params).expect("each value is of its kind");
+        assert_eq!(map.get("proxy"), Some(&json!("2001:db8::1")));
+        assert_eq!(map.get("allowed"), Some(&json!("10.0.0.7/32")));
+        assert_eq!(map.get("pool"), Some(&json!("10.0.0.0-10.0.0.3")));
+
+        let persisted: ParamMap =
+            serde_json::from_value(serde_json::to_value(&map).unwrap()).unwrap();
+        let delivered = persisted.to_rhai().expect("restores");
+        let proxy = delivered["proxy"].clone().try_cast::<IpAddress>();
+        assert_eq!(proxy.expect("an IpAddress").to_string(), "2001:db8::1");
+        let allowed = delivered["allowed"].clone().try_cast::<IpSubnet>();
+        assert_eq!(allowed.expect("an IpSubnet").to_string(), "10.0.0.7/32");
+        let pool = delivered["pool"].clone().try_cast::<IpRange>();
+        assert_eq!(pool.expect("an IpRange").to_string(), "10.0.0.0-10.0.0.3");
+
+        for (key, refused, reason) in [
+            ("proxy", "::ffff:10.0.0.1", "IPv4-mapped"),
+            ("allowed", "10.0.0.5/24", "10.0.0.0/24"),
+            (
+                "pool",
+                "2001:db8::/64",
+                "must be an IPv4 range, not an IPv6 one",
+            ),
+        ] {
+            let mut params = supplied("proxy", json!("10.0.0.1"));
+            params.insert("allowed".into(), json!("10.0.0.0/24"));
+            params.insert("pool".into(), json!("10.0.0.1-10.0.0.9"));
+            params.insert(key.into(), json!(refused));
+            let err = apply_schema(&sch, params).expect_err(refused);
+            let ParamValidationError::Requirements { messages } = err else {
+                panic!("{refused}: expected a requirement failure, got {err:?}");
+            };
+            assert!(
+                messages.len() == 1
+                    && messages[0].starts_with(&format!("{key}: "))
+                    && messages[0].contains(reason),
+                "{refused}: {messages:?}"
+            );
+        }
+    }
 }
