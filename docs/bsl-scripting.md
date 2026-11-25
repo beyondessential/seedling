@@ -122,7 +122,7 @@ app.deployment("worker")
     .arg(["--port", "8080"])          // append args
     .env("WORKERS", "4")
     .env([#{ name: "FOO", value: "bar" }, ...])
-    .memory("512m")                   // k / m / g suffixes
+    .memory("512Mi")                  // a quantity, or an integer number of bytes
     .cpus(0.5)
     .pids_limit(128)
     .workdir("/app")
@@ -169,7 +169,7 @@ let vol = app.volume("data")
 ```rhai
 let version = app.param("version")
     .kind("text")           // text (one line) | multiline | email | password | weak-password | random
-                            // | boolean | integer | choice | version | version-semver | purl
+                            // | boolean | integer | quantity | choice | version | version-semver | purl
                             // | url | url-origin | hostname
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
@@ -187,7 +187,7 @@ version.validate(|value, all| {
 });
 ```
 
-A kind that takes arguments is given as a kind map, a `name` and the kind's arguments. `integer` takes an optional `range`, and `choice` takes its `options`, which it requires:
+A kind that takes arguments is given as a kind map, a `name` and the kind's arguments. `integer` and `quantity` take an optional `range`, and `choice` takes its `options`, which it requires:
 
 ```rhai
 let port = app.param("port")
@@ -197,16 +197,21 @@ let tier = app.param("tier")
     .kind(#{ name: "choice", options: ["small", "large"] })
     .default_value("small");
 let canary = app.param("canary").kind("boolean").required(false);
+let cache = app.param("cache-memory")
+    .kind(#{ name: "quantity", range: 64 * 1024 * 1024..=AVAILABLE_MEMORY })
+    .default_value("256Mi")
+    .description("Memory for the cache, in bytes");
 
 port.parsed()               // 8080, an integer
+cache.parsed()              // 268435456, an integer of bytes
 canary.is_set() && canary.parsed()  // a boolean, without comparing against "true"
 ```
 
 A range with no start, such as `..10`, starts at 0, so give the start of a range that takes negative values. `default_value("")` removes a default. A default the kind refuses fails the evaluation once the script has finished, since `kind` and `default_value` can be called in either order. A `boolean` or `choice` parameter cannot be secret, since the definition lists every value it can take; the same goes for action and shell params.
 
-Every set value is first checked against its kind, by the kind's [parser](#parsing-a-kind): `text` and every kind but `multiline` hold a single line with no control characters, `email` needs an address, `password` a strong one, `boolean` exactly `true` or `false`, `integer` a whole number in plain decimal form within its range, and `choice` one of its options, matched case-sensitively. A value its kind refuses is rejected with the parser's reason, and while any value is refused no validator runs. An empty stored value is checked like any other; unset a parameter to clear it.
+Every set value is first checked against its kind, by the kind's [parser](#parsing-a-kind): `text` and every kind but `multiline` hold a single line with no control characters, `email` needs an address, `password` a strong one, `boolean` exactly `true` or `false`, `integer` a whole number in plain decimal form within its range, `quantity` a [quantity](#quantities) within its range, and `choice` one of its options, matched case-sensitively. A value its kind refuses is rejected with the parser's reason, and while any value is refused no validator runs. An empty stored value is checked like any other; unset a parameter to clear it.
 
-Operator interfaces offer a toggle for a `boolean` parameter, a number input for an `integer` one and a selection for a `choice` one. Clients setting parameters through `/apps/params/set` may send a JSON boolean or integer for those kinds; it is stored as its text.
+Operator interfaces offer a toggle for a `boolean` parameter, a number input for an `integer` one, a text input showing the resolved amount for a `quantity` one, and a selection for a `choice` one. Clients setting parameters through `/apps/params/set` may send a JSON boolean for a `boolean` parameter and a JSON integer for an `integer` or `quantity` one; it is stored as its text.
 
 A validator decides whether a proposed value is acceptable. It runs before any definition update or parameter change is stored, against the values the app would hold if the request went through, so it sees the new definition's rules alongside the new values. A rejection refuses the request with `validation_failed` and the thrown value as the reason; nothing changes. A validator runs only while its param is set (use `required` for presence), gets no `rt`, and may not define resources. Call `validate` at most once per param, at the top level.
 
@@ -400,7 +405,7 @@ app.on_shell("check", |rt, shell, _param| {
 });
 ```
 
-A closure's `param` map holds each declared param that has a value as its kind's [parser result](#parsing-a-kind): an `email` param is a map of `local` and `domain`, a `boolean` a boolean, an `integer` an integer and a `version` a `Version`. A declared param left without a value is absent, so test it with `"name" in param`. Params a schema does not declare arrive as they were given. Operators and clients may send a JSON boolean or integer for a `boolean` or `integer` param, as well as its text.
+A closure's `param` map holds each declared param that has a value as its kind's [parser result](#parsing-a-kind): an `email` param is a map of `local` and `domain`, a `boolean` a boolean, an `integer` or `quantity` an integer and a `version` a `Version`. A declared param left without a value is absent, so test it with `"name" in param`. Params a schema does not declare arrive as they were given. Operators and clients may send a JSON boolean for a `boolean` param and a JSON integer for an `integer` or `quantity` param, as well as its text.
 
 ## Standard helpers
 
@@ -416,7 +421,7 @@ Calling a helper that does not exist throws, like any unknown function. Which he
 
 ### Parsing a kind
 
-Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, and `std::parse_choice(v, ["small", "large"])`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_quantity`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, `std::parse_quantity(v)` or `std::parse_quantity(v, 1..)`, and `std::parse_choice(v, ["small", "large"])`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
 
 ```rhai
 let contact = std::parse_email("ops@example.org");
@@ -426,7 +431,23 @@ contact.domain  // "example.org"
 app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
-`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean and `std::parse_integer` an integer. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, and `std::parse_hostname` the hostname in its ASCII form, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean, and `std::parse_integer` and `std::parse_quantity` an integer. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, and `std::parse_hostname` the hostname in its ASCII form, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+
+### Quantities
+
+A quantity is a number with an optional suffix, as Kubernetes writes resource quantities, read as a whole integer: `std::parse_quantity` and the `quantity` kind read one, and `container.memory` takes one as a number of bytes. The number may have a sign and a decimal point (`-1`, `1.5`, `.5`), and the suffix multiplies it:
+
+- `k`, `M`, `G`, `T`, `P` and `E` by powers of 1000;
+- `Ki`, `Mi`, `Gi`, `Ti`, `Pi` and `Ei` by powers of 1024;
+- `e` or `E` followed by an integer, such as `1e9`, by that power of ten.
+
+Suffixes are case-sensitive and nothing may stand between the number and its suffix. A quantity that does not come to a whole number, or falls outside the signed 64-bit range, is refused rather than rounded or capped, so `512m`, which Kubernetes reads as milli, is refused with a hint towards `512Mi`. A quantity has no unit: the parameter's description says whether it counts bytes, bits or anything else.
+
+```rhai
+std::parse_quantity("1.5Gi")      // 1610612736
+std::parse_quantity("2k")         // 2000
+std::parse_quantity("512Mi") < AVAILABLE_MEMORY
+```
 
 ### Versions
 
