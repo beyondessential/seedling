@@ -34,8 +34,8 @@ Applies to a [host](../overview.md#host) running Linux, settling for that platfo
 | system journal | the journal |
 | resource-control group | a slice, over cgroup v2 |
 | system resolver | systemd-resolved, at its extra stub listener `127.0.0.54:53` |
-| snapshotting volume store | a BTRFS filesystem, in which each snapshottable volume is a subvolume |
-| packet filter | nftables |
+| snapshotting volume store | a BTRFS filesystem, as [volume storage](#volume-storage) settles |
+| packet-filtering rules | rules in nftables, as the [packet filter](#packet-filter) settles |
 | machine identifier | the contents of `/etc/machine-id`, with surrounding whitespace removed |
 
 The host MUST run systemd as its service manager, with the unified cgroup v2 hierarchy.
