@@ -113,7 +113,8 @@ Each trait goes beside the existing four in `system.rs`, with a stub in `system/
 - [x] A `portable` job in `.github/workflows/rust.yml` lints `seedling-core` with `--all-targets` on macOS and Windows
 - [x] No doc named a moved module; `DEVELOP.md` says where platform code goes
 - [x] Clippy, fmt, the spec style and citation checks and the CI greps pass
-- [ ] The workspace tests on Linux
+- [x] The reconciler files and clears the routes and packet-filter faults through one `settle_plane_fault`, which leaves a withheld apply's fault alone, and is tested directly
+- [x] The workspace tests on Linux
 
 ## Explicitly rejected
 

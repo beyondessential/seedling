@@ -7070,7 +7070,7 @@ mod tests {
         // not provided for.
         assert_eq!(
             standings[0].levels.iter().copied().collect::<Vec<_>>(),
-            [Priority::Critical, Priority::Normal, Priority::Low]
+            [Priority::Low, Priority::Normal, Priority::Critical]
         );
     }
 

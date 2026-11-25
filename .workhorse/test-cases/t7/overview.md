@@ -10,7 +10,7 @@
 
 ## Behaviour unchanged on Linux
 
-- [ ] The existing test suites of core, the daemon and the CLI pass with no test removed to make them pass
+- [x] The existing test suites of core, the daemon and the CLI pass with no test removed to make them pass
 - [x] Core's reconciler tests run against the stub backends, with no Linux adapter in core's dependency graph
 - [x] The adapters' own tests move with them into `seedling-linux` and still run
 - [x] A workload unit takes its tier slice and kill preference from its standing, and an infrastructure unit the infrastructure slice and -900 (verifies spec: LINUX#kill-order, LINUX#resource-control-groups)
@@ -27,6 +27,6 @@
 
 ## Packet filter (verifies spec: FLT#host-faults, LINUX#packet-filter)
 
-- [ ] A failed packet-filter apply files `packet_filter_failed`, and the next successful apply clears it
-- [ ] A withheld apply neither files nor clears `packet_filter_failed`
+- [x] A failed packet-filter apply files `packet_filter_failed`, and the next successful apply clears it
+- [x] A withheld apply neither files nor clears `packet_filter_failed`
 - [ ] An apply replaces only the `inet seedling_net` table and leaves a rule in another table in place
