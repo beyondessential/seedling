@@ -100,9 +100,10 @@ function likelySuffix(unit: string): string | null {
   return suffix === unit ? null : suffix;
 }
 
-/** Write `n` as a quantity: with the largest binary suffix it is a multiple of
- *  to two decimal places, otherwise the largest such decimal suffix, otherwise
- *  as a plain integer. */
+/** Write `n` as its shortest quantity: with whichever suffix it is an exact
+ *  multiple of to two decimal places gives the shortest text, or as a plain
+ *  integer where none is shorter. A tie goes to a binary suffix over a decimal
+ *  one, and to a larger suffix over a smaller one. */
 // spec: ACN#quantities
 export function formatQuantity(n: bigint): string {
   const magnitude = n < 0n ? -n : n;
@@ -111,15 +112,21 @@ export function formatQuantity(n: bigint): string {
     ...[...BINARY].reverse().map(([s, p]): [string, bigint] => [s, 1n << BigInt(p)]),
     ...[...DECIMAL].reverse().map(([s, p]): [string, bigint] => [s, 10n ** BigInt(p)]),
   ];
+  let shortest = n.toString();
+  let best: string | null = null;
   for (const [suffix, unit] of units) {
-    if (magnitude >= unit && (magnitude * 100n) % unit === 0n) {
-      const hundredths = (magnitude * 100n) / unit;
-      const whole = hundredths / 100n;
-      const fraction = hundredths % 100n;
-      if (fraction === 0n) return `${sign}${whole}${suffix}`;
-      if (fraction % 10n === 0n) return `${sign}${whole}.${fraction / 10n}${suffix}`;
-      return `${sign}${whole}.${fraction.toString().padStart(2, "0")}${suffix}`;
-    }
+    if (magnitude < unit || (magnitude * 100n) % unit !== 0n) continue;
+    const hundredths = (magnitude * 100n) / unit;
+    const whole = hundredths / 100n;
+    const fraction = hundredths % 100n;
+    const text =
+      fraction === 0n
+        ? `${sign}${whole}${suffix}`
+        : fraction % 10n === 0n
+          ? `${sign}${whole}.${fraction / 10n}${suffix}`
+          : `${sign}${whole}.${fraction.toString().padStart(2, "0")}${suffix}`;
+    if (best === null || text.length < best.length) best = text;
   }
-  return n.toString();
+  if (best !== null && best.length <= shortest.length) shortest = best;
+  return shortest;
 }

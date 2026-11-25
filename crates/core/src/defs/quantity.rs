@@ -53,9 +53,10 @@ pub fn parse_quantity(text: &str) -> Result<i64, String> {
     amount(&parts)
 }
 
-/// Write `n` as a quantity: with the largest binary suffix it is a multiple
-/// of to two decimal places, otherwise the largest such decimal suffix,
-/// otherwise as a plain integer.
+/// Write `n` as its shortest quantity: with whichever suffix it is an exact
+/// multiple of to two decimal places gives the shortest text, or as a plain
+/// integer where none is shorter. A tie goes to a binary suffix over a decimal
+/// one, and to a larger suffix over a smaller one.
 // spec: ACN#quantities
 pub fn format_quantity(n: i64) -> String {
     let magnitude = i128::from(n).abs();
@@ -68,18 +69,22 @@ pub fn format_quantity(n: i64) -> String {
         .iter()
         .rev()
         .map(|&(suffix, power)| (suffix, 10i128.pow(power)));
-    for (suffix, unit) in binary.chain(decimal) {
-        if magnitude >= unit && (magnitude * 100) % unit == 0 {
+    let plain = n.to_string();
+    binary
+        .chain(decimal)
+        .filter(|&(_, unit)| magnitude >= unit && (magnitude * 100) % unit == 0)
+        .map(|(suffix, unit)| {
             let hundredths = magnitude * 100 / unit;
             let (whole, fraction) = (hundredths / 100, hundredths % 100);
-            return match fraction {
+            match fraction {
                 0 => format!("{sign}{whole}{suffix}"),
                 f if f % 10 == 0 => format!("{sign}{whole}.{}{suffix}", f / 10),
                 f => format!("{sign}{whole}.{f:02}{suffix}"),
-            };
-        }
-    }
-    n.to_string()
+            }
+        })
+        .min_by_key(String::len)
+        .filter(|text| text.len() <= plain.len())
+        .unwrap_or(plain)
 }
 
 fn parts<'a>(input: &mut &'a str) -> winnow::Result<Parts<'a>> {
@@ -365,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn formatting_picks_the_largest_exact_suffix() {
+    fn formatting_picks_the_shortest_exact_quantity() {
         for (n, text) in [
             (0, "0"),
             (7, "7"),
@@ -376,7 +381,11 @@ mod tests {
             (15872 << 20, "15.5Gi"),
             (1_610_612_736, "1.5Gi"),
             (-(512 << 20), "-512Mi"),
-            (1_230, "1.23k"),
+            (1_230, "1230"),
+            (1_000_000_000, "1G"),
+            (1_500_000_000, "1.5G"),
+            (1 << 30, "1Gi"),
+            (1_000 << 20, "1000Mi"),
             (1_234, "1234"),
             (1_001, "1001"),
             (i64::MIN, "-8Ei"),

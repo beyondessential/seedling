@@ -69,14 +69,17 @@ describe("parseQuantity", () => {
 
 describe("formatQuantity", () => {
   // spec: ACN#quantities
-  it("picks the largest exact suffix", () => {
+  it("picks the shortest exact quantity", () => {
     for (const [n, text] of [
       [0n, "0"],
       [1_000n, "1k"],
       [1_500n, "1.5k"],
       [64n * 2n ** 20n, "64Mi"],
       [15872n * 2n ** 20n, "15.5Gi"],
-      [1_230n, "1.23k"],
+      [1_230n, "1230"],
+      [1_000_000_000n, "1G"],
+      [1_500_000_000n, "1.5G"],
+      [1_000n * 2n ** 20n, "1000Mi"],
       [1_234n, "1234"],
       [-(2n ** 63n), "-8Ei"],
     ] as const) {
