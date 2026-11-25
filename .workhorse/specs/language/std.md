@@ -35,6 +35,7 @@ Each parameter kind has a helper that parses a value of that kind, as [kind pars
 
 A helper that parses compound text, such as a URL or an email address, MUST return an object map from the name of each part to its value.
 A helper whose result is a single value with no parts MUST return it as a string, an integer, a boolean or a Blob.
+A helper that decodes a structured format MUST return the value the text holds, as [structured formats](structured-formats.md#decoding) specifies.
 A helper MUST return a value of a type of its own only where that value needs methods, such as comparing two versions or testing whether a subnet holds an address.
 
 ## Replicability

@@ -858,6 +858,93 @@ fn withheld_results_count_toward_the_derived_values_limit() {
     assert!(evaluate(1, &not_secret).is_none(), "nothing is withheld");
 }
 
+// spec: SEC#redaction
+// spec: FMT#withheld-arguments
+#[test]
+fn an_encoding_of_a_value_holding_a_secret_is_withheld() {
+    let script = r#"
+        let token = app.param("token").secret(true);
+        let config = #{ db: #{} };
+        config.db[token.value()] = 1;
+        app.description(std::encode_yaml(config));
+    "#;
+    let (yaml, found) = withheld(script, &[("token", "s3cret")]);
+    assert!(found, "{yaml}");
+    let (_, found) = withheld(&script.replace(".secret(true)", ""), &[("token", "s3cret")]);
+    assert!(!found, "a parameter that is not secret is shown");
+}
+
+// spec: SEC#redaction
+// spec: FMT#withheld-arguments
+#[test]
+fn each_string_decoded_from_a_secret_is_withheld() {
+    let params = [("token", r#"{"user": "alice", "pin": 1234}"#)];
+    let (user, found) = withheld(
+        r#"
+            let doc = std::decode_json(app.param("token").secret(true).value());
+            app.description(doc.user);
+        "#,
+        &params,
+    );
+    assert!(found, "{user}");
+    let (pin, found) = withheld(
+        r#"
+            let doc = std::decode_json(app.param("token").secret(true).value());
+            app.description(doc.pin.to_string());
+        "#,
+        &params,
+    );
+    assert!(!found, "only strings are withheld, not {pin}");
+}
+
+// spec: SEC#withheld-values
+// spec: FMT#refusal
+#[test]
+fn a_refusal_naming_a_secret_key_is_masked() {
+    let (_, err) = evaluate_bundle(
+        seedling_bundle::Bundle::from_stored_script(
+            r#"
+            let config = #{};
+            config[app.param("token").secret(true).value()] = ();
+            std::encode_toml(config);
+            "#,
+        ),
+        &[("token", "s3cret")],
+        &Default::default(),
+    );
+    let err = err.expect("TOML has no null").to_string();
+    assert!(
+        err.contains(r#"`value["<redacted>"]` cannot be encoded"#),
+        "{err}"
+    );
+    assert!(!err.contains("s3cret"), "{err}");
+}
+
+// spec: LIM#limits
+// spec: SEC#redaction
+#[test]
+fn each_decoded_string_counts_toward_the_derived_values_limit() {
+    let evaluate = |max_derived_values: usize| {
+        evaluate_bundle(
+            seedling_bundle::Bundle::from_stored_script(
+                r#"std::decode_json(app.param("token").secret(true).value());"#,
+            ),
+            &[("token", r#"{"a": "x", "b": ["x", ""]}"#)],
+            &crate::ScriptLimits {
+                max_derived_values,
+                ..Default::default()
+            },
+        )
+        .1
+    };
+    assert!(
+        evaluate(3).is_none(),
+        "a, b and x, the empty string withholding nothing"
+    );
+    let err = evaluate(2).expect("a third does not fit").to_string();
+    assert!(err.contains("too large"), "{err}");
+}
+
 // spec: RND#password-hashes
 #[test]
 fn a_password_hash_checks_its_password() {

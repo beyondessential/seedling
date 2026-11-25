@@ -66,6 +66,7 @@ miette = "7.6.0"
 semver = "1.0.28"
 base64 = "0.23.1"
 oci-client = "0.18.0"
+toml.workspace = true
 siphasher = "1.0.4"
 unicode-properties = { version = "0.1.5", default-features = false, features = ["general-category"] }
 strum = { version = "0.27.2", features = ["derive"] }
@@ -83,6 +84,9 @@ idna = "1.1.0"
 percent-encoding = "2.3.2"
 winnow = "1.0.5"
 num-bigint = "0.4.8"
+saphyr = "0.3.4"
+saphyr-parser = "0.3.4"
+hifijson = "0.5.1"
 
 [dev-dependencies]
 flate2 = "1.1.11"
