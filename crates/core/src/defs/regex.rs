@@ -25,7 +25,9 @@ use winnow::{
 use crate::{
     defs::{
         param_def::{ParamKind, ParamKindName},
-        stdlib::{ARRAY, HelperLimits, MODULE, STRING, helper_limits, kinds, max_string, within},
+        stdlib::{
+            ARRAY, HelperLimits, MAP, MODULE, STRING, helper_limits, kinds, max_string, within,
+        },
         take::{take_closure, take_string},
     },
     runtime::seeds,
@@ -403,8 +405,12 @@ impl CustomType for Regex {
             )
             .with_fn(
                 "captures",
-                |this: &mut Self, text: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                |ctx: NativeCallContext,
+                 this: &mut Self,
+                 text: Dynamic|
+                 -> Result<Dynamic, Box<EvalAltResult>> {
                     let text = take_string("text", text)?;
+                    within_capture_limits(&ctx, this)?;
                     let mut positions = Positions::new(&text);
                     let mut caps = this.0.regex.create_captures();
                     this.0.regex.captures(&text, &mut caps);
@@ -422,6 +428,7 @@ impl CustomType for Regex {
                  text: Dynamic|
                  -> Result<rhai::Array, Box<EvalAltResult>> {
                     let text = take_string("text", text)?;
+                    within_capture_limits(&ctx, this)?;
                     let mut positions = Positions::new(&text);
                     bounded(
                         &ctx,
@@ -547,6 +554,20 @@ fn span_map(text: &str, start: usize, end: usize, start_at: INT, end_at: INT) ->
     map.into()
 }
 
+// spec: LIM#limits
+/// Refuse to build the captures of `this` where its groups alone pass the
+/// engine's array or map limit.
+fn within_capture_limits(ctx: &NativeCallContext, this: &Regex) -> Result<(), Box<EvalAltResult>> {
+    let info = this.0.regex.group_info();
+    within(
+        info.group_len(PatternID::ZERO),
+        ctx.engine().max_array_size(),
+        ARRAY,
+    )?;
+    let named = info.pattern_names(PatternID::ZERO).flatten().count();
+    within(named, ctx.engine().max_map_size(), MAP)
+}
+
 // spec: REX#captures
 fn captures_map(text: &str, positions: &mut Positions, caps: &Captures) -> Dynamic {
     let whole = caps
@@ -664,6 +685,7 @@ fn replace(
                 }
             }
             Replacement::Closure(closure) => {
+                within_capture_limits(ctx, this)?;
                 let captures = captures_map(&text, &mut positions, &caps);
                 let replaced = closure.call_within_context::<Dynamic>(ctx, (captures,))?;
                 let replaced = replaced.into_string().map_err(|t| -> Box<EvalAltResult> {

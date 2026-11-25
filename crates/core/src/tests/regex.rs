@@ -402,3 +402,18 @@ fn nested_groups_have_their_own_character_positions() {
         "[[1, 4], [1, 3], [1, 2], [3, 4]]"
     );
 }
+
+// spec: LIM#limits
+#[test]
+fn captures_are_held_to_the_array_limit_by_their_groups_alone() {
+    let limits = crate::ScriptLimits {
+        max_array_size: 100,
+        ..crate::ScriptLimits::default()
+    };
+    let source = r#"let p = ""; p.pad(400, "()"); std::regex(p).captures("x")"#;
+    let err = eval_with(&limits, source).expect_err("too many groups");
+    assert!(
+        matches!(*err, rhai::EvalAltResult::ErrorDataTooLarge(..)),
+        "{err:?}"
+    );
+}

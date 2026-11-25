@@ -73,6 +73,8 @@ pub(crate) fn within(len: usize, limit: usize, what: &str) -> Result<(), Box<Eva
 pub(crate) const STRING: &str = "Length of string";
 /// What the engine calls an array in a size error.
 pub(crate) const ARRAY: &str = "Size of array/BLOB";
+/// What the engine calls an object map in a size error.
+pub(crate) const MAP: &str = "Size of object map";
 /// What the engine calls a Blob in a size error.
 const BLOB: &str = "Size of BLOB";
 
