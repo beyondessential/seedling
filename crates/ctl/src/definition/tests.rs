@@ -456,7 +456,10 @@ fn a_copy_in_the_folder_must_match_its_source_and_stands_in_for_a_missing_one() 
 
     write(dir.path(), "apps/def/lib/db.seed.rhai", b"stale;");
     let e = assembled(&dir).unwrap_err();
-    assert!(e.contains("different files"), "{e}");
+    assert!(
+        e.contains("differs from its source at lib/db.seed.rhai"),
+        "{e}"
+    );
 
     std::fs::remove_file(dir.path().join("apps/common/db.seed.rhai")).unwrap();
     assert_eq!(assembled(&dir).unwrap()["lib/db.seed.rhai"], b"stale;");
@@ -468,7 +471,10 @@ fn a_copy_in_the_folder_must_match_its_source_and_stands_in_for_a_missing_one() 
     let dir = repo(".git", "errors", "../pages");
     write(dir.path(), "apps/def/errors/500.html", b"<p>");
     let e = assembled(&dir).unwrap_err();
-    assert!(e.contains("different files"), "a partial copy differs: {e}");
+    assert!(
+        e.contains("differs from its source at errors/img/logo.png"),
+        "a partial copy differs where it lacks a file: {e}"
+    );
 }
 
 // spec: CLI#include-assembly

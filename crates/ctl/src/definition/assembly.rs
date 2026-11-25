@@ -113,14 +113,40 @@ pub(super) fn assemble(
             .collect();
         if !has_copy {
             files.extend(placed);
-        } else if !at_or_beneath(files, key).eq(placed.iter()) {
-            return Err(at(
-                "the folder already holds different files there; remove them or bring them in line"
-                    .to_owned(),
-            ));
+        } else if let Some(path) = first_difference(at_or_beneath(files, key), &placed) {
+            return Err(at(format!(
+                "the folder's copy differs from its source at {path}; remove the copy or bring it in line"
+            )));
         }
     }
     Ok(())
+}
+
+/// The first bundle path at which the folder's copy and the files read from
+/// its source differ: held by one and not the other, or held by both with
+/// different contents.
+fn first_difference<'a>(
+    copy: impl Iterator<Item = (&'a String, &'a Vec<u8>)>,
+    source: &'a BTreeMap<String, Vec<u8>>,
+) -> Option<&'a str> {
+    let mut copy = copy.peekable();
+    let mut source = source.iter().peekable();
+    loop {
+        match (copy.peek(), source.peek()) {
+            (None, None) => return None,
+            (Some((path, _)), None) | (None, Some((path, _))) => return Some(path),
+            (Some((a, x)), Some((b, y))) => {
+                if a != b {
+                    return Some(a.min(b));
+                }
+                if x != y {
+                    return Some(a);
+                }
+            }
+        }
+        copy.next();
+        source.next();
+    }
 }
 
 /// The files at `key` or beneath it, in path order, found by range rather
