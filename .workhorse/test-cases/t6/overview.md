@@ -46,11 +46,11 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 ## Host constants
 
 - [ ] A script that throws unless `TIMEZONE == "UTC"`, `NODE_NAME == ""` and `HOST_HAS_IPV4`, `HOST_HAS_IPV6`, `NAT64_ACTIVE` and `HAS_SNAPSHOTS` are all false: passes with no `--const` (verifies spec: CLI#check-host-constants)
-- [ ] A script that prints `AVAILABLE_THREADS`, `AVAILABLE_MEMORY` and `CPU_ARCHITECTURE` into a throw: the values match what the daemon on the same Linux machine gives a script (verifies spec: CLI#check-host-constants, CONST#host-constants)
+- [ ] A script that prints `AVAILABLE_THREADS` and `CPU_ARCHITECTURE` into a throw: the values match what the daemon on the same Linux machine gives a script (verifies spec: CLI#check-host-constants, CONST#host-constants)
 - [ ] `--const CPU_ARCHITECTURE=aarch64 --const AVAILABLE_MEMORY=2147483648 --const HOST_HAS_IPV6=true --const TIMEZONE=Pacific/Auckland`: the script sees each value (verifies spec: CLI#check-host-constants)
-- [ ] `--const AVAILABLE_THREADS=0`, `--const AVAILABLE_MEMORY=lots`, `--const HOST_HAS_IPV4=yes`, `--const CPU_ARCHITECTURE=`, `--const TIMEZONE=NZ`: each exits 2 and evaluates nothing (verifies spec: CLI#check-host-constants)
+- [ ] `--const AVAILABLE_THREADS=0`, `--const AVAILABLE_MEMORY=lots`, `--const HOST_HAS_IPV4=yes`, `--const CPU_ARCHITECTURE=`, `--const TIMEZONE=Mars/Olympus`: each exits 2 and evaluates nothing (verifies spec: CLI#check-host-constants)
 - [ ] `--const IDLE_CMD=x`, `--const NOT_A_CONSTANT=1`, and the same constant given twice: each exits 2 (verifies spec: CLI#check-host-constants)
-- [ ] On the macOS and Windows builds, a script that reads `AVAILABLE_MEMORY`: with no `--const` the evaluation fails as a `script` error; with `--const AVAILABLE_MEMORY=2147483648` it passes (verifies spec: CLI#check-host-constants, CONST#host-constants)
+- [ ] On each of the Linux, macOS and Windows builds, a script that reads `AVAILABLE_MEMORY`: with no `--const` the evaluation fails as a `script` error; with `--const AVAILABLE_MEMORY=2147483648` it passes (verifies spec: CLI#check-host-constants, CONST#host-constants)
 - [ ] On the macOS and Windows builds, a script that prints `AVAILABLE_THREADS` and `CPU_ARCHITECTURE` into a throw: both are the machine's own values (verifies spec: CLI#check-host-constants)
 
 ## Engine limits

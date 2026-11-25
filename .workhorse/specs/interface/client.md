@@ -280,7 +280,7 @@ The CLI MUST report an error and check nothing when an argument to `--set` has n
 | constant | default |
 | --- | --- |
 | `AVAILABLE_THREADS`, `CPU_ARCHITECTURE` | the value the runtime would determine on the machine the CLI runs on, as [host constants](../language/constants.md#host-constants) specifies |
-| `AVAILABLE_MEMORY` | on Linux, the value the runtime would determine on the machine the CLI runs on; on macOS and Windows, undetermined |
+| `AVAILABLE_MEMORY` | undetermined |
 | `HOST_HAS_IPV4`, `HOST_HAS_IPV6`, `NAT64_ACTIVE`, `HAS_SNAPSHOTS` | `false` |
 | `NODE_NAME` | the empty string |
 | `TIMEZONE` | `UTC` |
@@ -295,7 +295,7 @@ Where a default no option sets is undetermined, the CLI MUST treat it as the run
 > [!NOTE]
 > A definition that branches on the host is checked for each kind of host it will run on by running the check once per kind, such as with `--const CPU_ARCHITECTURE=aarch64`.
 >
-> The runtime runs only on Linux, so on macOS and Windows nothing determines the memory a runtime would see; a check there of a definition that reads `AVAILABLE_MEMORY` gives it with `--const`.
+> Reading the memory a runtime would see is part of the Linux runtime, which the CLI does not carry, so a check of a definition that reads `AVAILABLE_MEMORY` gives it with `--const` on every platform.
 
 ## Registry tags
 
