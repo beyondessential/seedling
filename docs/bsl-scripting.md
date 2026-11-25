@@ -170,7 +170,7 @@ let vol = app.volume("data")
 let version = app.param("version")
     .kind("text")           // text (one line) | multiline | email | password | weak-password | random
                             // | boolean | integer | quantity | choice | version | version-semver | purl
-                            // | url | url-origin | hostname
+                            // | url | url-origin | hostname | ip-address | ip-subnet | ip-range
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -421,7 +421,7 @@ Calling a helper that does not exist throws, like any unknown function. Which he
 
 ### Parsing a kind
 
-Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_quantity`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, `std::parse_quantity(v)` or `std::parse_quantity(v, 1..)`, and `std::parse_choice(v, ["small", "large"])`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_quantity`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname`, `std::parse_ip_address`, `std::parse_ip_subnet`, `std::parse_ip_range` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, `std::parse_quantity(v)` or `std::parse_quantity(v, 1..)`, `std::parse_choice(v, ["small", "large"])`, and `std::parse_ip_subnet(v)` or `std::parse_ip_subnet(v, 4)`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
 
 ```rhai
 let contact = std::parse_email("ops@example.org");
@@ -431,7 +431,7 @@ contact.domain  // "example.org"
 app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
-`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean, and `std::parse_integer` and `std::parse_quantity` an integer. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, and `std::parse_hostname` the hostname in its ASCII form, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean, and `std::parse_integer` and `std::parse_quantity` an integer. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, `std::parse_hostname` the hostname in its ASCII form, and the three IP parsers an address, subnet or range, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
 
 ### Quantities
 
@@ -519,6 +519,36 @@ The `url-origin` kind takes an `http` or `https` URL naming a host and optionall
 let public = std::parse_url_origin("https://Bücher.example:8443/");
 // #{ scheme: "https", host: "xn--bcher-kva.example", port: 8443 }
 std::parse_hostname("App.Example.org")    // "app.example.org"
+```
+
+### IP addresses, subnets and ranges
+
+The `ip-address` kind takes an IPv4 address in dotted decimal, such as `192.0.2.1`, or an IPv6 address, such as `2001:db8::1`. A dotted number with a leading zero, a zone such as `%eth0`, brackets, and an IPv4-mapped IPv6 address such as `::ffff:192.0.2.1` are refused; write that last one as the IPv4 address. The `ip-subnet` kind takes an address and a prefix length, such as `10.0.0.0/8`, or a bare address, which stands for itself alone (`/32` or `/128`). A subnet with host bits set, such as `10.0.0.5/24`, is refused, and the error names the subnet it lies in. The `ip-range` kind takes two addresses of one family joined by `-` with no spaces, such as `10.0.0.100-10.0.0.199`, a subnet, or a single address.
+
+Each takes an optional `family`, `4` or `6`, which refuses the other family: `kind(#{ name: "ip-range", family: 4 })`, and `std::parse_ip_range(v, 4)`.
+
+`std::parse_ip_address` returns an `IpAddress`, `std::parse_ip_subnet` an `IpSubnet` and `std::parse_ip_range` an `IpRange`. Each has `family()`, `4` or `6`, and prints in a canonical form: an IPv6 address in lower case and shortened, a subnet always with its prefix length, and a range always as `first-last`, whichever way it was written. That form parses back to an equal value, so it can be handed to software with a stricter parser of its own.
+
+- An `IpAddress` has `to_subnet()`, the subnet of just that address, `to_subnet(prefix_len)`, the subnet of that size the address lies in, and `to_range()`. Addresses of one family compare with `<`, `<=`, `>`, `>=`, `==` and `!=` in numeric order. An IPv4 and an IPv6 address are never equal, and ordering one against the other throws.
+- An `IpSubnet` has `address()`, its first address, `prefix_len()` and `to_range()`.
+- An `IpRange` has `start()` and `end()`.
+- Subnets and ranges compare only with `==` and `!=`. They have `contains(other)`, which is true when every address of `other` lies within, and `overlaps(other)`, which is true when at least one does. `other` is an address, subnet or range, never a string, so parse an operator's text first. Both are `false` across families.
+
+Comparing an IP value with any value of another type throws, including a string or another of the three IP types. An IP value passed to `invoke` is taken as its canonical text:
+
+```rhai
+let lan = std::parse_ip_subnet("10.0.0.0/24");
+lan.contains(std::parse_ip_address("10.0.0.7"))          // true
+lan.overlaps(std::parse_ip_range("10.0.0.250-10.0.1.9"))  // true
+std::parse_ip_address("10.0.0.7").to_subnet(16)          // 10.0.0.0/16
+std::parse_ip_range("10.0.0.0/30")                       // 10.0.0.0-10.0.0.3
+
+app.param("allowed").kind("ip-subnet");
+app.param("pool").kind(#{ name: "ip-range", family: 4 }).validate(|v, all| {
+    if "allowed" in all && !all.allowed.contains(v) {
+        throw "the address pool lies outside the allowed subnet";
+    }
+});
 ```
 
 ### Derived random values
