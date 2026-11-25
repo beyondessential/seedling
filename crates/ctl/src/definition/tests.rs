@@ -909,3 +909,25 @@ fn a_deeply_nested_github_path_is_read_without_exhausting_the_stack() {
     let files = github::read_definition(&data, "apps/web").unwrap();
     assert_eq!(files[&format!("{deep}/x")], b"x");
 }
+
+// spec: CLI#definition-folders
+#[test]
+fn a_non_utf8_path_a_github_definition_leaves_out_is_no_bar() {
+    let data = tarball(|b| {
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        tar_file(b, "o-r-abc/apps/web/.seedignore", b"scratch/\n");
+        let raw = b"o-r-abc/apps/web/scratch/caf\xe9.txt";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(1);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.as_gnu_mut().unwrap().name[..raw.len()].copy_from_slice(raw);
+        header.set_cksum();
+        b.append(&header, &b"x"[..]).unwrap();
+    });
+    let files = github::read_definition(&data, "apps/web").unwrap();
+    assert_eq!(
+        files.keys().collect::<Vec<_>>(),
+        [".seedignore", "app.seed.rhai"]
+    );
+}

@@ -183,16 +183,16 @@ impl Ignores {
         Ok(ignored(&chain, &join(dir, name), kind == Kind::Dir))
     }
 
-    /// Whether reading the folder leaves out the file at `path` beneath its
-    /// root, itself or by leaving out a directory on the way to it.
-    pub fn leaves_out(&mut self, tree: &impl Tree, path: &str) -> Result<bool, String> {
+    /// Whether reading the folder leaves out the `kind` at `path` beneath
+    /// its root, itself or by leaving out a directory on the way to it.
+    pub fn leaves_out(&mut self, tree: &impl Tree, path: &str, kind: Kind) -> Result<bool, String> {
         let segments: Vec<&str> = below(&self.root, path).split('/').collect();
         let mut dir = self.root.clone();
         for (i, segment) in segments.iter().enumerate() {
             let kind = if i + 1 < segments.len() {
                 Kind::Dir
             } else {
-                Kind::File
+                kind
             };
             if self.excludes(tree, &dir, segment, kind)? {
                 return Ok(true);
@@ -499,20 +499,29 @@ impl Archive {
         let mut tar = open(tarball);
         for entry in tar.entries().map_err(unreadable)? {
             let entry = entry.map_err(unreadable)?;
+            let kind = held_kind(entry.header().entry_type());
             let name = match entry_name(&entry.path().map_err(unreadable)?)? {
                 Some(EntryName::Utf8(name)) => name,
-                Some(EntryName::Other(lossy)) if !roots(&lossy).is_empty() => {
-                    return Err(format!(
-                        "the downloaded archive holds a non-UTF-8 path: {lossy}"
-                    ));
+                // Refused only where reading a wanted folder would keep it,
+                // as reading the same folder from disk refuses it.
+                Some(EntryName::Other(lossy)) => {
+                    let within = roots(&lossy);
+                    if let Some(kind) = kind
+                        && self.kept(&mut ignores, &within, &lossy, kind)?
+                    {
+                        return Err(format!(
+                            "the downloaded archive holds a non-UTF-8 path: {lossy}"
+                        ));
+                    }
+                    continue;
                 }
-                _ => continue,
+                None => continue,
             };
             let within = roots(&name);
             if within.is_empty() && !on_the_way(&name) {
                 continue;
             }
-            match held_kind(entry.header().entry_type()) {
+            match kind {
                 Some(Kind::Dir) => self.hold(name, Held::Dir)?,
                 Some(Kind::File) => {
                     if matches!(
@@ -521,17 +530,7 @@ impl Archive {
                     ) {
                         continue;
                     }
-                    let mut read = false;
-                    for root in &within {
-                        let ignores = ignores
-                            .entry(root.clone())
-                            .or_insert_with(|| Ignores::new(root));
-                        if *root == name || !ignores.leaves_out(self, &name)? {
-                            read = true;
-                            break;
-                        }
-                    }
-                    let contents = if read {
+                    let contents = if self.kept(&mut ignores, &within, &name, Kind::File)? {
                         budget.take_file(&name, name.len())?;
                         // Read against what one file may hold, so that
                         // contents already held are not charged twice.
@@ -546,6 +545,26 @@ impl Archive {
             }
         }
         Ok(())
+    }
+
+    /// Whether reading some definition folder rooted at one of `within` keeps
+    /// the `kind` at `name`, where each root's reading is decided by `ignores`.
+    fn kept(
+        &self,
+        ignores: &mut HashMap<String, Ignores>,
+        within: &[String],
+        name: &str,
+        kind: Kind,
+    ) -> Result<bool, String> {
+        for root in within {
+            let ignores = ignores
+                .entry(root.clone())
+                .or_insert_with(|| Ignores::new(root));
+            if root == name || !ignores.leaves_out(self, name, kind)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Hold `what` at `name`. A link stays a link whatever else the archive
