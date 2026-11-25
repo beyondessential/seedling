@@ -4,6 +4,7 @@ use std::{cmp::Ordering, fmt};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, INT, TypeBuilder};
 
+use super::compare::refuse_mixed_comparisons;
 use crate::runtime::definition::VersionRequirement;
 
 /// A version of any scheme, ordered as libversion orders it.
@@ -21,7 +22,7 @@ enum Segment {
 }
 
 impl Version {
-    const NAME: &str = "Version";
+    pub(crate) const NAME: &str = "Version";
 
     // spec: VER#generic-versions
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -163,7 +164,7 @@ pub struct SemVer {
 }
 
 impl SemVer {
-    const NAME: &str = "SemVer";
+    pub(crate) const NAME: &str = "SemVer";
 
     // spec: VER#semver-versions
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -270,43 +271,14 @@ where
         .with_fn(">=", |a: &mut T, b: T| *a >= b);
 
     // spec: VER#mixing-version-types
-    for op in ["==", "!=", "<", "<=", ">", ">="] {
-        builder
-            .with_fn(
-                op,
-                move |_: &mut T, b: Dynamic| -> Result<bool, Box<EvalAltResult>> {
-                    Err(mixed(op, name, type_name(&b)))
-                },
-            )
-            .with_fn(
-                op,
-                move |a: Dynamic, _: T| -> Result<bool, Box<EvalAltResult>> {
-                    Err(mixed(op, type_name(&a), name))
-                },
-            );
-    }
+    refuse_mixed_comparisons(
+        builder,
+        name,
+        "a version compares only with a version of its own type",
+    );
 
     // spec: VER#text-of-a-version
     builder
         .on_print(|this: &mut T| this.to_string())
         .on_debug(|this: &mut T| this.to_string());
-}
-
-// spec: VER#mixing-version-types
-fn mixed(op: &str, left: &str, right: &str) -> Box<EvalAltResult> {
-    format!(
-        "cannot compare {left} {op} {right}: a version compares only with a version of its own type"
-    )
-    .into()
-}
-
-/// The name a script knows `value`'s type by.
-fn type_name(value: &Dynamic) -> &str {
-    if value.is::<Version>() {
-        Version::NAME
-    } else if value.is::<SemVer>() {
-        SemVer::NAME
-    } else {
-        value.type_name()
-    }
 }

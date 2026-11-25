@@ -93,6 +93,7 @@ impl PartialEq<u16> for Port {
 pub mod action;
 pub mod app;
 pub mod collection;
+pub mod compare;
 pub mod container;
 pub mod deployment;
 pub mod enums;
