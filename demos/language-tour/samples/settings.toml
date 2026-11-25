@@ -1,0 +1,6 @@
+title = "Demo settings"
+started = 2026-01-02T03:04:05Z
+
+[server]
+port = 8080
+hosts = ["a.demo.internal", "b.demo.internal"]

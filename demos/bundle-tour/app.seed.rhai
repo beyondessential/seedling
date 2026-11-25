@@ -125,7 +125,7 @@ app.gate("release")
             `release ${was} -> ${now}; pages ${pages}; previous notes: ${was_notes}`
         };
         rt.start(app.job()
-            .image("docker.io/library/alpine:3.24.4")
+            .image("docker.io/library/busybox:1.38.0-musl")
             .command(["echo", message])
         ).terminated().ensure_success();
     });

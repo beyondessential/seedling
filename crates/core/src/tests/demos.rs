@@ -79,10 +79,12 @@ fn loaded(
     params: &BTreeMap<String, String>,
 ) -> (rhai::Engine, rhai::AST, defs::app::App) {
     let bundle = demo(name);
+    let seed = crate::runtime::seeds::AppSeed::for_tests();
+    let _frame = crate::runtime::seeds::AppSeedFrame::enter(&seed);
     let (engine, mut scope, mut app) =
         crate::setup_language(&crate::ScriptLimits::default(), Arc::clone(&bundle))
             .expect("the scope builds");
-    app.seed = Some(crate::runtime::seeds::AppSeed::for_tests());
+    app.seed = Some(seed.clone());
     *app.stored.lock() = params.clone();
     app.def.rcu(|d| {
         let mut d = (**d).clone();
@@ -301,4 +303,20 @@ fn stepping_the_store_down_fails_the_migrate_gate_body() {
             .is_some_and(|e| e.contains("refusing to step the store down from format 3 to 1")),
         "{migrate:?}"
     );
+}
+
+#[test]
+fn zz_dump_language_tour() {
+    let app = evaluated("language-tour", &BTreeMap::new());
+    let def = app.def.load();
+    for (id, r) in &def.resources {
+        if let crate::defs::resource::Resource::Volume(v) = r {
+            for (path, bytes) in &v.def.lock().writes {
+                if path == "/results.json" || path == "/random.json" {
+                    std::fs::write(format!("/tmp/q6{}", path.replace('/', "-")), bytes).unwrap();
+                }
+            }
+            let _ = id;
+        }
+    }
 }

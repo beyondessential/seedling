@@ -26,9 +26,11 @@ let static_site = |name, hostname| {
         .tls(Terminate.Https, Output.Http1)
         .redirect();
 
+    // httpd ignores SIGTERM as PID 1, so a shell runs it and exits on the
+    // signal, rather than every stop waiting out the stop timeout.
     app.deployment(name)
-        .image("docker.io/library/alpine:3.24.4")
-        .command(["httpd", "-f", "-p", "8080", "-h", "/www", "-c", "/etc/site/httpd.conf"])
+        .image("docker.io/library/busybox:1.38.0-musl")
+        .command(["sh", "-c", "trap 'exit 0' TERM INT; httpd -f -p 8080 -h /www -c /etc/site/httpd.conf & wait"])
         .mount("/www", site)
         .mount("/etc/site", conf)
         .http(8080, web.route("/"));
