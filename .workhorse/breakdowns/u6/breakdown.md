@@ -50,7 +50,7 @@ Add `boolean`, `integer` and `choice` kinds with their parse functions, so a scr
 
 Add encoders producing JSON from any value (not only a map, as Rhai's `to_json` is), YAML, TOML, INI and env-file text, for writing configuration files into volumes. To settle: key ordering, how a value the format cannot hold (such as a nested map in INI) is refused, and whether decoders come with them.
 
-## Quoting for shells, SQL and URLs
+## Quoting for shells, SQL and URLs · Q7
 
 Add functions that quote a string as a shell argument, a SQL string literal and a SQL identifier, and that percent-encode a URL component, so values put into commands and statements cannot change their meaning. To settle: the SQL dialects covered, and whether shell quoting always quotes or only when needed.
 
