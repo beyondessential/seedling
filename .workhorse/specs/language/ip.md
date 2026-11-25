@@ -17,6 +17,10 @@ Applies to the `ip-address`, `ip-subnet` and `ip-range` [param kinds](action.md#
 
 ## Terminology
 
+### Address order
+
+The order of two addresses of the same family as unsigned integers of their family's width.
+
 ### Family
 
 Whether an address, subnet or range is of IPv4 or of IPv6.
@@ -66,12 +70,10 @@ Its error SHOULD name the subnet with those host bits cleared.
 `std::parse_ip_range(text)` MUST return an `IpRange` for a value it accepts.
 It MUST accept exactly the values below, and MUST reject every other value.
 
-- Two addresses of the same family joined by a single `-` with no whitespace, where the first is not greater than the second, and that do not both lie within `::ffff:0:0/96`.
+- Two addresses of the same family joined by a single `-` with no whitespace, where the first does not follow the second in [address order](#address-order), and that do not both lie within `::ffff:0:0/96`.
   Each address is written as `std::parse_ip_address` requires, except that it MAY be an IPv4-mapped IPv6 address.
 - A subnet that `std::parse_ip_subnet` accepts, standing for the range from its first address to its last.
 - An address that `std::parse_ip_address` accepts, standing for the range holding only that address.
-
-Addresses MUST be ordered as unsigned integers of their family's width.
 
 > [!NOTE]
 > An IPv6 subnet that holds `::ffff:0:0/96`, such as `::/80`, ends on an IPv4-mapped address, so a range written as two addresses may end on one, which lets that range's canonical text parse again.
@@ -102,7 +104,7 @@ It MUST throw when `prefix_len` is negative, or exceeds 32 for an IPv4 address o
 > The parser refuses host bits because an operator who typed them may have meant another network.
 > A script calling `to_subnet` with a prefix length asks for the network the address sits in, so clearing them is the operation it requested.
 
-Two `IpAddress` values of the same family MUST compare by the [address order](#ranges) through `<`, `<=`, `>`, `>=`, `==` and `!=`.
+Two `IpAddress` values of the same family MUST compare by [address order](#address-order) through `<`, `<=`, `>`, `>=`, `==` and `!=`.
 For two `IpAddress` values of different families, `==` MUST return `false` and `!=` MUST return `true`, and `<`, `<=`, `>` and `>=` MUST raise a script error.
 
 ## Subnet values
