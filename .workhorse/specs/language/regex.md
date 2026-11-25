@@ -26,6 +26,11 @@ The std module MUST offer `std::regex(pattern: string)`, which returns a `Regex`
 > Repetition is what makes a compiled pattern large: `\w{1000}{1000}` is short to write and enormous once compiled.
 > The text of a pattern is already bounded by the string length [limit](../runtime/engine-limits.md#limits).
 
+A script that calls `std::regex` with a string literal, written without interpolation, for which `std::regex` would throw MUST fail [evaluation](overview.md#evaluation), whether or not the call would run.
+
+> [!NOTE]
+> Most patterns are written into the script, and a malformed one in a branch that rarely runs, such as an action, is then reported when the definition is first evaluated rather than when an operator first runs that action.
+
 ## Searching
 
 A search MUST report the leftmost-first match of the pattern in the text, wherever in the text it starts.
