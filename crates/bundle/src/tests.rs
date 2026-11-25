@@ -517,9 +517,9 @@ fn an_include_table_breaking_the_rules_is_refused_naming_the_key() {
         ),
         (
             b"[include]\n\"missing.rhai\" = \"x\"",
-            "\"missing.rhai\" names",
+            "\"missing.rhai\" holds no file",
         ),
-        (b"[include]\n\"li\" = \"x\"", "\"li\" names"),
+        (b"[include]\n\"li\" = \"x\"", "\"li\" holds no file"),
     ];
     for (meta, needle) in cases {
         let m = invalid_message(with_include(meta));
@@ -540,4 +540,17 @@ fn an_unsupported_bundle_with_a_malformed_include_is_reported_unsupported() {
         held.check_installable(&semver::Version::new(0, 12, 0)),
         Err(BundleError::Unsupported { .. })
     ));
+}
+
+// spec: BND#included-files
+#[test]
+fn the_include_table_reads_as_normalised_keys_and_their_sources() {
+    let table = included(b"seedling = \">=99\"\nfuture = 1\n[include]\n\"./lib/\" = \"../common\"")
+        .unwrap();
+    assert_eq!(
+        table,
+        BTreeMap::from([("lib".to_owned(), "../common".to_owned())])
+    );
+    assert!(included(b"").unwrap().is_empty());
+    assert!(included(b"[include]\n\"lib\" = 1").is_err());
 }

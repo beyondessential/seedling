@@ -721,25 +721,57 @@ fn read_script(
     Ok(Script::concatenate(texts))
 }
 
+/// The `include` table a metadata file declares, each normalised key mapped
+/// to the source path a client assembles it from, or an empty map where the
+/// file declares none.
+///
+/// Only the table is read: the rest of the metadata is left to the bundle
+/// rules, so a client can assemble a bundle the server then judges whole.
+// spec: BND#included-files
+pub fn included(metadata_file: &[u8]) -> Result<BTreeMap<String, String>, BundleError> {
+    match read_metadata_file(Some(metadata_file))?.remove("include") {
+        Some(value) => include_table(value),
+        None => Ok(BTreeMap::new()),
+    }
+}
+
 /// Check the `include` table against the files the bundle holds. Its values
 /// are where a client assembled each file from, which only the client reads.
 // spec: BND#included-files
 fn read_include(files: &BTreeMap<String, Bytes>, value: toml::Value) -> Result<(), BundleError> {
+    for path in include_table(value)?.keys() {
+        let beneath = format!("{path}/");
+        let present = files.contains_key(path)
+            || files
+                .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
+                .next()
+                .is_some_and(|(k, _)| k.starts_with(&beneath));
+        if !present {
+            return Err(invalid(format!(
+                "{METADATA_FILE} field `include` key {path:?} holds no file in the bundle"
+            )));
+        }
+    }
+    Ok(())
+}
+
+// spec: BND#included-files
+fn include_table(value: toml::Value) -> Result<BTreeMap<String, String>, BundleError> {
     let toml::Value::Table(table) = value else {
         return Err(invalid(format!(
             "{METADATA_FILE} field `include` must be a table of strings, got {}",
             value.type_str()
         )));
     };
-    let mut keys: BTreeMap<String, ()> = BTreeMap::new();
+    let mut keys: BTreeMap<String, String> = BTreeMap::new();
     for (key, source) in table {
         let at =
             |msg: String| invalid(format!("{METADATA_FILE} field `include` key {key:?} {msg}"));
-        match source {
-            toml::Value::String(s) if !s.is_empty() => {}
+        let source = match source {
+            toml::Value::String(s) if !s.is_empty() => s,
             toml::Value::String(_) => return Err(at("has an empty source path".to_owned())),
             other => return Err(at(format!("must be a string, got {}", other.type_str()))),
-        }
+        };
         let path = normalise_path(&key).map_err(|e| at(format!("is invalid: {e}")))?;
         if path.is_empty() {
             return Err(at("names the bundle root".to_owned()));
@@ -755,20 +787,9 @@ fn read_include(files: &BTreeMap<String, Bytes>, value: toml::Value) -> Result<(
                 "overlaps the key {other:?}: one is inside the other"
             )));
         }
-        let beneath = format!("{path}/");
-        let present = files.contains_key(&path)
-            || files
-                .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
-                .next()
-                .is_some_and(|(k, _)| k.starts_with(&beneath));
-        if !present {
-            return Err(at(format!(
-                "names {path:?}, which holds no file in the bundle"
-            )));
-        }
-        keys.insert(path, ());
+        keys.insert(path, source);
     }
-    Ok(())
+    Ok(keys)
 }
 
 fn metadata_map(table: &toml::Table, at: &str) -> Result<Map<String, Value>, BundleError> {
