@@ -92,6 +92,7 @@ fn all_tables_exist_after_migration() {
 }
 
 // spec: INFRA#file-permissions
+#[cfg(unix)]
 #[test]
 fn open_creates_database_with_owner_only_permissions() {
     use std::os::unix::fs::PermissionsExt;
@@ -115,6 +116,7 @@ fn open_creates_database_with_owner_only_permissions() {
 }
 
 // spec: INFRA#file-permissions
+#[cfg(unix)]
 #[test]
 fn open_does_not_create_the_database_through_a_planted_symlink() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -129,6 +131,7 @@ fn open_does_not_create_the_database_through_a_planted_symlink() {
 }
 
 // spec: INFRA#file-permissions
+#[cfg(unix)]
 #[test]
 fn open_rejects_database_with_group_readable_permissions() {
     use std::os::unix::fs::PermissionsExt;

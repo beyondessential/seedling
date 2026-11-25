@@ -595,6 +595,7 @@ fn deleting_a_managed_site_volume_whose_storage_is_gone_removes_the_record() {
 /// The data is real and would be orphaned, so a hold that could not be
 /// carried out must still stop the delete.
 // spec: ACTU#held-volumes
+#[cfg(unix)]
 #[test]
 fn deleting_a_managed_site_volume_that_cannot_be_held_leaves_the_record_alone() {
     let oi = TestOi::new();

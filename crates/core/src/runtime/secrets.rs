@@ -1,7 +1,4 @@
-use std::{
-    os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use orion::{
     aead, auth,
@@ -122,8 +119,7 @@ impl Cipher {
             });
         }
         if !missing {
-            let mode = path.metadata()?.permissions().mode() & 0o777;
-            if mode & 0o077 != 0 {
+            if let Some(mode) = crate::runtime::private_files::exposed_mode(path)? {
                 return Err(Error::InsecurePermissions {
                     path: path.to_owned(),
                     mode,
@@ -304,8 +300,10 @@ mod tests {
     }
 
     // spec: SEC#secret-key
+    #[cfg(unix)]
     #[test]
     fn keyfile_created_with_secure_perms() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("test.key");
         Cipher::load_or_create(&path, &Db::open_in_memory().unwrap()).expect("create");
@@ -314,6 +312,7 @@ mod tests {
     }
 
     // spec: INFRA#file-permissions
+    #[cfg(unix)]
     #[test]
     fn keyfile_creation_does_not_follow_a_planted_symlink() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -327,8 +326,10 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn insecure_perms_rejected() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("loose.key");
         std::fs::write(&path, [0u8; 32]).unwrap();

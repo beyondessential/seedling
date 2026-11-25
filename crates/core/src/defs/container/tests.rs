@@ -1,6 +1,9 @@
 use rhai::{Dynamic, Map};
 
-use super::{HealthcheckKind, HealthcheckOnFailure, parse_healthcheck};
+use super::{
+    HealthcheckKind, HealthcheckOnFailure, canonicalise_signal_name, parse_healthcheck,
+    signal_name, signal_number,
+};
 use crate::defs::duration::Duration;
 
 fn map_with(entries: &[(&str, Dynamic)]) -> Map {
@@ -258,4 +261,19 @@ fn parse_unknown_keys_are_rejected() {
     ]);
     let err = parse_healthcheck(m).expect_err("unknown key");
     assert!(err.to_string().contains("surprise"));
+}
+
+// spec: CTR#stopping
+#[test]
+fn every_signal_name_round_trips_through_its_number() {
+    for name in [
+        "SIGHUP", "SIGINT", "SIGKILL", "SIGTERM", "SIGWINCH", "SIGSYS",
+    ] {
+        let number = signal_number(name).unwrap();
+        assert_eq!(signal_name(number).as_deref(), Some(name));
+        assert_eq!(canonicalise_signal_name(name).as_deref(), Some(name));
+    }
+    assert_eq!(signal_number("POLL"), signal_number("SIGIO"));
+    assert_eq!(signal_number("SIGNOPE"), None);
+    assert_eq!(signal_name(40), None);
 }

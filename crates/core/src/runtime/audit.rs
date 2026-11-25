@@ -1,7 +1,6 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, BufWriter, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -10,7 +9,10 @@ use seedling_protocol::names::AppName;
 use tokio::{sync::broadcast, task::JoinHandle};
 use tracing::{error, warn};
 
-use crate::runtime::db::DbHandle;
+use crate::runtime::{
+    db::DbHandle,
+    private_files::{file_identity, open_private_append, restrict_dir},
+};
 
 // spec: AUD#storage
 pub struct AuditWriter {
@@ -30,16 +32,12 @@ impl AuditWriter {
             // existing one, such as `/var/log` itself, belongs to the host and
             // is not reset on every open.
             fs::create_dir_all(parent)?;
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o750))?;
+            restrict_dir(parent)?;
         }
 
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(path)?;
+        let file = open_private_append(path)?;
 
-        let inode = file.metadata()?.ino();
+        let inode = file_identity(&file.metadata()?);
 
         Ok(Self {
             writer: BufWriter::new(file),
@@ -51,7 +49,7 @@ impl AuditWriter {
     // spec: AUD#rotation
     pub fn reopen_if_rotated(&mut self) -> io::Result<()> {
         let needs_reopen = match fs::metadata(&self.path) {
-            Ok(meta) => meta.ino() != self.inode,
+            Ok(meta) => file_identity(&meta) != self.inode,
             Err(_) => true,
         };
 
@@ -326,8 +324,10 @@ mod tests {
     }
 
     // spec: AUD#storage
+    #[cfg(unix)]
     #[test]
     fn an_existing_parent_directory_keeps_its_mode_and_a_new_one_is_made_private() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = TempDir::new().unwrap();
         let existing = dir.path().join("shared");
         fs::create_dir(&existing).unwrap();

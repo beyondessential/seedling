@@ -650,6 +650,7 @@ mod tests {
 
     /// A volume directory that is really a symlink — storage an operator
     /// relocated by hand, or a link somebody else placed.
+    #[cfg(unix)]
     fn symlinked_volume(store: &VolumeStore, name: &VolumeName, target: &Path) {
         std::fs::create_dir_all(target).unwrap();
         std::fs::write(target.join("data.db"), b"the volume's contents").unwrap();
@@ -675,6 +676,7 @@ mod tests {
     }
 
     // spec: ACTU#held-volumes
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_hold_whose_move_fails_leaves_no_record_and_the_data_where_it_was() {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -706,6 +708,7 @@ mod tests {
     }
 
     // spec: ACTU#storage-confinement
+    #[cfg(unix)]
     #[tokio::test]
     async fn removing_a_symlinked_volume_is_refused_rather_than_reported_done() {
         let (_data, store) = store();
@@ -727,6 +730,7 @@ mod tests {
     }
 
     // spec: ACTU#storage-confinement
+    #[cfg(unix)]
     #[tokio::test]
     async fn removing_a_site_volume_that_is_a_symlink_is_refused() {
         let (_data, store) = store();
@@ -746,6 +750,7 @@ mod tests {
     }
 
     // spec: ACTU#storage-confinement
+    #[cfg(unix)]
     #[tokio::test]
     async fn holding_a_symlinked_volume_is_refused_rather_than_recorded_empty() {
         let (_data, store) = store();
@@ -850,6 +855,7 @@ mod tests {
     }
 
     // spec: ACTU#storage-confinement
+    #[cfg(unix)]
     #[test]
     fn owned_dir_refuses_a_symlink_and_reports_an_absent_path() {
         let dir = tempfile::tempdir().unwrap();

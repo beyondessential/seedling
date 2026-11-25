@@ -230,9 +230,17 @@ pub struct HealthCheckSpec {
 pub struct ExecHandle {
     pub stdin: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
     pub stdout: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
-    pub pty_master_fd: std::os::unix::io::RawFd,
+    pub pty_master_fd: RawPty,
     pub child: tokio::process::Child,
 }
+
+/// The raw handle of a PTY master.
+#[cfg(unix)]
+pub type RawPty = std::os::fd::RawFd;
+
+/// The raw handle of a PTY master, which only a Unix container runtime gives.
+#[cfg(not(unix))]
+pub type RawPty = i32;
 
 // ---------------------------------------------------------------------------
 // Transient unit spec
