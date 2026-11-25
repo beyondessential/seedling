@@ -292,7 +292,7 @@ fn rt_signal_is_callable() {
 fn warm_results_refuse_barriers_other_than_ready() {
     for (warm, barrier) in [
         ("rt.warm_certs(ing)", "running()"),
-        ("rt.warm_certs(ing)", "scheduled(5)"),
+        ("rt.warm_certs(ing)", "scheduled(\"5s\")"),
         ("rt.warm_images(web)", "terminated()"),
         ("rt.warm_images(web)", "terminated_eventually()"),
     ] {

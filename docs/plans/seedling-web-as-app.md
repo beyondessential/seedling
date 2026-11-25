@@ -314,7 +314,7 @@ app.deployment("web")
     .healthcheck(#{
         kind: "command",
         cmd: ["seedling-web", "--health-probe"],
-        interval: 10, retries: 3, start_period: 10, on_failure: "replace",
+        interval: "10s", retries: 3, start_period: "10s", on_failure: "replace",
     });
 
 ```
