@@ -13,18 +13,17 @@ Specs: BND (included files), DEFN (bundle rules), CLI (definition sources, inclu
   `crates/core/src/runtime/definition/bundle.rs` and `version.rs` move into a new `crates/bundle` (`seedling-bundle`), used by both core and ctl.
   The deterministic tar.gz writer goes there too, beside `Bundle::from_tar_gz`, so the reader and writer are tested as a round trip.
   It is a new crate rather than part of `seedling-protocol`, which keeps toml, semver, tar and flate2 out of the wire-types crate.
-- **One assembly over one tree view.**
-  Local folders and GitHub URLs both resolve to "a folder inside a boundary", and include assembly runs once over that.
-  For GitHub, the CLI extracts the whole repository at the commit, not just the folder, and the extraction root is the boundary.
-- **GitHub symlinks are recorded, never written.**
-  Extraction currently fails on any non-regular entry beneath the folder.
-  With whole-repository extraction, a symlink elsewhere in the repository must not fail a definition that never reads it.
-  So extraction records non-regular entries' paths without writing them, and refuses to write any entry beneath a recorded path.
-  Assembly treats a recorded path on a source's way down from the boundary as a symlink.
-  Writing symlinks into the temporary folder is ruled out, because a later entry written through one escapes the extraction (tar-slip).
+- **One reading over one tree.**
+  A definition is read through a `Tree` (what is at a path, what a directory holds, a file's contents), implemented by a folder on disk and by a repository held in memory from a GitHub archive.
+  The folder walker, `.seedignore` handling and include assembly run once over it, so a folder reads the same both ways, and a test holds it to that.
+  An archive link is an entry that is neither file nor directory, as a symlink is on disk, so nothing is recorded beside the tree and nothing is written.
+- **A GitHub archive is read in two passes, holding only what a definition reads.**
+  The first keeps every link, every `.seedignore` and the folder's `seedling.toml`; the second, knowing the sources, keeps the folder and the sources, reading only files some reading of them would not leave out.
+  Contents several paths share are held once, so a folder's copy beside its source is not charged twice.
+  Unpacking to a temporary folder was ruled out after review rounds kept finding the gaps between the archive and the disk copy of it.
 - **Out-of-bounds checks are lexical.**
   The source path is the folder's path relative to the boundary, joined with the value, then normalised.
-  For a local folder, each segment from the boundary down is then checked without following symlinks, before any read.
+  Each segment from the boundary down is then checked without following links, before any read.
 - **Artefact constants live with the bundle.**
   The artifact type, layer media type and versions annotation name moved from core's fetcher into `seedling-bundle`, since `definitions pack` prints the annotation name too.
 - **`Definition::Script` goes.**
@@ -68,11 +67,11 @@ Specs: BND (included files), DEFN (bundle rules), CLI (definition sources, inclu
 ### CLI: include assembly (CLI#include-assembly)
 
 - [x] Find the boundary for a local folder: the nearest directory at or above it holding a `.git` or `.jj` entry, otherwise the folder itself
-- [x] Change GitHub `download` to extract the whole repository at the commit into a temporary folder, recording non-regular entries' paths instead of writing them, and refusing entries beneath a recorded path or with a non-normal component
+- [x] Read a GitHub URL's repository at the commit in memory, as a `Tree`, holding the definition folder and its sources, and refusing entries with a non-normal component
 - [x] Scope the "outside" error to entries outside the repository (CLI#definition-sources)
-- [x] Add `assemble(files, folder, boundary, unwritten)` in `crates/ctl/src/definition/assembly.rs`, run after `read_folder` for both local and GitHub sources. For each key:
+- [x] Add `assemble(files, tree, folder, bounds, budget)` in `crates/ctl/src/definition/assembly.rs`, run after `read_folder` over the same tree for both local and GitHub sources. For each key:
   - compute the source path and classify it as out of bounds, missing, a file or a directory
-  - refuse a source reached through a symlink or recorded path, or that is neither a file nor a directory
+  - refuse a source reached through a link, or that is neither a file nor a directory
   - read a directory source with `read_folder`, and refuse one that yields nothing or holds a `seedling.toml` at any depth
   - compare with the folder's files at or beneath the key: use the folder's files when the source is out of bounds or missing, refuse on a mismatch, and refuse when neither exists
   - place the included files without applying the folder's `.seedignore`
@@ -87,11 +86,14 @@ Specs: BND (included files), DEFN (bundle rules), CLI (definition sources, inclu
   - a folder copy that matches, one that differs, and one used because the source is missing
   - an included path matched by `.seedignore` is still placed
   - an `apps export` of an app with includes, written outside any repository, pushes again unchanged
-- [x] GitHub tests, built from synthetic tarballs as the existing `extract_folder` tests are:
+- [x] GitHub tests, built from synthetic tarballs:
   - an include reaching a sibling folder at the same commit
   - a symlink elsewhere in the repository does not fail the definition
   - an include through a symlink entry is refused
   - an entry beneath a symlink entry is refused
+  - a link the folder's `.seedignore` leaves out does not fail it
+  - what the folder leaves out, or holds twice, costs nothing against the limits
+- [x] A test holding a folder to read the same from disk and from GitHub, with nested `.seedignore` files and includes
 
 ### CLI: definition packing (CLI#definition-packing)
 

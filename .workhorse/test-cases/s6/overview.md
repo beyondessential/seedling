@@ -25,7 +25,9 @@ Scenarios for sharing files between sibling definitions and packing definitions 
 - [x] An included path matched by the folder's `.seedignore` is still placed (verifies spec: CLI)
 - [x] An exported app with includes, written outside any repository, pushes again to the same files (verifies spec: CLI)
 - [x] A GitHub URL includes from a sibling folder at the same commit, and a symlink elsewhere in the repository does not fail it (verifies spec: CLI)
-- [x] A GitHub include through a symlink entry, or an archive entry beneath one, is refused without writing anything through it (verifies spec: CLI)
+- [x] A GitHub include through a symlink entry, or an archive entry beneath one, is refused, and nothing from the archive is written to disk (verifies spec: CLI)
+- [x] The same definition folder, with nested `.seedignore` files and includes, reads the same from disk and from a GitHub URL (verifies spec: CLI)
+- [x] A link a GitHub definition's `.seedignore` leaves out does not fail it (verifies spec: CLI)
 
 ## CLI: packing
 
