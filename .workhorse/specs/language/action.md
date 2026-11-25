@@ -66,9 +66,10 @@ A `name` naming no declared action MUST throw.
 The runtime MUST call the invoked closure with the caller's runtime handle.
 How the invoked closure shares the caller's operation is specified by [action composition](../runtime/operations.md#action-composition).
 
-Every value in `params` MUST be a unit, a boolean, an integer, a finite floating-point number, a string, a `Version`, a `SemVer`, or an array or map of such values.
+Every value in `params` MUST be a unit, a boolean, an integer, a finite floating-point number, a string, a `Version`, a `SemVer`, an `IpAddress`, an `IpSubnet`, an `IpRange`, or an array or map of such values.
 Any other value MUST make `invoke` throw.
 A `Version` or `SemVer` MUST be taken as its [text](version.md#text-of-a-version).
+An `IpAddress`, `IpSubnet` or `IpRange` MUST be taken as its [canonical form](ip.md#text-of-a-value).
 
 > [!NOTE]
 > A closure can pass the param map it received to `invoke` unchanged.
@@ -147,6 +148,9 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `url` | none | a URL | a map of `scheme`, `host`, `port`, `path`, `query`, `fragment`, `username` and `password`, as [URLs](url.md#urls) specify |
 | `url-origin` | none | an `http` or `https` URL naming a host and optionally a port | a map of `scheme`, `host` and `port`, as [URL origins](url.md#url-origins) specify |
 | `hostname` | none | a hostname an ingress can be declared on | the hostname in lower case, as [hostnames](url.md#hostnames) specify |
+| `ip-address` | `family`, optional | an IPv4 or IPv6 address, of `family` where one is given | an `IpAddress`, as [address values](ip.md#address-values) specify |
+| `ip-subnet` | `family`, optional | an IPv4 or IPv6 subnet, of `family` where one is given | an `IpSubnet`, as [subnet values](ip.md#subnet-values) specify |
+| `ip-range` | `family`, optional | a range of IPv4 or IPv6 addresses, of `family` where one is given | an `IpRange`, as [range values](ip.md#range-values) specify |
 | `boolean` | none | `true` or `false` | the value as a boolean |
 | `integer` | `range`, optional | a whole number, within `range` where one is given | the value as an integer |
 | `quantity` | `range`, optional | a [quantity](#quantities), within `range` where one is given | its amount as an integer |
@@ -165,6 +169,8 @@ An `integer` or `quantity` kind's `range` is valid only if it is an exclusive or
 > [!NOTE]
 > BSL reads a range with no start, such as `..10`, as one starting at 0, so a kind given only an upper bound accepts no negative value.
 > A range with no end runs to the largest integer where it is inclusive, such as `1..=`, and to one short of it where it is exclusive, such as `1..`.
+
+The `family` of an `ip-address`, `ip-subnet` or `ip-range` kind is valid only as the [family argument](ip.md#family-argument) specifies.
 
 A `choice` kind's `options` is valid only if it is a non-empty array of non-empty strings, no two of which are equal, each of which `std::parse_text` accepts.
 
@@ -240,7 +246,7 @@ Where it rejects a value that would be a quantity but for its suffix, its error 
 
 ### Presentation of kinds
 
-A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin` or `hostname` param, and a multi-line input for a `multiline` param.
+A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname`, `ip-address`, `ip-subnet` or `ip-range` param, and a multi-line input for a `multiline` param.
 A presentation layer SHOULD offer a toggle for a `boolean` param, a numeric input limited to `range` for an `integer` param, and a selection among `options`, in the order the script declared them, for a `choice` param.
 A presentation layer SHOULD offer a single-line input for a `quantity` param, and SHOULD show the amount the value resolves to while it is entered.
 A presentation layer MUST let an operator leave a param that is not required without a value, whatever its kind.
