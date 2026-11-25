@@ -174,10 +174,13 @@ fn seed_for_call(ctx: &NativeCallContext) -> Result<Seed, Box<EvalAltResult>> {
     seed.map_err(Into::into)
 }
 
-/// Record a value derived from the app seed. Values derived inside an action
-/// closure come from the operation seed and are the operation's own.
+/// Record a derived value as sensitive: the app's own outside an action
+/// closure, and the operation's inside one, where it comes from the operation
+/// seed.
 fn record<F: AsRef<[u8]>>(forms: impl FnOnce() -> Vec<F>) {
-    if !is_in_action_closure() {
+    if is_in_action_closure() {
+        seeds::record_operation_derived(forms());
+    } else {
         seeds::record_derived(forms());
     }
 }

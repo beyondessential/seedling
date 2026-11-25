@@ -65,9 +65,9 @@ impl AuditWriter {
     }
 
     // spec: AUD#entries
-    pub fn write_event(&mut self, event: &OiEvent) -> io::Result<()> {
+    pub fn write_event(&mut self, entry: &serde_json::Value) -> io::Result<()> {
         self.reopen_if_rotated()?;
-        serde_json::to_writer(&mut self.writer, event).map_err(io::Error::other)?;
+        serde_json::to_writer(&mut self.writer, entry).map_err(io::Error::other)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()?;
         Ok(())
@@ -158,21 +158,14 @@ impl AuditSink {
     // spec: AUD#entries
     // spec: AUD#write-failures
     /// Write one entry, opening the log first if it is not open, and report the
-    /// outcome through the fault.
-    pub fn record(&mut self, event: &OiEvent, db: &DbHandle) {
-        let outcome = match self.writer.take() {
-            Some(writer) => Ok(writer),
-            None => AuditWriter::open(&self.path),
-        }
-        .and_then(|mut writer| {
-            writer.write_event(event)?;
-            Ok(writer)
-        });
-        match outcome {
-            Ok(writer) => {
-                self.writer = Some(writer);
-                self.cleared(db);
-            }
+    /// outcome through the fault. An entry that could not be made is reported
+    /// as one that could not be written.
+    pub fn record(&mut self, entry: Result<serde_json::Value, String>, db: &DbHandle) {
+        match entry
+            .map_err(io::Error::other)
+            .and_then(|entry| self.write(&entry))
+        {
+            Ok(()) => self.cleared(db),
             Err(e) => {
                 error!(path = %self.path.display(), "failed to write audit event: {e}");
                 self.unwritten += 1;
@@ -180,20 +173,34 @@ impl AuditSink {
             }
         }
     }
+
+    /// Write `entry`, opening the log first if it is not open. A log that
+    /// fails a write is opened afresh for the next.
+    fn write(&mut self, entry: &serde_json::Value) -> io::Result<()> {
+        let mut writer = match self.writer.take() {
+            Some(writer) => writer,
+            None => AuditWriter::open(&self.path)?,
+        };
+        writer.write_event(entry)?;
+        self.writer = Some(writer);
+        Ok(())
+    }
 }
 
 // spec: AUD#entries
+/// Write each event from `rx` to the audit log as `entry` makes it.
 pub fn spawn_audit_task(
     path: PathBuf,
     mut rx: broadcast::Receiver<OiEvent>,
     db: DbHandle,
+    mut entry: impl FnMut(&OiEvent) -> Result<serde_json::Value, String> + Send + 'static,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut sink = AuditSink::new(path);
         sink.open(&db);
         loop {
             match rx.recv().await {
-                Ok(event) => sink.record(&event, &db),
+                Ok(event) => sink.record(entry(&event), &db),
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // spec: AUD#write-failures
                     warn!(dropped = n, "audit log receiver lagged, events lost");
@@ -231,13 +238,14 @@ mod tests {
 
     use super::*;
 
-    fn test_event(app: &str) -> OiEvent {
-        OiEvent::AppRegistered {
+    fn test_event(app: &str) -> serde_json::Value {
+        serde_json::to_value(OiEvent::AppRegistered {
             timestamp: jiff::Timestamp::now(),
             app: AppName::new_unchecked(app),
             generation: 1,
             actor: None,
-        }
+        })
+        .unwrap()
     }
 
     // spec: AUD#write-failures
@@ -269,20 +277,52 @@ mod tests {
             1,
             "a log that cannot be opened holds the fault before any entry"
         );
-        sink.record(&test_event("a"), &db);
-        sink.record(&test_event("b"), &db);
+        sink.record(Ok(test_event("a")), &db);
+        sink.record(Ok(test_event("b")), &db);
         let faults = held(&db);
         assert_eq!(faults.len(), 1, "one fault, whatever the count: {faults:?}");
         assert!(faults[0].contains("2 events"), "{}", faults[0]);
 
         // The obstruction goes; the next entry opens the log and writes.
         fs::remove_dir(&path).unwrap();
-        sink.record(&test_event("c"), &db);
+        sink.record(Ok(test_event("c")), &db);
         assert!(
             held(&db).is_empty(),
             "the fault must clear on the next write"
         );
         assert!(fs::read_to_string(&path).unwrap().contains("\"app\":\"c\""));
+    }
+
+    // spec: AUD#write-failures
+    #[test]
+    fn an_entry_that_cannot_be_made_is_reported_as_unwritten() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("audit.log");
+        let db = DbHandle::open_in_memory().unwrap();
+        let mut sink = AuditSink::new(path.clone());
+        let held = |db: &DbHandle| -> Vec<String> {
+            db.call(|db| {
+                crate::runtime::faults::list_active_faults(
+                    db,
+                    Some(&AppName::new_unchecked("seedling")),
+                )
+                .unwrap()
+                .into_iter()
+                .filter(|f| f.kind == "audit_log_unavailable")
+                .map(|f| f.description)
+                .collect()
+            })
+        };
+
+        sink.open(&db);
+        sink.record(Err("its app's sensitive values cannot be read".into()), &db);
+        let faults = held(&db);
+        assert_eq!(faults.len(), 1, "{faults:?}");
+        assert!(faults[0].contains("cannot be read"), "{}", faults[0]);
+
+        sink.record(Ok(test_event("d")), &db);
+        assert!(held(&db).is_empty(), "the next entry written clears it");
+        assert!(fs::read_to_string(&path).unwrap().contains("\"app\":\"d\""));
     }
 
     // spec: AUD#storage

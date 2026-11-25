@@ -26,6 +26,8 @@ The runtime MUST create the file readable and writable by its owner only.
 
 The runtime MUST write to the audit log every event it publishes on the [event feed](../interface/events.md#event-types).
 The audit log MUST be in JSON Lines, each entry being one event in the event feed's JSON representation, with its `type` and `timestamp` members.
+Each entry MUST be checked and masked as the event feed's events are, as [responses and events](secrets.md#responses-and-events) requires.
+An event whose app's sensitive values cannot be read is an entry the runtime cannot write.
 
 ## Rotation
 

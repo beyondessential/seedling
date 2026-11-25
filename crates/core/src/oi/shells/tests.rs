@@ -604,6 +604,27 @@ fn a_shell_whose_volume_param_cannot_be_bound_does_not_run_its_closure() {
     assert!(!reason.contains("the closure ran"), "{reason}");
 }
 
+// spec: SEC#withheld-values
+// spec: SEC#matching
+#[test]
+fn a_shell_failure_masks_a_secret_param_it_quotes() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{ throw `bad token ${{p.token}}`; }}, #{{
+            params: #{{ "token": #{{ kind: "text", secret: true }} }},
+        }});"#
+    );
+    let reason = run_shell(
+        &script,
+        serde_json::json!({ "token": "Tui-Harbour-58" }),
+        &FakeHost::answering(Ok(ShellExit::ended())),
+        None,
+    )
+    .reason
+    .expect("the session fails");
+    assert!(reason.contains("bad token <redacted>"), "{reason}");
+    assert!(!reason.contains("Tui-Harbour-58"), "{reason}");
+}
+
 // spec: ACN#param-delivery
 #[test]
 fn params_a_shell_declares_no_schema_for_still_reach_its_closure() {
@@ -676,6 +697,35 @@ fn what_a_shell_closure_starts_is_desired_and_recorded_against_the_session() {
         records[0].creator,
         crate::runtime::desired::DynamicCreator::ShellSession
     );
+}
+
+// spec: APPS#redacted-values
+// spec: SEC#matching
+#[test]
+fn a_dynamic_resource_description_quoting_a_secret_param_is_recorded_as_none() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{
+            shell.attach(tools);
+            rt.start(app.job().image("{SHELL_JOB}").command("true").description(`migrate with ${{p.token}}`));
+            rt.start(app.job().image("{SHELL_JOB}").command("true").description("plain"));
+        }}, #{{
+            params: #{{ "token": #{{ kind: "text", secret: true }} }},
+        }});"#
+    );
+    let ran = run_shell_session(
+        &script,
+        serde_json::json!({ "token": "Tui-Harbour-58" }),
+        &FakeHost::answering(Ok(ShellExit::exited(0))),
+        None,
+        |_| {},
+    );
+    assert_eq!(ran.outcome.reason, None);
+    let mut descriptions: Vec<_> = session_records(&ran)
+        .into_iter()
+        .map(|r| r.description)
+        .collect();
+    descriptions.sort();
+    assert_eq!(descriptions, [None, Some("plain".to_owned())]);
 }
 
 // spec: RT#starting-resources

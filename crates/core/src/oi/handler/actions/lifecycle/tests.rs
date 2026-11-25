@@ -1206,13 +1206,16 @@ fn a_call_that_would_act_on_a_workload_fails_while_what_gates_hold_cannot_be_rea
 }
 
 /// What the action `derive` threw when replayed against an operation persisted
-/// with `seed`, as after a restart severs everything held in memory.
-fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
+/// with `seed`, as after a restart severs everything held in memory. The
+/// action throws `thrown`, an expression over the derived value `id`.
+fn derived_on_replay(seed: &crate::runtime::seeds::Seed, thrown: &str) -> String {
     let name = AppName::new("demo").unwrap();
-    let script = r#"app.on_action("derive", |rt, _p| { throw std::uuid_v4("id"); });"#;
+    let script = format!(
+        r#"app.on_action("derive", |rt, _p| {{ let id = std::uuid_v4("id"); throw {thrown}; }});"#
+    );
     let (app, _) = crate::runtime::apps::evaluate_script(
         &name,
-        script,
+        &script,
         &Default::default(),
         &crate::ScriptLimits::default(),
     );
@@ -1272,11 +1275,32 @@ fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
 // spec: SEC#operation-seeds
 #[test]
 fn a_replay_derives_from_the_seed_on_record() {
+    // A part of the derived value is not the value itself, so it is not
+    // withheld from what the throw reports.
+    let prefix = r#"id.sub_string(0, 8)"#;
     let seed = crate::runtime::seeds::Seed::from_bytes([1; 32]);
-    let first = derived_on_replay(&seed);
-    assert_eq!(first, derived_on_replay(&seed));
+    let first = derived_on_replay(&seed, prefix);
+    assert_eq!(first, derived_on_replay(&seed, prefix));
     assert_ne!(
         first,
-        derived_on_replay(&crate::runtime::seeds::Seed::from_bytes([2; 32]))
+        derived_on_replay(&crate::runtime::seeds::Seed::from_bytes([2; 32]), prefix)
     );
+}
+
+// spec: SEC#withheld-values
+// spec: SEC#matching
+#[test]
+fn a_failure_masks_a_value_the_operation_derived() {
+    let seed = crate::runtime::seeds::Seed::from_bytes([1; 32]);
+    let thrown = derived_on_replay(&seed, r#"`password=${id};`"#);
+    assert!(thrown.contains("password=<redacted>;"), "{thrown}");
+}
+
+// spec: SEC#matching
+// spec: SEC#redaction
+#[test]
+fn a_failure_masks_a_helper_result_computed_from_a_value_the_operation_derived() {
+    let seed = crate::runtime::seeds::Seed::from_bytes([1; 32]);
+    let thrown = derived_on_replay(&seed, r#"`hex=${std::encode_hex(id)};`"#);
+    assert!(thrown.contains("hex=<redacted>;"), "{thrown}");
 }

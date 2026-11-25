@@ -331,6 +331,10 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// every pass of the operation or shell session.
     // spec: SEC#operation-seeds
     pub operation_seed: crate::runtime::seeds::Seed,
+    /// The sensitive values of the operation or shell session, which its
+    /// closures' derived values join as they are derived.
+    // spec: SEC#matching
+    pub sensitive: crate::runtime::redact::Scope,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -345,6 +349,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         engine,
         script_ast,
         operation_seed,
+        sensitive,
         operation_id,
         app,
         subject,
@@ -561,7 +566,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         let _guard =
             ActionClosureGuard::new(action_def, op_id_str.clone(), operation_volume_bindings)
                 .with_active_rt(rt_for_table)
-                .with_operation_seed(&operation_seed);
+                .with_operation_seed(&operation_seed, &sensitive);
         engine.eval_ast_with_scope::<Dynamic>(scope, &call_ast)
     });
 

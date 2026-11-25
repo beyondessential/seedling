@@ -638,6 +638,36 @@ pub(crate) fn run_operation_loop(
         }
     };
 
+    // spec: SEC#matching
+    let sensitive = {
+        let (name, cipher, def, stored) = (
+            app_name.clone(),
+            Arc::clone(&cipher),
+            app.def.load_full(),
+            app.stored.lock().clone(),
+        );
+        match db.call(move |db| {
+            crate::runtime::apps::sensitive_values(db, &cipher, &name, &def, &stored)
+        }) {
+            Ok(values) => crate::runtime::redact::Scope::new(values),
+            Err(e) => {
+                tracing::error!(app = %app_name, action = %action_name, "{action_name} not run: cannot read the app's sensitive values: {e}");
+                return OperationEnd::NotRun(format!(
+                    "{action_name} not run: the app's sensitive values cannot be read: {e}"
+                ));
+            }
+        }
+    };
+    if let Some(action) = target.action() {
+        let def = app.def.load();
+        let schema = def.actions.get(action.as_str()).map(|a| &a.params);
+        sensitive.insert_secret_params(params.values(), |name| {
+            schema
+                .and_then(|schema| schema.get(name))
+                .is_some_and(|p| p.is_secret())
+        });
+    }
+
     loop {
         // spec: RT#resources-a-gate-holds
         // What gates keep from the closure is read for each pass, so a pass
@@ -678,6 +708,7 @@ pub(crate) fn run_operation_loop(
                     _ => Subject::Action(action_name),
                 },
                 operation_seed: operation_seed.clone(),
+                sensitive: sensitive.clone(),
                 log: &log,
                 world: Arc::clone(&world),
                 registry: Arc::clone(&registry),
@@ -698,8 +729,10 @@ pub(crate) fn run_operation_loop(
         match result {
             OperationResult::Completed => return OperationEnd::Completed,
             OperationResult::Failed(e) => {
-                tracing::error!(app = %app_name, operation = %target, "operation failed: {e}");
-                return OperationEnd::Failed(e.to_string());
+                // spec: SEC#withheld-values
+                let why = sensitive.values().mask(&e.to_string()).into_owned();
+                tracing::error!(app = %app_name, operation = %target, "operation failed: {why}");
+                return OperationEnd::Failed(why);
             }
             // spec: OPS#cancellation
             OperationResult::Cancelled => {
