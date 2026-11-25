@@ -3,7 +3,7 @@
 //! either the same way.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     io::{ErrorKind, Read},
     ops::Bound,
@@ -467,19 +467,18 @@ impl Archive {
     /// path would read it, and contents several paths share are held once,
     /// within the bundle limits.
     pub fn load(&mut self, tarball: &[u8], wanted: &[String]) -> Result<(), String> {
-        let beneath: Vec<String> = wanted.iter().map(|w| format!("{w}/")).collect();
-        let roots = |name: &str| -> Vec<&str> {
-            wanted
-                .iter()
-                .zip(&beneath)
-                .filter(|(w, b)| w.is_empty() || name == w.as_str() || name.starts_with(*b))
-                .map(|(w, _)| w.as_str())
+        // Looked up along an entry's own ancestors, so each entry costs its
+        // depth however many paths are wanted.
+        let roots_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+        let on_the_way_set: HashSet<&str> =
+            wanted.iter().flat_map(|w| ancestors(w).skip(1)).collect();
+        let roots = |name: &str| -> Vec<String> {
+            ancestors(name)
+                .filter(|a| roots_set.contains(a))
+                .map(str::to_owned)
                 .collect()
         };
-        let on_the_way = |name: &str| {
-            let dir = format!("{name}/");
-            wanted.iter().any(|w| w.starts_with(&dir))
-        };
+        let on_the_way = |name: &str| on_the_way_set.contains(name);
         let mut budget = Budget::full();
         let mut held: HashMap<u64, Vec<Arc<[u8]>>> = HashMap::new();
         let mut cache = RulesCache::new();
@@ -551,6 +550,18 @@ impl Archive {
         }
         Ok(())
     }
+}
+
+/// `path` and every directory above it, up to and including the root, which
+/// is the empty path.
+fn ancestors(path: &str) -> impl Iterator<Item = &str> {
+    std::iter::successors(Some(path), |p| {
+        if p.is_empty() {
+            None
+        } else {
+            Some(p.rsplit_once('/').map_or("", |(parent, _)| parent))
+        }
+    })
 }
 
 /// Hold `contents`, once however many paths hold them: only contents not

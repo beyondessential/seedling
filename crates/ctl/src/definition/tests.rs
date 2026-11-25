@@ -843,3 +843,45 @@ fn what_a_github_definition_leaves_out_or_repeats_costs_nothing() {
     assert_eq!(files["big.bin"], most);
     assert!(!files.keys().any(|k| k.starts_with("fixtures")));
 }
+
+// spec: CLI#definition-sources
+#[test]
+fn a_github_definition_at_the_repository_root_reads_the_whole_repository() {
+    let data = tarball(|b| {
+        tar_file(b, "o-r-abc/app.seed.rhai", b"app;");
+        tar_file(b, "o-r-abc/pages/500.html", b"<p>");
+    });
+    let files = github::read_definition(&data, "").unwrap();
+    assert_eq!(
+        files.keys().collect::<Vec<_>>(),
+        vec!["app.seed.rhai", "pages/500.html"]
+    );
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn many_includes_read_from_github_as_few_do() {
+    let keys = seedling_bundle::BUNDLE_FILE_LIMIT / 2;
+    let mut metadata = String::from("[include]\n");
+    for i in 0..keys {
+        metadata.push_str(&format!("\"lib/{i}\" = \"../shared/{i}\"\n"));
+    }
+    let data = tarball(|b| {
+        tar_file(b, "o-r-abc/apps/web/seedling.toml", metadata.as_bytes());
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        for i in 0..keys {
+            tar_file(
+                b,
+                &format!("o-r-abc/apps/shared/{i}"),
+                i.to_string().as_bytes(),
+            );
+            tar_file(b, &format!("o-r-abc/docs/{i}.md"), b"elsewhere");
+        }
+    });
+    let files = github::read_definition(&data, "apps/web").unwrap();
+    assert_eq!(
+        files[&format!("lib/{}", keys - 1)],
+        (keys - 1).to_string().as_bytes()
+    );
+    assert!(!files.keys().any(|k| k.ends_with(".md")));
+}
