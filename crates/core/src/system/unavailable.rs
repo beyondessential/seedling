@@ -1,5 +1,5 @@
-//! Erroring backend implementations used when the container runtime (podman)
-//! or process manager (systemd) could not be reached at startup. They let the
+//! Erroring backend implementations used when the container runtime or
+//! process manager could not be reached at startup. They let the
 //! daemon come up in a degraded mode — the operator interface, database, and
 //! scheduler run and surface a system-wide fault — instead of crash-looping.
 //! Every method fails loudly; unlike the stub backends, they never fake
@@ -17,7 +17,7 @@ use crate::system::{
 };
 
 fn unavailable() -> BoxError {
-    "container/process backend unavailable: the podman/systemd connection failed at startup".into()
+    "container/process backend unavailable: the connection failed at startup".into()
 }
 
 /// A `ContainerRuntime` whose every operation fails with an "unavailable" error.

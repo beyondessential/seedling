@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use snafu::{IntoError, ResultExt, Snafu};
-use zbus::{Array, Connection, OwnedObjectPath, Signature, Structure, Variant as Value};
-
-use crate::system::{
+use seedling_core::system::{
     BoxError, BoxFuture, ProcessManager,
     priority::AppStandings,
     types::{
         ActiveState, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind, UnitState,
         UnitSummary,
     },
+    volume_store::ConfinedWriteError,
 };
+use snafu::{IntoError, ResultExt, Snafu};
+use zbus::{Array, Connection, OwnedObjectPath, Signature, Structure, Variant as Value};
 
 use self::priority::SliceSpec;
 
@@ -34,7 +34,7 @@ const START_LIMIT_BURST: u32 = 10;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Snafu)]
-pub(crate) enum SystemdError {
+pub enum SystemdError {
     #[snafu(display("D-Bus error: {source}"))]
     DBus {
         #[snafu(source(from(zbus::Error, Box::new)))]
@@ -251,7 +251,7 @@ fn parse_exec_main(code: i32, status: i32) -> Option<UnitExit> {
 // SystemdManager
 // ---------------------------------------------------------------------------
 
-pub(crate) struct SystemdManager {
+pub struct SystemdManager {
     conn: Arc<Connection>,
     /// The record of the slice unit files this runtime has written, in the data
     /// directory.
@@ -263,7 +263,7 @@ const SLICE_RECORD: &str = "slice-units";
 
 impl SystemdManager {
     /// Connect to the system D-Bus. Called once at startup.
-    pub(crate) async fn connect(data_dir: &std::path::Path) -> Result<Self, SystemdError> {
+    pub async fn connect(data_dir: &std::path::Path) -> Result<Self, SystemdError> {
         let conn = Connection::system().await.context(DBusSnafu)?;
         Ok(Self {
             conn: Arc::new(conn),
@@ -665,13 +665,11 @@ impl SystemdManager {
 
     async fn write_unit_impl(&self, name: &str, content: &str) -> Result<(), SystemdError> {
         validate_unit_name(name)?;
-        super::confined::write_async(std::path::Path::new(UNIT_DIR), name, content.as_bytes())
+        crate::confined::write_async(std::path::Path::new(UNIT_DIR), name, content.as_bytes())
             .await
             .map_err(|e| match e {
-                super::confined::ConfinedWriteError::Io { source, .. } => {
-                    IoSnafu.into_error(source)
-                }
-                super::confined::ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
+                ConfinedWriteError::Io { source, .. } => IoSnafu.into_error(source),
+                ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
                     name: name.to_owned(),
                 }
                 .build(),

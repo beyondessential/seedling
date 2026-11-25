@@ -6,11 +6,12 @@ use std::{
     path::Path,
 };
 
+use seedling_core::system::volume_store::ConfinedWriteError;
 use snafu::{IntoError, ResultExt};
 
 use super::priority::SliceSpec;
 use super::{InvalidUnitNameSnafu, IoSnafu, SystemdError, validate_unit_name};
-use crate::system::confined;
+use crate::confined;
 
 /// What a pass over the slice unit files did.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -83,8 +84,8 @@ pub(super) async fn sync_files(
             confined::write_async(unit_dir, &spec.name, wanted.as_bytes())
                 .await
                 .map_err(|e| match e {
-                    confined::ConfinedWriteError::Io { source, .. } => IoSnafu.into_error(source),
-                    confined::ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
+                    ConfinedWriteError::Io { source, .. } => IoSnafu.into_error(source),
+                    ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
                         name: spec.name.clone(),
                     }
                     .build(),

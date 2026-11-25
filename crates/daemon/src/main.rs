@@ -482,7 +482,13 @@ async fn main() {
         System::setup_stubbed(&data_dir, storage, journal)
             .unwrap_or_else(|e| fatal!("stubbed system setup failed: {e}"))
     } else {
-        let platform = Platform { journal, storage };
+        let platform = Platform {
+            connector: Arc::new(seedling_linux::connector::HostConnector {
+                data_dir: data_dir.clone(),
+            }),
+            journal,
+            storage,
+        };
         System::setup(platform, node_prefix, &data_dir)
             .await
             .unwrap_or_else(|e| fatal!("system setup failed: {e}"))

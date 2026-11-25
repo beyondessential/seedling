@@ -99,7 +99,7 @@ impl VolumeStorage for HostVolumeStorage {
         rel_path: &'a str,
         contents: &'a [u8],
     ) -> BoxFuture<'a, Result<(), ConfinedWriteError>> {
-        seedling_core::system::confined::write_async(root, rel_path, contents).boxed()
+        crate::confined::write_async(root, rel_path, contents).boxed()
     }
 }
 

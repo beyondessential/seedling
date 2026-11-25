@@ -19,14 +19,7 @@ use podman_rest_client::{
         },
     },
 };
-
-use snafu::{IntoError, Snafu};
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf, unix::AsyncFd},
-    process::Command,
-};
-
-use crate::system::{
+use seedling_core::system::{
     BoxError, BoxFuture, ContainerRuntime,
     translate::container::podman_args,
     types::{
@@ -34,13 +27,18 @@ use crate::system::{
         ContainerSummary, ExecHandle, ExecOutput, ImageSummary, NetworkSummary, SPEC_HASH_LABEL,
     },
 };
+use snafu::{IntoError, Snafu};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf, unix::AsyncFd},
+    process::Command,
+};
 
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Snafu)]
-pub(crate) enum PodmanError {
+pub enum PodmanError {
     #[snafu(display("podman API error: {source}"))]
     Api {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
@@ -62,7 +60,7 @@ pub(crate) enum PodmanError {
 // PodmanRuntime
 // ---------------------------------------------------------------------------
 
-pub(crate) struct PodmanRuntime {
+pub struct PodmanRuntime {
     client: PodmanRestClient,
 }
 
@@ -83,7 +81,7 @@ fn is_untagged_sentinel(tag: &str) -> bool {
 }
 
 impl PodmanRuntime {
-    pub(crate) async fn new() -> Result<Self, PodmanError> {
+    pub async fn new() -> Result<Self, PodmanError> {
         let client = PodmanRestClient::new(Config {
             // spec: LINUX#host-facilities
             uri: "unix:///run/podman/podman.sock".to_string(),
@@ -281,7 +279,7 @@ impl PodmanRuntime {
         prefix: Ipv6Net,
         ipv4: Option<ipnet::Ipv4Net>,
     ) -> Result<String, PodmanError> {
-        let gateway = crate::system::first_host_v6(&prefix)
+        let gateway = seedling_core::system::first_host_v6(&prefix)
             .ok_or_else(|| {
                 ProtocolSnafu {
                     message: format!(
@@ -303,7 +301,7 @@ impl PodmanRuntime {
         }];
 
         if let Some(v4) = ipv4 {
-            let gateway4 = crate::system::first_host_v4(&v4)
+            let gateway4 = seedling_core::system::first_host_v4(&v4)
                 .ok_or_else(|| {
                     ProtocolSnafu {
                         message: format!(

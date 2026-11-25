@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 
 use seedling_protocol::names::AppName;
 
-use crate::defs::enums::Priority;
-use crate::runtime::priority::AppPriority;
-use crate::system::priority::{AppStandings, UnitStanding};
+use seedling_core::defs::enums::Priority;
+use seedling_core::runtime::priority::AppPriority;
+use seedling_core::system::priority::{AppStandings, UnitStanding};
 
 /// Slice the runtime's own infrastructure (proxy, resolver) sits under.
 // spec: LINUX#resource-control-groups
@@ -344,7 +344,7 @@ mod tests {
     fn an_app_cannot_be_named_into_the_infra_slice_component() {
         // The guard for this is the reserved app names; here we pin the
         // collision it exists to prevent, so the two cannot drift apart.
-        let infra = AppName::new(crate::reserved::INFRA_APP_NAME).unwrap();
+        let infra = AppName::new(seedling_core::reserved::INFRA_APP_NAME).unwrap();
         assert_eq!(app_slice(&infra), INFRA_SLICE);
     }
 
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn an_app_named_for_the_infra_slice_cannot_displace_it() {
         let slices = desired_slices(&[standings(
-            crate::reserved::INFRA_APP_NAME,
+            seedling_core::reserved::INFRA_APP_NAME,
             AppPriority::Low,
             &[Priority::Normal],
         )]);
@@ -452,7 +452,7 @@ mod tests {
     fn a_workload_unit_takes_its_tier_slice_and_its_kill_preference() {
         let standing = UnitStanding::Workload {
             app: AppName::new("app-two").unwrap(),
-            standing: crate::system::priority::WorkloadStanding::new(
+            standing: seedling_core::system::priority::WorkloadStanding::new(
                 AppPriority::Low,
                 Priority::Critical,
             ),

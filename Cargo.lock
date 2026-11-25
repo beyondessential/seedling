@@ -5071,7 +5071,6 @@ dependencies = [
  "parking_lot",
  "pem 4.0.0",
  "percent-encoding",
- "podman-rest-client",
  "purl",
  "quinn",
  "rand 0.10.3",
@@ -5110,7 +5109,6 @@ dependencies = [
  "wildmatch",
  "winnow",
  "x509-parser",
- "zbus",
  "zxcvbn",
 ]
 
@@ -5144,15 +5142,25 @@ dependencies = [
 name = "seedling-linux"
 version = "0.12.0"
 dependencies = [
+ "bytes",
  "futures-util",
+ "http",
+ "ipnet",
  "jiff",
+ "libc",
+ "nix 0.31.3",
+ "podman-rest-client",
  "rustix",
  "seedling-core",
  "seedling-protocol",
+ "serde",
+ "serde_json",
+ "snafu",
  "systemd",
  "tempfile",
  "tokio",
  "tracing",
+ "zbus",
 ]
 
 [[package]]

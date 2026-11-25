@@ -25,15 +25,12 @@ pub mod types;
 
 pub mod breadcrumb;
 pub(crate) mod caddy;
-pub mod confined;
 pub(crate) mod data_plane;
 pub mod jool;
 pub mod journal;
-pub(crate) mod podman;
 pub mod resolver;
 pub mod startup_cleanup;
 pub mod stub;
-pub(crate) mod systemd;
 pub(crate) mod unavailable;
 pub mod volume_store;
 
@@ -69,12 +66,12 @@ pub fn proxy_bridge_gateway(node_prefix: &Ipv6Net) -> std::net::Ipv6Addr {
 /// Follows from the prefix rather than from where an allocator happens to put
 /// the host part. `None` for a prefix too small to hold a gateway and a host.
 // spec: INFRA#pod-networks
-pub(crate) fn first_host_v6(prefix: &Ipv6Net) -> Option<std::net::Ipv6Addr> {
+pub fn first_host_v6(prefix: &Ipv6Net) -> Option<std::net::Ipv6Addr> {
     (prefix.prefix_len() <= 126).then(|| std::net::Ipv6Addr::from(u128::from(prefix.network()) + 1))
 }
 
 // spec: INFRA#pod-networks
-pub(crate) fn first_host_v4(prefix: &ipnet::Ipv4Net) -> Option<std::net::Ipv4Addr> {
+pub fn first_host_v4(prefix: &ipnet::Ipv4Net) -> Option<std::net::Ipv4Addr> {
     (prefix.prefix_len() <= 30).then(|| std::net::Ipv4Addr::from(u32::from(prefix.network()) + 1))
 }
 pub use types::{
@@ -289,8 +286,8 @@ pub struct System {
     pub volume_store: volume_store::VolumeStore,
     /// Where log streams are read from.
     pub journal: Arc<dyn journal::JournalSource>,
-    /// Whether the container runtime (podman) and process manager (systemd)
-    /// are reachable. While either is not, the daemon runs degraded: the
+    /// Whether the container runtime and process manager are reachable.
+    /// While either is not, the daemon runs degraded: the
     /// backend is an erroring stub (see [`unavailable`]), the OI, database and
     /// reconciler run so the operator can see the fault, and no workloads are
     /// actuated. The reconciler probes the backends again, and
@@ -351,6 +348,7 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
 /// What the host platform provides the runtime with, beyond what the runtime
 /// builds itself.
 pub struct Platform {
+    pub connector: Arc<dyn backends::Connector>,
     pub journal: Arc<dyn journal::JournalSource>,
     pub storage: Arc<dyn volume_store::VolumeStorage>,
 }
@@ -372,21 +370,19 @@ impl System {
         node_prefix: Ipv6Net,
         data_dir: &Path,
     ) -> Result<SystemSetup, BoxError> {
-        // spec: INFRA#unavailable-backends — bring up the container runtime (podman)
-        // and process manager (systemd) best-effort. If either connection fails
-        // the daemon must NOT crash-loop: podman/systemd being down is a
+        // spec: INFRA#unavailable-backends — bring up the container runtime
+        // and process manager best-effort. If either connection fails
+        // the daemon must NOT crash-loop: either being down is a
         // recoverable host-configuration problem, and a crash-loop hides it
         // behind restart churn with no operator-visible signal. Instead we swap
         // in erroring backends, record the reason, and let the OI, database, and
         // reconciler come up so the operator sees a system-wide fault explaining
         // what is broken.
-        let connector = Arc::new(backends::HostConnector {
-            data_dir: data_dir.to_path_buf(),
-        });
+        let connector = platform.connector;
         let backends = backends::Backends::new(
-            connector.clone(),
-            backends::Connector::container(&*connector).await,
-            backends::Connector::process(&*connector).await,
+            Arc::clone(&connector),
+            connector.container().await,
+            connector.process().await,
         );
         if let Some(reason) = backends.unavailable_reason() {
             tracing::error!(

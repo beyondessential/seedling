@@ -12,10 +12,8 @@ use std::{
 };
 
 use rustix::fs::{self, Mode, OFlags, ResolveFlags, mkdirat};
+use seedling_core::system::volume_store::{ConfinedWriteError, EscapeSnafu, IoSnafu};
 use snafu::IntoError;
-
-pub use super::volume_store::ConfinedWriteError;
-use super::volume_store::{EscapeSnafu, IoSnafu};
 
 /// Default file mode for written files: owner rw, group r (0640).
 const FILE_MODE: Mode = Mode::from_raw_mode(0o640);
