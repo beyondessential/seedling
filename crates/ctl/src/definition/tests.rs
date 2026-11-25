@@ -891,3 +891,21 @@ fn many_includes_read_from_github_as_few_do() {
     );
     assert!(!files.keys().any(|k| k.ends_with(".md")));
 }
+
+// spec: CLI#definition-sources
+#[test]
+fn a_deeply_nested_github_path_is_read_without_exhausting_the_stack() {
+    // Deeper than a test thread's stack would allow one frame per level.
+    let deep = vec!["d"; 5_000].join("/");
+    let data = tarball(|b| {
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        let path = format!("o-r-abc/apps/web/{deep}/x");
+        let mut header = tar::Header::new_gnu();
+        header.set_size(1);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        b.append_data(&mut header, path, &b"x"[..]).unwrap();
+    });
+    let files = github::read_definition(&data, "apps/web").unwrap();
+    assert_eq!(files[&format!("{deep}/x")], b"x");
+}

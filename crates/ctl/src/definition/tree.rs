@@ -102,110 +102,131 @@ pub(super) fn read_folder(
     root: &str,
     budget: &mut Budget,
 ) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let mut ignores = Ignores::new(root);
     let mut files = BTreeMap::new();
-    let mut rules = Vec::new();
-    walk(tree, root, root, &mut rules, budget, &mut files)?;
+    // Walked with a stack of its own rather than by recursion, since a
+    // downloaded archive may nest directories as deep as it likes.
+    let mut dirs = vec![root.to_owned()];
+    while let Some(dir) = dirs.pop() {
+        for (name, kind) in tree.entries(&dir)? {
+            let path = join(&dir, name.shown());
+            if ignores.excludes(tree, &dir, name.shown(), kind)? {
+                continue;
+            }
+            if let Name::Other(_) = name {
+                return Err(format!("{} is not a UTF-8 path", tree.show(&path)));
+            }
+            match kind {
+                Kind::Dir => dirs.push(path),
+                Kind::File => {
+                    let rel = below(root, &path).to_owned();
+                    budget.take_file(&tree.show(&path), rel.len())?;
+                    let contents = tree.read(&path, budget)?;
+                    files.insert(rel, contents);
+                }
+                Kind::Other => {
+                    return Err(format!(
+                        "{} is not a regular file; definitions may only hold files and folders",
+                        tree.show(&path)
+                    ));
+                }
+            }
+        }
+    }
     Ok(files)
 }
 
-fn walk(
-    tree: &impl Tree,
-    root: &str,
-    dir: &str,
-    rules: &mut Vec<(String, Gitignore)>,
-    budget: &mut Budget,
-    files: &mut BTreeMap<String, Vec<u8>>,
-) -> Result<(), String> {
-    let pushed = match ignore_rules(tree, dir)? {
-        Some(rule) => {
-            rules.push((dir.to_owned(), rule));
-            true
-        }
-        None => false,
-    };
-    for (name, kind) in tree.entries(dir)? {
-        let path = join(dir, name.shown());
-        if is_vcs_metadata(name.shown(), kind) || ignored(rules, &path, kind == Kind::Dir) {
-            continue;
-        }
-        if let Name::Other(_) = name {
-            return Err(format!("{} is not a UTF-8 path", tree.show(&path)));
-        }
-        match kind {
-            Kind::Dir => walk(tree, root, &path, rules, budget, files)?,
-            Kind::File => {
-                let rel = path
-                    .strip_prefix(root)
-                    .map(|p| p.trim_start_matches('/'))
-                    .unwrap_or(&path)
-                    .to_owned();
-                budget.take_file(&tree.show(&path), rel.len())?;
-                let contents = tree.read(&path, budget)?;
-                files.insert(rel, contents);
-            }
-            Kind::Other => {
-                return Err(format!(
-                    "{} is not a regular file; definitions may only hold files and folders",
-                    tree.show(&path)
-                ));
-            }
-        }
+/// `path` relative to `root`, which it lies at or beneath.
+fn below<'a>(root: &str, path: &'a str) -> &'a str {
+    if root.is_empty() {
+        path
+    } else {
+        path.strip_prefix(root)
+            .map(|p| p.trim_start_matches('/'))
+            .unwrap_or(path)
     }
-    if pushed {
-        rules.pop();
-    }
-    Ok(())
 }
 
-/// The `.seedignore` rules of each directory, read once.
-type RulesCache = HashMap<String, Option<Gitignore>>;
+/// The `.seedignore` rules in force within a directory, nearest last, each
+/// with the directory it came from.
+type Chain = Arc<[(String, Arc<Gitignore>)]>;
 
-fn cached_rules(
-    tree: &impl Tree,
-    dir: &str,
-    cache: &mut RulesCache,
-) -> Result<Option<Gitignore>, String> {
-    if let Some(rules) = cache.get(dir) {
-        return Ok(rules.clone());
-    }
-    let rules = ignore_rules(tree, dir)?;
-    cache.insert(dir.to_owned(), rules.clone());
-    Ok(rules)
+/// What a definition folder rooted at one path leaves out: version-control
+/// metadata, and what the `.seedignore` files from the root down exclude.
+/// Reading the folder and asking about one path of it both decide here, so
+/// the two cannot differ, and each directory's rules are read once.
+pub(super) struct Ignores {
+    root: String,
+    chains: HashMap<String, Chain>,
 }
 
-/// Whether a definition folder rooted at `root` leaves out the file at
-/// `path` beneath it, as [`read_folder`] would.
-fn left_out(
-    tree: &impl Tree,
-    root: &str,
-    path: &str,
-    cache: &mut RulesCache,
-) -> Result<bool, String> {
-    let mut rules = Vec::new();
-    if let Some(rule) = cached_rules(tree, root, cache)? {
-        rules.push((root.to_owned(), rule));
+impl Ignores {
+    pub fn new(root: &str) -> Self {
+        Self {
+            root: root.to_owned(),
+            chains: HashMap::new(),
+        }
     }
-    let below = path
-        .strip_prefix(root)
-        .map(|p| p.trim_start_matches('/'))
-        .unwrap_or(path);
-    let segments: Vec<&str> = below.split('/').collect();
-    let mut dir = root.to_owned();
-    for (i, segment) in segments.iter().enumerate() {
-        let at = join(&dir, segment);
-        let is_dir = i + 1 < segments.len();
-        let kind = if is_dir { Kind::Dir } else { Kind::File };
-        if is_vcs_metadata(segment, kind) || ignored(&rules, &at, is_dir) {
+
+    /// Whether the folder leaves out `name`, a `kind` directly within `dir`.
+    pub fn excludes(
+        &mut self,
+        tree: &impl Tree,
+        dir: &str,
+        name: &str,
+        kind: Kind,
+    ) -> Result<bool, String> {
+        if is_vcs_metadata(name, kind) {
             return Ok(true);
         }
-        if is_dir {
-            if let Some(rule) = cached_rules(tree, &at, cache)? {
-                rules.push((at.clone(), rule));
-            }
-            dir = at;
-        }
+        let chain = self.chain(tree, dir)?;
+        Ok(ignored(&chain, &join(dir, name), kind == Kind::Dir))
     }
-    Ok(false)
+
+    /// Whether reading the folder leaves out the file at `path` beneath its
+    /// root, itself or by leaving out a directory on the way to it.
+    pub fn leaves_out(&mut self, tree: &impl Tree, path: &str) -> Result<bool, String> {
+        let segments: Vec<&str> = below(&self.root, path).split('/').collect();
+        let mut dir = self.root.clone();
+        for (i, segment) in segments.iter().enumerate() {
+            let kind = if i + 1 < segments.len() {
+                Kind::Dir
+            } else {
+                Kind::File
+            };
+            if self.excludes(tree, &dir, segment, kind)? {
+                return Ok(true);
+            }
+            dir = join(&dir, segment);
+        }
+        Ok(false)
+    }
+
+    /// The rules in force within `dir`, which lies at or beneath the root,
+    /// built down from the nearest directory already known.
+    fn chain(&mut self, tree: &impl Tree, dir: &str) -> Result<Chain, String> {
+        let mut pending = Vec::new();
+        let mut at = dir;
+        let mut chain: Chain = loop {
+            if let Some(chain) = self.chains.get(at) {
+                break chain.clone();
+            }
+            pending.push(at.to_owned());
+            if at == self.root || at.is_empty() {
+                break Arc::from([]);
+            }
+            at = at.rsplit_once('/').map_or("", |(parent, _)| parent);
+        };
+        for dir in pending.into_iter().rev() {
+            if let Some(rule) = ignore_rules(tree, &dir)? {
+                let mut extended = chain.to_vec();
+                extended.push((dir.clone(), Arc::new(rule)));
+                chain = extended.into();
+            }
+            self.chains.insert(dir, chain.clone());
+        }
+        Ok(chain)
+    }
 }
 
 /// Whether `name` is version-control metadata: one of the directories above,
@@ -238,16 +259,9 @@ fn ignore_rules(tree: &impl Tree, dir: &str) -> Result<Option<Gitignore>, String
 /// Whether the rules in force leave out `path`: the nearest directory's
 /// `.seedignore` that matches it decides, so a deeper file can bring back
 /// what a shallower one left out.
-fn ignored(rules: &[(String, Gitignore)], path: &str, is_dir: bool) -> bool {
+fn ignored(rules: &[(String, Arc<Gitignore>)], path: &str, is_dir: bool) -> bool {
     for (dir, rule) in rules.iter().rev() {
-        let relative = if dir.is_empty() {
-            path
-        } else {
-            path.strip_prefix(dir.as_str())
-                .map(|p| p.trim_start_matches('/'))
-                .unwrap_or(path)
-        };
-        let matched = rule.matched(relative, is_dir);
+        let matched = rule.matched(below(dir, path), is_dir);
         if matched.is_ignore() {
             return true;
         }
@@ -481,7 +495,7 @@ impl Archive {
         let on_the_way = |name: &str| on_the_way_set.contains(name);
         let mut budget = Budget::full();
         let mut held: HashMap<u64, Vec<Arc<[u8]>>> = HashMap::new();
-        let mut cache = RulesCache::new();
+        let mut ignores: HashMap<String, Ignores> = HashMap::new();
         let mut tar = open(tarball);
         for entry in tar.entries().map_err(unreadable)? {
             let entry = entry.map_err(unreadable)?;
@@ -509,7 +523,10 @@ impl Archive {
                     }
                     let mut read = false;
                     for root in &within {
-                        if *root == name || !left_out(self, root, &name, &mut cache)? {
+                        let ignores = ignores
+                            .entry(root.clone())
+                            .or_insert_with(|| Ignores::new(root));
+                        if *root == name || !ignores.leaves_out(self, &name)? {
                             read = true;
                             break;
                         }
