@@ -533,3 +533,17 @@ async fn a_packed_lone_file_keeps_its_name() {
         ["web.seed.rhai"]
     );
 }
+
+// spec: CLI#definition-sources
+#[test]
+fn a_lone_files_script_errors_name_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "web.seed.rhai", b"let x = 1;\nlet y = ;\n");
+    let bundle =
+        Bundle::from_files(read_lone_file(&dir.path().join("web.seed.rhai")).unwrap()).unwrap();
+    let message = bundle
+        .script()
+        .unwrap()
+        .remap_error("Unexpected ';' (line 2, position 9)");
+    assert!(message.contains("web.seed.rhai line 2"), "{message}");
+}
