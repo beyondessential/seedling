@@ -262,6 +262,7 @@ With `--json`, the CLI MUST print to standard output a single JSON object, `{ "e
 `definitions check` MUST accept `--set name=value`, which MAY be repeated.
 Each MUST set the parameter `name` to the string `value`, split at the first `=`.
 The CLI MUST evaluate the script with the parameters so set as its only stored parameter values, and MUST then validate them as [proposed values](params.md#proposed-values).
+A sample value for a parameter the definition does not declare MUST fail validation, with a reason saying the parameter is not declared.
 
 The CLI MUST report an error and check nothing when an argument to `--set` has no `=`, or when the same parameter is set more than once.
 
