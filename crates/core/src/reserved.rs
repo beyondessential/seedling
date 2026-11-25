@@ -29,16 +29,19 @@ pub const RESERVED_EXTERNAL_VOLUME_PREFIXES: &[&str] = &["seedling-op-"];
 pub const RESERVED_SITE_INGRESS_NAMES: &[&str] =
     &[crate::runtime::tailscale::TAILSCALE_INGRESS_NAME];
 
-/// App names the daemon claims.
+/// The app name the daemon keeps for its own infrastructure.
 ///
-/// An app's workloads are placed in a slice named after the app, so an app name
-/// that realises the slice component the daemon keeps for its own
-/// infrastructure would have its containers share — and reweight — the slice
-/// holding the proxy and the resolver.
+/// An app's workloads are placed in a resource-control group named after the
+/// app, so an app with this name would have its containers share, and
+/// reweight, the group holding the proxy and the resolver.
+// spec: IDN#reserved-names
+pub const INFRA_APP_NAME: &str = "infra";
+
+/// App names the daemon claims.
 ///
 /// `seedling` is the app the runtime files faults about its own reporting to
 /// other systems against.
-pub const RESERVED_APP_NAMES: &[&str] = &[crate::system::priority::INFRA_COMPONENT, "seedling"];
+pub const RESERVED_APP_NAMES: &[&str] = &[INFRA_APP_NAME, "seedling"];
 
 /// A name that belongs to the daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,7 +115,7 @@ mod tests {
     // spec: PRIO#resource-control-groups
     #[test]
     fn the_infra_slice_app_name_is_reserved() {
-        let reserved = AppName::new(crate::system::priority::INFRA_COMPONENT).unwrap();
+        let reserved = AppName::new(INFRA_APP_NAME).unwrap();
         assert!(check_app_name(&reserved).is_err());
         let ordinary = AppName::new("infra-tools").unwrap();
         assert!(check_app_name(&ordinary).is_ok());

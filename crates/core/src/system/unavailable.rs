@@ -9,9 +9,10 @@ use ipnet::{Ipv4Net, Ipv6Net};
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime, ProcessManager,
+    priority::AppStandings,
     types::{
         ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ExecOutput,
-        ImageSummary, NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
+        ImageSummary, NetworkSummary, TransientUnitSpec, UnitState, UnitSummary,
     },
 };
 
@@ -182,9 +183,9 @@ impl ProcessManager for UnavailableProcessManager {
         Box::pin(async { Err(unavailable()) })
     }
 
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async { Err(unavailable()) })

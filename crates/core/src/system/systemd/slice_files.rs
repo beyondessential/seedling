@@ -8,8 +8,9 @@ use std::{
 
 use snafu::{IntoError, ResultExt};
 
+use super::priority::SliceSpec;
 use super::{InvalidUnitNameSnafu, IoSnafu, SystemdError, validate_unit_name};
-use crate::system::{confined, types::SliceSpec};
+use crate::system::confined;
 
 /// What a pass over the slice unit files did.
 #[derive(Debug, Default, PartialEq, Eq)]

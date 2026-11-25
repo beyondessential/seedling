@@ -16,9 +16,10 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime, ProcessManager,
+    priority::AppStandings,
     types::{
         ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ExecOutput,
-        ImageSummary, NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
+        ImageSummary, NetworkSummary, TransientUnitSpec, UnitState, UnitSummary,
     },
 };
 
@@ -223,13 +224,13 @@ impl ProcessManager for Switchable<dyn ProcessManager> {
         async move { inner.list_units(prefix).await }.boxed()
     }
 
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>> {
         let inner = self.get();
-        async move { inner.sync_slices(desired, prune).await }.boxed()
+        async move { inner.sync_groups(apps, prune).await }.boxed()
     }
 
     fn write_unit<'a>(

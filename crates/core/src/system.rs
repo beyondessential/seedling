@@ -3,10 +3,13 @@ use std::{path::Path, sync::Arc};
 use ipnet::{Ipv4Net, Ipv6Net};
 use sha2::{Digest, Sha256};
 
-use crate::system::types::{
-    ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
-    ExecOutput, ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, SliceSpec,
-    TransientUnitSpec, UnitState, UnitSummary,
+use crate::system::{
+    priority::AppStandings,
+    types::{
+        ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules,
+        ExecHandle, ExecOutput, ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute,
+        TransientUnitSpec, UnitState, UnitSummary,
+    },
 };
 
 pub mod actuator;
@@ -79,8 +82,7 @@ pub use types::{
     ExecHandle as SystemExecHandle, ForwardProto, HealthCheckSpec, HttpRedirect, IngressRule,
     Mount, MountRule, MountSource, ObservationFact, ProxyConfig as SystemProxyConfig,
     ProxyListener, ProxyListenerProto, ProxyRoute, ResolvedExternalMount,
-    ServiceRoute as SystemServiceRoute, SliceSpec as SystemSliceSpec, TransientRestart,
-    VirtualHost,
+    ServiceRoute as SystemServiceRoute, TransientRestart, VirtualHost,
 };
 
 // ---------------------------------------------------------------------------
@@ -194,6 +196,9 @@ pub trait ContainerRuntime: Send + Sync + 'static {
 
 pub trait ProcessManager: Send + Sync + 'static {
     // Transient units — container lifecycle; no unit file written to disk.
+    /// Start a transient unit. The process manager paces the unit's automatic
+    /// restarts, whatever its standing.
+    // spec: AUTO#restart-pacing
     fn start_transient<'a>(
         &'a self,
         spec: TransientUnitSpec,
@@ -212,22 +217,23 @@ pub trait ProcessManager: Send + Sync + 'static {
         prefix: &'a str,
     ) -> BoxFuture<'a, Result<Vec<UnitSummary>, BoxError>>;
 
-    // Resource-control slices — the grouping the runtime owns.
-    /// Make the set of slices this runtime owns match `desired`, creating,
-    /// reweighting and forgetting as needed.
+    // Resource-control groups — the grouping the runtime owns.
+    /// Make the resource-control groups this runtime owns provide for `apps`
+    /// and for the runtime's infrastructure, creating, reweighting and
+    /// forgetting as needed.
     ///
-    /// Takes the whole set rather than one slice at a time because the
-    /// supervisor re-reads its unit files as global work: deciding once for the
-    /// batch costs a single re-read instead of one per slice. The implementation
-    /// compares against what already exists, so a call that changes nothing
-    /// costs nothing.
+    /// Takes the whole set rather than one app at a time because the
+    /// supervisor may re-read its configuration as global work: deciding once
+    /// for the batch costs a single re-read instead of one per group. The
+    /// implementation compares against what already exists, so a call that
+    /// changes nothing costs nothing.
     ///
     /// `prune` is false when the caller could not account for every app this
-    /// tick, so a short `desired` set never forgets a live app's slice.
+    /// tick, so a short `apps` set never forgets a live app's group.
     // spec: PRIO#resource-control-groups
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>>;
 

@@ -5,15 +5,29 @@ use zbus::{Array, Connection, OwnedObjectPath, Signature, Structure, Variant as 
 
 use crate::system::{
     BoxError, BoxFuture, ProcessManager,
+    priority::AppStandings,
     types::{
-        ActiveState, SliceSpec, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind,
-        UnitState, UnitSummary,
+        ActiveState, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind, UnitState,
+        UnitSummary,
     },
 };
 
+use self::priority::SliceSpec;
+
+pub mod priority;
 mod slice_files;
 
 const UNIT_DIR: &str = "/etc/systemd/system";
+
+// spec: LINUX#restart-pacing
+/// Seconds between a unit's exit and its next automatic restart.
+const RESTART_DELAY_SECS: u64 = 5;
+// spec: LINUX#restart-pacing
+/// Width of the window the start limit counts starts in, in seconds.
+const START_LIMIT_INTERVAL_SECS: u64 = 600;
+// spec: LINUX#restart-pacing
+/// Starts permitted within the window before systemd stops restarting a unit.
+const START_LIMIT_BURST: u32 = 10;
 
 // ---------------------------------------------------------------------------
 // Internal error type
@@ -331,45 +345,38 @@ impl SystemdManager {
         // spec: LINUX#restart-pacing
         // Slow systemd's per-unit restart cadence so a crash-looping
         // container does not blow through the start-limit window in seconds.
-        if let Some(secs) = spec.restart_sec {
-            props.push(UnitProperty {
-                name: "RestartUSec",
-                value: Value::from(u64::from(secs) * 1_000_000),
-            });
-        }
-        if let Some(secs) = spec.start_limit_interval_sec {
-            props.push(UnitProperty {
-                name: "StartLimitIntervalUSec",
-                value: Value::from(u64::from(secs) * 1_000_000),
-            });
-        }
-        if let Some(burst) = spec.start_limit_burst {
-            props.push(UnitProperty {
-                name: "StartLimitBurst",
-                value: Value::from(burst),
-            });
-        }
-        // spec: PRIO#resource-control-groups
+        // The wide window means a slow-failing container (e.g. takes 30s to
+        // crash) still gets multiple chances; the per-attempt delay means a
+        // fast-failing container can't burn through the budget in a
+        // heartbeat.
+        props.push(UnitProperty {
+            name: "RestartUSec",
+            value: Value::from(RESTART_DELAY_SECS * 1_000_000),
+        });
+        props.push(UnitProperty {
+            name: "StartLimitIntervalUSec",
+            value: Value::from(START_LIMIT_INTERVAL_SECS * 1_000_000),
+        });
+        props.push(UnitProperty {
+            name: "StartLimitBurst",
+            value: Value::from(START_LIMIT_BURST),
+        });
         // spec: LINUX#resource-control-groups
-        // The unit joins the slice its app and declared level resolve to; the
-        // slice itself carries the CPU and I/O weights.
-        if let Some(slice) = &spec.slice {
-            validate_unit_name(slice)?;
-            props.push(UnitProperty {
-                name: "Slice",
-                value: Value::from(slice.as_str()),
-            });
-        }
-        // spec: PRIO#kill-order
+        // The unit joins the slice its standing resolves to; the slice itself
+        // carries the CPU and I/O weights.
+        let slice = priority::unit_slice(&spec.standing);
+        validate_unit_name(&slice)?;
+        props.push(UnitProperty {
+            name: "Slice",
+            value: Value::from(slice),
+        });
         // spec: LINUX#kill-order
         // Set here rather than adjusted later because the supervisor applies it
         // when it spawns the process and cannot change it afterwards.
-        if let Some(adj) = spec.oom_score_adjust {
-            props.push(UnitProperty {
-                name: "OOMScoreAdjust",
-                value: Value::from(adj),
-            });
-        }
+        props.push(UnitProperty {
+            name: "OOMScoreAdjust",
+            value: Value::from(priority::unit_oom_score_adjust(&spec.standing)),
+        });
         // spec: ACTU#container-logs
         // spec: LINUX#logs
         if !spec.log_extra_fields.is_empty() {
@@ -840,11 +847,12 @@ impl ProcessManager for SystemdManager {
         Box::pin(async move { self.stop_unit_impl(name).await.map_err(Into::into) })
     }
 
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>> {
+        let desired = priority::desired_slices(&apps).into_values().collect();
         Box::pin(async move {
             self.sync_slices_impl(desired, prune)
                 .await

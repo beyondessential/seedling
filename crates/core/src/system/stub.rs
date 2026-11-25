@@ -18,13 +18,15 @@ use std::{
 use futures_util::FutureExt;
 use ipnet::Ipv4Net;
 use parking_lot::Mutex;
+use seedling_protocol::names::AppName;
 
 use super::{
     BoxError, BoxFuture, ContainerFilter, ContainerHealth, ContainerRuntime, ContainerSpec,
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
     ExecOutput, ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig,
     ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
-    types::{ActiveState, SPEC_HASH_LABEL, SliceSpec, UnitExit},
+    priority::{AppStandings, UnitStanding},
+    types::{ActiveState, SPEC_HASH_LABEL, UnitExit},
 };
 
 /// The image reference in a `podman run` argv.
@@ -545,18 +547,16 @@ pub struct StubProcessManager {
 struct UnitState_ {
     units: BTreeMap<String, UnitRecord>,
     persistent_units: BTreeMap<String, String>,
-    /// Slices ensured so far, by unit name. Overwritten on reweight, so the
-    /// map always holds the weights last applied.
-    slices: BTreeMap<String, SliceSpec>,
+    /// The standings provided for so far, by app. Overwritten on each sync,
+    /// so the map always holds the standings last applied.
+    groups: BTreeMap<AppName, AppStandings>,
 }
 
 struct UnitRecord {
     state: ActiveState,
     sub: String,
-    /// The slice the unit joined and the kill preference it was started with,
-    /// as the spec carried them.
-    slice: Option<String>,
-    oom_score_adjust: Option<i32>,
+    /// The standing the unit was started with, where the spec carried one.
+    standing: Option<UnitStanding>,
     /// Mirrors systemd's `NRestarts`: monotonic while the unit lives, reset
     /// when the unit is recreated. Driven directly by tests.
     restarts: u32,
@@ -607,18 +607,18 @@ impl StubProcessManager {
         }
     }
 
-    /// The slices ensured so far, carrying the weights last applied to each.
-    pub fn slices(&self) -> BTreeMap<String, SliceSpec> {
-        self.state.lock().slices.clone()
+    /// The standings provided for so far, as last applied for each app.
+    pub fn groups(&self) -> BTreeMap<AppName, AppStandings> {
+        self.state.lock().groups.clone()
     }
 
-    /// The slice a unit joined and the kill preference it was started with.
-    pub fn placement(&self, unit: &str) -> Option<(Option<String>, Option<i32>)> {
+    /// The standing a unit was started with.
+    pub fn standing(&self, unit: &str) -> Option<UnitStanding> {
         self.state
             .lock()
             .units
             .get(unit)
-            .map(|u| (u.slice.clone(), u.oom_score_adjust))
+            .and_then(|u| u.standing.clone())
     }
 }
 
@@ -690,8 +690,7 @@ impl ProcessManager for StubProcessManager {
                 UnitRecord {
                     state: ActiveState::Active,
                     sub: "running".to_owned(),
-                    slice: spec.slice.clone(),
-                    oom_score_adjust: spec.oom_score_adjust,
+                    standing: Some(spec.standing.clone()),
                     restarts: 0,
                     last_exit: None,
                     result: None,
@@ -703,20 +702,20 @@ impl ProcessManager for StubProcessManager {
         .boxed()
     }
 
-    fn sync_slices<'a>(
+    fn sync_groups<'a>(
         &'a self,
-        desired: Vec<SliceSpec>,
+        apps: Vec<AppStandings>,
         prune: bool,
     ) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
             let mut s = self.state.lock();
             if prune {
-                let wanted: std::collections::HashSet<&str> =
-                    desired.iter().map(|spec| spec.name.as_str()).collect();
-                s.slices.retain(|name, _| wanted.contains(name.as_str()));
+                let wanted: std::collections::HashSet<&AppName> =
+                    apps.iter().map(|app| &app.app).collect();
+                s.groups.retain(|name, _| wanted.contains(name));
             }
-            for spec in desired {
-                s.slices.insert(spec.name.clone(), spec);
+            for app in apps {
+                s.groups.insert(app.app.clone(), app);
             }
             Ok(())
         }
@@ -829,8 +828,7 @@ impl ProcessManager for StubProcessManager {
             s.units.entry(name.to_owned()).or_insert(UnitRecord {
                 state: ActiveState::Active,
                 sub: "running".to_owned(),
-                slice: None,
-                oom_score_adjust: None,
+                standing: None,
                 restarts: 0,
                 last_exit: None,
                 result: None,

@@ -445,11 +445,7 @@ mod tests {
             log_extra_fields: vec![],
             kill_signal: None,
             timeout_stop_secs: None,
-            slice: None,
-            oom_score_adjust: None,
-            restart_sec: None,
-            start_limit_interval_sec: None,
-            start_limit_burst: None,
+            standing: crate::system::priority::UnitStanding::Infrastructure,
         }
     }
 
