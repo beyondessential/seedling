@@ -947,7 +947,7 @@ Seedling then reports the app to Canopy as an application of that type, keyed by
 A definition is a *bundle*: a folder holding the script and any files it needs, such as error pages or seed data. A lone script pushed with `seedling-ctl` becomes a bundle holding that file under its own name, with a `seedling.toml` naming it as the script.
 
 ```
-tamanu/
+web/
 ├── seedling.toml        # optional
 ├── app.seed.rhai
 └── pages/
@@ -1002,7 +1002,7 @@ let banner = app.file("banner.txt").text();       // throws if the file is not U
 - Both read the bundle the app was evaluated from, in any context.
 - `volume.write` and `rt.write` accept a `File` as well as a string. `volume.write_dir(path, dir)` writes a whole directory, and may target the volume root.
 
-Bundles are limited to regular files and folders, 2 MiB in total. See [Deploying](deploying.md#app-definitions) for pushing a folder and publishing a bundle to a registry.
+Bundles are limited to regular files and folders, 2 MiB in total. The [bundle-tour demo](../demos/bundle-tour/) uses every field of `seedling.toml`, sidecar files and includes. See [Deploying](deploying.md#app-definitions) for pushing a folder and publishing a bundle to a registry.
 
 ### Sharing files between definitions
 
@@ -1013,6 +1013,8 @@ Sibling definitions in one repository share helpers and sidecars through `[inclu
 - to the repository the folder sits in (the nearest folder above holding `.git` or `.jj`), or to the definition folder itself outside a repository;
 - for a GitHub URL, to that repository at the same commit;
 - never through a symlink, and never into `.git` or `.jj`.
+
+The [bundle-tour](../demos/bundle-tour/) and [bundle-share](../demos/bundle-share/) demos include the same helper script and pages from `demos/shared/`.
 
 An included folder is read like a definition folder, honouring its own `.seedignore`, and may not hold a `seedling.toml`: only the definition folder's own is read. A copy already in the folder must match its source; where the source cannot be reached, as when pushing a folder written by `apps export`, the copy is used as it stands.
 

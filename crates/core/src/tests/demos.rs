@@ -264,7 +264,12 @@ fn the_actions_and_gates_demo_gates_move_with_what_they_converge_on() {
 // spec: IMG#image-discovery
 #[test]
 fn the_migrate_gate_body_initialises_first_and_steps_up_after() {
-    let first = probe("actions-and-gates", &gates_params("2", "Kia ora"), None, true);
+    let first = probe(
+        "actions-and-gates",
+        &gates_params("2", "Kia ora"),
+        None,
+        true,
+    );
     assert_eq!(
         gate_probe(&first, "migrate"),
         &BTreeSet::from(["docker.io/library/busybox:1.38.0-musl".to_owned()])
@@ -303,20 +308,4 @@ fn stepping_the_store_down_fails_the_migrate_gate_body() {
             .is_some_and(|e| e.contains("refusing to step the store down from format 3 to 1")),
         "{migrate:?}"
     );
-}
-
-#[test]
-fn zz_dump_language_tour() {
-    let app = evaluated("language-tour", &BTreeMap::new());
-    let def = app.def.load();
-    for (id, r) in &def.resources {
-        if let crate::defs::resource::Resource::Volume(v) = r {
-            for (path, bytes) in &v.def.lock().writes {
-                if path == "/results.json" || path == "/random.json" {
-                    std::fs::write(format!("/tmp/q6{}", path.replace('/', "-")), bytes).unwrap();
-                }
-            }
-            let _ = id;
-        }
-    }
 }
