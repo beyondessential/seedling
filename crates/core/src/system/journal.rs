@@ -27,7 +27,7 @@ pub const SCRIPT_POS_FIELD: &str = "SEEDLING_SCRIPT_POS";
 /// The journal fields that tie an entry to a workload instance, which is how
 /// its logs are found. The unit of the instance's container carries them, and
 /// so does anything else recorded with that container's logs.
-// spec: LINUX#logs
+// spec: ACTU#container-logs
 pub fn instance_log_fields(instance: &ResourceInstance) -> Vec<(String, String)> {
     let kind = instance.kind.type_name();
     let resource = instance.name.as_deref().unwrap_or(&instance.display_name);

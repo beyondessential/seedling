@@ -49,70 +49,71 @@ The `nftables_failed` fault is `packet_filter_failed`.
 
 ## Build steps
 
+Built one facility at a time rather than in the order below: each commit adds the core trait, moves the Linux adapter and wires the daemon, so the tree builds at every step. The crate itself arrived with the first facility moved, since an empty crate would warn of unused dependencies.
+
 ### Scaffolding
 
-- [ ] Create `crates/linux` as the `seedling-linux` package, depending on `seedling-core` and `seedling-protocol`, and add it to the workspace members
-- [ ] Make the `seedling` daemon depend on `seedling-linux`
+- [x] Create `crates/linux` as the `seedling-linux` package, depending on `seedling-core` and `seedling-protocol`, and add it to the workspace members
+- [x] Make the `seedling` daemon depend on `seedling-linux`
 
 ### Traits for the facilities without one
 
 Each trait goes beside the existing four in `system.rs`, with a stub in `system/stub.rs` for core's tests.
 
-- [ ] Log sink and log source, for what `system/journal.rs` and `system/breadcrumb.rs` do with the journal: core keeps building the fields (`instance_log_fields`, `Breadcrumb`, `LogTarget`, `LogEntry`, `LogStreamOptions`) and hands entries to the sink and stream requests to the source. Breadcrumbs are written from the barrier with no handle in reach, so the sink is installed once at startup, as `sysconst::set` is
-- [ ] Volume store: what `system/volume_store.rs` offers (create, remove, hold, restore, held-volume records, site volumes, snapshot, promote, backend match) plus the confined writes and owned-directory checks `system/actuator.rs` takes from `system/confined.rs`. Held-volume metadata and site-name claiming are decisions and stay in core
-- [ ] Backend connector: how `system/backends.rs` reaches a working container runtime and process manager (today `PodmanRuntime::new` and `SystemdManager::connect`), so the probing and switching stay in core and the connecting comes from the platform
-- [ ] NAT64 translator: `jool::setup_nat64` and `teardown_nat64`, called from the reconciler
-- [ ] Machine identifier: `system::node_prefix_from_machine_id` keeps the derivation in core and takes the identifier from the platform
+- [x] Log sink and log source (`system/journal.rs`): core builds a `JournalRecord` (level, message, `SEEDLING_*` fields) and keeps the field names; the sink is installed once with `journal::install_sink`, and the source is `System::journal`
+- [x] Volume storage (`volume_store::VolumeStorage`): create, remove, is-snapshottable, snapshot and confined write. Core's `VolumeStore` stays a concrete type holding it, with the layout, held-volume records, site-name claiming and the owned-directory checks, which are portable `std` code
+- [x] Backend connector: `backends::Connector` is public, and the platform's connector is `Platform::connector`
+- [x] NAT64 translator: `system::AddressTranslator`, held as `System::translator`
+- [x] Machine identifier: `node_prefix_from_machine_id` takes the identifier, which the daemon reads through `seedling_linux::host::machine_id`
+- [x] `System::setup` takes a `Platform` (connector, data plane, journal, storage, translator); `setup_stubbed` takes the storage and journal, so stub mode keeps volumes and shows breadcrumbs as the host does, and fakes everything else
 
 ### Workload standing instead of Linux values
 
-- [ ] `TransientUnitSpec` (`system/types.rs`) carries the workload's standing (a `WorkloadStanding`, or infrastructure) in place of `slice`, `oom_score_adjust`, `restart_sec`, `start_limit_interval_sec` and `start_limit_burst`
-- [ ] `ProcessManager::sync_slices` takes the set of standings to provide for (each app's priority and the Deployment priorities it uses, plus infrastructure) in place of named, weighted `SliceSpec`s, keeping its `prune` flag
-- [ ] The reconciler's slice computation (`system/reconcile.rs`, around the `priority::app_slice` calls) and the unit specs built in `system/actuator/pod.rs`, `system/caddy/startup.rs` and `system/resolver/startup.rs` produce standings
-- [ ] `system/priority.rs`'s slice naming, weights and OOM mapping, with their tests and the slice-weight tests in `system/reconcile.rs`, move to `seedling-linux` with the systemd manager; `WorkloadStanding` stays in core
-- [ ] `reserved.rs` keeps `infra` as a reserved app name as a literal of its own, since it no longer has `priority::INFRA_COMPONENT` to borrow
-- [ ] The stub process manager in `system/stub.rs` records standings, and the reconciler tests that asserted slice names or weights assert standings instead
+- [x] `TransientUnitSpec` carries a `UnitStanding` (infrastructure, or a workload's app and `WorkloadStanding`) in place of the slice, the OOM score and restart pacing
+- [x] `ProcessManager::sync_groups` takes `AppStandings` (each app's priority and its Deployment levels, Normal always among them) in place of `sync_slices`, keeping its `prune` flag
+- [x] The reconciler's `desired_standings`, `actuator/pod.rs`, `caddy/startup.rs` and `resolver/startup.rs` produce standings
+- [x] Slice naming, weights, the OOM mapping and `desired_slices` live in `seedling_linux::systemd::priority` with their tests; `WorkloadStanding`, `UnitStanding` and `AppStandings` stay in core's `system/priority.rs`
+- [x] Restart pacing is applied by the systemd manager to every unit it starts
+- [x] `reserved.rs` has `INFRA_APP_NAME` as a literal of its own
+- [x] The stub process manager records standings
 
 ### Moving the Linux adapters
 
-Each move carries its tests and `// spec:` citations with it.
-
-- [ ] `system/podman.rs` → `seedling-linux`
-- [ ] `system/systemd.rs` and `system/systemd/` → `seedling-linux`
-- [ ] The journal reading and writing out of `system/journal.rs` and `system/breadcrumb.rs` → `seedling-linux`, implementing the log sink and source
-- [ ] `system/data_plane.rs` and `system/data_plane/` (nftables and routes) → `seedling-linux`
-- [ ] `system/netinfo.rs` → `seedling-linux`
-- [ ] `system/jool.rs` → `seedling-linux`, implementing the NAT64 translator
-- [ ] `system/confined.rs` and the btrfs and plain-directory storage of `system/volume_store.rs` → `seedling-linux`, implementing the volume store
-- [ ] `HostSource` out of `system/host_probes.rs`, and `detect_available_memory` and `parse_mem_total_bytes` out of `sysconst.rs` → `seedling-linux`
-- [ ] Reading `/etc/machine-id` → `seedling-linux`
-- [ ] Make `SystemFacts::default()` report memory as undetermined
+- [x] `podman.rs`, `systemd.rs` and `systemd/`, with confinement moving alongside them as its last user in core
+- [x] The journald reading and writing, as `seedling_linux::journal::Journal`
+- [x] `data_plane.rs` and `data_plane/`, and `netinfo.rs`
+- [x] `jool.rs`, as `seedling_linux::jool::Jool`
+- [x] The BTRFS storage, as `seedling_linux::volume_storage::HostVolumeStorage`, with `is_btrfs`
+- [x] `HostSource` and the `/proc/meminfo` read, as `seedling_linux::host`; `HostConstants::detect` takes the source
+- [x] `SystemFacts::default()` reports memory undetermined. Core's own test builds fall back to a known memory figure instead, since the constants spec fails every evaluation while memory is undetermined
 
 ### Unix code that stays in core
 
-- [ ] One helper for private file modes, used by `runtime/db.rs`, `runtime/secrets.rs`, `runtime/audit.rs` and `runtime/tls/serve.rs`: the Unix mode under `cfg(unix)`, `todo!()` on Windows
-- [ ] `runtime/definition/auth.rs`: `getuid` under `cfg(unix)`, and a Windows implementation for what T6's credential lookup needs
-- [ ] `runtime/barrier/runtime.rs`: decode signal names from exit codes with a table of core's own instead of `nix::sys::signal::Signal`, since this is portable data
-- [ ] `oi/shells/registry.rs` and `oi/shells/session.rs`: the PTY size, `libc::kill` and `ExitStatusExt` under `cfg(unix)`, `todo!()` on Windows
-- [ ] Unix-only tests (symlinks and modes in `oi/handler/volumes/tests.rs`, `runtime/db/tests.rs`, `runtime/secrets.rs`, `runtime/tls/serve.rs`) under `cfg(unix)`
+- [x] `runtime/private_files.rs`: private file modes, directory modes and file identity, used by the database, secrets, audit log and TLS token
+- [x] `runtime/local_socket.rs`: the Unix-socket HTTP client for the proxy's admin API and Tailscale's local API, which the plan did not foresee
+- [x] Registry credentials: the container engine's primary file is the runtime directory on Linux and `~/.config/containers/auth.json` elsewhere, as containers-auth.json(5) says, with `USERPROFILE` standing for `HOME` on Windows
+- [x] A signal table of core's own in `defs/container.rs`, used by the barrier's exit codes and by systemd's kill signal
+- [x] Shells: the pty size, `kill` and `ExitStatusExt` under `cfg(unix)`, `todo!()` elsewhere; `ExecHandle` carries a `RawPty`
+- [x] Unix-only tests under `cfg(unix)`, the shell tests that spawn jobs in `oi/shells/tests/jobs.rs`
 
 ### Dependencies
 
-- [ ] Move `nftables`, `rtnetlink`, `podman-rest-client`, `systemd` and `zbus` from `crates/core/Cargo.toml` to `crates/linux/Cargo.toml`
-- [ ] Drop `nix` from core once the barrier no longer needs it; make `rustix` and `libc` `cfg(unix)` target dependencies of core
-- [ ] Confirm no other dependency of core fails to build for Windows, fixing or gating any that does
+- [x] `nftables`, `rtnetlink`, `podman-rest-client`, `systemd` and `zbus` are `seedling-linux`'s
+- [x] `nix` leaves core; `libc` is a `cfg(unix)` dependency and `rustix` a Linux one
+- [x] Every other dependency builds for Windows and macOS (checked by cross-compiling with mingw and zig)
 
 ### Wiring the daemon
 
-- [ ] `crates/daemon/src/main.rs` builds the platform from `seedling-linux` (backend connector, data plane, volume store, log sink and source, host source, NAT64 translator, machine identifier) and hands it to core where it builds `System` today
-- [ ] The snapshotting check in `main.rs` asks the volume store rather than calling `volume_store::is_btrfs`
-- [ ] `system::System` holds the volume store as a trait object
+- [x] `crates/daemon/src/main.rs` builds the `Platform` from `seedling-linux` and installs the journal sink
+- [x] The snapshotting check calls `seedling_linux::volume_storage::is_btrfs`, the Linux storage's own test, rather than core
+- [x] `System` holds the `VolumeStore`, which holds the storage as a trait object
 
 ### CI and docs
 
-- [ ] Add a job to `.github/workflows/rust.yml` running `cargo clippy -p seedling-core --all-targets -- -D warnings` on macOS and Windows
-- [ ] Update `docs/` and `DEVELOP.md` wherever they name a module that moved or describe which crate holds what
-- [ ] Run clippy, fmt, the spec style and citation checks, and the workspace tests on Linux
+- [x] A `portable` job in `.github/workflows/rust.yml` lints `seedling-core` with `--all-targets` on macOS and Windows
+- [x] No doc named a moved module; `DEVELOP.md` says where platform code goes
+- [x] Clippy, fmt, the spec style and citation checks and the CI greps pass
+- [ ] The workspace tests on Linux
 
 ## Explicitly rejected
 

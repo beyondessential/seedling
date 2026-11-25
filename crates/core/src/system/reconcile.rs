@@ -1919,28 +1919,8 @@ impl Reconciler {
                     self.reconcile_dtls_refusals(served).await;
                 }
 
-                match routes_res {
-                    Some(Err(e)) => {
-                        error!(error = %e, "routes: apply_routes failed");
-                        self.file_system_fault(
-                            "routes_failed",
-                            &format!("apply_routes failed: {e}"),
-                        );
-                    }
-                    Some(Ok(())) => self.clear_system_fault("routes_failed"),
-                    None => {}
-                }
-                match rules_res {
-                    Some(Err(e)) => {
-                        error!(error = %e, "rules: apply_rules failed");
-                        self.file_system_fault(
-                            "packet_filter_failed",
-                            &format!("apply_rules failed: {e}"),
-                        );
-                    }
-                    Some(Ok(())) => self.clear_system_fault("packet_filter_failed"),
-                    None => {}
-                }
+                self.settle_plane_fault("routes_failed", "apply_routes", routes_res);
+                self.settle_plane_fault("packet_filter_failed", "apply_rules", rules_res);
                 match proxy_res {
                     Some(Err(e)) => {
                         error!(error = ?e, addr = %caddy_ip, "proxy: apply_config failed");
@@ -2004,19 +1984,10 @@ impl Reconciler {
                 // Caddy unavailable — still apply routes (they don't need
                 // caddy), unless this tick's route set is missing a
                 // contributor.
-                match apply_routes_plane(&*self.driver.data_plane, &all_routes, routes_coverage)
-                    .await
-                {
-                    Some(Err(e)) => {
-                        error!(error = %e, "routes: apply_routes failed");
-                        self.file_system_fault(
-                            "routes_failed",
-                            &format!("apply_routes failed: {e}"),
-                        );
-                    }
-                    Some(Ok(())) => self.clear_system_fault("routes_failed"),
-                    None => {}
-                }
+                let routes_res =
+                    apply_routes_plane(&*self.driver.data_plane, &all_routes, routes_coverage)
+                        .await;
+                self.settle_plane_fault("routes_failed", "apply_routes", routes_res);
             }
         }
 
@@ -3601,6 +3572,35 @@ mod tests {
                 .map(|f| (f.kind, f.subject))
                 .collect()
         })
+    }
+
+    // spec: FLT#host-faults
+    // spec: RCN#applying-absolute-state
+    #[test]
+    fn a_packet_filter_fault_follows_the_applies_and_a_withheld_one_moves_nothing() {
+        let oi = crate::oi::test_support::TestOi::new();
+        let reconciler = test_reconciler(&oi);
+        let filed = || {
+            active_kinds(&oi, "_system")
+                .iter()
+                .any(|(kind, _)| kind == "packet_filter_failed")
+        };
+
+        reconciler.settle_plane_fault("packet_filter_failed", "apply_rules", None);
+        assert!(!filed(), "a withheld apply files nothing");
+
+        reconciler.settle_plane_fault(
+            "packet_filter_failed",
+            "apply_rules",
+            Some(Err("the ruleset was refused".into())),
+        );
+        assert!(filed(), "a failed apply files the fault");
+
+        reconciler.settle_plane_fault("packet_filter_failed", "apply_rules", None);
+        assert!(filed(), "a withheld apply clears nothing");
+
+        reconciler.settle_plane_fault("packet_filter_failed", "apply_rules", Some(Ok(())));
+        assert!(!filed(), "the next successful apply clears it");
     }
 
     // spec: FLT#volume-faults
