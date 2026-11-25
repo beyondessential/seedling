@@ -379,6 +379,40 @@ fn action_param_kind_purl_accepted() {
     assert_eq!(param.kind, crate::defs::param_def::ParamKind::Purl);
 }
 
+// spec: PARAM#schema
+// spec: ACN#param-kinds
+#[test]
+fn param_schema_kind_url() {
+    use crate::defs::param_def::ParamKind;
+
+    for (name, kind) in [
+        ("url", ParamKind::Url),
+        ("url-origin", ParamKind::UrlOrigin),
+        ("hostname", ParamKind::Hostname),
+    ] {
+        let app = run_test_script_app(&format!(
+            r#"
+            app.param("endpoint").kind("{name}");
+            app.on_action("point", |rt, _param| {{}}, #{{
+                params: #{{ endpoint: #{{ kind: "{name}" }} }}
+            }});
+            "#
+        ));
+        let def = app.def.load();
+        let schema = def.params.get("endpoint").expect("param declared");
+        assert_eq!(schema.kind, kind, "{name}");
+        assert!(!schema.is_secret(), "{name}");
+        let action = def.actions.get("point").expect("point action");
+        let param = action
+            .params
+            .get(&seedling_protocol::names::ParamName::new_unchecked(
+                "endpoint".to_owned(),
+            ))
+            .expect("action param declared");
+        assert_eq!(param.kind, kind, "{name}");
+    }
+}
+
 // spec: ACN#param-kinds
 #[test]
 fn action_param_kind_version_accepted() {

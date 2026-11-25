@@ -43,6 +43,7 @@ mod purl;
 mod runtime;
 mod service;
 mod stdlib;
+mod url;
 mod version;
 mod volume;
 

@@ -31,36 +31,36 @@ Adds the `url`, `url-origin` and `hostname` kinds and their `std::parse_*` helpe
 
 ## Parsers (`crates/core/src/defs/url.rs`)
 
-- [ ] New module `defs/url.rs` (`pub mod url;` in `defs.rs`), doc comment matching `purl.rs`'s, importing the crate as `::url` where the module name would shadow it
-- [ ] `pub fn parse_hostname(text: &str) -> Result<String, String>`: `idna::domain_to_ascii_strict`, then `check_hostname`, then `url::Host::parse` must give `Host::Domain`; returns the result lower-cased, with `// spec: URL#hostnames` at each step
-- [ ] `pub struct Url { scheme: String, host: Option<String>, port: Option<u16>, path: String, query: Option<String>, fragment: Option<String>, username: Option<String>, password: Option<String> }`
-- [ ] `Url::parse(text)`: `::url::Url::parse`, error text from the crate's `ParseError` display
-  - [ ] host: `None` for no host or an empty one; for a special URL the serialised host; for an opaque host, `Host::parse` on it as given, serialised on success, otherwise the opaque host (`// spec: URL#hosts`)
-  - [ ] port: `port()` or, failing that, `port_or_known_default()`; refuse `Some(0)` (`// spec: URL#ports`)
-  - [ ] query and fragment: `None` when absent or empty, otherwise as the crate gives them (`// spec: URL#components`)
-  - [ ] username and password: `None` when empty, otherwise `percent_decode_str(..).decode_utf8()`, refusing invalid UTF-8 and anything `line_breaking_character` finds, naming the component and the character as `reject_control_characters` does (`// spec: URL#userinfo`)
-- [ ] `pub struct UrlOrigin { scheme: String, host: String, port: u16 }` and `UrlOrigin::parse(text)`: `Url::parse` first, then in turn refuse a scheme other than `http`/`https`, an `@` in the authority (scan above), a query or fragment present at all, a path other than `/`, and a host `parse_hostname` refuses or would change; the host is what `parse_hostname` returns, the port as `Url` gave it (`// spec: URL#url-origins`)
+- [x] New module `defs/url.rs` (`pub mod url;` in `defs.rs`), doc comment matching `purl.rs`'s, importing the crate as `::url` where the module name would shadow it
+- [x] `pub fn parse_hostname(text: &str) -> Result<String, String>`: `idna::domain_to_ascii_strict`, then `check_hostname`, then `url::Host::parse` must give `Host::Domain`; returns the result lower-cased, with `// spec: URL#hostnames` at each step
+- [x] `pub struct Url { scheme: String, host: Option<String>, port: Option<u16>, path: String, query: Option<String>, fragment: Option<String>, username: Option<String>, password: Option<String> }`
+- [x] `Url::parse(text)`: `::url::Url::parse`, error text from the crate's `ParseError` display
+  - [x] host: `None` for no host or an empty one; for a special URL the serialised host; for an opaque host, `Host::parse` on it as given, serialised on success, otherwise the opaque host (`// spec: URL#hosts`)
+  - [x] port: `port()` or, failing that, `port_or_known_default()`; refuse `Some(0)` (`// spec: URL#ports`)
+  - [x] query and fragment: `None` when absent or empty, otherwise as the crate gives them (`// spec: URL#components`)
+  - [x] username and password: `None` when empty, otherwise `percent_decode_str(..).decode_utf8()`, refusing invalid UTF-8 and anything `line_breaking_character` finds, naming the component and the character as `reject_control_characters` does (`// spec: URL#userinfo`)
+- [x] `pub struct UrlOrigin { scheme: String, host: String, port: u16 }` and `UrlOrigin::parse(text)`: `Url::parse` first, then in turn refuse a scheme other than `http`/`https`, an `@` in the authority (scan above), a query or fragment present at all, a path other than `/`, and a host `parse_hostname` refuses or would change; the host is what `parse_hostname` returns, the port as `Url` gave it (`// spec: URL#url-origins`)
 
 ## Kind wiring
 
-- [ ] `crates/core/src/defs/param_def.rs`: `ParamKind::Url`, `UrlOrigin` and `Hostname` after `Purl`, each `// spec: ACN#param-kinds`; arms in `parse`, `as_str` and `FromStr` for `"url"`, `"url-origin"` and `"hostname"`. They stay single-line, so `reject_control_characters` runs before them
-- [ ] `ParsedValue::Url(Url)` and `ParsedValue::UrlOrigin(UrlOrigin)`; `Hostname` returns `ParsedValue::Value` holding the lower-cased name
-- [ ] `crates/core/src/defs/stdlib/kinds.rs`: `url_map` and `url_origin_map` beside `purl_map`, inserting only the keys present, `port` as an `INT`, each `// spec: URL#components` / `// spec: URL#url-origins`
-- [ ] Confirm `is_secret` stays false for the three kinds (no change to its `matches!`)
+- [x] `crates/core/src/defs/param_def.rs`: `ParamKind::Url`, `UrlOrigin` and `Hostname` after `Purl`, each `// spec: ACN#param-kinds`; arms in `parse`, `as_str` and `FromStr` for `"url"`, `"url-origin"` and `"hostname"`. They stay single-line, so `reject_control_characters` runs before them
+- [x] `ParsedValue::Url(Url)` and `ParsedValue::UrlOrigin(UrlOrigin)`; `Hostname` returns `ParsedValue::Value` holding the lower-cased name
+- [x] `crates/core/src/defs/stdlib/kinds.rs`: `url_map` and `url_origin_map` beside `purl_map`, inserting only the keys present, `port` as an `INT`, each `// spec: URL#components` / `// spec: URL#url-origins`
+- [x] Confirm `is_secret` stays false for the three kinds (no change to its `matches!`)
 
 ## Tests
 
-- [ ] `crates/core/src/tests/url.rs` (registered in `tests.rs`), set up like `tests/purl.rs`, each test citing its URL section:
-  - [ ] hostnames: `Example.ORG` → `example.org`; `bücher.de` → `xn--bcher-kva.de`; refused: `10.0.0.5`, `app.0x1f`, `[::1]`, `*.example.org`, `-a.example.org`, a 64-character label, an empty value, `a..b`
-  - [ ] urls, components: `https://u:p@Example.org:8443/a/b?x=1&x=2#f` gives every key; `https://example.org` gives port 443 and path `/`; `file:///etc/hosts` has no `host`; `mailto:someone@example.org` has scheme and path only; `https://h/?#` has no query or fragment; `%2F` in the path, query and fragment stays encoded
-  - [ ] urls, hosts: `postgres://DB.Example.org/x` → host `db.example.org`; `postgres://0x7f.1/` → `127.0.0.1`; `postgres://bücher.de/` → `xn--bcher-kva.de`; `https://[::1]:80/` → `[::1]`; a non-special host the host parser refuses (`foo://a%zz/`) stays as given; `postgres://h/` has no port
-  - [ ] urls, userinfo: `%40` and `%3A` in a password come back as `@` and `:`; `%0A` in a username, `%E2%80%A8` in a password and `%FF` refused
-  - [ ] urls, ports: `https://h:0/` and `postgres://h:0/` refused; an unparseable URL (`not a url`, `https://h:99999/`) refused
-  - [ ] url origins: `https://Example.org`, `http://example.org:8080/` accepted with the expected map; refused: `ftp://example.org/`, `https://@example.org/`, `https://u@example.org/`, `https://example.org/?`, `https://example.org/#`, `https://example.org/a`, `https://10.0.0.5/`, `https://[::1]/`, `https://app.0x1f/`, `https://h:0/`
-  - [ ] `std::parse_url` on a value with U+2028 is refused before the URL parser runs
-- [ ] `crates/core/src/tests/stdlib.rs`: add `parse_url`, `parse_url_origin` and `parse_hostname` to the single-line refusal list
-- [ ] `crates/core/src/tests/param.rs`: `param_schema_kind_url` covering all three kinds through `.kind(..)` and an action param schema, asserting the kind and that none is secret
-- [ ] `crates/web/frontend/src/components/ParamFields.test.tsx`: add `url`, `url-origin` and `hostname` to the single-line input test and retitle it
+- [x] `crates/core/src/tests/url.rs` (registered in `tests.rs`), set up like `tests/purl.rs`, each test citing its URL section:
+  - [x] hostnames: `Example.ORG` → `example.org`; `bücher.de` → `xn--bcher-kva.de`; refused: `10.0.0.5`, `app.0x1f`, `[::1]`, `*.example.org`, `-a.example.org`, a 64-character label, an empty value, `a..b`
+  - [x] urls, components: `https://u:p@Example.org:8443/a/b?x=1&x=2#f` gives every key; `https://example.org` gives port 443 and path `/`; `file:///etc/hosts` has no `host`; `mailto:someone@example.org` has scheme and path only; `https://h/?#` has no query or fragment; `%2F` in the path, query and fragment stays encoded
+  - [x] urls, hosts: `postgres://DB.Example.org/x` → host `db.example.org`; `postgres://0x7f.1/` → `127.0.0.1`; `postgres://bücher.de/` → `xn--bcher-kva.de`; `https://[::1]:80/` → `[::1]`; a non-special host the host parser refuses (`foo://a%zz/`) stays as given; `postgres://h/` has no port
+  - [x] urls, userinfo: `%40` and `%3A` in a password come back as `@` and `:`; `%0A` in a username, `%E2%80%A8` in a password and `%FF` refused
+  - [x] urls, ports: `https://h:0/` and `postgres://h:0/` refused; an unparseable URL (`not a url`, `https://h:99999/`) refused
+  - [x] url origins: `https://Example.org`, `http://example.org:8080/` accepted with the expected map; refused: `ftp://example.org/`, `https://@example.org/`, `https://u@example.org/`, `https://example.org/?`, `https://example.org/#`, `https://example.org/a`, `https://10.0.0.5/`, `https://[::1]/`, `https://app.0x1f/`, `https://h:0/`
+  - [x] `std::parse_url` on a value with U+2028 is refused before the URL parser runs (covered by the helper list in `tests/stdlib.rs`)
+- [x] `crates/core/src/tests/stdlib.rs`: add `parse_url`, `parse_url_origin` and `parse_hostname` to the single-line refusal list
+- [x] `crates/core/src/tests/param.rs`: `param_schema_kind_url` covering all three kinds through `.kind(..)` and an action param schema, asserting the kind and that none is secret
+- [x] `crates/web/frontend/src/components/ParamFields.test.tsx`: add `url`, `url-origin` and `hostname` to the single-line input test and retitle it
 
 ## Docs and checks
 

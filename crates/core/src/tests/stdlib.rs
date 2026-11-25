@@ -119,6 +119,9 @@ fn single_line_kinds_refuse_control_characters_and_separators() {
             "parse_version",
             "parse_version_semver",
             "parse_purl",
+            "parse_url",
+            "parse_url_origin",
+            "parse_hostname",
             "parse_volume",
         ] {
             let reason = refusal(helper, &value);
