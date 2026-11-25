@@ -1,0 +1,401 @@
+{
+  "parse": [
+    {
+      "case": "every suffix multiplies the number",
+      "cases": [
+        {
+          "text": "0",
+          "amount": "0"
+        },
+        {
+          "text": "7",
+          "amount": "7"
+        },
+        {
+          "text": "1k",
+          "amount": "1000"
+        },
+        {
+          "text": "1M",
+          "amount": "1000000"
+        },
+        {
+          "text": "1G",
+          "amount": "1000000000"
+        },
+        {
+          "text": "1T",
+          "amount": "1000000000000"
+        },
+        {
+          "text": "1P",
+          "amount": "1000000000000000"
+        },
+        {
+          "text": "1E",
+          "amount": "1000000000000000000"
+        },
+        {
+          "text": "1Ki",
+          "amount": "1024"
+        },
+        {
+          "text": "1Mi",
+          "amount": "1048576"
+        },
+        {
+          "text": "1Gi",
+          "amount": "1073741824"
+        },
+        {
+          "text": "1Ti",
+          "amount": "1099511627776"
+        },
+        {
+          "text": "1Pi",
+          "amount": "1125899906842624"
+        },
+        {
+          "text": "1Ei",
+          "amount": "1152921504606846976"
+        }
+      ]
+    },
+    {
+      "case": "an exponent scales by a power of ten, and E alone is exa",
+      "cases": [
+        {
+          "text": "1e3",
+          "amount": "1000"
+        },
+        {
+          "text": "1E3",
+          "amount": "1000"
+        },
+        {
+          "text": "1e+3",
+          "amount": "1000"
+        },
+        {
+          "text": "15000e-3",
+          "amount": "15"
+        },
+        {
+          "text": "2.5e2",
+          "amount": "250"
+        },
+        {
+          "text": "0e99999999999999999999",
+          "amount": "0"
+        },
+        {
+          "text": "2E",
+          "amount": "2000000000000000000"
+        },
+        {
+          "text": "2E2",
+          "amount": "200"
+        }
+      ]
+    },
+    {
+      "case": "a number may put its point anywhere and take a sign",
+      "cases": [
+        {
+          "text": ".5Gi",
+          "amount": "536870912"
+        },
+        {
+          "text": "5.Gi",
+          "amount": "5368709120"
+        },
+        {
+          "text": "1.5Gi",
+          "amount": "1610612736"
+        },
+        {
+          "text": "1.5k",
+          "amount": "1500"
+        },
+        {
+          "text": "007",
+          "amount": "7"
+        },
+        {
+          "text": "-512Mi",
+          "amount": "-536870912"
+        },
+        {
+          "text": "+1k",
+          "amount": "1000"
+        },
+        {
+          "text": "-0",
+          "amount": "0"
+        }
+      ]
+    },
+    {
+      "case": "the signed 64-bit range bounds the amount",
+      "cases": [
+        {
+          "text": "9223372036854775807",
+          "amount": "9223372036854775807"
+        },
+        {
+          "text": "-9223372036854775808",
+          "amount": "-9223372036854775808"
+        },
+        {
+          "text": "-8Ei",
+          "amount": "-9223372036854775808"
+        },
+        {
+          "text": "9223372036854775808",
+          "error": "must be within the signed 64-bit range"
+        },
+        {
+          "text": "8Ei",
+          "error": "must be within the signed 64-bit range"
+        },
+        {
+          "text": "10E",
+          "error": "must be within the signed 64-bit range"
+        },
+        {
+          "text": "1e19",
+          "error": "must be within the signed 64-bit range"
+        },
+        {
+          "text": "1e99999999999999999999",
+          "error": "must be within the signed 64-bit range"
+        }
+      ]
+    },
+    {
+      "case": "a fractional amount is rejected",
+      "cases": [
+        {
+          "text": "1.1Ki",
+          "error": "must come to a whole number"
+        },
+        {
+          "text": "1e-3",
+          "error": "must come to a whole number"
+        },
+        {
+          "text": "1500e-3",
+          "error": "must come to a whole number"
+        },
+        {
+          "text": "0.5",
+          "error": "must come to a whole number"
+        },
+        {
+          "text": "1e-99999999999999999999",
+          "error": "must come to a whole number"
+        },
+        {
+          "text": "0.5Ki",
+          "amount": "512"
+        },
+        {
+          "text": "0.000000000000000000867361737988403547205962240695953369140625Ei",
+          "amount": "1"
+        }
+      ]
+    },
+    {
+      "case": "anything else is not a quantity",
+      "cases": [
+        {
+          "text": "",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": " 1",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1 ",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1 Ki",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": ".",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "+",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1..2",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1.2.3",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1e",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1e+",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1e3Ki",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1kk",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1u",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1n",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "0x10",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "1,000",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        },
+        {
+          "text": "--1",
+          "error": "must be a quantity, such as 512Mi or 1.5G"
+        }
+      ]
+    },
+    {
+      "case": "a wrong suffix suggests the one likely meant",
+      "cases": [
+        {
+          "text": "512m",
+          "error": "m is milli; did you mean 512Mi?"
+        },
+        {
+          "text": "512mi",
+          "error": "did you mean 512Mi?"
+        },
+        {
+          "text": "1ki",
+          "error": "did you mean 1Ki?"
+        },
+        {
+          "text": "1K",
+          "error": "did you mean 1Ki?"
+        },
+        {
+          "text": "512MiB",
+          "error": "did you mean 512Mi?"
+        },
+        {
+          "text": "1MB",
+          "error": "did you mean 1M?"
+        },
+        {
+          "text": "1KB",
+          "error": "did you mean 1k?"
+        },
+        {
+          "text": "1g",
+          "error": "did you mean 1Gi?"
+        },
+        {
+          "text": "-1.5g",
+          "error": "did you mean -1.5Gi?"
+        },
+        {
+          "text": "64B",
+          "error": "did you mean 64?"
+        }
+      ]
+    }
+  ],
+  "format": [
+    {
+      "amount": "0",
+      "text": "0"
+    },
+    {
+      "amount": "7",
+      "text": "7"
+    },
+    {
+      "amount": "1000",
+      "text": "1k"
+    },
+    {
+      "amount": "1500",
+      "text": "1.5k"
+    },
+    {
+      "amount": "1048576",
+      "text": "1Mi"
+    },
+    {
+      "amount": "67108864",
+      "text": "64Mi"
+    },
+    {
+      "amount": "16642998272",
+      "text": "15.5Gi"
+    },
+    {
+      "amount": "1610612736",
+      "text": "1.5Gi"
+    },
+    {
+      "amount": "-536870912",
+      "text": "-512Mi"
+    },
+    {
+      "amount": "1230",
+      "text": "1230"
+    },
+    {
+      "amount": "1000000000",
+      "text": "1G"
+    },
+    {
+      "amount": "1500000000",
+      "text": "1.5G"
+    },
+    {
+      "amount": "1073741824",
+      "text": "1Gi"
+    },
+    {
+      "amount": "1048576000",
+      "text": "1000Mi"
+    },
+    {
+      "amount": "1234",
+      "text": "1234"
+    },
+    {
+      "amount": "1001",
+      "text": "1001"
+    },
+    {
+      "amount": "-9223372036854775808",
+      "text": "-8Ei"
+    },
+    {
+      "amount": "9223372036854775807",
+      "text": "9223372036854775807"
+    }
+  ]
+}

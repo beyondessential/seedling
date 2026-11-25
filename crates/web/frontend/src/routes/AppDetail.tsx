@@ -62,6 +62,7 @@ import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { PlanParamDialog } from "../components/PlanParamDialog";
 import { KindInput, hasKindInput } from "../components/KindInput";
+import { QuantityAmount } from "../components/QuantityAmount";
 import { ParamFields } from "../components/ParamFields";
 import { useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
@@ -75,8 +76,8 @@ import {
   logsUrlForTarget,
   parseFaultTargets,
 } from "../lib/faultTargets";
-import { generateRandomHex, initialParamValues, integerProblem, paramFieldType, paramsBlocker, type ParamEntries } from "../lib/params";
-import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
+import { generateRandomHex, initialParamValues, integerProblem, paramFieldType, paramHelperText, paramsBlocker, paramValueRejected, quantityProblem, type ParamEntries } from "../lib/params";
+import { formatQuantity } from "../lib/quantity";
 import {
   appPriorityColor,
   deploymentPriorityColor,
@@ -587,9 +588,9 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
         {bindings.map((b) => (
           <Chip key={b} label={b} size="small" variant="outlined" />
         ))}
-        {def.container.memory && (
+        {def.container.memory !== null && (
           <Chip
-            label={`mem: ${def.container.memory}`}
+            label={`mem: ${formatQuantity(BigInt(def.container.memory))}`}
             size="small"
             variant="outlined"
           />
@@ -1120,12 +1121,13 @@ function ParamsSection({
     setEditing(null);
   };
 
-  // A kind with an input of its own takes no empty value: unsetting is its
-  // own action.
+  // A kind with an input of its own, or a quantity, takes no empty value:
+  // unsetting is its own action.
   const unstageable = (p: AppParam) =>
     blankSecret(p) ||
     (hasKindInput(p.kind) &&
-      (draft === "" || (p.kind === "integer" && integerProblem(draft, p.range) !== null)));
+      (draft === "" || (p.kind === "integer" && integerProblem(draft, p.range) !== null))) ||
+    (p.kind === "quantity" && (draft === "" || quantityProblem(draft, p.range) !== null));
 
   const editActions = (p: AppParam) => (
     <>
@@ -1387,24 +1389,15 @@ function ParamsSection({
                               ? "text"
                               : paramFieldType(p.kind, p.secret)
                         }
-                        error={
-                          p.kind === "password" &&
-                          draft.length > 0 &&
-                          !isStrongPassword(draft)
-                        }
-                        helperText={
-                          p.kind === "password" && draft.length > 0
-                            ? isStrongPassword(draft)
-                              ? (p.description ?? undefined)
-                              : "Password is too weak"
-                            : p.kind === "weak-password" && draft.length > 0
-                              ? `Strength: ${passwordScore(draft)}/4${p.description ? ` — ${p.description}` : ""}`
-                              : (p.description ?? undefined)
-                        }
+                        error={paramValueRejected(p, draft)}
+                        helperText={paramHelperText(p, draft)}
                         slotProps={{
                           input: {
                             endAdornment: (
                               <InputAdornment position="end">
+                                {p.kind === "quantity" && (
+                                  <QuantityAmount value={draft} />
+                                )}
                                 {p.kind === "random" && (
                                   <Tooltip title="Generate (32 bytes, hex)">
                                     <IconButton

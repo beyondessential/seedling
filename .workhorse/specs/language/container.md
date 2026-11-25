@@ -90,10 +90,9 @@ The default is [`OnExit.Restart`](constants.md#onexit) for a Deployment and [`On
 
 ## Resource limits
 
-`container.memory(limit: string)` sets the container's memory limit.
-A `limit` MUST be a decimal integer of at least 1, without leading zeros, followed by one unit suffix.
-The suffixes are `k` for kibibytes, `m` for mebibytes and `g` for gibibytes, in either case.
-Any other `limit` MUST throw.
+`container.memory(limit: string | int)` sets the container's memory limit, in bytes.
+A string `limit` MUST be a [quantity](action.md#quantities) that `std::parse_quantity` accepts, and the limit is its amount.
+A `limit` of less than 1, or of any other type, MUST throw.
 
 `container.cpus(limit: float)` sets the container's CPU limit, in CPU cores.
 A `limit` MUST be finite and greater than zero, and MAY be fractional.

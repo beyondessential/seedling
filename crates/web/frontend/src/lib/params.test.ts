@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { generateRandomHex, initialParamValues, integerProblem, paramsBlocker, type ParamEntries } from "./params";
+import {
+  generateRandomHex,
+  initialParamValues,
+  integerProblem,
+  paramsBlocker,
+  quantityProblem,
+  type ParamEntries,
+} from "./params";
 
 const def = (over: Record<string, unknown>) => ({
   kind: "text",
@@ -72,5 +79,26 @@ describe("integerProblem", () => {
     expect(integerProblem("0", { min: 1, max: null })).toBe("Must be at least 1");
     expect(integerProblem("6", { min: null, max: 5 })).toBe("Must be at most 5");
     expect(integerProblem("5", { min: 1, max: 5 })).toBeNull();
+  });
+});
+
+describe("quantityProblem", () => {
+  // spec: ACN#quantities
+  it("states a range's bounds as quantities", () => {
+    const range = { min: 64 * 2 ** 20, max: 15872 * 2 ** 20 };
+    expect(quantityProblem("1Gi", range)).toBeNull();
+    expect(quantityProblem("", range)).toBeNull();
+    expect(quantityProblem("32Gi", range)).toBe("Must be between 64Mi and 15.5Gi");
+    expect(quantityProblem("1Mi", { min: 1024, max: null })).toBeNull();
+    expect(quantityProblem("1", { min: 1024, max: null })).toBe("Must be at least 1Ki");
+    expect(quantityProblem("512m", null)).toBe("m is milli; did you mean 512Mi?");
+  });
+
+  // spec: ACN#presentation-of-kinds
+  it("holds back a quantity its kind rejects", () => {
+    const entries = [["size", def({ kind: "quantity", range: { min: 1, max: 1024 } })]] as ParamEntries;
+    expect(paramsBlocker(entries, { size: "1Ki" })).toBeNull();
+    expect(paramsBlocker(entries, { size: "2Ki" })).not.toBeNull();
+    expect(paramsBlocker(entries, { size: "1m" })).not.toBeNull();
   });
 });

@@ -15,11 +15,17 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { useOiQuery } from "../hooks/useOi";
-import { generateRandomHex, paramFieldType, type ParamEntries } from "../lib/params";
-import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
+import {
+  generateRandomHex,
+  paramFieldType,
+  paramHelperText,
+  paramValueRejected,
+  type ParamEntries,
+} from "../lib/params";
 import type { ParamSchema, SiteVolume } from "../lib/types";
 import { KindInput, hasKindInput } from "./KindInput";
 import { OiErrorAlert } from "./OiErrorAlert";
+import { QuantityAmount } from "./QuantityAmount";
 
 function VolumeParamField({
   name,
@@ -55,16 +61,6 @@ function VolumeParamField({
       {error && <OiErrorAlert error={error} />}
     </FormControl>
   );
-}
-
-function helper(def: ParamSchema, value: string): string | undefined {
-  if (def.kind === "password" && value.length > 0) {
-    return isStrongPassword(value) ? (def.description || undefined) : "Password is too weak";
-  }
-  if (def.kind === "weak-password" && value.length > 0) {
-    return `Strength: ${passwordScore(value)}/4${def.description ? ` — ${def.description}` : ""}`;
-  }
-  return def.description || undefined;
 }
 
 /** One input per declared param of an action or shell: each
@@ -111,7 +107,7 @@ export function ParamFields({
         const masked = def.secret === true || def.kind === "password" || def.kind === "weak-password";
         const isRandom = def.kind === "random";
         const isMultiline = def.kind === "multiline";
-        const weak = def.kind === "password" && value.length > 0 && !isStrongPassword(value);
+        const isQuantity = def.kind === "quantity";
         return (
           <TextField
             key={key}
@@ -119,18 +115,19 @@ export function ParamFields({
             size="small"
             value={value}
             onChange={(e) => onChange(key, e.target.value)}
-            helperText={helper(def, value)}
-            error={weak}
+            helperText={paramHelperText(def, value)}
+            error={paramValueRejected(def, value)}
             multiline={isMultiline}
             minRows={isMultiline ? 3 : undefined}
             type={isMultiline ? undefined : shown[key] ? "text" : paramFieldType(def.kind, def.secret)}
             required={def.required}
             slotProps={{
               input:
-                masked || isRandom
+                masked || isRandom || isQuantity
                   ? {
                       endAdornment: (
                         <InputAdornment position="end">
+                          {isQuantity && <QuantityAmount value={value} />}
                           {isRandom && (
                             <Tooltip title="Generate (32 bytes, hex)">
                               <IconButton

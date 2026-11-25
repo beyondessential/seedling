@@ -814,6 +814,19 @@ fn kind_takes_a_kind_name_or_a_kind_map() {
         }
     );
     assert_eq!(
+        kind_of(r#"app.param("size").kind("quantity");"#, "size"),
+        ParamKind::Quantity { range: None }
+    );
+    assert_eq!(
+        kind_of(
+            r#"app.param("size").kind(#{ name: "quantity", range: 1..=1024 });"#,
+            "size"
+        ),
+        ParamKind::Quantity {
+            range: IntRange::new(1, 1024, true)
+        }
+    );
+    assert_eq!(
         kind_of(
             r#"app.param("tier").kind(#{ name: "choice", options: ["small", "large"] });"#,
             "tier"
@@ -832,6 +845,8 @@ fn kind_refuses_a_kind_map_that_is_not_valid() {
         (r#"#{ name: "text", range: 1..2 }"#, "unknown key"),
         (r#"#{ name: "integer", range: 3..3 }"#, "holds no integer"),
         (r#"#{ name: "integer", range: "1..2" }"#, "integer range"),
+        (r#"#{ name: "quantity", range: 3..3 }"#, "holds no integer"),
+        (r#"#{ name: "quantity", options: ["a"] }"#, "unknown key"),
         (r#""choice""#, "options"),
         (r#"#{ name: "choice" }"#, "options"),
         (r#"#{ name: "choice", options: [] }"#, "at least one option"),
@@ -860,7 +875,9 @@ fn parsed_gives_the_parser_result_of_the_kind_as_declared() {
         let port = app.param("port").kind(#{ name: "integer", range: 1..=65535 });
         let tier = app.param("tier").kind(#{ name: "choice", options: ["small", "large"] });
         let contact = app.param("contact").kind("email");
+        let size = app.param("size").kind("quantity");
         if flag.parsed() != true { throw "flag"; }
+        if size.parsed() != 1536 { throw "size"; }
         if port.parsed() != 8080 { throw "port"; }
         if tier.parsed() != "large" { throw "tier"; }
         if contact.parsed().domain != "example.org" { throw "contact"; }
@@ -872,7 +889,8 @@ fn parsed_gives_the_parser_result_of_the_kind_as_declared() {
                 ("flag", "true"),
                 ("port", "8080"),
                 ("tier", "large"),
-                ("contact", "ops@example.org")
+                ("contact", "ops@example.org"),
+                ("size", "1.5Ki")
             ]
         ),
         None
@@ -889,6 +907,13 @@ fn parsed_throws_where_the_kind_rejects_the_value_or_none_is_set() {
     .expect("11 is out of range");
     assert!(rejected.contains("between 1 and 10"), "{rejected}");
 
+    let rejected = evaluation_error(
+        r#"app.param("size").kind(#{ name: "quantity", range: 1024..=1048576 }).parsed();"#,
+        &[("size", "2Mi")],
+    )
+    .expect("2Mi is out of range");
+    assert!(rejected.contains("between 1Ki and 1Mi"), "{rejected}");
+
     let unset = evaluation_error(r#"app.param("port").kind("integer").parsed();"#, &[])
         .expect("nothing to parse");
     assert!(unset.contains("not set"), "{unset}");
@@ -901,6 +926,7 @@ fn default_value_takes_a_boolean_or_integer_as_its_canonical_form() {
         r#"
         app.param("flag").kind("boolean").default_value(true);
         app.param("num").kind("integer").default_value(-3);
+        app.param("size").kind("quantity").default_value(536870912);
         app.param("cleared").default_value("x").default_value("");
         "#,
     );
@@ -908,6 +934,7 @@ fn default_value_takes_a_boolean_or_integer_as_its_canonical_form() {
     let default = |name: &str| def.params.get(name).unwrap().default_text();
     assert_eq!(default("flag").as_deref(), Some("true"));
     assert_eq!(default("num").as_deref(), Some("-3"));
+    assert_eq!(default("size").as_deref(), Some("536870912"));
     assert_eq!(default("cleared"), None);
     assert!(
         run_test_script_err(r#"app.param("xyz").default_value(1.5);"#)
@@ -924,6 +951,8 @@ fn a_default_its_kind_rejects_fails_the_evaluation_once_it_completes() {
         r#"app.param("num").default_value("ten").kind("integer");"#,
         r#"app.param("num").kind("integer").default_value("ten");"#,
         r#"app.param("num").default_value(true).kind("integer");"#,
+        r#"app.param("num").default_value("512m").kind("quantity");"#,
+        r#"app.param("num").kind(#{ name: "quantity", range: 1..=10 }).default_value(11);"#,
         r#"app.param("num").default_value(3);"#,
     ] {
         let err = evaluation_error(script, &[]).unwrap_or_else(|| panic!("{script}"));

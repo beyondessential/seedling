@@ -11,6 +11,7 @@ use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use super::{
     purl::{Purl, QualifierValue},
+    quantity::{format_quantity, parse_quantity},
     take::{reject_unknown_keys, take_map, take_string, take_string_array},
     url::{Url, UrlOrigin, parse_hostname},
     version::{SemVer, Version},
@@ -80,6 +81,7 @@ pub enum ParamKindName {
     Random,
     Boolean,
     Integer,
+    Quantity,
     Choice,
     Version,
     VersionSemver,
@@ -101,6 +103,7 @@ impl ParamKindName {
             Self::Random => "random",
             Self::Boolean => "boolean",
             Self::Integer => "integer",
+            Self::Quantity => "quantity",
             Self::Choice => "choice",
             Self::Version => "version",
             Self::VersionSemver => "version-semver",
@@ -116,7 +119,7 @@ impl ParamKindName {
     // spec: ACN#param-kinds
     fn arguments(self) -> &'static [&'static str] {
         match self {
-            Self::Integer => &["range"],
+            Self::Integer | Self::Quantity => &["range"],
             Self::Choice => &["options"],
             _ => &[],
         }
@@ -157,6 +160,10 @@ pub enum ParamKind {
         range: Option<IntRange>,
     },
     // spec: ACN#param-kinds
+    Quantity {
+        range: Option<IntRange>,
+    },
+    // spec: ACN#param-kinds
     Choice {
         options: Vec<String>,
     },
@@ -190,6 +197,7 @@ impl ParamKind {
             Self::Random => ParamKindName::Random,
             Self::Boolean => ParamKindName::Boolean,
             Self::Integer { .. } => ParamKindName::Integer,
+            Self::Quantity { .. } => ParamKindName::Quantity,
             Self::Choice { .. } => ParamKindName::Choice,
             Self::Version => ParamKindName::Version,
             Self::VersionSemver => ParamKindName::VersionSemver,
@@ -264,6 +272,16 @@ impl ParamKind {
                 }
                 return Ok(ParsedValue::Int(n));
             }
+            // spec: ACN#quantities
+            Self::Quantity { range } => {
+                let n = parse_quantity(value)?;
+                if let Some(range) = range
+                    && !range.contains(n)
+                {
+                    return Err(format!("must be {}", range.describe(format_quantity)));
+                }
+                return Ok(ParsedValue::Int(n));
+            }
             // spec: ACN#kind-parsers
             Self::Choice { options } => {
                 if !options.iter().any(|option| option == value) {
@@ -298,7 +316,9 @@ impl ParamKind {
         let given = match (self, value) {
             (_, SuppliedValue::Text(_))
             | (Self::Boolean, SuppliedValue::Bool(_))
-            | (Self::Integer { .. }, SuppliedValue::Int(_)) => return Ok(()),
+            | (Self::Integer { .. } | Self::Quantity { .. }, SuppliedValue::Int(_)) => {
+                return Ok(());
+            }
             (_, SuppliedValue::Bool(_)) => "a boolean",
             (_, SuppliedValue::Int(_)) => "an integer",
         };
@@ -371,6 +391,7 @@ fn kind_with(
         ParamKindName::Random => ParamKind::Random,
         ParamKindName::Boolean => ParamKind::Boolean,
         ParamKindName::Integer => ParamKind::Integer { range },
+        ParamKindName::Quantity => ParamKind::Quantity { range },
         ParamKindName::Choice => ParamKind::Choice {
             options: options.unwrap_or_default(),
         },
@@ -390,7 +411,7 @@ fn take_kind_name(what: &str, value: Dynamic) -> Result<ParamKindName, Box<EvalA
         .map_err(|()| format!("`{what}`: unknown param kind {name:?}").into())
 }
 
-/// Read an `integer` kind's `range`.
+/// Read the `range` of an `integer` or `quantity` kind.
 // spec: ACN#kind-arguments
 pub fn take_range(what: &str, value: Dynamic) -> Result<IntRange, Box<EvalAltResult>> {
     let type_name = value.type_name();
@@ -428,7 +449,7 @@ pub fn take_options(what: &str, value: Dynamic) -> Result<Vec<String>, Box<EvalA
     Ok(options)
 }
 
-/// An `integer` kind's range, kept with the end the script wrote so that an
+/// The range of an `integer` or `quantity` kind, kept with the end the script wrote so that an
 /// exclusive range running to the largest integer still reads as unbounded.
 // spec: ACN#kind-arguments
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,10 +495,21 @@ impl IntRange {
     }
 }
 
+impl IntRange {
+    /// The range as its least and greatest values, each written by `bound`.
+    pub fn describe(&self, bound: impl Fn(i64) -> String) -> String {
+        format!(
+            "between {} and {}",
+            bound(self.start),
+            bound(self.greatest())
+        )
+    }
+}
+
 impl fmt::Display for IntRange {
     // spec: ACN#kind-parsers
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "between {} and {}", self.start, self.greatest())
+        f.write_str(&self.describe(|n| n.to_string()))
     }
 }
 

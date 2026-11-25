@@ -36,7 +36,7 @@ The runtime MUST store it, and it takes effect once the app's definition declare
 The server MUST validate a definition update and a parameter change before it persists any part of the change.
 
 Validation [checks the kind](../language/parameter.md#kind-checks) of every parameter that is set in the proposed values.
-A value supplied as a boolean for a parameter whose kind is not `boolean`, or as an integer for one whose kind is not `integer`, MUST fail validation, as MUST one supplied so for an unknown parameter.
+A value supplied as a boolean for a parameter whose kind is not `boolean`, or as an integer for one whose kind is neither `integer` nor `quantity`, MUST fail validation, as MUST one supplied so for an unknown parameter.
 If every kind accepts its value, validation then runs the [validator](../language/parameter.md#validators) of each such parameter against the proposed values.
 The kinds and validators are those the proposed definition declares when evaluated with the proposed values.
 For a parameter change whose proposed values fail to evaluate, the kinds and validators are those of the app's most recent successful evaluation.

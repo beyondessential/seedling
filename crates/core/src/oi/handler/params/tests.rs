@@ -1280,6 +1280,7 @@ const TYPED_SCRIPT: &str = r#"
     app.param("enabled").kind("boolean").required(false);
     app.param("replicas").kind(#{ name: "integer", range: 1..=9 }).required(false);
     app.param("tier").kind(#{ name: "choice", options: ["small", "large"] }).required(false);
+    app.param("memory").kind(#{ name: "quantity", range: 1..=1073741824 }).required(false);
     app.param("greeting").required(false);
     app.deployment("web").image("docker.io/library/nginx:1.29");
 "#;
@@ -1301,13 +1302,16 @@ fn a_boolean_or_integer_is_stored_as_its_canonical_form() {
     let oi = oi_with_typed_app();
     oi.call(
         "/apps/params/set",
-        json!({ "app": "demo", "params": { "enabled": true, "replicas": 3, "tier": "large" } }),
+        json!({ "app": "demo", "params": {
+            "enabled": true, "replicas": 3, "tier": "large", "memory": 536870912
+        } }),
     )
     .unwrap();
     assert_eq!(
         stored_values(&oi),
         vec![
             ("enabled".to_owned(), "true".to_owned()),
+            ("memory".to_owned(), "536870912".to_owned()),
             ("replicas".to_owned(), "3".to_owned()),
             ("tier".to_owned(), "large".to_owned()),
         ]
@@ -1339,6 +1343,14 @@ fn a_value_the_kind_rejects_or_a_native_value_of_the_wrong_kind_fails_validation
         (
             json!({ "replicas": "03" }),
             "replicas: must be an integer in decimal form",
+        ),
+        (
+            json!({ "memory": "512m" }),
+            "memory: m is milli; did you mean 512Mi?",
+        ),
+        (
+            json!({ "memory": 2147483648_i64 }),
+            "memory: must be between 1 and 1Gi",
         ),
         (
             json!({ "tier": "Large" }),

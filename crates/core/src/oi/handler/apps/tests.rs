@@ -2787,6 +2787,7 @@ fn rotation_that_cannot_read_the_parameters_changes_nothing() {
 
 // spec: APPS#parameters
 // spec: APPS#actions
+// spec: APPS#resources
 #[test]
 fn a_description_reports_each_param_range_and_options() {
     let oi = TestOi::new();
@@ -2796,6 +2797,7 @@ fn a_description_reports_each_param_range_and_options() {
         app.param("upto").kind(#{ name: "integer", range: ..5 }).required(false);
         app.param("from").kind(#{ name: "integer", range: -3..= }).required(false);
         app.param("count").kind("integer").default_value(3);
+        app.param("memory").kind(#{ name: "quantity", range: 1048576.. }).default_value(1073741824);
         app.param("tier").kind(#{ name: "choice", options: ["small", "large", "medium"] })
             .required(false);
         app.param("flag").kind("boolean").default_value(true);
@@ -2803,7 +2805,7 @@ fn a_description_reports_each_param_range_and_options() {
             open: #{ kind: #{ name: "integer", range: 1..=10 } },
             size: #{ kind: #{ name: "choice", options: ["b", "a"] } },
         } });
-        app.deployment("web");
+        app.deployment("web").memory("512Mi");
     "#;
     oi.call("/apps/create", json!({ "app": "demo", "script": script }))
         .unwrap();
@@ -2825,6 +2827,12 @@ fn a_description_reports_each_param_range_and_options() {
     assert_eq!(param("count")["range"], json!(null));
     assert_eq!(param("count")["kind"], "integer");
     assert_eq!(param("count")["default_value"], "3");
+    assert_eq!(param("memory")["kind"], "quantity");
+    assert_eq!(
+        param("memory")["range"],
+        json!({ "min": 1048576, "max": null })
+    );
+    assert_eq!(param("memory")["default_value"], "1073741824");
     assert_eq!(param("flag")["default_value"], "true");
     assert_eq!(
         param("tier")["options"],
@@ -2845,4 +2853,13 @@ fn a_description_reports_each_param_range_and_options() {
         json!({ "min": 1, "max": 10 })
     );
     assert_eq!(scale["params"]["size"]["options"], json!(["b", "a"]));
+
+    let web = desc["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "web")
+        .unwrap()
+        .clone();
+    assert_eq!(web["def"]["container"]["memory"], json!(536870912));
 }

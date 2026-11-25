@@ -457,7 +457,7 @@ fn spec_from_pod(
         health,
         hosts,
         dns_servers: dns_servers.to_vec(),
-        memory: container.memory.clone(),
+        memory: container.memory,
         cpus: container.cpus,
         extra_caps: container.extra_caps.clone(),
         writable_rootfs: container.writable_rootfs,

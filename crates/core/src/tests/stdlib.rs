@@ -123,6 +123,7 @@ fn single_line_kinds_refuse_control_characters_and_separators() {
             "parse_url_origin",
             "parse_hostname",
             "parse_volume",
+            "parse_quantity",
         ] {
             let reason = refusal(helper, &value);
             assert!(
@@ -590,6 +591,46 @@ fn integer_takes_a_range_and_names_it_when_refusing() {
     assert!(refusal("parse_integer", r#""1", 5..5"#).contains("holds no integer"));
     assert!(refusal("parse_integer", r#""1", 5..=4"#).contains("holds no integer"));
     assert!(refusal("parse_integer", r#""1", [1, 2]"#).contains("must be an integer range"));
+}
+
+// spec: ACN#quantities
+#[test]
+fn quantity_gives_the_amount_of_a_quantity() {
+    for (value, n) in [
+        ("512Mi", 512 << 20),
+        ("1.5G", 1_500_000_000),
+        ("-2k", -2000),
+    ] {
+        let parsed = eval(&format!("std::parse_quantity({value:?})")).unwrap();
+        assert_eq!(parsed.as_int().unwrap(), n, "{value}");
+    }
+    assert_eq!(
+        refusal("parse_quantity", r#""512m""#),
+        "m is milli; did you mean 512Mi?"
+    );
+    assert_eq!(
+        refusal("parse_quantity", r#""1.1Ki""#),
+        "must come to a whole number"
+    );
+}
+
+// spec: ACN#quantities
+// spec: ACN#kind-arguments
+#[test]
+fn quantity_takes_a_range_and_names_it_in_quantities_when_refusing() {
+    assert_eq!(
+        eval(r#"std::parse_quantity("64Mi", 64 * 1024 * 1024..=AVAILABLE_MEMORY)"#)
+            .unwrap()
+            .as_int()
+            .unwrap(),
+        64 << 20
+    );
+    assert_eq!(
+        refusal("parse_quantity", r#""32Gi", 67108864..=16642998272"#),
+        "must be between 64Mi and 15.5Gi"
+    );
+    assert!(refusal("parse_quantity", r#""1", 5..5"#).contains("holds no integer"));
+    assert!(refusal("parse_quantity", r#""1", "1..2""#).contains("must be an integer range"));
 }
 
 // spec: ACN#kind-parsers

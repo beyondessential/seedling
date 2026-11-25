@@ -180,7 +180,7 @@ pub(crate) fn serialize_param_schema(
 // spec: APPS#parameters
 fn param_schema_json(schema: &ParamDef) -> serde_json::Map<String, Value> {
     let range = match &schema.kind {
-        ParamKind::Integer { range: Some(range) } => {
+        ParamKind::Integer { range: Some(range) } | ParamKind::Quantity { range: Some(range) } => {
             json!({ "min": range.min(), "max": range.max() })
         }
         _ => Value::Null,
