@@ -71,7 +71,9 @@ fn string(s: &str) -> Yaml<'static> {
             '\n' => quoted.push_str("\\n"),
             '\t' => quoted.push_str("\\t"),
             '\r' => quoted.push_str("\\r"),
-            c if c < ' ' || unprintable(c) => quoted.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c if c < ' ' || c == '\u{7f}' || unprintable(c) => {
+                quoted.push_str(&format!("\\u{:04x}", u32::from(c)));
+            }
             c => quoted.push(c),
         }
     }

@@ -257,10 +257,14 @@ fn yaml_quotes_keys_by_the_same_rules() {
 // spec: FMT#yaml
 #[test]
 fn yaml_escapes_characters_no_plain_scalar_may_hold() {
-    let s = "a\u{85}b\u{9f}\u{fffe}";
-    let out = text(&format!("std::encode_yaml({})", lit(s)));
-    assert_eq!(out, "\"a\\u0085b\\u009f\\ufffe\"\n");
-    assert_eq!(text(&format!("std::decode_yaml({})", lit(&out))), s);
+    for (s, written) in [
+        ("a\u{85}b\u{9f}\u{fffe}", "\"a\\u0085b\\u009f\\ufffe\"\n"),
+        ("a\u{7f}b\u{85}\u{1}", "\"a\\u007fb\\u0085\\u0001\"\n"),
+    ] {
+        let out = text(&format!("std::encode_yaml({})", lit(s)));
+        assert_eq!(out, written);
+        assert_eq!(text(&format!("std::decode_yaml({})", lit(&out))), s);
+    }
 }
 
 // The TOML tests pin the toml crate's layout, so a change to it in a later
