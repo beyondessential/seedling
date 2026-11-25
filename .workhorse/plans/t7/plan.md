@@ -37,6 +37,11 @@ Off Linux, `seedling-ctl` takes memory as undetermined unless `--const` sets it,
 Of what it calls, the NAT64 detection (`nat64::detect_external_nat64`, a DNS lookup) and the thread, time-zone and node-name detection in `sysconst.rs` are portable and stay in core; the egress detection (rtnetlink) and the `/proc/meminfo` read move.
 `SystemFacts::default()` stops reading memory and reports it undetermined; on Linux, `seedling-ctl` can reach the Linux host source through a Linux-only dependency on `seedling-linux`, which is T6's to decide.
 
+### Linux-settled values
+
+The process manager takes what a workload is, and `seedling-linux` turns that into what the Linux platform spec settles: slice names and weights, OOM score adjustments and restart pacing.
+Unit names stay in core, because the reconciler matches units against recorded identity.
+
 ### Specs follow the boundary
 
 The generic specs name host facilities, the snapshotting volume store and the packet filter, rather than BTRFS and nftables; the Linux platform spec settles them with the detail the generic specs dropped.
@@ -58,6 +63,15 @@ Each trait goes beside the existing four in `system.rs`, with a stub in `system/
 - [ ] Backend connector: how `system/backends.rs` reaches a working container runtime and process manager (today `PodmanRuntime::new` and `SystemdManager::connect`), so the probing and switching stay in core and the connecting comes from the platform
 - [ ] NAT64 translator: `jool::setup_nat64` and `teardown_nat64`, called from the reconciler
 - [ ] Machine identifier: `system::node_prefix_from_machine_id` keeps the derivation in core and takes the identifier from the platform
+
+### Workload standing instead of Linux values
+
+- [ ] `TransientUnitSpec` (`system/types.rs`) carries the workload's standing (a `WorkloadStanding`, or infrastructure) in place of `slice`, `oom_score_adjust`, `restart_sec`, `start_limit_interval_sec` and `start_limit_burst`
+- [ ] `ProcessManager::sync_slices` takes the set of standings to provide for (each app's priority and the Deployment priorities it uses, plus infrastructure) in place of named, weighted `SliceSpec`s, keeping its `prune` flag
+- [ ] The reconciler's slice computation (`system/reconcile.rs`, around the `priority::app_slice` calls) and the unit specs built in `system/actuator/pod.rs`, `system/caddy/startup.rs` and `system/resolver/startup.rs` produce standings
+- [ ] `system/priority.rs`'s slice naming, weights and OOM mapping, with their tests and the slice-weight tests in `system/reconcile.rs`, move to `seedling-linux` with the systemd manager; `WorkloadStanding` stays in core
+- [ ] `reserved.rs` keeps `infra` as a reserved app name as a literal of its own, since it no longer has `priority::INFRA_COMPONENT` to borrow
+- [ ] The stub process manager in `system/stub.rs` records standings, and the reconciler tests that asserted slice names or weights assert standings instead
 
 ### Moving the Linux adapters
 
@@ -109,3 +123,5 @@ Each move carries its tests and `// spec:` citations with it.
 - Running core's full test suite on macOS and Windows.
 - Making `seedling-linux` compile to nothing off Linux so a bare workspace build passes everywhere.
 - A portable default for host facts in core.
+- Leaving the Linux-settled values (slices, OOM scores, restart pacing) in core.
+- Moving unit naming to `seedling-linux`, which would rework how the reconciler names and finds units.
