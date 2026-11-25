@@ -54,7 +54,9 @@ web_svc.ingress(hostname.value(), 443)
 
 let web = app.deployment("web")
     .image(busybox)
-    .command(["httpd", "-f", "-p", "8080", "-h", "/www"])
+    // httpd as PID 1 ignores SIGTERM, so a shell runs it, exits on stop, and
+    // passes SIGHUP on so `reload` reaches the server.
+    .command(["sh", "-c", "trap 'exit 0' TERM INT; trap 'kill -HUP $pid' HUP; httpd -f -p 8080 -h /www & pid=$!; while kill -0 $pid; do wait; done"])
     .mount("/www", site)
     .mount("/store", store)
     .http(8080, web_svc.route("/"));

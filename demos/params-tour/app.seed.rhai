@@ -253,9 +253,10 @@ if redirect_http.parsed() {
 }
 
 app.deployment("page")
-    .image("docker.io/library/alpine:3.24.4")
+    .image("docker.io/library/busybox:1.38.0-musl")
     .user("65534:65534")
-    .command(["sh", "-c", "mkdir -p /tmp/www && printf '%s' \"$PAGE\" > /tmp/www/index.html && exec httpd -f -p 8080 -h /tmp/www"])
+    // httpd as PID 1 ignores SIGTERM, so a shell runs it and exits on stop.
+    .command(["sh", "-c", "mkdir -p /tmp/www && printf '%s' \"$PAGE\" > /tmp/www/index.html; trap 'exit 0' TERM INT; httpd -f -p 8080 -h /tmp/www & wait"])
     .env("PAGE", page)
     // Secret values reach the workload; the server ignores them.
     .env("ADMIN_PASSWORD", admin_password.value())
