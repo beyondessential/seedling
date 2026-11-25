@@ -214,24 +214,24 @@ impl Holds {
         }
         // spec: FMT#values-each-format-holds
         // take: dispatch
-        if let Some(version) = value.clone().try_cast::<Version>() {
-            return Ok(Tree::Str(version.to_string()));
+        if value.is::<Version>() {
+            return Ok(Tree::Str(value.cast::<Version>().to_string()));
         }
         // take: dispatch
-        if let Some(version) = value.clone().try_cast::<SemVer>() {
-            return Ok(Tree::Str(version.to_string()));
+        if value.is::<SemVer>() {
+            return Ok(Tree::Str(value.cast::<SemVer>().to_string()));
         }
         // take: dispatch
-        if let Some(addr) = value.clone().try_cast::<IpAddress>() {
-            return Ok(Tree::Str(addr.to_string()));
+        if value.is::<IpAddress>() {
+            return Ok(Tree::Str(value.cast::<IpAddress>().to_string()));
         }
         // take: dispatch
-        if let Some(subnet) = value.clone().try_cast::<IpSubnet>() {
-            return Ok(Tree::Str(subnet.to_string()));
+        if value.is::<IpSubnet>() {
+            return Ok(Tree::Str(value.cast::<IpSubnet>().to_string()));
         }
         // take: dispatch
-        if let Some(range) = value.clone().try_cast::<IpRange>() {
-            return Ok(Tree::Str(range.to_string()));
+        if value.is::<IpRange>() {
+            return Ok(Tree::Str(value.cast::<IpRange>().to_string()));
         }
         // take: dispatch
         if value.is_array() {
