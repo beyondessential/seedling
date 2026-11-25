@@ -8,9 +8,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use seedling_bundle::{METADATA_FILE, included, normalise_path};
+use seedling_bundle::{BUNDLE_SIZE_LIMIT, METADATA_FILE, included, normalise_path};
 
-use super::{VCS_METADATA_DIRS, read_folder};
+use super::{VCS_METADATA_DIRS, read_bounded, read_folder};
 
 /// The `/`-separated paths, from the include boundary, of archive entries
 /// that were neither files nor directories and so were never written out.
@@ -189,8 +189,7 @@ fn read_source(
         .symlink_metadata()
         .map_err(|e| format!("cannot read {}: {e}", at.display()))?;
     if meta.is_file() {
-        let contents =
-            std::fs::read(&at).map_err(|e| format!("cannot read {}: {e}", at.display()))?;
+        let contents = read_bounded(&at, BUNDLE_SIZE_LIMIT)?;
         return Ok(Some(BTreeMap::from([(String::new(), contents)])));
     }
     if !meta.is_dir() {

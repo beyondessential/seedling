@@ -629,3 +629,20 @@ fn a_file_beside_an_included_path_is_not_taken_for_a_copy_of_it() {
     assert_eq!(files["errors/500.html"], b"<p>");
     assert_eq!(files["errors-old.html"], b"old");
 }
+
+// spec: CLI#include-assembly
+#[test]
+fn a_source_larger_than_any_bundle_is_refused_as_it_is_read() {
+    let dir = repo(".git", "everything", "../..");
+    for i in 0..=seedling_bundle::BUNDLE_FILE_LIMIT {
+        write(dir.path(), &format!("many/{i}"), b"");
+    }
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("more than the 4096 files"), "{e}");
+
+    let dir = repo(".git", "big.bin", "../big.bin");
+    let big = vec![0u8; seedling_bundle::BUNDLE_SIZE_LIMIT + 1];
+    write(dir.path(), "apps/big.bin", &big);
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("size limit"), "{e}");
+}

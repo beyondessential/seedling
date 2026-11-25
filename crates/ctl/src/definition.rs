@@ -3,12 +3,14 @@
 
 use std::{
     collections::BTreeMap,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use seedling_bundle::{Bundle, METADATA_FILE, VERSIONS_ANNOTATION};
+use seedling_bundle::{
+    BUNDLE_FILE_LIMIT, BUNDLE_SIZE_LIMIT, Bundle, METADATA_FILE, VERSIONS_ANNOTATION,
+};
 use serde_json::{Map, Value, json};
 
 use assembly::{Unwritten, assemble, boundary_of};
@@ -266,6 +268,7 @@ pub(super) fn read_folder(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Stri
         .filter_entry(|e| !is_vcs_metadata(e))
         .build();
     let mut files = BTreeMap::new();
+    let mut size = 0usize;
     for entry in walker {
         let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
         let path = entry.path();
@@ -288,11 +291,39 @@ pub(super) fn read_folder(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Stri
             .to_str()
             .ok_or_else(|| format!("{} is not a UTF-8 path", path.display()))?
             .to_owned();
-        let contents =
-            std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        // Bounded as it is read, so that a folder far larger than any bundle,
+        // such as a whole repository named by mistake, is refused before it
+        // is held in memory.
+        if files.len() >= BUNDLE_FILE_LIMIT {
+            return Err(format!(
+                "{} holds more than the {BUNDLE_FILE_LIMIT} files a definition may",
+                root.display()
+            ));
+        }
+        size = size.saturating_add(rel.len());
+        let contents = read_bounded(path, BUNDLE_SIZE_LIMIT.saturating_sub(size))?;
+        size = size.saturating_add(contents.len());
         files.insert(rel, contents);
     }
     Ok(files)
+}
+
+/// Read a file, refusing it once it passes `remaining` bytes of what a
+/// definition may hold.
+pub(super) fn read_bounded(path: &Path, remaining: usize) -> Result<Vec<u8>, String> {
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut contents = Vec::new();
+    file.take(remaining as u64 + 1)
+        .read_to_end(&mut contents)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    if contents.len() > remaining {
+        return Err(format!(
+            "{} takes the definition past its {BUNDLE_SIZE_LIMIT}-byte size limit",
+            path.display()
+        ));
+    }
+    Ok(contents)
 }
 
 /// A GitHub URL naming a folder: `https://github.com/<owner>/<repo>/tree/<rest>`,
