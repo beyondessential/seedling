@@ -57,14 +57,11 @@ pub(super) fn encode(tree: &Tree) -> Result<String, Box<EvalAltResult>> {
 // spec: FMT#env-files
 // spec: FMT#decoding
 pub(super) fn decode(text: &str) -> Result<Tree, Box<EvalAltResult>> {
-    let mut lines: Vec<&str> = text.split('\n').collect();
     // The line feed ending the last line starts no line of its own.
-    if lines.last() == Some(&"") {
-        lines.pop();
-    }
+    let text = text.strip_suffix('\n').unwrap_or(text);
     let mut names = HashSet::new();
     let mut entries = Vec::new();
-    for (i, text) in lines.into_iter().enumerate() {
+    for (i, text) in text.split('\n').enumerate() {
         let Ok(parsed) = line.parse(text) else {
             return Err(not_a_document("an env file", i + 1));
         };
