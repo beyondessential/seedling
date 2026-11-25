@@ -108,7 +108,7 @@ The runtime MUST raise a script error, naming `std::encode_json`, when a script 
 It MUST write a string, map keys included, quoted when any of these holds of it:
 
 - it is empty, or begins or ends with whitespace;
-- a reader applying the core schema would read it plain as other than that string;
+- it cannot be written as a plain scalar, or a reader applying the core schema would read it plain as other than that string;
 - it is `~`, or one of `yes`, `no`, `on`, `off`, `true`, `false` and `null` written in lower case, upper case, or with only its first letter in upper case;
 - it reads as an integer or a floating-point number, including in hexadecimal, octal or exponent form, or begins with `.`.
 
