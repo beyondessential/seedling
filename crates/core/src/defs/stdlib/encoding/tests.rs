@@ -116,6 +116,7 @@ fn errors_leave_out_the_argument() {
         (r#"std::decode_base64url("Zm9v~mFy")"#, &["~", "126"]),
         (r#"std::decode_base64("Zh==")"#, &["'h'", "0x68"]),
         (r#"std::uuid_v5("s3cr3t", "x")"#, &["s3cr3t"]),
+        (r#"std::decode_percent("s3cr3t%")"#, &["s3cr3t"]),
     ] {
         let err = throws(src);
         assert!(held.iter().all(|h| !err.contains(h)), "{err}");
@@ -129,6 +130,63 @@ fn the_utf8_helpers_round_trip_and_keep_empty_empty() {
     assert_eq!(digest(r#"std::encode_utf8("é")"#), "c3a9");
     assert_eq!(digest(r#"std::encode_utf8("")"#), "");
     assert_eq!(text(r#"std::decode_utf8("")"#), "");
+}
+
+// spec: ENC#encodings
+#[test]
+fn encode_percent_keeps_only_unreserved_characters() {
+    let unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    assert_eq!(
+        text(&format!("std::encode_percent({unreserved:?})")),
+        unreserved
+    );
+    for b in (0..=0x7f_u8).filter(|b| !unreserved.as_bytes().contains(b)) {
+        assert_eq!(
+            text(&format!(
+                r#"std::encode_percent(std::decode_hex("{b:02x}"))"#
+            )),
+            format!("%{b:02X}")
+        );
+    }
+    assert_eq!(text(r#"std::encode_percent("a b/é")"#), "a%20b%2F%C3%A9");
+    assert_eq!(text(r#"std::encode_percent("")"#), "");
+}
+
+// spec: ENC#encodings
+#[test]
+fn decode_percent_reads_a_url_component_as_carried() {
+    assert_eq!(digest(r#"std::decode_percent("%2f%2F")"#), "2f2f");
+    assert_eq!(
+        text(r#"std::decode_utf8(std::decode_percent("a+b=c&d:e!f%20g"))"#),
+        "a+b=c&d:e!f g"
+    );
+    assert_eq!(
+        text(r#"std::decode_utf8(std::decode_percent("é%C3%A9"))"#),
+        "éé"
+    );
+    assert!(eval(r#"std::decode_percent("")"#).unwrap().is_blob());
+    assert_eq!(digest(r#"std::decode_percent("")"#), "");
+}
+
+// spec: ENC#encodings
+#[test]
+fn decode_percent_throws_on_a_malformed_escape() {
+    for (src, at) in [("%", 0), ("%4", 0), ("ab%zz", 2), ("%41%", 3), ("%4g", 0)] {
+        let err = throws(&format!("std::decode_percent({src:?})"));
+        assert!(err.contains(&format!("position {at}")), "{err}");
+    }
+}
+
+// spec: ENC#encodings
+#[test]
+fn percent_encoding_round_trips_every_byte() {
+    let all: String = (0..=0xff_u8).map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        digest(&format!(
+            r#"std::decode_percent(std::encode_percent(std::decode_hex("{all}")))"#
+        )),
+        all
+    );
 }
 
 // spec: ENC#digests
@@ -243,6 +301,13 @@ fn a_result_beyond_the_engine_limits_fails() {
     );
     let err = engine
         .eval::<Dynamic>(r#"std::encode_utf8("hello")"#)
+        .unwrap_err();
+    assert!(
+        matches!(*err, EvalAltResult::ErrorDataTooLarge(..)),
+        "{err}"
+    );
+    let err = engine
+        .eval::<Dynamic>(r#"std::encode_percent("  ab")"#)
         .unwrap_err();
     assert!(
         matches!(*err, EvalAltResult::ErrorDataTooLarge(..)),

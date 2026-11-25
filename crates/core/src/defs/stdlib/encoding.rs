@@ -3,6 +3,7 @@
 
 use base64::{Engine as _, engine::general_purpose};
 use hmac::{Hmac, KeyInit, Mac};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode, percent_encode};
 use rhai::{Dynamic, EvalAltResult, FuncRegistration, NativeCallContext};
 use sha2::{Digest, Sha256, Sha512};
 
@@ -80,6 +81,28 @@ pub(super) fn register(module: &mut rhai::Module) {
         let text = String::from_utf8(data.bytes.to_vec())
             .map_err(|e| -> Box<EvalAltResult> { format!("`data` is not UTF-8: {e}").into() })?;
         text_result(ctx, &[&data], text)
+    });
+    // spec: ENC#encodings
+    unary(module, "encode_percent", |ctx, data| {
+        let data = take_byte_arg("data", data)?;
+        within(data.bytes.len().saturating_mul(3), max_string(ctx), STRING)?;
+        text_result(
+            ctx,
+            &[&data],
+            percent_encode(&data.bytes, UNRESERVED_KEPT).to_string(),
+        )
+    });
+    // spec: ENC#encodings
+    unary(module, "decode_percent", |ctx, text| {
+        let text = take_text(text)?;
+        if let Some(at) = malformed_escape(&text.bytes) {
+            return Err(not_encoded(
+                "percent-encoded",
+                format!("`%` at position {at} is not followed by two hexadecimal digits"),
+            ));
+        }
+        let bytes = percent_decode(&text.bytes).collect();
+        blob_result(ctx, &[&text], bytes)
     });
 
     // spec: ENC#digests
@@ -171,6 +194,24 @@ fn hex_error(e: hex::FromHexError) -> String {
             "odd number of digits".into()
         }
     }
+}
+
+// spec: ENC#encodings
+/// Every byte but the unreserved characters is percent-encoded.
+pub(super) const UNRESERVED_KEPT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+// spec: ENC#encodings
+/// The position of the first `%` not followed by two hexadecimal digits,
+/// which the percent-encoding decoder would otherwise pass through as itself.
+fn malformed_escape(text: &[u8]) -> Option<usize> {
+    text.iter().enumerate().find_map(|(i, &b)| {
+        let escape = text.get(i + 1..i + 3);
+        (b == b'%' && !escape.is_some_and(|e| e.iter().all(u8::is_ascii_hexdigit))).then_some(i)
+    })
 }
 
 fn base64_error(e: base64::DecodeError) -> String {

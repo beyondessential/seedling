@@ -82,6 +82,9 @@ fn blob_forms(bytes: &[u8]) -> Vec<Vec<u8>> {
         base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(bytes)
             .into_bytes(),
+        percent_encoding::percent_encode(bytes, encoding::UNRESERVED_KEPT)
+            .to_string()
+            .into_bytes(),
     ]
 }
 
@@ -152,3 +155,6 @@ fn settle(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
