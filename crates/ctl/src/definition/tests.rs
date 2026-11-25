@@ -606,3 +606,14 @@ fn a_github_url_folder_may_not_climb_out_of_the_repository() {
     let files = github::read_repository_folder(&root, "apps/./web/", &unwritten).unwrap();
     assert_eq!(files["app.seed.rhai"], b"app;");
 }
+
+// spec: CLI#include-assembly
+#[test]
+fn a_file_beside_an_included_path_is_not_taken_for_a_copy_of_it() {
+    let dir = repo(".git", "errors", "../pages");
+    write(dir.path(), "apps/def/errors-old.html", b"old");
+    write(dir.path(), "apps/def/errors.txt", b"note");
+    let files = assembled(&dir).unwrap();
+    assert_eq!(files["errors/500.html"], b"<p>");
+    assert_eq!(files["errors-old.html"], b"old");
+}

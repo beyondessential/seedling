@@ -4,6 +4,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::ErrorKind,
+    ops::Bound,
     path::{Component, Path, PathBuf},
 };
 
@@ -59,17 +60,12 @@ pub(super) fn assemble(
             Some(path) => read_source(boundary, path, unwritten).map_err(at)?,
             None => None,
         };
-        let beneath = format!("{key}/");
-        let existing: BTreeMap<String, Vec<u8>> = files
-            .iter()
-            .filter(|(path, _)| *path == key || path.starts_with(&beneath))
-            .map(|(path, contents)| (path.clone(), contents.clone()))
-            .collect();
+        let has_copy = at_or_beneath(files, key).next().is_some();
         let Some(yielded) = yielded else {
             // spec: CLI#include-assembly
             // An exported bundle carries its included files, and its
             // sources may well not exist wherever it was exported to.
-            if !existing.is_empty() {
+            if has_copy {
                 continue;
             }
             return Err(at(match source {
@@ -88,9 +84,9 @@ pub(super) fn assemble(
                 (path, contents)
             })
             .collect();
-        if existing.is_empty() {
+        if !has_copy {
             files.extend(placed);
-        } else if existing != placed {
+        } else if !at_or_beneath(files, key).eq(placed.iter()) {
             return Err(at(
                 "the folder already holds different files there; remove them or bring them in line"
                     .to_owned(),
@@ -98,6 +94,20 @@ pub(super) fn assemble(
         }
     }
     Ok(())
+}
+
+/// The files at `key` or beneath it, in path order, found by range rather
+/// than by scanning every file.
+fn at_or_beneath<'a>(
+    files: &'a BTreeMap<String, Vec<u8>>,
+    key: &str,
+) -> impl Iterator<Item = (&'a String, &'a Vec<u8>)> {
+    let beneath = format!("{key}/");
+    let exact = files.get_key_value(key);
+    let under = files
+        .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
+        .take_while(move |(path, _)| path.starts_with(&beneath));
+    exact.into_iter().chain(under)
 }
 
 /// `folder`'s path within `boundary`, `/`-separated.
