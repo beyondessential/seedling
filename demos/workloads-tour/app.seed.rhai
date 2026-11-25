@@ -21,8 +21,8 @@ let hostname = app.param("hostname")
     .default_value("workloads-tour.demo.internal")
     .description("Hostname the tour answers on");
 
-// Every long-running workload reads this into its environment, so changing it
-// changes their definitions and sets each one's update strategy going:
+// Most deployments read this into their environment, so changing it changes
+// their definitions and sets each one's update strategy going:
 // `seedling-ctl apps params set workloads-tour revision=2`.
 let revision = app.param("revision")
     .kind("text")
@@ -32,8 +32,8 @@ let revision = app.param("revision")
 let alpine = "docker.io/library/alpine:3.24.4";
 
 // CPU_ARCHITECTURE: these images are published for some architectures only.
-// The workloads that need them are left out elsewhere, rather than failing
-// to pull.
+// On any other, including one this script does not recognise, the workloads
+// that need them are left out rather than failing to pull.
 let whoami_arches = ["x86_64", "aarch64", "arm"];
 let socat_arches = ["x86_64", "aarch64", "arm"];
 
@@ -110,11 +110,11 @@ trap 'exit 0' TERM
 nc -lk -p ${port} -e sh -c ${std::quote_shell(handler)} &
 wait $!`;
 
-// Named volume, read-only: the declared file writes are applied once, when the
-// runtime creates the volume, and every container mounts it read-only. A
-// later definition that changes the text does not rewrite it. The runtime
-// creates each written file 0640 and its parent folders as needed; the
-// report lists them.
+// Named volume, read-only: the declared file writes are applied once, when
+// the runtime creates the volume, and any container mounting it gets it
+// read-only. A later definition that changes the text does not rewrite it.
+// The runtime creates each written file 0640 and its parent folders as
+// needed; the report lists them.
 let site = app.volume("site")
     .readonly()
     .write("/motd.txt", "Written by the runtime when it created this volume, and never again.\n")
@@ -155,11 +155,13 @@ done
 
 section "privileges: container.cap_add, container.writable_rootfs"
 grep -e '^CapEff' -e '^NoNewPrivs' /proc/self/status
-if touch owned 2>/dev/null && chown 65534:65534 owned 2>/dev/null; then
+probe=$(mktemp)
+if chown 65534:65534 "$probe" 2>/dev/null; then
     echo "chown: allowed, as the CHOWN capability was granted"
 else
     echo "chown: refused"
 fi
+rm -f "$probe"
 if touch /rootfs-probe 2>/dev/null; then
     echo "root filesystem: writable"
 else
@@ -177,10 +179,12 @@ section "state volume, written by the prepare job before this instance started"
 cat /state/prepared 2>/dev/null || echo "nothing yet"
 
 section "service mounts: pod.mount, reached at localmount"
-echo "tcp 7000:"
-echo ping | nc -w 1 localmount 7000 2>&1 || echo "no answer"
-echo "udp 7001:"
-echo ping | nc -u -w 1 localmount 7001 2>&1 || echo "no answer"
+for proto in tcp udp; do
+    if [ "$proto" = tcp ]; then port=7000; flag=; else port=7001; flag=-u; fi
+    out=$(echo ping | nc $flag -w 1 localmount $port 2>&1)
+    echo "$proto $port:"
+    if [ -n "$out" ]; then echo "$out"; else echo "no answer"; fi
+done
 `;
 
 // External volume: the app names it and an operator supplies the storage.
@@ -220,13 +224,15 @@ while [ "$n" -lt 600 ]; do sleep 1 & wait $!; n=$((n + 1)); done`])
 // `seedling-ctl apps scale workloads-tour frontend up`.
 //
 // Health check, replace: flip one instance with
-// `curl -k -X POST https://workloads-tour.demo.internal/health -d 500`.
-// After start_period + retries x interval, here 10 + 3 x 5 = 25 seconds, it
-// is unhealthy; the runtime starts a fresh instance alongside it, routes to
-// the healthy ones, and retires it once the fresh one is healthy.
+// `curl -k -X POST https://workloads-tour.demo.internal/health -d 500`; the
+// reply names the instance that took it. Three failed checks five seconds
+// apart make it unhealthy, and once its grace window has passed
+// (start_period + retries x interval, 25 seconds from its start) the runtime
+// starts a fresh instance alongside it, routes to the healthy ones, and
+// retires it once the fresh one is healthy.
 //
 // Rolling update: after `apps params set workloads-tour revision=2` or
-// `apps restart workloads-tour frontend`, `apps show` holds one instance above
+// `apps restart workloads-tour frontend`, `apps show` lists one instance above
 // scale while each fresh instance becomes healthy before a stale one stops.
 //
 // `arg` with no `command` replaces the image's default arguments and keeps
@@ -314,7 +320,8 @@ app.deployment("inspector")
     .http(8081, web.route("/report"))
     .after([prepare, frontend]);
 
-// `lower..end` excludes `end`, so this scale is 0 to 1, and starts at 0.
+// `lower..end` excludes `end`, so this scale is 0 to 1, and starts at 0:
+// `seedling-ctl apps scale workloads-tour share-reader to 1` starts it.
 app.deployment("share-reader")
     .image(alpine)
     .arg(["sh", "-c", serve.call(8080, "")])
