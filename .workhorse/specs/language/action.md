@@ -155,6 +155,7 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `integer` | `range`, optional | a whole number, within `range` where one is given | the value as an integer |
 | `quantity` | `range`, optional | a [quantity](#quantities), within `range` where one is given | its amount as an integer |
 | `choice` | `options`, required | one of `options` | the value |
+| `duration` | none | a length of time, as [duration syntax](duration.md#duration-syntax) specifies | a `Duration` |
 | `volume` | none | the name of a site volume, as [volume params](#volume-params) specify | the value |
 
 ### Kind arguments
@@ -246,7 +247,7 @@ Where it rejects a value that would be a quantity but for its suffix, its error 
 
 ### Presentation of kinds
 
-A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname`, `ip-address`, `ip-subnet` or `ip-range` param, and a multi-line input for a `multiline` param.
+A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname`, `ip-address`, `ip-subnet`, `ip-range` or `duration` param, and a multi-line input for a `multiline` param.
 A presentation layer SHOULD offer a toggle for a `boolean` param, a numeric input limited to `range` for an `integer` param, and a selection among `options`, in the order the script declared them, for a `choice` param.
 A presentation layer SHOULD offer a single-line input for a `quantity` param, and SHOULD show the amount the value resolves to while it is entered.
 A presentation layer MUST let an operator leave a param that is not required without a value, whatever its kind.
