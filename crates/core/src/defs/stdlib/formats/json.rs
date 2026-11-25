@@ -1,12 +1,16 @@
-//! JSON, on serde_json.
+//! JSON, written by serde_json and read by hifijson, which gives each
+//! number's own text.
 
-use std::{cell::RefCell, collections::HashSet, fmt};
+use std::{borrow::Cow, collections::HashSet};
 
+use hifijson::{
+    SliceLexer,
+    token::Lex,
+    value::{self, Value},
+};
 use rhai::EvalAltResult;
-use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
-use serde_json::Value;
 
-use super::{Holds, MAX_DEPTH, Tree};
+use super::{Holds, MAX_DEPTH, Tree, line_of, not_a_document};
 
 // spec: FMT#values-each-format-holds
 pub(super) const HOLDS: Holds = Holds {
@@ -25,7 +29,8 @@ pub(super) fn encode(tree: &Tree) -> String {
     text
 }
 
-fn to_value(tree: &Tree) -> Value {
+fn to_value(tree: &Tree) -> serde_json::Value {
+    use serde_json::Value;
     match tree {
         Tree::Unit => Value::Null,
         Tree::Bool(b) => Value::Bool(*b),
@@ -48,183 +53,65 @@ fn to_value(tree: &Tree) -> Value {
 
 // spec: FMT#decoding
 pub(super) fn decode(text: &str) -> Result<Tree, Box<EvalAltResult>> {
-    let numbers = RefCell::new(number_tokens(text).into_iter());
-    let mut de = serde_json::Deserializer::from_str(text);
-    let tree = Node {
-        numbers: &numbers,
-        levels: 0,
-    }
-    .deserialize(&mut de)
-    .and_then(|tree| de.end().map(|()| tree))
-    .map_err(failure)?;
-    Ok(tree)
-}
-
-/// A decoding failure, naming the line it was found at. serde_json's own
-/// messages, and the visitor's below, never quote the text.
-fn failure(e: serde_json::Error) -> Box<EvalAltResult> {
-    let message = e.to_string();
-    let reason = message
-        .rsplit_once(" at line ")
-        .map_or(message.as_str(), |(reason, _)| reason);
-    match e.classify() {
-        serde_json::error::Category::Data => {
-            format!("`text` holds {reason} at line {}", e.line()).into()
+    let mut lexer = SliceLexer::new(text.as_bytes());
+    // A scalar within the deepest array or object allowed sits one level
+    // below it.
+    let parsed = lexer.exactly_one(Lex::ws_peek, |next, lexer| {
+        value::parse_bounded(MAX_DEPTH + 1, next, lexer)
+    });
+    match parsed {
+        Ok(value) => from_value(value),
+        // spec: FMT#helpers
+        Err(hifijson::Error::Depth) => {
+            Err(format!("`text` nests arrays and objects more than {MAX_DEPTH} levels deep").into())
         }
-        _ => format!("`text` is not JSON at line {}: {reason}", e.line()).into(),
+        Err(_) => {
+            let at = text.len() - lexer.as_slice().len();
+            Err(not_a_document("JSON", line_of(text.as_bytes(), at)))
+        }
     }
 }
 
-/// The text of each number in `text`, in the order it gives them, which is
-/// the order serde_json visits them in.
-///
-/// serde_json reads an integer too large for 64 bits as a float, and `-0` as
-/// one too, so the visitor classifies each number by its text instead. The
-/// scan is only relied on up to where serde_json finds the text valid, where
-/// a number starts wherever a minus sign or a digit stands outside a string.
-fn number_tokens(text: &str) -> Vec<&str> {
-    let bytes = text.as_bytes();
-    let mut tokens = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'"' {
-                    i += if bytes[i] == b'\\' { 2 } else { 1 };
-                }
-                i += 1;
-            }
-            b'-' | b'0'..=b'9' => {
-                let start = i;
-                while i < bytes.len()
-                    && matches!(bytes[i], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
-                {
-                    i += 1;
-                }
-                tokens.push(&text[start..i]);
-            }
-            _ => i += 1,
+fn from_value(value: Value<&str, Cow<'_, str>>) -> Result<Tree, Box<EvalAltResult>> {
+    Ok(match value {
+        Value::Null => Tree::Unit,
+        Value::Bool(b) => Tree::Bool(b),
+        // spec: FMT#decoding
+        Value::Number((text, parts)) if parts.is_int() => {
+            Tree::Int(text.parse().map_err(|_| -> Box<EvalAltResult> {
+                "`text` holds an integer beyond the range of a 64-bit signed integer".into()
+            })?)
         }
-    }
-    tokens
-}
-
-/// A value at some depth of the document.
-struct Node<'a, 't> {
-    numbers: &'a RefCell<std::vec::IntoIter<&'t str>>,
-    /// The arrays and objects the value sits within.
-    levels: usize,
-}
-
-impl<'a, 't> Node<'a, 't> {
-    fn within(&self, levels: usize) -> Node<'a, 't> {
-        Node {
-            numbers: self.numbers,
-            levels,
-        }
-    }
-
-    // spec: FMT#helpers
-    fn nested<E: de::Error>(&self) -> Result<usize, E> {
-        let levels = self.levels + 1;
-        if levels > MAX_DEPTH {
-            return Err(E::custom(format_args!(
-                "arrays and objects nested more than {MAX_DEPTH} levels deep"
-            )));
-        }
-        Ok(levels)
-    }
-
-    // spec: FMT#decoding
-    fn number<E: de::Error>(self) -> Result<Tree, E> {
-        let token = self
-            .numbers
-            .borrow_mut()
-            .next()
-            .ok_or_else(|| E::custom("a number the scan for numbers missed"))?;
-        if token.contains(['.', 'e', 'E']) {
-            let f: f64 = token
+        Value::Number((text, _)) => {
+            let f: f64 = text
                 .parse()
-                .map_err(|_| E::custom("a number the scan for numbers misread"))?;
+                .expect("Rust reads every number JSON's grammar allows");
             if !f.is_finite() {
-                return Err(E::custom(
-                    "a number beyond the range of a floating-point number",
-                ));
+                return Err(
+                    "`text` holds a number beyond the range of a floating-point number".into(),
+                );
             }
-            return Ok(Tree::Float(f));
+            Tree::Float(f)
         }
-        token
-            .parse()
-            .map(Tree::Int)
-            .map_err(|_| E::custom("an integer beyond the range of a 64-bit signed integer"))
-    }
-}
-
-impl<'de> DeserializeSeed<'de> for Node<'_, '_> {
-    type Value = Tree;
-
-    fn deserialize<D: de::Deserializer<'de>>(self, deserializer: D) -> Result<Tree, D::Error> {
-        deserializer.deserialize_any(self)
-    }
-}
-
-impl<'de> Visitor<'de> for Node<'_, '_> {
-    type Value = Tree;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a JSON value")
-    }
-
-    fn visit_unit<E: de::Error>(self) -> Result<Tree, E> {
-        Ok(Tree::Unit)
-    }
-
-    fn visit_bool<E: de::Error>(self, v: bool) -> Result<Tree, E> {
-        Ok(Tree::Bool(v))
-    }
-
-    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Tree, E> {
-        self.number()
-    }
-
-    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Tree, E> {
-        self.number()
-    }
-
-    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Tree, E> {
-        self.number()
-    }
-
-    fn visit_str<E: de::Error>(self, v: &str) -> Result<Tree, E> {
-        Ok(Tree::Str(v.to_owned()))
-    }
-
-    fn visit_string<E: de::Error>(self, v: String) -> Result<Tree, E> {
-        Ok(Tree::Str(v))
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Tree, A::Error> {
-        let levels = self.nested()?;
-        let mut items = Vec::new();
-        while let Some(item) = seq.next_element_seed(self.within(levels))? {
-            items.push(item);
-        }
-        Ok(Tree::Array(items))
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Tree, A::Error> {
-        let levels = self.nested()?;
-        let mut keys = HashSet::new();
-        let mut entries = Vec::new();
-        while let Some(key) = map.next_key::<String>()? {
-            // spec: FMT#decoding
-            if !keys.insert(key.clone()) {
-                return Err(de::Error::custom("the same key twice in one object"));
+        Value::String(s) => Tree::Str(s.into_owned()),
+        Value::Array(items) => Tree::Array(
+            items
+                .into_iter()
+                .map(from_value)
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Object(members) => {
+            let mut keys = HashSet::new();
+            let mut entries = Vec::with_capacity(members.len());
+            for (key, value) in members {
+                let key = key.into_owned();
+                // spec: FMT#decoding
+                if !keys.insert(key.clone()) {
+                    return Err("`text` holds the same key twice in one object".into());
+                }
+                entries.push((key, from_value(value)?));
             }
-            let value = map.next_value_seed(self.within(levels))?;
-            entries.push((key, value));
+            Tree::Map(entries)
         }
-        Ok(Tree::Map(entries))
-    }
+    })
 }

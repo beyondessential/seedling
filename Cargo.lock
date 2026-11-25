@@ -2558,6 +2558,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hifijson"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9dfcf92104a9752d8dbac1879032a51873d7cebcf7e4cb2bdd0513e069440f"
+
+[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5045,6 +5051,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hickory-resolver",
+ "hifijson",
  "hmac 0.13.0",
  "http",
  "iana-time-zone",

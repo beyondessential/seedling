@@ -85,6 +85,7 @@ winnow = "1.0.5"
 num-bigint = "0.4.8"
 saphyr = "0.3.4"
 saphyr-parser = "0.3.4"
+hifijson = "0.5.1"
 
 [dev-dependencies]
 flate2 = "1.1.11"

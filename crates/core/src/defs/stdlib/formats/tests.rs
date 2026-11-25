@@ -444,13 +444,17 @@ fn decoders_refuse_numbers_out_of_range() {
 // spec: FMT#decoding
 #[test]
 fn decoders_refuse_a_key_given_twice() {
-    for (helper, doc) in [
-        ("decode_json", r#"{"a": 1, "\u0061": 2}"#),
-        ("decode_yaml", "a: 1\n\"a\": 2"),
-        ("decode_toml", "a = 1\na = 2"),
+    for (helper, doc, refusal) in [
+        (
+            "decode_json",
+            r#"{"a": 1, "\u0061": 2}"#,
+            "the same key twice",
+        ),
+        ("decode_yaml", "a: 1\n\"a\": 2", "the same key twice"),
+        ("decode_toml", "a = 1\na = 2", "is not TOML at line 2"),
     ] {
         let err = throws(&format!("std::{helper}({})", lit(doc)));
-        assert!(err.contains("line"), "{helper}: {err}");
+        assert!(err.contains(refusal), "{helper}: {err}");
     }
 }
 

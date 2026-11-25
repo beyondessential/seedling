@@ -5,8 +5,7 @@
 Every format is implemented on an existing crate; Seedling writes no YAML, TOML or JSON parser of its own.
 Add each with `cargo add` at implementation time so the pinned version is the current one.
 
-- JSON: `serde_json`, already a dependency.
-  serde_json reads an integer too large for 64 bits, and `-0`, as a float, so the decoder scans the number tokens' text once (valid only up to where serde_json accepts the text) and classifies each number from it in the order the visitor meets them.
+- JSON: `serde_json`, already a dependency, writes. `hifijson` reads: it gives each number's own text and whether it is an integer, where serde_json reads an integer too large for 64 bits, and `-0`, as a float. It bounds depth, keeps duplicate keys for the decoder to refuse, and has no dependencies.
 - TOML: `toml`, already a dependency, writing and reading. It writes TOML 1.0 for every value BSL lowers to, and reads TOML 1.1, refusing duplicate keys, out-of-range integers and overflowing floats itself.
   Seedling's tests pin its layout, so a change to it in a later version of the crate is caught there.
 - YAML: `saphyr` and `saphyr-parser` 0.3.4 (YAML 1.2). 0.4 was under a week old, inside the local cargo minimum publish age.
@@ -20,7 +19,7 @@ Add each with `cargo add` at implementation time so the pinned version is the cu
 
 - [x] `cargo add saphyr` (and winnow, if not already a dependency of the crate holding the std module).
 - [x] Shared value walk: position tracking for refusal errors, the 64-deep nesting limit, `Version`/`SemVer` as text, Blob and other opaque types refused.
-- [x] JSON encode and decode on `serde_json`, with integers outside the signed 64-bit range refused rather than read as floats (unlike `defs/json.rs::to_dynamic`).
+- [x] JSON encode on `serde_json` and decode on `hifijson`, with integers outside the signed 64-bit range refused rather than read as floats (unlike `defs/json.rs::to_dynamic`).
 - [x] YAML encode and decode on `saphyr`: core schema only, one document, alias budget of 100 000, non-string keys refused; tests pinning the quoting cases in the spec.
 - [x] TOML encode and decode on `toml`, checking the encoder's output parses as TOML 1.0.0 (no 1.1-only syntax).
 - [x] Env encoder and winnow decoder.
