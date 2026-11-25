@@ -15,11 +15,17 @@ import {
 } from "@mui/material";
 import { useState } from "react";
 import { useOiQuery } from "../hooks/useOi";
-import { generateRandomHex, paramFieldType, type ParamEntries } from "../lib/params";
+import {
+  generateRandomHex,
+  paramFieldType,
+  quantityProblem,
+  type ParamEntries,
+} from "../lib/params";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import type { ParamSchema, SiteVolume } from "../lib/types";
 import { KindInput, hasKindInput } from "./KindInput";
 import { OiErrorAlert } from "./OiErrorAlert";
+import { QuantityAmount } from "./QuantityAmount";
 
 function VolumeParamField({
   name,
@@ -58,6 +64,9 @@ function VolumeParamField({
 }
 
 function helper(def: ParamSchema, value: string): string | undefined {
+  if (def.kind === "quantity") {
+    return quantityProblem(value, def.range) ?? (def.description || undefined);
+  }
   if (def.kind === "password" && value.length > 0) {
     return isStrongPassword(value) ? (def.description || undefined) : "Password is too weak";
   }
@@ -111,7 +120,9 @@ export function ParamFields({
         const masked = def.secret === true || def.kind === "password" || def.kind === "weak-password";
         const isRandom = def.kind === "random";
         const isMultiline = def.kind === "multiline";
+        const isQuantity = def.kind === "quantity";
         const weak = def.kind === "password" && value.length > 0 && !isStrongPassword(value);
+        const invalidQuantity = isQuantity && quantityProblem(value, def.range) !== null;
         return (
           <TextField
             key={key}
@@ -120,17 +131,18 @@ export function ParamFields({
             value={value}
             onChange={(e) => onChange(key, e.target.value)}
             helperText={helper(def, value)}
-            error={weak}
+            error={weak || invalidQuantity}
             multiline={isMultiline}
             minRows={isMultiline ? 3 : undefined}
             type={isMultiline ? undefined : shown[key] ? "text" : paramFieldType(def.kind, def.secret)}
             required={def.required}
             slotProps={{
               input:
-                masked || isRandom
+                masked || isRandom || isQuantity
                   ? {
                       endAdornment: (
                         <InputAdornment position="end">
+                          {isQuantity && <QuantityAmount value={value} />}
                           {isRandom && (
                             <Tooltip title="Generate (32 bytes, hex)">
                               <IconButton

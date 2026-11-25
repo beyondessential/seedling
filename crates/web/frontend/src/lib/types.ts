@@ -96,7 +96,8 @@ export interface ContainerSummary {
   env: Record<string, string>;
   volume_mounts: Record<string, { kind: "volume"; name: string | null } | { kind: "external_volume"; name: string }>;
   on_exit: string;
-  memory: string | null;
+  /** The memory limit, in bytes. */
+  memory: number | null;
   cpus: number | null;
   extra_caps: string[];
   writable_rootfs: boolean;

@@ -119,6 +119,29 @@ describe("ParamFields", () => {
   });
 
   // spec: ACN#presentation-of-kinds
+  it("shows the amount a quantity resolves to, and holds back one its kind rejects", () => {
+    renderWithSession(
+      <Form
+        entries={
+          [["memory", def({ kind: "quantity", description: "Database memory", range: { min: 1, max: 2 ** 31 } })]] as ParamEntries
+        }
+      />,
+    );
+    const input = screen.getByLabelText(/memory/, { selector: "input" }) as HTMLInputElement;
+    expect(input.type).toBe("text");
+    fireEvent.change(input, { target: { value: "1.5Gi" } });
+    expect(screen.getByText(`= ${(1_610_612_736).toLocaleString()}`)).toBeTruthy();
+    expect(screen.getByText("Database memory")).toBeTruthy();
+    expect((screen.getByText("submit") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.change(input, { target: { value: "32Gi" } });
+    expect(screen.getByText("Must be between 1 and 2Gi")).toBeTruthy();
+    expect((screen.getByText("submit") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input, { target: { value: "512m" } });
+    expect(screen.getByText("m is milli; did you mean 512Mi?")).toBeTruthy();
+    expect(screen.queryByText(/^= /)).toBeNull();
+  });
+
+  // spec: ACN#presentation-of-kinds
   it("offers a choice param's options in their declared order, and none for an optional one", async () => {
     renderWithSession(
       <Form

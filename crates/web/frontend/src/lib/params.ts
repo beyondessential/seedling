@@ -1,5 +1,6 @@
 import type { IntRange, ParamSchema } from "./types";
 import { isStrongPassword } from "./passwordStrength";
+import { formatQuantity, parseQuantity } from "./quantity";
 
 export type ParamEntries = [string, ParamSchema][];
 
@@ -19,9 +20,9 @@ export function generateRandomHex(): string {
 
 /** Why the values cannot be submitted, or null when they can.
  *
- *  A required param may not be submitted empty. A `password` value judged weak
- *  or an `integer` value outside its range is held back because the runtime
- *  would reject it; a `weak-password` value is never held back for its
+ *  A required param may not be submitted empty. A `password` value judged weak,
+ *  or an `integer` or `quantity` value its kind rejects, is held back because
+ *  the runtime would reject it; a `weak-password` value is never held back for its
  *  strength. */
 // spec: ACN#param-schemas
 // spec: ACN#kind-parsers
@@ -40,6 +41,9 @@ export function paramsBlocker(
       return `${key} is too weak`;
     }
     if (def.kind === "integer" && integerProblem(value, def.range) !== null) {
+      return `${key} is not a valid value`;
+    }
+    if (def.kind === "quantity" && quantityProblem(value, def.range) !== null) {
       return `${key} is not a valid value`;
     }
   }
@@ -64,6 +68,24 @@ export function integerProblem(value: string, range?: IntRange | null): string |
   if ((min !== null && n < BigInt(min)) || (max !== null && n > BigInt(max))) {
     if (min !== null && max !== null) return `Must be between ${min} and ${max}`;
     return min !== null ? `Must be at least ${min}` : `Must be at most ${max}`;
+  }
+  return null;
+}
+
+/** Why `value` is not a `quantity` value within `range`, or null when it is
+ *  one or is empty. */
+// spec: ACN#quantities
+export function quantityProblem(value: string, range?: IntRange | null): string | null {
+  if (value === "") return null;
+  const parsed = parseQuantity(value);
+  if ("problem" in parsed) return parsed.problem;
+  const min = range?.min ?? null;
+  const max = range?.max ?? null;
+  const n = parsed.amount;
+  if ((min !== null && n < BigInt(min)) || (max !== null && n > BigInt(max))) {
+    const bound = (b: number) => formatQuantity(BigInt(b));
+    if (min !== null && max !== null) return `Must be between ${bound(min)} and ${bound(max)}`;
+    return min !== null ? `Must be at least ${bound(min)}` : `Must be at most ${bound(max!)}`;
   }
   return null;
 }

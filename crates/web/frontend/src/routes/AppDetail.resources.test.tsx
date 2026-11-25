@@ -6,6 +6,7 @@ import {
   baseFixtures,
   healthcheck,
   makeDetail,
+  makeContainer,
   makeFault,
   makeWebDeployment,
   psqlShellAction,
@@ -74,6 +75,32 @@ describe("AppDetail params", () => {
         ["/apps/params/set", { app: "myapp", params: { domain: "shop.example.com" } }],
       ]),
     );
+  });
+
+  // spec: ACN#presentation-of-kinds
+  it("shows a quantity's resolved amount in the edit row and holds back one its kind rejects", async () => {
+    const memory = {
+      name: "memory",
+      value: "1Gi",
+      is_set: true,
+      secret: false,
+      kind: "quantity",
+      range: { min: 1, max: 2 ** 31 },
+      options: null,
+      required: false,
+      description: null,
+      default_value: null,
+    };
+    mount(baseFixtures(makeDetail({ params: [memory] })), "write");
+    const row = (await screen.findByText("memory")).closest("tr") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    const input = screen.getByDisplayValue("1Gi");
+    fireEvent.change(input, { target: { value: "1.5Gi" } });
+    expect(screen.getByText(`= ${(1_610_612_736).toLocaleString()}`)).toBeTruthy();
+    expect(iconButton("Stage this change").disabled).toBe(false);
+    fireEvent.change(input, { target: { value: "512m" } });
+    expect(screen.getByText("m is milli; did you mean 512Mi?")).toBeTruthy();
+    expect(iconButton("Stage this change").disabled).toBe(true);
   });
 
   // spec: UI#operator-capabilities
@@ -265,6 +292,15 @@ describe("AppDetail params", () => {
       ]),
     );
     expect(callsTo(request, "/apps/params/set")).toEqual([]);
+  });
+});
+
+describe("AppDetail resource limits", () => {
+  it("shows a container's memory limit as a quantity", async () => {
+    const web = makeWebDeployment();
+    if (web.def?.kind === "deployment") web.def.container = makeContainer({ memory: 512 * 2 ** 20 });
+    mount(baseFixtures(makeDetail({ resources: [web] })));
+    expect(await screen.findByText("mem: 512Mi")).toBeTruthy();
   });
 });
 

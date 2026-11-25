@@ -62,6 +62,7 @@ import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
 import { PlanParamDialog } from "../components/PlanParamDialog";
 import { KindInput, hasKindInput } from "../components/KindInput";
+import { QuantityAmount } from "../components/QuantityAmount";
 import { ParamFields } from "../components/ParamFields";
 import { useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
@@ -75,7 +76,8 @@ import {
   logsUrlForTarget,
   parseFaultTargets,
 } from "../lib/faultTargets";
-import { generateRandomHex, initialParamValues, integerProblem, paramFieldType, paramsBlocker, type ParamEntries } from "../lib/params";
+import { generateRandomHex, initialParamValues, integerProblem, paramFieldType, paramsBlocker, quantityProblem, type ParamEntries } from "../lib/params";
+import { formatQuantity } from "../lib/quantity";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import {
   appPriorityColor,
@@ -587,9 +589,9 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
         {bindings.map((b) => (
           <Chip key={b} label={b} size="small" variant="outlined" />
         ))}
-        {def.container.memory && (
+        {def.container.memory !== null && (
           <Chip
-            label={`mem: ${def.container.memory}`}
+            label={`mem: ${formatQuantity(BigInt(def.container.memory))}`}
             size="small"
             variant="outlined"
           />
@@ -1125,7 +1127,8 @@ function ParamsSection({
   const unstageable = (p: AppParam) =>
     blankSecret(p) ||
     (hasKindInput(p.kind) &&
-      (draft === "" || (p.kind === "integer" && integerProblem(draft, p.range) !== null)));
+      (draft === "" || (p.kind === "integer" && integerProblem(draft, p.range) !== null))) ||
+    (p.kind === "quantity" && quantityProblem(draft, p.range) !== null);
 
   const editActions = (p: AppParam) => (
     <>
@@ -1388,12 +1391,18 @@ function ParamsSection({
                               : paramFieldType(p.kind, p.secret)
                         }
                         error={
-                          p.kind === "password" &&
-                          draft.length > 0 &&
-                          !isStrongPassword(draft)
+                          (p.kind === "password" &&
+                            draft.length > 0 &&
+                            !isStrongPassword(draft)) ||
+                          (p.kind === "quantity" &&
+                            quantityProblem(draft, p.range) !== null)
                         }
                         helperText={
-                          p.kind === "password" && draft.length > 0
+                          p.kind === "quantity"
+                            ? (quantityProblem(draft, p.range) ??
+                              p.description ??
+                              undefined)
+                            : p.kind === "password" && draft.length > 0
                             ? isStrongPassword(draft)
                               ? (p.description ?? undefined)
                               : "Password is too weak"
@@ -1405,6 +1414,9 @@ function ParamsSection({
                           input: {
                             endAdornment: (
                               <InputAdornment position="end">
+                                {p.kind === "quantity" && (
+                                  <QuantityAmount value={draft} />
+                                )}
                                 {p.kind === "random" && (
                                   <Tooltip title="Generate (32 bytes, hex)">
                                     <IconButton
