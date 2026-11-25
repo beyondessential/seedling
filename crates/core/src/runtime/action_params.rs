@@ -495,8 +495,11 @@ mod tests {
     // spec: ACN#kind-parsers
     // spec: VER#semver-versions
     // spec: PURL#accepted-values
+    // spec: URL#hostnames
+    // spec: URL#components
+    // spec: URL#url-origins
     #[test]
-    fn a_version_or_purl_param_is_checked_by_its_kind() {
+    fn a_version_purl_or_url_param_is_checked_by_its_kind() {
         for (kind, refused, accepted, delivered) in [
             (ParamKind::Version, "16.4 bookworm", "16.4", json!("16.4")),
             (
@@ -510,6 +513,30 @@ mod tests {
                 "pkg:npm/foo/",
                 "pkg://NPM/foo@1.0",
                 json!({ "type": "npm", "name": "foo", "version": "1.0" }),
+            ),
+            (
+                ParamKind::Url,
+                "https://h:0/",
+                "postgres://u:p%40ss@DB.Internal/app",
+                json!({
+                    "scheme": "postgres",
+                    "host": "db.internal",
+                    "path": "/app",
+                    "username": "u",
+                    "password": "p@ss",
+                }),
+            ),
+            (
+                ParamKind::UrlOrigin,
+                "https://example.org/a",
+                "https://Example.org",
+                json!({ "scheme": "https", "host": "example.org", "port": 443 }),
+            ),
+            (
+                ParamKind::Hostname,
+                "10.0.0.5",
+                "Example.org",
+                json!("example.org"),
             ),
         ] {
             let err = apply_schema(

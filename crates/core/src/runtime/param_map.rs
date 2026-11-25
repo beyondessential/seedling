@@ -101,6 +101,11 @@ impl ParamMap {
             ParsedValue::Int(n) => (Value::from(n), None),
             ParsedValue::Version(v) => (Value::String(v.to_string()), Some(VersionType::Version)),
             ParsedValue::SemVer(v) => (Value::String(v.to_string()), Some(VersionType::SemVer)),
+            url @ (ParsedValue::Url(_) | ParsedValue::UrlOrigin(_)) => (
+                crate::defs::json::from_dynamic(url.into_dynamic())
+                    .expect("a URL's components are strings and an integer"),
+                None,
+            ),
             purl @ ParsedValue::Purl(_) => (
                 crate::defs::json::from_dynamic(purl.into_dynamic())
                     .expect("a purl's components are strings, arrays, maps and a Version"),

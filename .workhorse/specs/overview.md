@@ -26,6 +26,9 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [POSIX `crontab`](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/crontab.html), Issue 8 | schedule expressions, under [ACN](language/action.md) |
 | [IANA Time Zone Database](https://www.iana.org/time-zones) | time zone names, under [ACN](language/action.md), [CONST](language/constants.md) |
 | [SipHash](https://www.aumasson.jp/siphash/siphash.pdf) | the hash of schedule `H` fields, under [ACN](language/action.md) |
+| [Unicode Technical Standard #46](https://www.unicode.org/reports/tr46/) | internationalised domain names, under [URL](language/url.md) |
+| [URL Standard](https://url.spec.whatwg.org/) | URLs, under [URL](language/url.md) |
+| [RFC 5890](https://www.rfc-editor.org/rfc/rfc5890) | internationalised domain name labels, under [URL](language/url.md) |
 | [zxcvbn](https://www.usenix.org/conference/usenixsecurity16/technical-sessions/presentation/wheeler) | password strength estimation, under [ACN](language/action.md) |
 | [OCI Image Format Specification](https://github.com/opencontainers/image-spec) | container images and their configuration, under [CTR](language/container.md), [DEFN](interface/definitions.md), [IMGM](interface/images.md) |
 | [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec) | registries and fetching definitions, under [DEFN](interface/definitions.md), [IMGM](interface/images.md) |

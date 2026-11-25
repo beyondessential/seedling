@@ -12,6 +12,7 @@ use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use super::{
     purl::{Purl, QualifierValue},
     take::{reject_unknown_keys, take_map, take_string, take_string_array},
+    url::{Url, UrlOrigin, parse_hostname},
     version::{SemVer, Version},
 };
 
@@ -83,6 +84,9 @@ pub enum ParamKindName {
     Version,
     VersionSemver,
     Purl,
+    Url,
+    UrlOrigin,
+    Hostname,
     Volume,
 }
 
@@ -101,6 +105,9 @@ impl ParamKindName {
             Self::Version => "version",
             Self::VersionSemver => "version-semver",
             Self::Purl => "purl",
+            Self::Url => "url",
+            Self::UrlOrigin => "url-origin",
+            Self::Hostname => "hostname",
             Self::Volume => "volume",
         }
     }
@@ -159,6 +166,12 @@ pub enum ParamKind {
     VersionSemver,
     // spec: ACN#param-kinds
     Purl,
+    // spec: ACN#param-kinds
+    Url,
+    // spec: ACN#param-kinds
+    UrlOrigin,
+    // spec: ACN#param-kinds
+    Hostname,
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -181,6 +194,9 @@ impl ParamKind {
             Self::Version => ParamKindName::Version,
             Self::VersionSemver => ParamKindName::VersionSemver,
             Self::Purl => ParamKindName::Purl,
+            Self::Url => ParamKindName::Url,
+            Self::UrlOrigin => ParamKindName::UrlOrigin,
+            Self::Hostname => ParamKindName::Hostname,
             Self::Volume => ParamKindName::Volume,
         }
     }
@@ -264,6 +280,9 @@ impl ParamKind {
             Self::Version => return Version::parse(value).map(ParsedValue::Version),
             Self::VersionSemver => return SemVer::parse(value).map(ParsedValue::SemVer),
             Self::Purl => return Purl::parse(value).map(ParsedValue::Purl),
+            Self::Url => return Url::parse(value).map(ParsedValue::Url),
+            Self::UrlOrigin => return UrlOrigin::parse(value).map(ParsedValue::UrlOrigin),
+            Self::Hostname => return parse_hostname(value).map(ParsedValue::Value),
             // spec: ACN#kind-parsers
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|e| e.to_string())?;
@@ -358,6 +377,9 @@ fn kind_with(
         ParamKindName::Version => ParamKind::Version,
         ParamKindName::VersionSemver => ParamKind::VersionSemver,
         ParamKindName::Purl => ParamKind::Purl,
+        ParamKindName::Url => ParamKind::Url,
+        ParamKindName::UrlOrigin => ParamKind::UrlOrigin,
+        ParamKindName::Hostname => ParamKind::Hostname,
         ParamKindName::Volume => ParamKind::Volume,
     }
 }
@@ -547,6 +569,8 @@ pub enum ParsedValue {
     Version(Version),
     SemVer(SemVer),
     Purl(Purl),
+    Url(Url),
+    UrlOrigin(UrlOrigin),
 }
 
 impl ParsedValue {
@@ -566,6 +590,8 @@ impl ParsedValue {
             Self::Version(version) => Dynamic::from(version),
             Self::SemVer(version) => Dynamic::from(version),
             Self::Purl(purl) => purl_map(purl),
+            Self::Url(url) => url_map(url),
+            Self::UrlOrigin(origin) => url_origin_map(origin),
         }
     }
 }
@@ -603,6 +629,39 @@ fn purl_map(purl: Purl) -> Dynamic {
     if let Some(subpath) = purl.subpath {
         map.insert("subpath".into(), subpath.into());
     }
+    map.into()
+}
+
+/// A URL's components as a map, leaving out those it does not have.
+// spec: URL#components
+fn url_map(url: Url) -> Dynamic {
+    let mut map = rhai::Map::new();
+    map.insert("scheme".into(), url.scheme.into());
+    let optional = [
+        ("host", url.host),
+        ("query", url.query),
+        ("fragment", url.fragment),
+        ("username", url.username),
+        ("password", url.password),
+    ];
+    for (key, value) in optional {
+        if let Some(value) = value {
+            map.insert(key.into(), value.into());
+        }
+    }
+    if let Some(port) = url.port {
+        map.insert("port".into(), INT::from(port).into());
+    }
+    map.insert("path".into(), url.path.into());
+    map.into()
+}
+
+// spec: URL#url-origins
+fn url_origin_map(origin: UrlOrigin) -> Dynamic {
+    let mut map = rhai::Map::new();
+    map.insert("scheme".into(), origin.scheme.into());
+    map.insert("host".into(), origin.host.into());
+    map.insert("port".into(), INT::from(origin.port).into());
     map.into()
 }
 

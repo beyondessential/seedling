@@ -4,6 +4,7 @@ use seedling_protocol::names::{AppName, AppServiceName, SiteIngressName};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::defs::ingress::check_hostname;
 use crate::oi::{handler::RequestCtx, state::OiState};
 use crate::runtime::site_ingress_attachments::{
     self, AttachmentProtocol, AttachmentTarget, SiteIngressAttachment,
@@ -14,52 +15,6 @@ use crate::runtime::site_ingresses::{
 
 #[cfg(test)]
 mod tests;
-
-/// Validate an operator-supplied hostname using the same shape as
-/// [`crate::defs::service::validate_hostname`] (which rejects wildcard
-/// labels, leading/trailing hyphens, and oversize labels). Site
-/// ingresses share the public DNS namespace with app ingresses, so the
-/// rules must match — otherwise an operator could create a site
-/// ingress with a hostname that an app could never declare.
-fn validate_hostname(hostname: &str) -> Result<(), OiError> {
-    if hostname.is_empty() || hostname.len() > 253 {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!("hostname must be 1-253 characters, got {}", hostname.len()),
-        ));
-    }
-    if hostname.contains('*') {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            "wildcard hostnames are not permitted".to_owned(),
-        ));
-    }
-    for label in hostname.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            return Err(OiError::new(
-                ErrorCode::RequirementsInvalid,
-                format!(
-                    "each hostname label must be 1-63 characters, got '{}' ({})",
-                    label,
-                    label.len()
-                ),
-            ));
-        }
-        if label.starts_with('-') || label.ends_with('-') {
-            return Err(OiError::new(
-                ErrorCode::RequirementsInvalid,
-                format!("hostname label must not start or end with a hyphen: '{label}'"),
-            ));
-        }
-        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err(OiError::new(
-                ErrorCode::RequirementsInvalid,
-                format!("hostname label contains invalid characters: '{label}'"),
-            ));
-        }
-    }
-    Ok(())
-}
 
 fn internal(what: &str, e: impl std::fmt::Display) -> OiError {
     OiError::new(ErrorCode::Internal, format!("{what}: {e}"))
@@ -230,7 +185,11 @@ pub(crate) fn create_site_ingress(
     params: CreateSiteIngressParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    validate_hostname(&params.hostname)?;
+    // Site ingresses share the public DNS namespace with app ingresses, so
+    // a hostname an app could never declare is refused here too.
+    // spec: ING#hostnames
+    check_hostname(&params.hostname)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
     // spec: IDN#reserved-names
     crate::reserved::check_site_ingress_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;

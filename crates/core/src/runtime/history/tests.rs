@@ -1264,6 +1264,7 @@ fn a_persisted_version_param_is_restored_as_a_version() {
         defs::{
             param_def::ParsedValue,
             purl::Purl,
+            url::Url,
             version::{SemVer, Version},
         },
         runtime::{param_map::ParamMap, secrets::Cipher},
@@ -1290,6 +1291,10 @@ fn a_persisted_version_param_is_restored_as_a_version() {
     params.insert_parsed(
         "package".into(),
         ParsedValue::Purl(Purl::parse("pkg:npm/foo@1.0?arch=x64").unwrap()),
+    );
+    params.insert_parsed(
+        "database".into(),
+        ParsedValue::Url(Url::parse("postgres://db.internal:5432/app").unwrap()),
     );
 
     save_current_operation(&db, &cipher, &op, &params, &Default::default()).unwrap();
@@ -1323,5 +1328,11 @@ fn a_persisted_version_param_is_restored_as_a_version() {
             .into_string()
             .unwrap(),
         "x64"
+    );
+    let database = delivered["database"].clone().cast::<rhai::Map>();
+    assert_eq!(database["port"].as_int().unwrap(), 5432);
+    assert_eq!(
+        database["host"].clone().into_string().unwrap(),
+        "db.internal"
     );
 }
