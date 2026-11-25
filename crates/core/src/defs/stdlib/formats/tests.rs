@@ -176,6 +176,28 @@ fn nesting_deeper_than_64_levels_throws() {
     }
 }
 
+// spec: FMT#helpers
+#[test]
+fn hostile_nesting_throws_before_it_can_exhaust_the_stack() {
+    let n = 100_000;
+    let nested = |open: &str, close: &str| format!("{}1{}", open.repeat(n), close.repeat(n));
+    for (helper, doc) in [
+        ("decode_json", nested("[", "]")),
+        ("decode_json", nested("{\"a\":", "}")),
+        ("decode_yaml", nested("[", "]")),
+        ("decode_yaml", nested("{a: ", "}")),
+        ("decode_toml", format!("a = {}", nested("[", "]"))),
+        ("decode_toml", format!("a = {}", nested("{b = ", "}"))),
+        ("decode_toml", format!("{} = 1", vec!["a"; n].join("."))),
+        (
+            "decode_toml",
+            format!("[{}]\nx = 1", vec!["a"; n].join(".")),
+        ),
+    ] {
+        throws(&format!("std::{helper}({})", lit(&doc)));
+    }
+}
+
 // spec: FMT#yaml
 #[test]
 fn yaml_is_block_style_indented_by_two() {
@@ -208,9 +230,9 @@ tags:
 fn yaml_quotes_strings_a_reader_could_misread() {
     for s in [
         "", " a", "a ", "\ta", "~", "no", "No", "NO", "yes", "on", "Off", "true", "False", "null",
-        "NULL", "0755", "1e3", "0x1F", "0o17", "-1", "+1", ".5", ".inf", "1.5", "a: b", "- a",
-        "#a", "a #b", "[a]", "{a}", "&a", "*a", "!a", "|a", ">a", "%a", "@a", "`a", "'a", "\"a",
-        "a\nb",
+        "NULL", "0755", "1e3", "0x1F", "0o17", "-1", "+1", ".5", ".inf", ".env", "1.5", "a: b",
+        "- a", "#a", "a #b", "[a]", "{a}", "&a", "*a", "!a", "|a", ">a", "%a", "@a", "`a", "'a",
+        "\"a", "a\nb",
     ] {
         let out = text(&format!("std::encode_yaml({})", lit(s)));
         assert!(out.starts_with('"'), "{s:?} written as {out:?}");
