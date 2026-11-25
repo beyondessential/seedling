@@ -8,6 +8,10 @@ pub mod sysconst;
 pub mod system;
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests evaluate snippets of BSL directly, not definitions"
+)]
 mod tests;
 
 /// Configurable limits for the Rhai script engine.
