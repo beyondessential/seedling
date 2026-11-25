@@ -108,8 +108,9 @@ pub(super) fn decode(text: &str, max_bytes: usize) -> Result<Tree, Box<EvalAltRe
     .stream()
 }
 
-/// A node an anchor names, for its aliases to copy.
-struct Anchored {
+/// A decoded node, and what an alias copying it adds to the copy budgets.
+#[derive(Clone)]
+struct Loaded {
     tree: Tree,
     /// The values within it, itself included.
     values: usize,
@@ -119,17 +120,10 @@ struct Anchored {
     bytes: usize,
 }
 
-/// A decoded node and what an anchor on it records.
-struct Loaded {
-    tree: Tree,
-    values: usize,
-    height: usize,
-    bytes: usize,
-}
-
 struct Loader<'i> {
     events: Parser<'i, StrInput<'i>>,
-    anchors: HashMap<usize, Anchored>,
+    /// The node each anchor names, for its aliases to copy.
+    anchors: HashMap<usize, Loaded>,
     /// The values aliases have copied so far.
     copies: usize,
     /// The bytes of the strings aliases have copied so far.
@@ -287,26 +281,12 @@ impl<'i> Loader<'i> {
                 if levels + anchored.height > MAX_DEPTH {
                     return Err(depth(span));
                 }
-                let loaded = Loaded {
-                    tree: anchored.tree.clone(),
-                    values: anchored.values,
-                    height: anchored.height,
-                    bytes: anchored.bytes,
-                };
-                return Ok(loaded);
+                return Ok(anchored.clone());
             }
             _ => return Err(not_a_document("YAML", span.start.line())),
         };
         if anchor != 0 {
-            self.anchors.insert(
-                anchor,
-                Anchored {
-                    tree: loaded.tree.clone(),
-                    values: loaded.values,
-                    height: loaded.height,
-                    bytes: loaded.bytes,
-                },
-            );
+            self.anchors.insert(anchor, loaded.clone());
         }
         Ok(loaded)
     }
