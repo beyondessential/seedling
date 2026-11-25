@@ -111,7 +111,7 @@ A replacement string replaces each match with the string, after expanding its gr
 > [!NOTE]
 > `$1a` names a group `1a`, which no pattern can have since a group's name cannot begin with a digit, so it throws; `${1}a` is the first group followed by `a`.
 
-A replacement closure MUST be called once for each match, in the order found, with the captures of that match as its one argument, and the match MUST be replaced with the string it returns.
+A replacement closure MUST be called once for each match, in the order found, with the captures of that match as its one argument, and the match MUST be replaced with the string it returns, without expanding group references in it.
 A replacement closure that returns anything other than a string MUST raise a script error.
 
 ## Text examined
