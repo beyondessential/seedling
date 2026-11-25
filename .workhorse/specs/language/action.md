@@ -152,6 +152,7 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `ip-address` | `family`, optional | an IPv4 or IPv6 address, of `family` where one is given | an `IpAddress`, as [address values](ip.md#address-values) specify |
 | `ip-subnet` | `family`, optional | an IPv4 or IPv6 subnet, of `family` where one is given | an `IpSubnet`, as [subnet values](ip.md#subnet-values) specify |
 | `ip-range` | `family`, optional | a range of IPv4 or IPv6 addresses, of `family` where one is given | an `IpRange`, as [range values](ip.md#range-values) specify |
+| `regex` | none | a regular expression | a `Regex`, as [regular expressions](regex.md#compiling-a-pattern) specify |
 | `boolean` | none | `true` or `false` | the value as a boolean |
 | `integer` | `range`, optional | a whole number, within `range` where one is given | the value as an integer |
 | `quantity` | `range`, optional | a [quantity](#quantities), within `range` where one is given | its amount as an integer |
