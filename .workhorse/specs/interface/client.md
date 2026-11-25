@@ -240,6 +240,9 @@ When the CLI reports an error and checks nothing, because of an option it was gi
 | `validation` | a sample parameter value is rejected | the rejecting parameter and its reason, with one error for each such parameter |
 
 The location of an error is the file it lies in and, where it has one, the line within that file.
+A `script` error lies at the script file and line where it arose, not where a function that raised it was called.
+A `version` error, and a `bundle` error about a field of the [metadata file](../language/bundle.md#metadata-file), lie in the metadata file.
+A `bundle` error about a path lies at that path, where it names a file in the bundle.
 For a file source, the file MUST be given as the path the source names.
 For a folder source, it MUST be given as the path the source names joined with the file's bundle path, and otherwise as the bundle path alone.
 
