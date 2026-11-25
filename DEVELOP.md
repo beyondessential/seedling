@@ -9,6 +9,10 @@ You'll need podman >=5.0 installed, and for your OS to be on systemd.
 
 Watchexec is recommended. `just` is used to run common tasks — see the `justfile` at the repo root.
 
+`seedling-core` builds on Linux, macOS and Windows, since `seedling-ctl` ships on all three; CI lints it on each.
+Code that reaches the host (Podman, systemd, the journal, nftables, routes, BTRFS, Jool) goes in `seedling-linux`, behind the traits in `seedling_core::system`, and the daemon wires it up.
+`seedling-linux` and the daemon are Linux-only, so off Linux, build packages by name with `-p` rather than the whole workspace.
+
 ## Building and running
 
 Two terminal windows (or tmux panes):
