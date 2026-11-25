@@ -1052,10 +1052,12 @@ fn check_kinds(
 ) -> Result<BTreeMap<String, ParsedValue>, Vec<Rejection>> {
     let mut parsed = BTreeMap::new();
     let mut rejections = Vec::new();
+    // spec: REX#compiled-size
+    let mut budget = Budget::of(limits);
     for (name, value) in proposed {
         // An unset parameter is not checked; an empty stored value is.
         let result = match declared.get(name.as_str()) {
-            Some(def) => def.kind.parse_supplied(value, &mut Budget::of(limits)),
+            Some(def) => def.kind.parse_supplied(value, &mut budget),
             None if matches!(value, SuppliedValue::Text(_)) => continue,
             None => Err(
                 "a boolean or integer is given for a parameter the definition does not \

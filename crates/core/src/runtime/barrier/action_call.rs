@@ -24,7 +24,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::defs::app::{SubActionFrame, action_call_lookup, action_call_stack};
 use crate::defs::param_def::ParamDef;
-use crate::defs::regex::{Budgets, with_evaluation_budget};
+use crate::defs::regex::{Budget, with_evaluation_budget};
 use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
 use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
@@ -83,7 +83,7 @@ pub fn call_action(
     // spec: HIST#action-calls
     // spec: REX#compiled-size
     let call_params = with_evaluation_budget(ctx, |budget| {
-        resolve_call_params(&rt, action_name, params, &mut Budgets::Shared(budget))
+        resolve_call_params(&rt, action_name, params, budget)
     })??;
 
     let _frame = SubActionFrame::enter(action_name.clone());
@@ -104,7 +104,7 @@ fn validate_call_params(
     rt: &RuntimeInstance,
     schema: Option<&Schema>,
     params: Map,
-    budgets: &mut Budgets,
+    budget: &mut Budget,
 ) -> Result<ParamMap, Box<EvalAltResult>> {
     let json_params = crate::defs::json::from_map(params)
         .map_err(|e| -> Box<EvalAltResult> { format!("Action.invoke: param {e}").into() })?;
@@ -115,7 +115,7 @@ fn validate_call_params(
     };
 
     let params =
-        action_params::apply_schema(schema, json_params, budgets).map_err(validation_to_eval)?;
+        action_params::apply_schema(schema, json_params, budget).map_err(validation_to_eval)?;
     action_params::validate_volume_params(schema, &params, &RtVolumeLookup(rt))
         .map_err(validation_to_eval)?;
     Ok(params)
@@ -162,14 +162,14 @@ fn resolve_call_params(
     rt: &RuntimeInstance,
     action_name: &ActionName,
     params: Map,
-    budgets: &mut Budgets,
+    budget: &mut Budget,
 ) -> Result<ParamMap, Box<EvalAltResult>> {
     let schema = action_schema(rt, action_name)?;
     let Some(ctx) = rt.ctx.as_ref() else {
         // Stub / language-only context — nothing to record and nothing to
         // recover. Tests that exercise the call surface without a real
         // runtime context still execute the closure inline.
-        return validate_call_params(rt, schema.as_ref(), params, budgets);
+        return validate_call_params(rt, schema.as_ref(), params, budget);
     };
 
     // spec: OPS#sub-action-parameters
@@ -192,7 +192,7 @@ fn resolve_call_params(
         }
     }
 
-    let validated = validate_call_params(rt, schema.as_ref(), params, budgets)?;
+    let validated = validate_call_params(rt, schema.as_ref(), params, budget)?;
     hold_secret_params(schema.as_ref(), validated.values());
 
     let SplitParams {

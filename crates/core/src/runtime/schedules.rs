@@ -320,7 +320,7 @@ fn validate_empty_invocation(
     crate::runtime::action_params::apply_schema(
         schema,
         serde_json::Map::new(),
-        &mut crate::defs::regex::Budgets::EachFresh(limits),
+        &mut crate::defs::regex::Budget::of(limits),
     )
     .map_err(|e| e.to_string())
 }

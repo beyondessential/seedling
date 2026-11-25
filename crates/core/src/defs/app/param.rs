@@ -53,6 +53,8 @@ pub(super) fn parse_param_defs(
     limits: &super::super::stdlib::HelperLimits,
 ) -> Result<BTreeMap<ParamName, ParamDef>, Box<EvalAltResult>> {
     let mut reqs = BTreeMap::new();
+    // spec: REX#compiled-size
+    let mut budget = Budget::of(limits);
     for (key, value) in map {
         // A non-map entry used to be skipped outright, so the param simply
         // did not exist — and a non-string `kind` fell back to the default,
@@ -107,7 +109,7 @@ pub(super) fn parse_param_defs(
             secret,
         };
         // spec: ACN#param-schemas
-        def.check_default(&mut Budget::of(limits))
+        def.check_default(&mut budget)
             .map_err(|e| -> Box<EvalAltResult> {
                 format!("param `{key}` default_value: {e}").into()
             })?;

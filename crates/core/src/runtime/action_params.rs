@@ -23,7 +23,7 @@ use seedling_protocol::names::{ParamName, SiteVolumeName};
 use crate::{
     defs::{
         param_def::{ParamDef, ParamKind, ParsedValue, SuppliedValue},
-        regex::Budgets,
+        regex::Budget,
     },
     runtime::param_map::ParamMap,
 };
@@ -107,7 +107,7 @@ pub fn reject_reserved<'a>(
 pub fn apply_schema(
     schema: &BTreeMap<ParamName, ParamDef>,
     mut params: serde_json::Map<String, serde_json::Value>,
-    budgets: &mut Budgets,
+    budget: &mut Budget,
 ) -> Result<ParamMap, ParamValidationError> {
     let mut supplied = BTreeMap::new();
     for (name, def) in schema {
@@ -129,7 +129,7 @@ pub fn apply_schema(
         supplied.insert(key.to_owned(), value);
     }
 
-    let parsed = run_requirements(schema, &supplied, budgets)?;
+    let parsed = run_requirements(schema, &supplied, budget)?;
     for name in schema.keys() {
         params.remove(name.as_str());
     }
@@ -220,7 +220,7 @@ pub trait VolumeLookup {
 pub fn run_requirements(
     schema: &BTreeMap<ParamName, ParamDef>,
     supplied: &BTreeMap<String, SuppliedValue>,
-    budgets: &mut Budgets,
+    budget: &mut Budget,
 ) -> Result<BTreeMap<String, ParsedValue>, ParamValidationError> {
     let mut parsed = BTreeMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -241,7 +241,7 @@ pub fn run_requirements(
         };
 
         // spec: ACN#kind-parsers
-        match budgets.with(|budget| req_def.kind.parse_supplied(&value, budget)) {
+        match req_def.kind.parse_supplied(&value, budget) {
             Ok(value) => {
                 parsed.insert(field_str.to_owned(), value);
             }
@@ -306,7 +306,7 @@ mod tests {
         super::apply_schema(
             schema,
             params,
-            &mut crate::defs::regex::Budgets::EachFresh(&crate::ScriptLimits::default().helpers()),
+            &mut crate::defs::regex::Budget::of(&crate::ScriptLimits::default().helpers()),
         )
     }
 
@@ -522,6 +522,34 @@ mod tests {
     }
 
     // spec: ACN#param-schemas
+    // spec: REX#compiled-size
+    #[test]
+    fn one_invocations_patterns_share_one_budget() {
+        let schema = BTreeMap::from([
+            (ParamName::new("first").unwrap(), of_kind(ParamKind::Regex)),
+            (ParamName::new("second").unwrap(), of_kind(ParamKind::Regex)),
+        ]);
+        let params = serde_json::Map::from_iter([
+            ("first".to_owned(), json!("a")),
+            ("second".to_owned(), json!("b")),
+        ]);
+        let limits = crate::ScriptLimits {
+            max_regex_compiled_size: 200_000,
+            ..crate::ScriptLimits::default()
+        };
+        let err = super::apply_schema(
+            &schema,
+            params.clone(),
+            &mut crate::defs::regex::Budget::of(&limits.helpers()),
+        )
+        .expect_err("the two patterns together exceed the limit");
+        assert!(
+            format!("{err:?}").contains("compiled size limit"),
+            "{err:?}"
+        );
+        apply_schema(&schema, params).expect("within the default limit");
+    }
+
     // spec: OPS#persistence
     #[test]
     fn a_regex_param_survives_persistence_as_a_regex() {

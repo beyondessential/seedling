@@ -122,7 +122,7 @@ fn apply_action_param_schema(
     action_params::apply_schema(
         action_params_schema,
         params,
-        &mut crate::defs::regex::Budgets::EachFresh(&state.script_limits.helpers()),
+        &mut crate::defs::regex::Budget::of(&state.script_limits.helpers()),
     )
     .map_err(validation_error_to_oi)
 }

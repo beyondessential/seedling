@@ -23,10 +23,12 @@ pub(super) fn check_params(
     def: &super::app::AppDef,
     limits: &super::stdlib::HelperLimits,
 ) -> Result<(), String> {
+    // spec: REX#compiled-size
+    let mut budget = Budget::of(limits);
     for (name, param) in &def.params {
         // spec: PARAM#kind-checks
         param
-            .check_default(&mut Budget::of(limits))
+            .check_default(&mut budget)
             .map_err(|e| format!("the default of parameter '{name}' is rejected: {e}"))?;
         // spec: PARAM#secret-parameters
         param
