@@ -13,6 +13,19 @@ Each demo exists to show and exercise a slice of BSL and the runtime.
 - **actions-and-gates**: gates with keys and start ordering, a gate re-running when its key moves, actions with a param schema, a shell, a scheduled action, a job.
 - **paired apps** (provider and consumer): an exported service and an exported volume consumed by a second app.
 
-## Open
+## Demos as test fixtures
 
-- Whether the demos take over as test fixtures for `crates/core/src/tests/definitions.rs`, or those tests move to inline scripts.
+The demos replace the current definitions as the fixtures in `crates/core/src/tests/definitions.rs`, so they keep evaluating as the language changes.
+Every demo gets at least an evaluation test.
+
+The gate tests carry over to actions-and-gates, which must exercise what they assert today:
+
+- a gate exclusive with a deployment (stopped for the run)
+- a gate with a check job and an interval
+- `after` ordering between gates, and deployments ordered after gates
+- gate keys that move with some params and not others
+- a gate body that branches on first run vs later runs, observed under a probe
+- a gate body that fails on a refused transition (today: a postgres downgrade)
+- actions whose bodies run under a probe
+
+The Tamanu name-quoting and missing-hostname tests test those definitions alone, and go with them.
