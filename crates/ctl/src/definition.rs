@@ -424,9 +424,7 @@ mod github {
 
     use seedling_bundle::METADATA_FILE;
 
-    use super::{
-        Bounds, Budget, GithubUrl, Unwritten, assemble, read_bounded, read_folder, source_paths,
-    };
+    use super::{Bounds, Budget, GithubUrl, Unwritten, assemble, read_folder, source_paths};
 
     fn client() -> Result<reqwest::Client, String> {
         reqwest::Client::builder()
@@ -524,17 +522,14 @@ mod github {
         // root, so it is held to the repository as an archive entry is.
         let folder = seedling_bundle::normalise_path(folder)
             .map_err(|e| format!("the URL's folder lies outside the repository: {e}"))?;
-        let unwritten = record_links(tarball)?;
-        extract(tarball, root, &unwritten, std::slice::from_ref(&folder))?;
-        let metadata = root.join(&folder).join(METADATA_FILE);
-        let sources = match metadata.symlink_metadata() {
-            Ok(meta) if meta.is_file() => {
-                source_paths(&folder, &read_bounded(&metadata, &mut Budget::full())?)?
-            }
-            _ => Vec::new(),
+        let scan = scan(tarball, &folder)?;
+        let sources = match &scan.metadata {
+            Some(metadata) => source_paths(&folder, metadata)?,
+            None => Vec::new(),
         };
-        extract(tarball, root, &unwritten, &sources)?;
-        read_repository_folder(root, &folder, &unwritten)
+        let wanted = Wanted::new(std::iter::once(folder.clone()).chain(sources));
+        extract(tarball, root, &scan.unwritten, &wanted)?;
+        read_repository_folder(root, &folder, &scan.unwritten)
     }
 
     /// Read `folder` out of an extracted repository and assemble what it
@@ -569,50 +564,100 @@ mod github {
         Ok(files)
     }
 
-    /// Record every entry of a GitHub tarball that is neither a file nor a
-    /// directory, checking every entry's path on the way.
-    ///
-    /// Such an entry is never written: a symlink written out would let a
-    /// later entry be written through it, and it only matters if the
-    /// definition reads it. They are all recorded before anything is written,
-    /// so an entry at or beneath one is refused whichever comes first.
-    fn record_links(tarball: &[u8]) -> Result<Unwritten, String> {
-        let mut unwritten = Unwritten::default();
+    /// What a first pass over a GitHub tarball learns before anything is
+    /// written.
+    struct Scan {
+        /// Every entry that is neither a file nor a directory. Such an entry
+        /// is never written: a symlink written out would let a later entry be
+        /// written through it, and it only matters if the definition reads
+        /// it. They are all recorded before anything is written, so an entry
+        /// at or beneath one is refused whichever comes first.
+        unwritten: Unwritten,
+        /// The definition folder's metadata file, which names the sources
+        /// to unpack beside the folder.
+        metadata: Option<Vec<u8>>,
+    }
+
+    fn scan(tarball: &[u8], folder: &str) -> Result<Scan, String> {
+        let metadata_path = if folder.is_empty() {
+            METADATA_FILE.to_owned()
+        } else {
+            format!("{folder}/{METADATA_FILE}")
+        };
+        let mut scan = Scan {
+            unwritten: Unwritten::default(),
+            metadata: None,
+        };
         for entry in archive(tarball).entries().map_err(unreadable)? {
             let entry = entry.map_err(unreadable)?;
-            let Some(name) = entry_name(&entry.path().map_err(unreadable)?)? else {
+            // A path that is not UTF-8 can be neither a link a definition's
+            // path passes through nor a file it names.
+            let Some(EntryName::Utf8(name)) = entry_name(&entry.path().map_err(unreadable)?)?
+            else {
                 continue;
             };
-            if !matches!(
-                entry.header().entry_type(),
+            match entry.header().entry_type() {
+                tar::EntryType::Regular | tar::EntryType::Continuous if name == metadata_path => {
+                    let at = std::path::Path::new(&name);
+                    scan.metadata = Some(Budget::full().read(at, entry)?);
+                }
                 tar::EntryType::Directory
-                    | tar::EntryType::Regular
-                    | tar::EntryType::Continuous
-                    | tar::EntryType::XGlobalHeader
-                    | tar::EntryType::XHeader
-            ) {
-                unwritten.record(name);
+                | tar::EntryType::Regular
+                | tar::EntryType::Continuous
+                | tar::EntryType::XGlobalHeader
+                | tar::EntryType::XHeader => {}
+                _ => scan.unwritten.record(name),
             }
         }
-        Ok(unwritten)
+        Ok(scan)
+    }
+
+    /// The paths, from the repository root, at or beneath which entries are
+    /// unpacked.
+    struct Wanted(Vec<(String, String)>);
+
+    impl Wanted {
+        fn new(paths: impl IntoIterator<Item = String>) -> Self {
+            Self(
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        let beneath = format!("{path}/");
+                        (path, beneath)
+                    })
+                    .collect(),
+            )
+        }
+
+        fn holds(&self, name: &[u8]) -> bool {
+            self.0.iter().any(|(path, beneath)| {
+                path.is_empty() || name == path.as_bytes() || name.starts_with(beneath.as_bytes())
+            })
+        }
     }
 
     /// Unpack the files and directories of a GitHub tarball at or beneath
-    /// each of `wanted` into `dest`, dropping the one top-level directory
+    /// what is `wanted` into `dest`, dropping the one top-level directory
     /// GitHub prefixes every entry with. What is written is held to the
-    /// bundle limits.
+    /// bundle limits, and nothing else in the repository is judged.
     // spec: CLI#definition-sources
     fn extract(
         tarball: &[u8],
         dest: &std::path::Path,
         unwritten: &Unwritten,
-        wanted: &[String],
+        wanted: &Wanted,
     ) -> Result<(), String> {
         let mut budget = Budget::full();
         for entry in archive(tarball).entries().map_err(unreadable)? {
             let entry = entry.map_err(unreadable)?;
-            let Some(name) = entry_name(&entry.path().map_err(unreadable)?)? else {
-                continue;
+            let name = match entry_name(&entry.path().map_err(unreadable)?)? {
+                Some(EntryName::Utf8(name)) if wanted.holds(name.as_bytes()) => name,
+                Some(EntryName::Other(lossy)) if wanted.holds(lossy.as_bytes()) => {
+                    return Err(format!(
+                        "the downloaded archive holds a non-UTF-8 path: {lossy}"
+                    ));
+                }
+                _ => continue,
             };
             let kind = entry.header().entry_type();
             let written = matches!(
@@ -623,12 +668,6 @@ mod github {
                 return Err(format!(
                     "the downloaded archive holds {name} at or beneath {special}, which is not a file or directory"
                 ));
-            }
-            if !wanted
-                .iter()
-                .any(|w| w.is_empty() || name == *w || name.starts_with(&format!("{w}/")))
-            {
-                continue;
             }
             let target = dest.join(&name);
             match kind {
@@ -658,13 +697,25 @@ mod github {
         format!("the downloaded archive is unreadable: {e}")
     }
 
+    /// An archive entry's path within the repository.
+    enum EntryName {
+        Utf8(String),
+        /// A path that is not UTF-8, with each invalid sequence replaced.
+        /// Everything before the first of them is kept, so it is at or
+        /// beneath a wanted path exactly when the path itself is.
+        Other(String),
+    }
+
     /// An archive entry's path within the repository, `/`-separated, or
     /// `None` for GitHub's prefix directory itself.
-    fn entry_name(path: &std::path::Path) -> Result<Option<String>, String> {
+    fn entry_name(path: &std::path::Path) -> Result<Option<EntryName>, String> {
         // Every entry is written beneath the extraction root, so nothing but
         // plain names may reach the join: an archive is not a trusted source
-        // of paths, whatever produced it. The prefix directory is checked
-        // too, so that a leading `..` is refused rather than dropped.
+        // of paths, whatever produced it. A path that is not plain cannot be
+        // placed in the repository at all, so whether the definition would
+        // read it cannot be known either, and the archive is refused
+        // whatever the entry. The prefix directory is checked too, so that a
+        // leading `..` is refused rather than dropped.
         if path
             .components()
             .any(|c| !matches!(c, std::path::Component::Normal(_)))
@@ -680,12 +731,10 @@ mod github {
         if rel.as_os_str().is_empty() {
             return Ok(None);
         }
-        rel.to_str().map(|s| Some(s.to_owned())).ok_or_else(|| {
-            format!(
-                "the downloaded archive holds a non-UTF-8 path: {}",
-                rel.display()
-            )
-        })
+        Ok(Some(match rel.to_str() {
+            Some(name) => EntryName::Utf8(name.to_owned()),
+            None => EntryName::Other(rel.to_string_lossy().into_owned()),
+        }))
     }
 }
 

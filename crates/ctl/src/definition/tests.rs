@@ -744,3 +744,31 @@ fn a_folder_at_its_repository_root_is_told_it_is_in_one() {
     let e = read_assembled_folder(dir.path()).unwrap_err();
     assert!(e.contains("lies outside the repository at"), "{e}");
 }
+
+// spec: CLI#definition-sources
+#[test]
+fn a_non_utf8_path_fails_only_a_definition_that_reads_it() {
+    fn odd_name(b: &mut tar::Builder<Vec<u8>>, raw: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(1);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.as_gnu_mut().unwrap().name[..raw.len()].copy_from_slice(raw);
+        header.set_cksum();
+        b.append(&header, &b"x"[..]).unwrap();
+    }
+    let elsewhere = tarball(|b| {
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        odd_name(b, b"o-r-abc/docs/caf\xe9.txt");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    github::extract_definition(&elsewhere, dir.path(), "apps/web").unwrap();
+
+    let within = tarball(|b| {
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        odd_name(b, b"o-r-abc/apps/web/caf\xe9.txt");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let e = github::extract_definition(&within, dir.path(), "apps/web").unwrap_err();
+    assert!(e.contains("non-UTF-8"), "{e}");
+}
