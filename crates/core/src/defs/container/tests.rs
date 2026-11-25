@@ -1,6 +1,7 @@
 use rhai::{Dynamic, Map};
 
 use super::{HealthcheckKind, HealthcheckOnFailure, parse_healthcheck};
+use crate::defs::duration::Duration;
 
 fn map_with(entries: &[(&str, Dynamic)]) -> Map {
     let mut m = Map::new();
@@ -191,6 +192,14 @@ fn a_timing_is_a_duration_in_whole_seconds() {
         ]);
         let err = parse_healthcheck(m).expect_err("refused");
         assert!(err.to_string().contains(expected), "{err}");
+    }
+    for value in [Dynamic::from("1m 30s"), Dynamic::from(Duration::from_secs(90))] {
+        let m = map_with(&[
+            ("kind", Dynamic::from("command")),
+            ("cmd", Dynamic::from(cmd.clone())),
+            ("timeout", value),
+        ]);
+        assert_eq!(parse_healthcheck(m).expect("taken").timeout_secs, 90);
     }
 }
 

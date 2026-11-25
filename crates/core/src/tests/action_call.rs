@@ -698,6 +698,31 @@ fn a_recorded_ip_param_replays_as_its_type() {
     result.expect("replay restores the recorded range");
 }
 
+// spec: OPS#persistence
+// spec: OPS#sub-action-parameters
+#[test]
+fn a_recorded_duration_param_replays_as_a_duration() {
+    let source = r#"
+        app.on_action("inner", |rt, p| {
+            if type_of(p.ttl) != "Duration" { throw `ttl is ${type_of(p.ttl)}`; }
+            if p.ttl != std::parse_duration("90m") { throw `ttl is ${p.ttl}`; }
+        }, #{ params: #{ ttl: #{ kind: "duration" } } });
+        app.on_action("outer", |rt, _p| {
+            app.action("inner").invoke(#{ ttl: SUPPLIED });
+        });
+    "#;
+    let first = source.replace("SUPPLIED", r#"std::parse_duration("90m")"#);
+    let (result, pending) = run_outer_in_replay_context(&first, Vec::new(), None);
+    result.expect("outer must run");
+    let extra = sub_action_payload(&pending);
+    assert!(extra.contains(r#""ttl":"1h 30m""#), "{extra}");
+    assert!(extra.contains(r#""types":{"ttl":"duration"}"#), "{extra}");
+
+    let second = source.replace("SUPPLIED", r#""2h""#);
+    let (result, _) = run_outer_in_replay_context(&second, pending, None);
+    result.expect("replay restores the recorded duration");
+}
+
 // spec: HIST#action-calls
 // spec: SEC#matching
 #[test]
