@@ -119,7 +119,7 @@ It MUST write a string quoted when any of these holds of it:
 
 `encode_toml` MUST write a TOML 1.0.0 document.
 It MUST refuse unit at any depth.
-It MUST write a map within the argument as a table under a `[table]` header, and an array whose every element is a map as an array of tables under `[[array]]` headers.
+It MUST write a map within the argument as a table under a `[table]` header, and an array that holds at least one element, every one a map, as an array of tables under `[[array]]` headers.
 It MUST write any other array inline, with a map within it as an inline table.
 It MUST write a key bare when TOML allows it bare, and quoted otherwise.
 Within each table, it MUST write the entries written as key/value lines before the tables, each in [key order](#key-order).
