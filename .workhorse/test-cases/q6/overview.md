@@ -5,13 +5,13 @@
 - [ ] Each bundle under `demos/` loads as a bundle and evaluates with no params set (params-tour: with only its required param), with no error.
 - [ ] bundle-tour and bundle-share are assembled through the same include assembly the CLI uses, and both carry the files from `demos/shared/`.
 - [ ] ctl's `apps create` from a demo folder still assembles includes after the assembly moves.
-- [ ] actions-and-gates: a gate exclusive with a deployment lists that deployment.
-- [ ] actions-and-gates: a gate with a check job and an interval reports both.
-- [ ] actions-and-gates: `after` ordering between gates, and deployments ordered after gates, match the definition.
-- [ ] actions-and-gates: changing a param a gate converges on moves that gate's key; changing an unrelated param leaves it.
-- [ ] actions-and-gates: a gate body takes its first-run branch under a probe with no last success, and its later-run branch with one.
-- [ ] actions-and-gates: a refused transition (metadata version going backwards) fails the gate body.
-- [ ] actions-and-gates: every action body runs under a probe.
+- [x] actions-and-gates: a gate exclusive with a deployment lists that deployment.
+- [x] actions-and-gates: a gate with a check job and an interval reports both.
+- [x] actions-and-gates: `after` ordering between gates, and deployments ordered after gates, match the definition.
+- [x] actions-and-gates: changing a param a gate converges on moves that gate's key; changing an unrelated param leaves it.
+- [x] actions-and-gates: a gate body takes its first-run branch under a probe with no last success, and its later-run branch with one.
+- [x] actions-and-gates: a refused transition (the `format` param stepping down from its last success) fails the gate body.
+- [x] actions-and-gates: every action body runs under a probe.
 - [ ] Nothing in the repo still names `apps/`, `postgres.seed.rhai` or `tamanu-*.seed.rhai`.
 
 ## On a dev VM

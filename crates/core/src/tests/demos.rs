@@ -198,3 +198,107 @@ fn every_demo_action_and_gate_body_runs_under_a_probe() {
         }
     }
 }
+
+fn gates_params(format: &str, greeting: &str) -> BTreeMap<String, String> {
+    params(&[("format", format), ("greeting", greeting)])
+}
+
+// spec: GATE#declaration
+#[test]
+fn the_actions_and_gates_demo_declares_its_gates() {
+    let app = evaluated("actions-and-gates", &BTreeMap::new());
+    assert_eq!(declared(&app), ["migrate", "render", "verify", "announce"]);
+    let def = app.def.load();
+
+    let migrate = &def.gates["migrate"];
+    assert!(migrate.has_body);
+    assert_eq!(migrate.exclusive, deployments(&["web"]));
+    let check = migrate.check.as_ref().expect("migrate has a check");
+    assert_eq!(check.job, workload(ResourceKind::Job, "store-check"));
+    assert_eq!(check.interval, Some(std::time::Duration::from_secs(600)));
+
+    assert_eq!(def.gates["render"].after, after_gates(&["migrate"]));
+    assert!(def.gates["render"].exclusive.is_empty());
+
+    let verify = &def.gates["verify"];
+    assert!(!verify.has_body, "verify waits on its check alone");
+    assert_eq!(verify.after, after_gates(&["migrate", "render"]));
+    let check = verify.check.as_ref().expect("verify has a check");
+    assert_eq!(check.job, workload(ResourceKind::Job, "verify-check"));
+    assert_eq!(check.interval, None);
+
+    assert_eq!(
+        def.gates["announce"].after,
+        BTreeSet::from([AfterTarget::Workload(workload(
+            ResourceKind::Deployment,
+            "web"
+        ))])
+    );
+    assert_eq!(
+        deployment_after(&def, "web"),
+        after_gates(&["render", "verify"])
+    );
+}
+
+// spec: GATE#keys
+#[test]
+fn the_actions_and_gates_demo_gates_move_with_what_they_converge_on() {
+    let key = |p: &BTreeMap<String, String>, gate_name: &str| {
+        evaluated("actions-and-gates", p).def.load().gates[gate_name]
+            .key
+            .clone()
+    };
+    let base = gates_params("2", "Kia ora");
+    let stepped = gates_params("3", "Kia ora");
+    let greeted = gates_params("2", "Hello");
+
+    assert_ne!(key(&base, "migrate"), key(&stepped, "migrate"));
+    assert_eq!(key(&base, "render"), key(&stepped, "render"));
+    assert_ne!(key(&base, "render"), key(&greeted, "render"));
+    assert_eq!(key(&base, "migrate"), key(&greeted, "migrate"));
+    assert_eq!(key(&base, "verify"), key(&greeted, "verify"));
+}
+
+// spec: IMG#image-discovery
+#[test]
+fn the_migrate_gate_body_initialises_first_and_steps_up_after() {
+    let first = probe("actions-and-gates", &gates_params("2", "Kia ora"), None, true);
+    assert_eq!(
+        gate_probe(&first, "migrate"),
+        &BTreeSet::from(["docker.io/library/busybox:1.38.0-musl".to_owned()])
+    );
+
+    let later = probe(
+        "actions-and-gates",
+        &gates_params("3", "Kia ora"),
+        Some(&gates_params("1", "Kia ora")),
+        true,
+    );
+    assert_eq!(
+        gate_probe(&later, "migrate"),
+        &BTreeSet::from(["docker.io/library/alpine:3.24.4".to_owned()])
+    );
+}
+
+// spec: GATE#body
+#[test]
+fn stepping_the_store_down_fails_the_migrate_gate_body() {
+    let response = probe(
+        "actions-and-gates",
+        &gates_params("1", "Kia ora"),
+        Some(&gates_params("3", "Kia ora")),
+        false,
+    );
+    let migrate = response
+        .per_handler
+        .iter()
+        .find(|h| h.name == "migrate")
+        .expect("the migrate gate is probed");
+    assert!(
+        migrate
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("refusing to step the store down from format 3 to 1")),
+        "{migrate:?}"
+    );
+}
