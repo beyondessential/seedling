@@ -39,7 +39,6 @@ sha2.workspace = true
 snafu.workspace = true
 subtle.workspace = true
 systemd = "0.11.1"
-tempfile = "3.27.0"
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
@@ -93,5 +92,6 @@ hifijson = "0.5.1"
 flate2 = "1.1.11"
 rcgen = { version = "0.14.10", features = ["x509-parser"] }
 tar = "0.4.46"
+tempfile = "3.27.0"
 time = "0.3.55"
 tokio = { workspace = true, features = ["test-util"] }
