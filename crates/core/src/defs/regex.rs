@@ -516,11 +516,27 @@ fn replace(
 ) -> Result<String, Box<EvalAltResult>> {
     let text = take_string("text", text)?;
     let replacement = take_replacement(this, method, replacement)?;
-    let mut positions = Positions::new(&text);
+    let limit = limit.unwrap_or(usize::MAX);
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
+    // A replacement that inserts no group needs only where each match is.
+    if let Replacement::Template(pieces) = &replacement
+        && let Some(literal) = literal_of(pieces)
+    {
+        for m in this.0.regex.find_iter(&text).take(limit) {
+            out.push_str(&text[last..m.start()]);
+            out.push_str(&literal);
+            last = m.end();
+            // spec: LIM#limits
+            within(out.len(), max_string(ctx), STRING)?;
+        }
+        out.push_str(&text[last..]);
+        within(out.len(), max_string(ctx), STRING)?;
+        return Ok(out);
+    }
+    let mut positions = Positions::new(&text);
     let matches = this.0.regex.captures_iter(&text);
-    for caps in matches.take(limit.unwrap_or(usize::MAX)) {
+    for caps in matches.take(limit) {
         let whole = caps.get_match().expect("the iterator yields matches only");
         out.push_str(&text[last..whole.start()]);
         match &replacement {
@@ -553,6 +569,17 @@ fn replace(
     out.push_str(&text[last..]);
     within(out.len(), max_string(ctx), STRING)?;
     Ok(out)
+}
+
+/// The text a replacement string inserts, where it inserts no group.
+fn literal_of(pieces: &[Piece]) -> Option<String> {
+    pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Literal(literal) => Some(literal.as_str()),
+            Piece::Group(_) => None,
+        })
+        .collect()
 }
 
 // spec: LIM#limits
