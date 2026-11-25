@@ -19,13 +19,16 @@ use seedling_core::{
     },
     system::{
         Platform, System,
-        host_probes::{Fact, HostConstants, HostProbes, HostSource},
+        host_probes::{Fact, HostConstants, HostProbes},
         nat64::should_activate_nat64,
-        netinfo::{detect_ipv4_egress, detect_ipv6_egress},
         node_prefix_from_machine_id,
         reconcile::Reconciler,
         resolver::{resolver_addr, resolver_gateway_addr, spawn_dns_forwarder},
     },
+};
+use seedling_linux::{
+    host::HostSource,
+    netinfo::{detect_ipv4_egress, detect_ipv6_egress},
 };
 use seedling_protocol::names::AppName;
 use tokio::sync::Notify;
@@ -399,7 +402,7 @@ async fn main() {
     // spec: CONST#determining-host-constants
     // A constant that cannot be determined at start is looked for again by
     // the reconciler on each iteration, which files a fault until it is.
-    let constants = HostConstants::detect();
+    let constants = HostConstants::detect(&HostSource).await;
     let host_probes = HostProbes::new(
         Arc::new(HostSource),
         nat64_detection_fact,
@@ -482,10 +485,13 @@ async fn main() {
         System::setup_stubbed(&data_dir, storage, journal)
             .unwrap_or_else(|e| fatal!("stubbed system setup failed: {e}"))
     } else {
+        let data_plane = seedling_linux::data_plane::NftablesDataPlane::new(node_prefix)
+            .unwrap_or_else(|e| fatal!("cannot open the packet filter: {e}"));
         let platform = Platform {
             connector: Arc::new(seedling_linux::connector::HostConnector {
                 data_dir: data_dir.clone(),
             }),
+            data_plane: Arc::new(data_plane),
             journal,
             storage,
         };

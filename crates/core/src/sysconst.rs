@@ -1,7 +1,7 @@
 //! Host-level system facts surfaced to BSL as `const.*` constants.
 //!
 //! Values populated here back constants defined in `spec: CONST`.
-//! Some values (IPv4/IPv6 egress, BTRFS availability, etc.) can only be
+//! Some values (IPv4/IPv6 egress, snapshot support, etc.) can only be
 //! determined asynchronously or from runtime daemon state, so they are
 //! cached here once at daemon startup and read synchronously from
 //! `defs::scope()` on every script execution.
@@ -35,15 +35,16 @@ pub struct SystemFacts {
 
 impl Default for SystemFacts {
     /// Outside a running daemon the host's identity has no meaning, so the
-    /// node name is empty; the compute and memory figures are still the
-    /// host's.
+    /// node name is empty; the compute figure is still the host's. Memory is
+    /// read through a platform, which a non-daemon caller does not have, so
+    /// it is undetermined.
     fn default() -> Self {
         Self {
             ipv4_egress: false,
             ipv6_egress: false,
             nat64_active: false,
             available_threads: detect_available_threads().ok(),
-            available_memory: detect_available_memory(),
+            available_memory: Err("the host's memory is read only by the daemon".to_owned()),
             has_snapshots: false,
             node_name: Ok(String::new()),
             timezone: "UTC".to_owned(),
@@ -61,44 +62,6 @@ pub fn detect_available_threads() -> Result<i64, String> {
     let n = std::thread::available_parallelism()
         .map_err(|e| format!("cannot read the compute threads available: {e}"))?;
     Ok(i64::try_from(n.get()).unwrap_or(i64::MAX))
-}
-
-/// Memory the script may plan around: 90% of the host's `MemTotal`,
-/// reserving 10% for the daemon itself, the runtime, and the kernel's page
-/// cache.
-// spec: CONST#host-constants
-pub fn detect_available_memory() -> Result<i64, String> {
-    let contents = std::fs::read_to_string("/proc/meminfo")
-        .map_err(|e| format!("cannot read /proc/meminfo: {e}"))?;
-    let total = parse_mem_total_bytes(&contents)?;
-    let available = total.saturating_mul(9) / 10;
-    if available <= 0 {
-        return Err(format!("the host reports {total} bytes of memory"));
-    }
-    Ok(available)
-}
-
-/// `MemTotal` from the contents of `/proc/meminfo`, in bytes.
-fn parse_mem_total_bytes(meminfo: &str) -> Result<i64, String> {
-    let line = meminfo
-        .lines()
-        .find_map(|line| line.strip_prefix("MemTotal:"))
-        .ok_or("/proc/meminfo has no MemTotal line")?;
-    let mut parts = line.split_whitespace();
-    let (Some(num), Some(unit)) = (parts.next(), parts.next()) else {
-        return Err(format!("MemTotal {line:?} is not a number and a unit"));
-    };
-    let value = num
-        .parse::<i64>()
-        .map_err(|e| format!("MemTotal {num:?} is not a number: {e}"))?;
-    let multiplier: i64 = match unit {
-        "B" => 1,
-        "kB" | "KB" => 1024,
-        "MB" => 1024 * 1024,
-        "GB" => 1024 * 1024 * 1024,
-        other => return Err(format!("MemTotal has an unknown unit {other:?}")),
-    };
-    Ok(value.saturating_mul(multiplier))
 }
 
 /// The host's name.
@@ -132,7 +95,23 @@ pub fn set(facts: SystemFacts) {
 
 /// The recorded facts, or a default snapshot if [`set`] was never called.
 pub fn get() -> SystemFacts {
-    FACTS.read().clone().unwrap_or_default()
+    FACTS.read().clone().unwrap_or_else(unset)
+}
+
+/// What a caller that never recorded facts sees.
+#[cfg(not(test))]
+fn unset() -> SystemFacts {
+    SystemFacts::default()
+}
+
+/// Core's own tests stand for a host whose memory is known, as the daemon's
+/// is, so that the scripts they evaluate can read it.
+#[cfg(test)]
+fn unset() -> SystemFacts {
+    SystemFacts {
+        available_memory: Ok(1 << 30),
+        ..SystemFacts::default()
+    }
 }
 
 /// Host facts determined since the rest were set, each `None` where it
@@ -153,7 +132,7 @@ pub struct Determined {
 // spec: CONST#determining-host-constants
 pub fn determined(found: Determined) {
     let mut held = FACTS.write();
-    let facts = held.get_or_insert_with(SystemFacts::default);
+    let facts = held.get_or_insert_with(unset);
     if let Some(v4) = found.ipv4_egress {
         facts.ipv4_egress = v4;
     }
@@ -180,13 +159,7 @@ mod tests {
 
     // spec: CONST#host-constants
     #[test]
-    fn mem_total_is_read_in_bytes_and_anything_else_is_undetermined() {
-        assert_eq!(
-            parse_mem_total_bytes("MemFree: 1 kB\nMemTotal:   2048 kB\n"),
-            Ok(2048 * 1024)
-        );
-        assert!(parse_mem_total_bytes("MemFree: 1 kB\n").is_err());
-        assert!(parse_mem_total_bytes("MemTotal: lots kB\n").is_err());
-        assert!(parse_mem_total_bytes("MemTotal: 12 parsecs\n").is_err());
+    fn outside_the_daemon_memory_is_undetermined() {
+        assert!(SystemFacts::default().available_memory.is_err());
     }
 }

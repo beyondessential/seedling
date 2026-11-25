@@ -81,8 +81,8 @@ fn is_main_table_default_route(route: &RouteMessage) -> bool {
     if !matches!(route.header.kind, RouteType::Unicast) {
         return false;
     }
-    if crate::system::data_plane::routes::effective_table(route)
-        != crate::system::data_plane::routes::MAIN_ROUTE_TABLE
+    if crate::data_plane::routes::effective_table(route)
+        != crate::data_plane::routes::MAIN_ROUTE_TABLE
     {
         return false;
     }
@@ -166,7 +166,7 @@ mod tests {
     // spec: LINUX#egress
     #[test]
     fn only_a_default_route_of_the_main_table_counts_for_either_family() {
-        use crate::system::data_plane::routes::MAIN_ROUTE_TABLE;
+        use crate::data_plane::routes::MAIN_ROUTE_TABLE;
         let v6 = Some(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
         let v4 = Some(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
         assert!(is_main_table_default_route(&default_route(

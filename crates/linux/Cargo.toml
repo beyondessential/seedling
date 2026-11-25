@@ -13,8 +13,10 @@ futures-util.workspace = true
 ipnet.workspace = true
 jiff.workspace = true
 libc = "0.2.191"
+nftables = { version = "0.6.3", features = ["tokio"] }
 nix = { version = "0.31.3", features = ["signal", "term"] }
 podman-rest-client = { version = "0.13.0", default-features = false, features = ["uds", "v5"] }
+rtnetlink = "0.24.0"
 rustix = { version = "1.1.6", features = ["fs"] }
 serde.workspace = true
 serde_json.workspace = true

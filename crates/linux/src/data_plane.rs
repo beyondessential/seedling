@@ -8,16 +8,16 @@ use rtnetlink::Handle;
 use snafu::Snafu;
 use tracing::error;
 
-use crate::system::{
+use seedling_core::system::{
     BoxError, BoxFuture, DataPlane,
     types::{DataPlaneRules, ServiceRoute},
 };
 
 mod nft;
-pub(crate) mod routes;
+pub mod routes;
 
 #[derive(Debug, Snafu)]
-pub(crate) enum DataPlaneError {
+pub enum DataPlaneError {
     #[snafu(display("nftables error: {source}"))]
     Nftables {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
@@ -30,13 +30,13 @@ pub(crate) enum DataPlaneError {
     },
 }
 
-pub(crate) struct NftablesDataPlane {
+pub struct NftablesDataPlane {
     node_prefix: Ipv6Net,
     handle: Handle,
 }
 
 impl NftablesDataPlane {
-    pub(crate) fn new(node_prefix: Ipv6Net) -> std::io::Result<Self> {
+    pub fn new(node_prefix: Ipv6Net) -> std::io::Result<Self> {
         let (connection, handle, _) = rtnetlink::new_connection()?;
         tokio::spawn(connection);
         Ok(Self {

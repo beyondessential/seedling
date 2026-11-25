@@ -2,7 +2,7 @@ use std::net::{Ipv6Addr, SocketAddr};
 
 use ipnet::Ipv6Net;
 
-use crate::system::types::{ForwardProto, IngressRule};
+use seedling_core::system::types::{ForwardProto, IngressRule};
 
 use super::nft::{
     ct_state_established_related_accept, ct_status_dnat_accept, dnat_lb,

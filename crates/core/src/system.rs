@@ -16,7 +16,6 @@ pub mod actuator;
 pub mod backends;
 pub mod host_probes;
 pub mod nat64;
-pub mod netinfo;
 pub mod observer;
 pub mod priority;
 pub mod reconcile;
@@ -25,7 +24,6 @@ pub mod types;
 
 pub mod breadcrumb;
 pub(crate) mod caddy;
-pub(crate) mod data_plane;
 pub mod jool;
 pub mod journal;
 pub mod resolver;
@@ -259,8 +257,9 @@ pub trait NetworkProxy: Send + Sync + 'static {
 }
 
 pub trait DataPlane: Send + Sync + 'static {
-    /// Atomically replace the complete nftables rule set in `seedling_net`.
-    /// Idempotent. Covers ingress DNAT, FORWARD policy, and mount DNAT6.
+    /// Atomically replace the complete set of packet-filtering rules the
+    /// runtime owns. Idempotent. Covers ingress DNAT, FORWARD policy, and
+    /// mount DNAT6.
     fn apply_rules<'a>(&'a self, rules: &'a DataPlaneRules) -> BoxFuture<'a, Result<(), BoxError>>;
 
     /// Replace the complete set of IPv6 service routes in the routing table.
@@ -349,6 +348,7 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
 /// builds itself.
 pub struct Platform {
     pub connector: Arc<dyn backends::Connector>,
+    pub data_plane: Arc<dyn DataPlane>,
     pub journal: Arc<dyn journal::JournalSource>,
     pub storage: Arc<dyn volume_store::VolumeStorage>,
 }
@@ -392,8 +392,6 @@ impl System {
             );
         }
         let (container, process) = (backends.container(), backends.process());
-        let data_plane_arc: Arc<dyn DataPlane> =
-            Arc::new(data_plane::NftablesDataPlane::new(node_prefix)?);
 
         // spec: PRX#proxy-lifecycle — bring Caddy up best-effort. A failure
         // here (image build, container start, health check) must NOT take down
@@ -430,7 +428,7 @@ impl System {
             container,
             process,
             proxy,
-            data_plane: data_plane_arc,
+            data_plane: platform.data_plane,
             volume_store,
             journal: platform.journal,
             backends,

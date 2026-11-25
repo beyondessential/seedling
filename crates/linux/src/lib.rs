@@ -3,7 +3,10 @@
 
 mod confined;
 pub mod connector;
+pub mod data_plane;
+pub mod host;
 pub mod journal;
+pub mod netinfo;
 pub mod podman;
 pub mod systemd;
 pub mod volume_storage;
