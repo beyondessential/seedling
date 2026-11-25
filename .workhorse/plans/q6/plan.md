@@ -12,6 +12,10 @@ Each demo exists to show and exercise a slice of BSL and the runtime.
 - **protocol-tour**: one ingress per termination pairing: plain TCP passthrough, TLS to TCP, DTLS to UDP, HTTPS to HTTP/1.1, HTTPS to cleartext HTTP/2. Each backed by a small echo server.
 - **actions-and-gates**: gates with keys and start ordering, a gate re-running when its key moves, actions with a param schema, a shell, a scheduled action, a job.
 - **paired apps** (provider and consumer): an exported service and an exported volume consumed by a second app.
+- **bundle-tour**: every bundle feature: several script files in a `script` order, sidecar files read with `app.file` and `app.dir` and written into a volume, the metadata table read with `app.metadata()`, a `seedling` version requirement, and files pulled in from `demos/shared/` through `include`.
+- **bundle-share**: a small second demo including the same files from `demos/shared/` (a helper script and a static page), so `include` is shown actually shared between bundles.
+
+Each demo covers every feature of its area, not a sample of it.
 
 ## Layout
 
@@ -30,6 +34,7 @@ No demo image is built or published from this repo.
 The demos replace the current definitions as the fixtures in `crates/core/src/tests/definitions.rs`, so they keep evaluating as the language changes.
 Every demo gets at least an evaluation test.
 Fixtures load as bundles rather than `include_str!` of one script, so a demo's sidecar files and metadata are part of what is tested.
+Demos using `include` are assembled the way the CLI assembles them; the assembly in `crates/ctl/src/definition.rs` (`read_assembled_folder`) moves where both ctl and the core tests can call it, rather than being reimplemented for the tests.
 
 The gate tests carry over to actions-and-gates, which must exercise what they assert today:
 
