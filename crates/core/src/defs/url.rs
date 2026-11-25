@@ -150,11 +150,15 @@ fn userinfo(component: &str, encoded: &str) -> Result<Option<String>, String> {
 }
 
 /// Whether the authority of `text`, an `http` or `https` URL the URL parser
-/// has accepted, holds an `@`, read as the parser reads it: after the
-/// scheme's `:` and any `/` or `\`, up to the next `/`, `\`, `?` or `#`. The
-/// parser drops an empty username and password, so this is the only way to
-/// see one.
+/// has accepted, holds an `@`, read as the parser reads it: with every tab,
+/// line feed and carriage return removed, after the scheme's `:` and any `/`
+/// or `\`, up to the next `/`, `\`, `?` or `#`. The parser drops an empty
+/// username and password, so this is the only way to see one.
 fn has_userinfo(text: &str) -> bool {
+    let text: String = text
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
     let Some((_, rest)) = text.split_once(':') else {
         return false;
     };

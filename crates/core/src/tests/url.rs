@@ -265,3 +265,21 @@ fn a_url_origin_is_refused_for_its_shape_before_its_parts() {
         assert!(refused.contains(reason), "{value}: {refused}");
     }
 }
+
+/// The kind parser refuses these before the URL parser runs, so they are
+/// given to `UrlOrigin::parse` directly.
+// spec: URL#url-origins
+#[test]
+fn a_url_origin_finds_an_at_sign_the_url_parser_reads_past_whitespace() {
+    for value in [
+        "https:\t//@h/",
+        "https://\n@h/",
+        "ht\ttps://@h/",
+        "https:/\r/u@h/",
+    ] {
+        assert!(
+            crate::defs::url::UrlOrigin::parse(value).is_err(),
+            "{value:?} should be refused"
+        );
+    }
+}
