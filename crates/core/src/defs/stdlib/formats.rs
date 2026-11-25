@@ -7,7 +7,7 @@ use rhai::{Dynamic, EvalAltResult, FuncRegistration, NativeCallContext};
 use serde::{Serialize, Serializer};
 
 use super::{
-    ARRAY, MAP, STRING, Withheld,
+    ARRAY, HelperResult, MAP, STRING, Withheld,
     bytes::{ByteArg, held, take_byte_arg},
     max_string, settle, within,
 };
@@ -21,8 +21,6 @@ mod env;
 mod json;
 mod toml;
 mod yaml;
-
-type HelperResult = Result<Dynamic, Box<EvalAltResult>>;
 
 // spec: FMT#helpers
 /// The most levels of arrays and maps a value may nest, counting the
