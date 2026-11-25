@@ -180,6 +180,7 @@ A decoder MUST return each value as the table gives for its format.
 | any | object, mapping, table, inline table | map of the decoded values |
 
 A decoder MUST raise a script error at an integer outside the range of a signed 64-bit integer.
+A decoder MUST raise a script error at any other number too large in magnitude for a finite floating-point number, other than YAML's and TOML's own infinities.
 A decoder MUST raise a script error at a map that holds the same key twice.
 
 ### YAML documents
