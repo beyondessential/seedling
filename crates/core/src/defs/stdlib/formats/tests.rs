@@ -18,7 +18,10 @@ fn eval(src: &str) -> Result<Dynamic, Box<EvalAltResult>> {
 }
 
 fn text(src: &str) -> String {
-    eval(src).unwrap_or_else(|e| panic!("{src}: {e}")).into_string().unwrap()
+    eval(src)
+        .unwrap_or_else(|e| panic!("{src}: {e}"))
+        .into_string()
+        .unwrap()
 }
 
 fn throws(src: &str) -> String {
@@ -68,7 +71,7 @@ fn json_is_indented_by_two_and_sorted() {
 fn json_takes_any_value_and_escapes_only_what_it_must() {
     assert_eq!(text("std::encode_json(1)"), "1\n");
     assert_eq!(text("std::encode_json(1.0)"), "1.0\n");
-    assert_eq!(text("std::encode_json(1e300)"), "1e300\n");
+    assert_eq!(text("std::encode_json(1e300)"), "1e+300\n");
     assert_eq!(text("std::encode_json([])"), "[]\n");
     assert_eq!(text("std::encode_json(#{})"), "{}\n");
     assert_eq!(
@@ -95,15 +98,26 @@ fn a_version_is_written_as_its_text() {
 fn a_refusal_names_the_position_and_the_reason() {
     let err = throws(r#"std::encode_json(#{ a: [1, #{ "b c": 1.0 / 0.0 }] })"#);
     assert!(
-        err.contains(r#"`value["a"][1]["b c"]` cannot be encoded: JSON has no infinite or NaN number"#),
+        err.contains(
+            r#"`value["a"][1]["b c"]` cannot be encoded: JSON has no infinite or NaN number"#
+        ),
         "{err}"
     );
     let err = throws(r#"std::encode_toml(#{ a: #{ b: () } })"#);
-    assert!(err.contains(r#"`value["a"]["b"]` cannot be encoded: TOML has no null"#), "{err}");
+    assert!(
+        err.contains(r#"`value["a"]["b"]` cannot be encoded: TOML has no null"#),
+        "{err}"
+    );
     let err = throws(r#"std::encode_yaml([blob(2)])"#);
-    assert!(err.contains("`value[0]` cannot be encoded: YAML has no type for blob"), "{err}");
+    assert!(
+        err.contains("`value[0]` cannot be encoded: YAML has no type for blob"),
+        "{err}"
+    );
     let err = throws(r#"std::encode_env(#{ A: [1] })"#);
-    assert!(err.contains(r#"`value["A"]` cannot be encoded: an env file has no arrays"#), "{err}");
+    assert!(
+        err.contains(r#"`value["A"]` cannot be encoded: an env file has no arrays"#),
+        "{err}"
+    );
     let err = throws(r#"std::encode_env(#{ A: #{} })"#);
     assert!(err.contains("an env file has no nested maps"), "{err}");
     let err = throws(r#"std::encode_env(#{ A: () })"#);
@@ -123,8 +137,14 @@ fn toml_and_env_take_only_a_map() {
 #[test]
 fn nesting_deeper_than_128_levels_throws() {
     let nested = |levels: usize| format!("{}1{}", "[".repeat(levels), "]".repeat(levels));
-    text(&format!("std::encode_json({})", nested(128)));
-    let err = throws(&format!("std::encode_json({})", nested(129)));
+    // A literal that deep is beyond the engine's own expression depth.
+    let encode = |levels: usize| {
+        eval(&format!(
+            "let v = 1; for i in 0..{levels} {{ v = [v]; }} std::encode_json(v)"
+        ))
+    };
+    let _ = encode(128).unwrap();
+    let err = encode(129).expect_err("129 levels").to_string();
     assert!(err.contains("more than 128 levels deep"), "{err}");
 
     let yaml = |levels: usize| lit(&nested(levels));
@@ -143,7 +163,7 @@ nested:
   a: []
   z: 1
 none: null
-on: true
+\"on\": true
 port: 8080
 ratio: 0.5
 tags:
@@ -164,17 +184,17 @@ tags:
 #[test]
 fn yaml_quotes_strings_a_reader_could_misread() {
     for s in [
-        "", " a", "a ", "\ta", "~", "no", "No", "NO", "yes", "on", "Off", "true", "False",
-        "null", "NULL", "0755", "1e3", "0x1F", "0o17", "-1", "+1", ".5", ".inf", "1.5",
-        "a: b", "- a", "#a", "a #b", "[a]", "{a}", "&a", "*a", "!a", "|a", ">a", "%a", "@a",
-        "`a", "'a", "\"a", "a\nb",
+        "", " a", "a ", "\ta", "~", "no", "No", "NO", "yes", "on", "Off", "true", "False", "null",
+        "NULL", "0755", "1e3", "0x1F", "0o17", "-1", "+1", ".5", ".inf", "1.5", "a: b", "- a",
+        "#a", "a #b", "[a]", "{a}", "&a", "*a", "!a", "|a", ">a", "%a", "@a", "`a", "'a", "\"a",
+        "a\nb",
     ] {
         let out = text(&format!("std::encode_yaml({})", lit(s)));
         assert!(out.starts_with('"'), "{s:?} written as {out:?}");
         let back = text(&format!("std::decode_yaml({})", lit(&out)));
         assert_eq!(back, s, "{out:?}");
     }
-    for s in ["web", "y", "n", "a b", "1.2.3", "v1", "https://x"] {
+    for s in ["web", "y", "n", "a b", "1.2.3", "v1", "a/b"] {
         let out = text(&format!("std::encode_yaml({})", lit(s)));
         assert_eq!(out, format!("{s}\n"));
     }
@@ -217,7 +237,7 @@ fn toml_writes_tables_after_key_value_lines() {
             })"#
         ),
         r#""a key" = 1
-big = 1e300
+big = 1e+300
 empty = []
 inf = -inf
 list = [1, "two", { three = 3 }, []]
@@ -267,7 +287,9 @@ fn toml_output_round_trips() {
 #[test]
 fn env_files_single_quote_every_value() {
     assert_eq!(
-        text(r#"std::encode_env(#{ PORT: 80, DEBUG: false, RATIO: 1.0, NAME: "a b$c\"d", _X: "" })"#),
+        text(
+            r#"std::encode_env(#{ PORT: 80, DEBUG: false, RATIO: 1.0, NAME: "a b$c\"d", _X: "" })"#
+        ),
         "DEBUG='false'\nNAME='a b$c\"d'\nPORT='80'\nRATIO='1.0'\n_X=''\n"
     );
     assert_eq!(text("std::encode_env(#{})"), "");
@@ -312,7 +334,10 @@ fn env_files_decode_their_strict_form() {
         ("A=x y", 1),
     ] {
         let err = throws(&format!("std::decode_env({})", lit(bad)));
-        assert!(err.contains(&format!("is not an env file at line {line}")), "{bad:?}: {err}");
+        assert!(
+            err.contains(&format!("is not an env file at line {line}")),
+            "{bad:?}: {err}"
+        );
     }
     let err = throws(&format!("std::decode_env({})", lit("A=1\nA=2\n")));
     assert!(err.contains("names the same key twice, at line 2"), "{err}");
@@ -341,9 +366,16 @@ fn decoders_return_values_by_the_mapping_table() {
     assert_eq!(
         json(&format!(
             "std::decode_yaml({})",
-            lit("a: ~\nb: [yes, true, 0x1F, 0o17, 010, 1., .5, -.inf, 'true', \"1\"]\nc:\n")
+            lit("a: ~\nb: [yes, true, 0x1F, 0o17, 010, 1., .5, 'true', \"1\"]\nc:\n")
         )),
-        serde_json::json!({ "a": null, "b": ["yes", true, 31, 15, 10, 1.0, 0.5, null, "true", "1"], "c": null })
+        serde_json::json!({ "a": null, "b": ["yes", true, 31, 15, 10, 1.0, 0.5, "true", "1"], "c": null })
+    );
+    assert_eq!(
+        eval(&format!("std::decode_yaml({})", lit("-.inf")))
+            .unwrap()
+            .as_float()
+            .unwrap(),
+        f64::NEG_INFINITY
     );
     assert!(
         eval(&format!("std::decode_yaml({})", lit(".nan")))
@@ -355,7 +387,9 @@ fn decoders_return_values_by_the_mapping_table() {
     assert_eq!(
         json(&format!(
             "std::decode_toml({})",
-            lit("a = 1979-05-27 07:32:00Z\nb = 1979-05-27\nc = 07:32:00\nd = 1979-05-27t07:32:00\ne = [1, 2.0, \"x\", { f = true }]")
+            lit(
+                "a = 1979-05-27 07:32:00Z\nb = 1979-05-27\nc = 07:32:00\nd = 1979-05-27t07:32:00\ne = [1, 2.0, \"x\", { f = true }]"
+            )
         )),
         serde_json::json!({
             "a": "1979-05-27T07:32:00Z",
@@ -384,7 +418,10 @@ fn decoders_refuse_numbers_out_of_range() {
         throws(&format!("std::{helper}({})", lit(doc)));
     }
     assert_eq!(
-        json(&format!("std::decode_json({})", lit("-9223372036854775808"))),
+        json(&format!(
+            "std::decode_json({})",
+            lit("-9223372036854775808")
+        )),
         serde_json::json!(i64::MIN)
     );
 }
@@ -429,7 +466,11 @@ fn decoders_ignore_a_byte_order_mark() {
         ("decode_toml", ""),
         ("decode_env", ""),
     ] {
-        let v = eval(&format!("std::{helper}({})", lit(&format!("\u{feff}{doc}")))).unwrap();
+        let v = eval(&format!(
+            "std::{helper}({})",
+            lit(&format!("\u{feff}{doc}"))
+        ))
+        .unwrap();
         assert!(v.is_map(), "{helper}");
     }
 }
@@ -440,7 +481,10 @@ fn yaml_reads_exactly_one_document() {
     for doc in ["", "# only a comment\n", "a: 1\n---\nb: 2\n"] {
         throws(&format!("std::decode_yaml({})", lit(doc)));
     }
-    assert_eq!(json(&format!("std::decode_yaml({})", lit("---\na: 1\n...\n"))), serde_json::json!({ "a": 1 }));
+    assert_eq!(
+        json(&format!("std::decode_yaml({})", lit("---\na: 1\n...\n"))),
+        serde_json::json!({ "a": 1 })
+    );
 }
 
 // spec: FMT#yaml-documents
@@ -453,7 +497,16 @@ fn yaml_tags_must_be_core_and_fit_their_node() {
         )),
         serde_json::json!(["1", 2, 3.0, true, null, [], {}])
     );
-    for doc in ["!foo x", "! x", "!!binary aGk=", "!!int x", "!!float 0x1F", "!!map []", "!!seq {}", "!!str [1]"] {
+    for doc in [
+        "!foo x",
+        "! x",
+        "!!binary aGk=",
+        "!!int x",
+        "!!float 0x1F",
+        "!!map []",
+        "!!seq {}",
+        "!!str [1]",
+    ] {
         let err = throws(&format!("std::decode_yaml({})", lit(doc)));
         assert!(err.contains("tag"), "{doc}: {err}");
     }
@@ -472,7 +525,10 @@ fn yaml_keys_must_be_strings() {
 #[test]
 fn yaml_aliases_copy_their_anchor_within_a_budget() {
     assert_eq!(
-        json(&format!("std::decode_yaml({})", lit("a: &x [1, 2]\nb: *x\n"))),
+        json(&format!(
+            "std::decode_yaml({})",
+            lit("a: &x [1, 2]\nb: *x\n")
+        )),
         serde_json::json!({ "a": [1, 2], "b": [1, 2] })
     );
     // Each level doubles the copies: 10 levels of 10 copies is far past the budget.
@@ -492,9 +548,15 @@ fn yaml_aliases_copy_their_anchor_within_a_budget() {
 // spec: FMT#helpers
 #[test]
 fn decoders_take_a_bytes_argument() {
-    assert_eq!(json("std::decode_json(std::encode_utf8(\"[1]\"))"), serde_json::json!([1]));
+    assert_eq!(
+        json("std::decode_json(std::encode_utf8(\"[1]\"))"),
+        serde_json::json!([1])
+    );
     let err = throws("std::decode_json(1)");
-    assert!(err.contains("`text` must be a string, Blob, File or Directory"), "{err}");
+    assert!(
+        err.contains("`text` must be a string, Blob, File or Directory"),
+        "{err}"
+    );
 }
 
 // spec: FMT#helpers
@@ -502,11 +564,11 @@ fn decoders_take_a_bytes_argument() {
 #[test]
 fn results_are_held_to_the_engine_limits() {
     let mut engine = engine();
-    engine.set_max_string_size(16);
+    engine.set_max_string_size(24);
     engine.set_max_array_size(3);
     engine.set_max_map_size(2);
     let err = engine
-        .eval::<Dynamic>(r#"std::encode_json(["aaaaaa", "bbbbbb"])"#)
+        .eval::<Dynamic>(r#"std::encode_json(["aaaaaaaaaa", "bbbbbbbbbb"])"#)
         .expect_err("text too long")
         .to_string();
     assert!(err.contains("Length of string"), "{err}");

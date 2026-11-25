@@ -870,10 +870,7 @@ fn an_encoding_of_a_value_holding_a_secret_is_withheld() {
     "#;
     let (yaml, found) = withheld(script, &[("token", "s3cret")]);
     assert!(found, "{yaml}");
-    let (_, found) = withheld(
-        &script.replace(".secret(true)", ""),
-        &[("token", "s3cret")],
-    );
+    let (_, found) = withheld(&script.replace(".secret(true)", ""), &[("token", "s3cret")]);
     assert!(!found, "a parameter that is not secret is shown");
 }
 
@@ -917,7 +914,10 @@ fn each_decoded_string_counts_toward_the_derived_values_limit() {
         )
         .1
     };
-    assert!(evaluate(3).is_none(), "a, b and x, the empty string withholding nothing");
+    assert!(
+        evaluate(3).is_none(),
+        "a, b and x, the empty string withholding nothing"
+    );
     let err = evaluate(2).expect("a third does not fit").to_string();
     assert!(err.contains("too large"), "{err}");
 }

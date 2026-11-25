@@ -1,9 +1,6 @@
 //! YAML, written by saphyr's emitter and read from saphyr's parser.
 
-use std::{
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-};
+use std::collections::{HashMap, HashSet};
 
 use rhai::EvalAltResult;
 use saphyr::{Mapping, Scalar, ScalarStyle, Yaml, YamlEmitter};
@@ -294,7 +291,7 @@ fn depth(span: Span) -> Box<EvalAltResult> {
 
 /// The suffix of a tag the core schema defines, or a script error.
 // spec: FMT#yaml-documents
-fn core_tag<'t>(tag: &'t Tag, span: Span) -> Result<&'t str, Box<EvalAltResult>> {
+fn core_tag(tag: &Tag, span: Span) -> Result<&str, Box<EvalAltResult>> {
     match tag.suffix.as_str() {
         suffix @ ("str" | "int" | "float" | "bool" | "null" | "seq" | "map")
             if tag.is_yaml_core_schema() =>
@@ -320,7 +317,7 @@ fn collection_tag(tag: Option<&Tag>, kind: &str, span: Span) -> Result<(), Box<E
 /// A scalar as the core schema reads it. A quoted or block scalar with no
 /// tag is a string; a tagged one must read as its tag's type.
 fn scalar(
-    value: &Cow<'_, str>,
+    value: &str,
     style: ScalarStyle,
     tag: Option<&Tag>,
     span: Span,
@@ -376,7 +373,10 @@ fn resolve(v: &str, span: Span) -> Result<Option<Tree>, Box<EvalAltResult>> {
             };
             if let Some(integer) = integer {
                 return integer.map(|i| Some(Tree::Int(i))).map_err(|_| {
-                    failure("an integer beyond the range of a 64-bit signed integer", span)
+                    failure(
+                        "an integer beyond the range of a 64-bit signed integer",
+                        span,
+                    )
                 });
             }
             if !is_core_float(v) {
@@ -422,6 +422,7 @@ fn is_core_float(v: &str) -> bool {
         }
         None => is_digits(mantissa, 10),
     };
-    let exponent_ok = exponent.is_none_or(|e| is_digits(e.strip_prefix(['-', '+']).unwrap_or(e), 10));
+    let exponent_ok =
+        exponent.is_none_or(|e| is_digits(e.strip_prefix(['-', '+']).unwrap_or(e), 10));
     mantissa_ok && exponent_ok
 }

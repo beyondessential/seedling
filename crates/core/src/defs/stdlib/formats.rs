@@ -139,9 +139,9 @@ impl Tree {
             Tree::Int(i) => i.into(),
             Tree::Float(f) => f.into(),
             Tree::Str(s) => s.into(),
-            Tree::Array(items) => Dynamic::from_array(
-                items.into_iter().map(Tree::into_dynamic).collect(),
-            ),
+            Tree::Array(items) => {
+                Dynamic::from_array(items.into_iter().map(Tree::into_dynamic).collect())
+            }
             Tree::Map(entries) => Dynamic::from_map(
                 entries
                     .into_iter()
@@ -203,10 +203,7 @@ impl Holds {
         if value.is_float() {
             let f = value.cast::<rhai::FLOAT>();
             if !f.is_finite() && !self.non_finite {
-                return Err(at.refused(&format!(
-                    "{} has no infinite or NaN number",
-                    self.name
-                )));
+                return Err(at.refused(&format!("{} has no infinite or NaN number", self.name)));
             }
             return Ok(Tree::Float(f));
         }
@@ -332,7 +329,10 @@ fn encoded(ctx: &NativeCallContext, tree: &Tree, text: String) -> HelperResult {
 // spec: FMT#decoding
 /// The text of a decoder's `text` argument, without a byte order mark.
 fn document(text: &ByteArg) -> Result<&str, Box<EvalAltResult>> {
-    let bytes = text.bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&text.bytes);
+    let bytes = text
+        .bytes
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(&text.bytes);
     std::str::from_utf8(bytes).map_err(|e| {
         format!(
             "`text` is not valid UTF-8 at line {}",
