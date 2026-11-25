@@ -304,10 +304,10 @@ pub(crate) fn scope_with(
 
     // spec: CONST#idle-command
     // spec: LINUX#idle-command
-    let idle_cmd: rhai::Array = vec![
-        rhai::Dynamic::from("sleep".to_owned()),
-        rhai::Dynamic::from("infinity".to_owned()),
-    ];
+    let idle_cmd: rhai::Array = ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
+        .into_iter()
+        .map(|arg| rhai::Dynamic::from(arg.to_owned()))
+        .collect();
     scope.push_constant("IDLE_CMD", idle_cmd);
 
     // spec: CONST#onupdate

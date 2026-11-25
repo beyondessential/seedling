@@ -292,7 +292,7 @@ col.select(#{ name_patterns: ["worker-*"] })
 | `HAS_SNAPSHOTS` | bool | Whether volume storage supports copy-on-write snapshots |
 | `NODE_NAME` | string | Identifier of the node running the application; while undetermined every evaluation fails, with a `host_constant_undetermined` fault on `_system` |
 | `TIMEZONE` | string | IANA timezone of the host (e.g. `Pacific/Auckland`); `UTC` while undetermined, with a `timezone_undetermined` fault on `_system` |
-| `IDLE_CMD` | array | A no-op long-running command (`["sleep", "infinity"]`) for containers whose only purpose is to host `rt.exec` calls |
+| `IDLE_CMD` | array | A no-op long-running command, `sleep infinity` under a shell that exits on SIGTERM or SIGINT, for containers whose only purpose is to host `rt.exec` calls |
 
 ### Enum constants
 
@@ -1056,7 +1056,7 @@ Discarding the return value is fine if the script doesn't care about the result;
 - Stdout and stderr go to the container's log stream; they are not captured by the script.
 - The call is at-most-once across replays: the recorded exit code is recovered from the action log on replay rather than re-running the command.
 
-The `IDLE_CMD` constant is provided as a sugar for the "container as exec host" pattern: it's `["sleep", "infinity"]`, used as a deployment or job's `command(...)` so the container starts, does nothing, and stays alive while the action runs `rt.exec` against it.
+The `IDLE_CMD` constant is provided as a sugar for the "container as exec host" pattern: it runs `sleep infinity` under a shell that exits on SIGTERM or SIGINT, so the container starts, does nothing, stays alive while the action runs `rt.exec` against it, and stops at once. The image needs a POSIX shell and a `sleep` that accepts `infinity`.
 
 ## Action params with `kind: "volume"`
 

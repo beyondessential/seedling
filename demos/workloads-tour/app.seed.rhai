@@ -362,10 +362,9 @@ echo "lifecycle: 600 seconds up, exiting with status 0"`)
     .on_exit(OnExit.RestartOnFailure)
     .on_terminate(OnTerminate.Recreate);
 
-// IDLE_CMD runs a process that does nothing. As the container's main process
-// it ignores SIGTERM, so stopping this deployment takes the full 10 second
-// stop timeout before SIGKILL; time `apps stop-resource workloads-tour
-// deployment idle` to see it. It runs as an unprivileged uid:gid.
+// IDLE_CMD runs a process that does nothing until the container is asked to
+// stop, then exits at once rather than waiting out the stop timeout. It runs
+// as an unprivileged uid:gid.
 app.deployment("idle")
     .image(alpine)
     .command(IDLE_CMD)
