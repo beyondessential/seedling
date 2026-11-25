@@ -1,8 +1,13 @@
 import type { IntRange, ParamSchema } from "./types";
-import { isStrongPassword } from "./passwordStrength";
+import { isStrongPassword, passwordScore } from "./passwordStrength";
 import { formatQuantity, parseQuantity } from "./quantity";
 
 export type ParamEntries = [string, ParamSchema][];
+
+/** The parts of a param's schema a text input's helper line reads. */
+export type TextParamSchema = Pick<ParamSchema, "kind" | "range"> & {
+  description?: string | null;
+};
 
 /** The values an action's inputs start with: each param's `default_value`. */
 // spec: ACN#param-schemas
@@ -88,4 +93,28 @@ export function quantityProblem(value: string, range?: IntRange | null): string 
     return min !== null ? `Must be at least ${bound(min)}` : `Must be at most ${bound(max!)}`;
   }
   return null;
+}
+
+/** Whether a text input shows `value` as one its kind rejects: a `password`
+ *  judged weak, or a `quantity` its kind refuses. */
+// spec: ACN#presentation-of-kinds
+export function paramValueRejected(def: TextParamSchema, value: string): boolean {
+  if (def.kind === "password") return value.length > 0 && !isStrongPassword(value);
+  if (def.kind === "quantity") return quantityProblem(value, def.range) !== null;
+  return false;
+}
+
+/** The helper line under a text input: the reason the kind rejects the value,
+ *  a `weak-password` value's strength, or else the description. */
+// spec: ACN#presentation-of-kinds
+export function paramHelperText(def: TextParamSchema, value: string): string | undefined {
+  const description = def.description || undefined;
+  if (def.kind === "quantity") return quantityProblem(value, def.range) ?? description;
+  if (def.kind === "password" && value.length > 0) {
+    return isStrongPassword(value) ? description : "Password is too weak";
+  }
+  if (def.kind === "weak-password" && value.length > 0) {
+    return `Strength: ${passwordScore(value)}/4${description ? ` — ${description}` : ""}`;
+  }
+  return description;
 }

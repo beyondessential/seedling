@@ -76,9 +76,8 @@ import {
   logsUrlForTarget,
   parseFaultTargets,
 } from "../lib/faultTargets";
-import { generateRandomHex, initialParamValues, integerProblem, paramFieldType, paramsBlocker, quantityProblem, type ParamEntries } from "../lib/params";
+import { generateRandomHex, initialParamValues, integerProblem, paramFieldType, paramHelperText, paramsBlocker, paramValueRejected, quantityProblem, type ParamEntries } from "../lib/params";
 import { formatQuantity } from "../lib/quantity";
-import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import {
   appPriorityColor,
   deploymentPriorityColor,
@@ -1390,26 +1389,8 @@ function ParamsSection({
                               ? "text"
                               : paramFieldType(p.kind, p.secret)
                         }
-                        error={
-                          (p.kind === "password" &&
-                            draft.length > 0 &&
-                            !isStrongPassword(draft)) ||
-                          (p.kind === "quantity" &&
-                            quantityProblem(draft, p.range) !== null)
-                        }
-                        helperText={
-                          p.kind === "quantity"
-                            ? (quantityProblem(draft, p.range) ??
-                              p.description ??
-                              undefined)
-                            : p.kind === "password" && draft.length > 0
-                            ? isStrongPassword(draft)
-                              ? (p.description ?? undefined)
-                              : "Password is too weak"
-                            : p.kind === "weak-password" && draft.length > 0
-                              ? `Strength: ${passwordScore(draft)}/4${p.description ? ` — ${p.description}` : ""}`
-                              : (p.description ?? undefined)
-                        }
+                        error={paramValueRejected(p, draft)}
+                        helperText={paramHelperText(p, draft)}
                         slotProps={{
                           input: {
                             endAdornment: (

@@ -18,10 +18,10 @@ import { useOiQuery } from "../hooks/useOi";
 import {
   generateRandomHex,
   paramFieldType,
-  quantityProblem,
+  paramHelperText,
+  paramValueRejected,
   type ParamEntries,
 } from "../lib/params";
-import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import type { ParamSchema, SiteVolume } from "../lib/types";
 import { KindInput, hasKindInput } from "./KindInput";
 import { OiErrorAlert } from "./OiErrorAlert";
@@ -61,19 +61,6 @@ function VolumeParamField({
       {error && <OiErrorAlert error={error} />}
     </FormControl>
   );
-}
-
-function helper(def: ParamSchema, value: string): string | undefined {
-  if (def.kind === "quantity") {
-    return quantityProblem(value, def.range) ?? (def.description || undefined);
-  }
-  if (def.kind === "password" && value.length > 0) {
-    return isStrongPassword(value) ? (def.description || undefined) : "Password is too weak";
-  }
-  if (def.kind === "weak-password" && value.length > 0) {
-    return `Strength: ${passwordScore(value)}/4${def.description ? ` — ${def.description}` : ""}`;
-  }
-  return def.description || undefined;
 }
 
 /** One input per declared param of an action or shell: each
@@ -121,8 +108,6 @@ export function ParamFields({
         const isRandom = def.kind === "random";
         const isMultiline = def.kind === "multiline";
         const isQuantity = def.kind === "quantity";
-        const weak = def.kind === "password" && value.length > 0 && !isStrongPassword(value);
-        const invalidQuantity = isQuantity && quantityProblem(value, def.range) !== null;
         return (
           <TextField
             key={key}
@@ -130,8 +115,8 @@ export function ParamFields({
             size="small"
             value={value}
             onChange={(e) => onChange(key, e.target.value)}
-            helperText={helper(def, value)}
-            error={weak || invalidQuantity}
+            helperText={paramHelperText(def, value)}
+            error={paramValueRejected(def, value)}
             multiline={isMultiline}
             minRows={isMultiline ? 3 : undefined}
             type={isMultiline ? undefined : shown[key] ? "text" : paramFieldType(def.kind, def.secret)}
