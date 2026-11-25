@@ -131,6 +131,7 @@ struct Withholding {
 }
 
 /// Why a helper result may be withheld.
+#[derive(Clone)]
 pub enum Dependence {
     /// An argument contains a derived value, so the result is withheld.
     Derived,

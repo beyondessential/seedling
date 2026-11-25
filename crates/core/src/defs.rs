@@ -194,9 +194,17 @@ pub fn register(engine: &mut Engine) {
         "sleep",
         |_: rhai::FLOAT| -> Result<(), Box<rhai::EvalAltResult>> { Err(NO_SLEEP.into()) },
     );
+
+    // spec: FMT#json
+    // Rhai's basic map package offers `to_json`, which no feature removes.
+    engine.register_fn(
+        "to_json",
+        |_: &mut rhai::Map| -> Result<String, Box<rhai::EvalAltResult>> { Err(NO_TO_JSON.into()) },
+    );
 }
 
 const NO_SLEEP: &str = "`sleep` is not available: evaluation cannot pause";
+const NO_TO_JSON: &str = "`to_json` is not available: use `std::encode_json`";
 
 // spec: BSL#evaluation
 // spec: BSL#enums

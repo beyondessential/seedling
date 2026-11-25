@@ -687,6 +687,37 @@ Quoting stops the shell from changing a value, not the program from reading it: 
 
 A quoted result is withheld like any other helper's when an argument holds a secret parameter or a derived value.
 
+### Structured formats
+
+These helpers write a value as JSON, YAML, TOML or env-file text, such as a configuration file to [write into a volume](#volume), and read one back. Each decoder takes bytes as the encoding helpers do, so a bundle file decodes directly.
+
+| helper | returns |
+| --- | --- |
+| `std::encode_json(value)` / `std::decode_json(text)` | indented JSON / the value it holds |
+| `std::encode_yaml(value)` / `std::decode_yaml(text)` | block-style YAML / the value it holds |
+| `std::encode_toml(map)` / `std::decode_toml(text)` | a TOML 1.0 document / the map it holds |
+| `std::encode_env(map)` / `std::decode_env(text)` | `KEY='value'` lines / the map they hold |
+
+```rhai
+let settings = #{ server: #{ port: 8080, hosts: ["a.internal", "b.internal"] }, debug: false };
+let toml = std::encode_toml(settings);
+// debug = false
+//
+// [server]
+// hosts = ["a.internal", "b.internal"]
+// port = 8080
+
+let defaults = std::decode_yaml(app.file("defaults.yaml"));
+```
+
+Every encoder writes map keys in sorted order and one fixed layout, so the same value always gives the same text. A value the format cannot hold throws, naming where it sits and why, rather than being dropped or converted: `()` in TOML or an env file, an infinite number in JSON, an array or nested map in an env file, and a Blob anywhere (encode it with one of the encodings first). A version is written as its text. YAML quotes any string an older YAML reader could take for something else, such as `no`, `on` or `0755`. An env file single-quotes every value, so a value holding a single quote or a line break throws.
+
+Decoders are strict: text that is not a document of the format throws, naming the line it stops being one, and so does a key given twice or an integer too large for BSL. YAML is read under the YAML 1.2 core schema, so `yes` and `on` are strings, and a document holding more than one document, a custom tag or a non-string key throws. TOML date-times come back as strings. `std::decode_env` reads only blank lines, `#` comments and `KEY=value` entries with a bare or single-quoted value; double quotes, escapes, `$` expansion and `export` throw, because the readers of env files disagree on them.
+
+Rhai's own `to_json` on a map throws, pointing at `std::encode_json`, which handles every value the same way the other encoders do.
+
+An encoding of a value holding a secret is withheld like the secret, and each string decoded from a secret is withheld too.
+
 ## Gates
 
 An app comes up from its resource graph alone: the runtime starts every static resource and keeps it running. Some changes need a step the graph cannot express, such as migrating a database before a new version serves. A _gate_ is such a step. The runtime keeps each gate satisfied by running its body whenever the gate's _key_ moves from the key of its last success, and holds back the workloads that depend on it until it is.

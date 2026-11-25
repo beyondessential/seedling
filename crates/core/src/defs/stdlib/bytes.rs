@@ -30,6 +30,12 @@ impl ByteArg {
     }
 }
 
+// spec: SEC#redaction
+/// The bytes of `args` to look for a withheld value in.
+pub(super) fn held<'a>(args: &[&'a ByteArg]) -> Vec<&'a [u8]> {
+    args.iter().filter_map(|a| a.withholdable()).collect()
+}
+
 // spec: ENC#byte-arguments
 /// Convert a string, Blob, `File` or `Directory` to its bytes, or throw
 /// naming `what` and the actual type.

@@ -3,12 +3,13 @@
 use base64::Engine as _;
 use rhai::{Dynamic, EvalAltResult, FuncRegistration, NativeCallContext, Position};
 
-use self::bytes::ByteArg;
+use self::bytes::{ByteArg, held};
 use crate::runtime::{barrier::runtime::is_in_action_closure, seeds};
 
 mod bytes;
 mod encoding;
 mod fields;
+mod formats;
 pub(crate) mod kinds;
 mod quoting;
 mod random;
@@ -21,6 +22,7 @@ pub fn module() -> rhai::Module {
     random::register(&mut module);
     encoding::register(&mut module);
     quoting::register(&mut module);
+    formats::register(&mut module);
     module
 }
 
@@ -65,6 +67,10 @@ fn within(len: usize, limit: usize, what: &str) -> Result<(), Box<EvalAltResult>
 const STRING: &str = "Length of string";
 /// What the engine calls a Blob in a size error.
 const BLOB: &str = "Size of BLOB";
+/// What the engine calls an array in a size error.
+const ARRAY: &str = "Size of array/BLOB";
+/// What the engine calls an object map in a size error.
+const MAP: &str = "Size of object map";
 
 // spec: SEC#redaction
 /// The forms of a Blob that the runtime withholds: its bytes, its UTF-8
@@ -115,45 +121,52 @@ fn max_blob(ctx: &NativeCallContext) -> usize {
 // spec: QUOT#results
 fn text_result(ctx: &NativeCallContext, args: &[&ByteArg], text: String) -> HelperResult {
     within(text.len(), max_string(ctx), STRING)?;
-    settle(ctx, args, || vec![text.as_bytes().to_vec()])?;
+    settle(ctx, &held(args), || vec![vec![text.as_bytes().to_vec()]])?;
     Ok(text.into())
 }
 
 // spec: ENC#results
 fn blob_result(ctx: &NativeCallContext, args: &[&ByteArg], bytes: Vec<u8>) -> HelperResult {
     within(bytes.len(), max_blob(ctx), BLOB)?;
-    settle(ctx, args, || blob_forms(&bytes))?;
+    settle(ctx, &held(args), || vec![blob_forms(&bytes)])?;
     Ok(Dynamic::from_blob(bytes))
 }
 
 // spec: SEC#redaction
-/// Withhold a result when any of its arguments contains a withheld value.
-/// Results computed in an action closure are the operation's own.
+/// Withhold each of a helper's results, given as the text forms of each, when
+/// any of the bytes `held` of its arguments contains a withheld value. Each
+/// result counts toward the derived values limit on its own. Results computed
+/// in an action closure are the operation's own.
 fn settle(
     ctx: &NativeCallContext,
-    args: &[&ByteArg],
-    forms: impl FnOnce() -> Vec<Vec<u8>>,
+    held: &[&[u8]],
+    results: impl FnOnce() -> Vec<Vec<Vec<u8>>>,
 ) -> Result<(), Box<EvalAltResult>> {
-    let held: Vec<&[u8]> = args.iter().filter_map(|a| a.withholdable()).collect();
     if is_in_action_closure() {
         // spec: SEC#matching
         let sensitive = seeds::operation_scope().map(|scope| scope.values());
         if !sensitive.is_some_and(|s| held.iter().any(|a| s.found_in_bytes(a))) {
             return Ok(());
         }
-        // spec: LIM#limits
-        if !seeds::count_derivation(helper_limits(ctx)?.derived_values) {
-            return Err(too_large("Number of derived values"));
+        let limit = helper_limits(ctx)?.derived_values;
+        for forms in results() {
+            // spec: LIM#limits
+            if !seeds::count_derivation(limit) {
+                return Err(too_large("Number of derived values"));
+            }
+            seeds::record_operation_derived(forms);
         }
-        seeds::record_operation_derived(forms());
         return Ok(());
     }
-    let Some(dependence) = seeds::dependence(&held) else {
+    let Some(dependence) = seeds::dependence(held) else {
         return Ok(());
     };
-    // spec: LIM#limits
-    if !seeds::withhold(dependence, forms(), helper_limits(ctx)?.derived_values) {
-        return Err(too_large("Number of derived values"));
+    let limit = helper_limits(ctx)?.derived_values;
+    for forms in results() {
+        // spec: LIM#limits
+        if !seeds::withhold(dependence.clone(), forms, limit) {
+            return Err(too_large("Number of derived values"));
+        }
     }
     Ok(())
 }
