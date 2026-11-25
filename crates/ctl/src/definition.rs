@@ -417,6 +417,11 @@ mod github {
         folder: &str,
         unwritten: &Unwritten,
     ) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
+        // The folder comes from the URL, and is joined onto the extraction
+        // root, so it is held to the repository as an archive entry is.
+        let folder = seedling_bundle::normalise_path(folder)
+            .map_err(|e| format!("the URL's folder lies outside the repository: {e}"))?;
+        let folder = folder.as_str();
         let beneath = format!("{folder}/");
         if let Some(special) = unwritten.iter().find(|u| {
             folder.is_empty()

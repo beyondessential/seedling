@@ -587,3 +587,17 @@ fn a_lone_files_script_errors_name_the_file() {
         .remap_error("Unexpected ';' (line 2, position 9)");
     assert!(message.contains("web.seed.rhai line 2"), "{message}");
 }
+
+// spec: CLI#definition-sources
+#[test]
+fn a_github_url_folder_may_not_climb_out_of_the_repository() {
+    let data = tarball(|b| tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;"));
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    let unwritten = github::extract_repository(&data, &root).unwrap();
+    write(dir.path(), "outside/app.seed.rhai", b"not this");
+    let e = github::read_repository_folder(&root, "apps/../../outside", &unwritten).unwrap_err();
+    assert!(e.contains("outside the repository"), "{e}");
+    let files = github::read_repository_folder(&root, "apps/./web/", &unwritten).unwrap();
+    assert_eq!(files["app.seed.rhai"], b"app;");
+}
