@@ -29,3 +29,8 @@ The gate tests carry over to actions-and-gates, which must exercise what they as
 - actions whose bodies run under a probe
 
 The Tamanu name-quoting and missing-hostname tests test those definitions alone, and go with them.
+
+## Other changes
+
+- [x] Delete the stale copy of the "Seedling in production" PRD from this branch; the live one is on its project branch.
+- [ ] README's "Apps" section points at the demos.
