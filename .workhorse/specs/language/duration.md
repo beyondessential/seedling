@@ -31,6 +31,17 @@ A day MUST count as 24 hours, and a week as 7 days.
 > A fraction is allowed on the last unit only, from hours down, as in `1.5h`.
 > A month or a year has no fixed length, so a value meaning about a month is written in days, as `30d`.
 
+## Duration arguments
+
+An argument or options-map field documented as a `duration` MUST accept a `Duration`, and a string that `std::parse_duration` accepts, read as the `Duration` it returns.
+A string that `std::parse_duration` rejects MUST raise a script error naming the argument and giving the parser's error.
+A value of any other type, including a number, MUST raise a script error.
+
+An argument documented as a duration in whole seconds MUST also raise a script error, naming the argument and the duration, for a duration that is not a whole number of seconds.
+
+> [!NOTE]
+> A script writes a literal as a string, as in `container.stop_timeout("2m")`, and passes a `Duration` it has read from a parameter or computed, as in `container.stop_timeout(param.parsed() * 2)`.
+
 ## Text of a duration
 
 A `Duration` MUST convert to a string in this form: each unit from days down to nanoseconds whose part of the duration is not zero, largest first, as the count followed by the unit's designator, separated by single spaces.

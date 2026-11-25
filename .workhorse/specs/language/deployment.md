@@ -14,7 +14,7 @@ A [resource](../overview.md#resource) that keeps a number of instances of one co
 
 ### Grace window
 
-The time after an instance of a Deployment with a health check starts, `start_period + retries × interval` seconds, before the runtime acts on the instance being unhealthy.
+The time after an instance of a Deployment with a health check starts, `start_period + retries × interval`, before the runtime acts on the instance being unhealthy.
 
 ## Declaration
 
@@ -56,15 +56,15 @@ The method is defined on `Deployment` alone.
 | --- | --- | --- | --- | --- |
 | `kind` | string | yes | | the variety of check; `"command"` |
 | `cmd` | string or array of strings | with `kind: "command"` | | the probe command |
-| `interval` | integer seconds | no | 30 | the time between successive checks |
-| `timeout` | integer seconds | no | 30 | the time a single check may run before it counts as failed |
+| `interval` | duration in whole seconds | no | 30 seconds | the time between successive checks |
+| `timeout` | duration in whole seconds | no | 30 seconds | the time a single check may run before it counts as failed |
 | `retries` | integer | no | 3 | the consecutive failures that make a healthy instance unhealthy |
-| `start_period` | integer seconds | no | 0 | the time after the container starts during which failures do not count against `retries` |
+| `start_period` | duration in whole seconds | no | zero | the time after the container starts during which failures do not count against `retries` |
 | `on_failure` | string | no | `"replace"` | the response to an instance that stays unhealthy; `"replace"` or `"monitor"` |
 
 A `config` with any key not in the table MUST throw.
-An `interval` or `timeout` below 1 MUST throw.
-A negative `start_period` MUST throw.
+Each duration field MUST be read as [duration arguments](duration.md#duration-arguments) specify.
+An `interval` or `timeout` below 1 second MUST throw.
 A `retries` below 1 MUST throw.
 An `on_failure` other than `"replace"` or `"monitor"` MUST throw.
 
@@ -85,9 +85,9 @@ An empty string, an empty array, and an array whose every element is empty MUST 
 
 ### Check timing
 
-The runtime MUST run a check every `interval` seconds, and MUST count a check still running after `timeout` seconds as failed.
+The runtime MUST run a check every `interval`, and MUST count a check still running after `timeout` as failed.
 After `retries` consecutive failures, the runtime MUST treat the instance as unhealthy.
-Failures within `start_period` seconds of the container starting MUST NOT count towards `retries`.
+Failures within `start_period` of the container starting MUST NOT count towards `retries`.
 
 ### Failure response
 

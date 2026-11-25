@@ -135,6 +135,6 @@ A `name` MUST be one of `HUP`, `INT`, `QUIT`, `ILL`, `TRAP`, `ABRT`, `BUS`, `FPE
 A `name` MUST be compared case-insensitively, ignoring leading and trailing whitespace, and any other name MUST throw.
 If a container sets no stop signal, the runtime MUST send `SIGTERM`.
 
-`container.stop_timeout(seconds: number)` sets how long the runtime waits after sending the stop signal before sending `SIGKILL`.
-A `seconds` MUST be an integer from 1 to 4294967295.
+`container.stop_timeout(timeout: duration)` sets how long the runtime waits after sending the stop signal before sending `SIGKILL`.
+A `timeout` MUST be a [duration in whole seconds](duration.md#duration-arguments) from 1 second to 4294967295 seconds.
 If a container sets no stop timeout, the runtime SHOULD wait 90 seconds.
