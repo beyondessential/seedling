@@ -21,6 +21,10 @@ Applies to the `ip-address`, `ip-subnet` and `ip-range` [param kinds](action.md#
 
 Whether an address, subnet or range is of IPv4 or of IPv6.
 
+### Decimal number
+
+A number written in ASCII decimal digits with no leading zero, zero being written `0`.
+
 ### Host bits
 
 The bits of a subnet's address after its prefix length.
@@ -30,7 +34,7 @@ The bits of a subnet's address after its prefix length.
 `std::parse_ip_address(text)` MUST return an `IpAddress` for a value it accepts.
 It MUST accept exactly the values below, and MUST reject every other value.
 
-- An IPv4 address, written as four decimal numbers from 0 to 255 separated by dots, none with a leading zero.
+- An IPv4 address, written as four decimal numbers from 0 to 255 separated by dots.
 - An IPv6 address in the IPv6 text form, with no enclosing brackets and no zone index, that is not an IPv4-mapped IPv6 address.
 
 Hexadecimal digits in an IPv6 address MUST be accepted in either case.
@@ -47,7 +51,7 @@ It MUST accept exactly the values below, and MUST reject every other value.
 - An address that `std::parse_ip_address` accepts, followed by `/` and a prefix length.
 - An address that `std::parse_ip_address` accepts, standing for the subnet of that address with a prefix length of 32 for IPv4 and of 128 for IPv6.
 
-The prefix length MUST be written in decimal with no leading zero, and MUST be at most 32 for an IPv4 address and at most 128 for an IPv6 address.
+The prefix length MUST be written as a decimal number, and MUST be at most 32 for an IPv4 address and at most 128 for an IPv6 address.
 
 `std::parse_ip_subnet` MUST reject a value whose host bits are not all zero.
 Its error SHOULD name the subnet with those host bits cleared.
@@ -137,9 +141,9 @@ Both MUST return `false` when `other` is of the other family.
 
 An `IpAddress`, `IpSubnet` or `IpRange` MUST convert to a string in its canonical form:
 
-- an IPv4 address as four decimal numbers separated by dots, none with a leading zero;
+- an IPv4 address as four decimal numbers separated by dots;
 - an IPv6 address as canonical IPv6 text;
-- a subnet as its first address, `/`, and its prefix length in decimal, whether or not the prefix length was written;
+- a subnet as its first address, `/`, and its prefix length as a decimal number, whether or not the prefix length was written;
 - a range as its first address, `-`, and its last address, whether it was written as two addresses, a subnet or a single address.
 
 The parser of a value's kind MUST accept its canonical form, and MUST return a value equal to it.
