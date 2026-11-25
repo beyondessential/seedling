@@ -1497,7 +1497,7 @@ impl Reconciler {
         // module already loaded, instance-add handles EEXIST) so it is safe
         // to run on every non-idle tick where `nat64_installed` is false.
         if nat64_step(self.nat64_active, self.nat64_translator, false) == Some(Nat64Step::SetUp) {
-            match crate::system::jool::setup_nat64().await {
+            match self.driver.translator.set_up().await {
                 Ok(()) => {
                     self.nat64_translator = Nat64Translator::Installed;
                     self.clear_system_fault("nat64_setup_failed");
@@ -2192,7 +2192,7 @@ impl Reconciler {
 
         // spec: NAT64#translator-lifecycle
         if nat64_step(self.nat64_active, self.nat64_translator, true) == Some(Nat64Step::TearDown) {
-            match crate::system::jool::teardown_nat64().await {
+            match self.driver.translator.tear_down().await {
                 Ok(()) => {
                     self.nat64_translator = Nat64Translator::Removed;
                     // spec: FLT#host-faults

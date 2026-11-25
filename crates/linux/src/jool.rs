@@ -1,8 +1,13 @@
+//! The NAT64 translator on Linux: a Jool instance of its own.
+
 use std::process::Output;
 
+use futures_util::FutureExt;
+use seedling_core::{
+    runtime::nat64_prefix::NAT64_PREFIX_STR,
+    system::{AddressTranslator, BoxError, BoxFuture},
+};
 use snafu::prelude::*;
-
-use crate::runtime::nat64_prefix::NAT64_PREFIX_STR;
 
 const JOOL_INSTANCE: &str = "seedling";
 
@@ -163,15 +168,24 @@ async fn remove_instance() -> Result<(), JoolError> {
     Ok(())
 }
 
-pub async fn setup_nat64() -> Result<(), JoolError> {
+/// The host's Jool translator.
+pub struct Jool;
+
+impl AddressTranslator for Jool {
+    fn set_up(&self) -> BoxFuture<'_, Result<(), BoxError>> {
+        async { setup_nat64().await.map_err(Into::into) }.boxed()
+    }
+
+    fn tear_down(&self) -> BoxFuture<'_, Result<(), BoxError>> {
+        async { remove_instance().await.map_err(Into::into) }.boxed()
+    }
+}
+
+async fn setup_nat64() -> Result<(), JoolError> {
     // spec: NAT64#translator
     ensure_forwarding_enabled().await?;
     ensure_module_loaded().await?;
     ensure_instance().await
-}
-
-pub async fn teardown_nat64() -> Result<(), JoolError> {
-    remove_instance().await
 }
 
 // spec: LINUX#forwarding

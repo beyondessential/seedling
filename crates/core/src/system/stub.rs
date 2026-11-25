@@ -884,6 +884,19 @@ impl DataPlane for StubDataPlane {
     }
 }
 
+/// Stub NAT64 translator: installs and removes nothing.
+pub struct StubTranslator;
+
+impl super::AddressTranslator for StubTranslator {
+    fn set_up(&self) -> BoxFuture<'_, Result<(), BoxError>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn tear_down(&self) -> BoxFuture<'_, Result<(), BoxError>> {
+        async { Ok(()) }.boxed()
+    }
+}
+
 /// Stub volume storage: plain directories, none of them snapshottable, and
 /// confinement judged from the path's own components. Unlike a host's
 /// storage it cannot tell a symlink part-way along a path from a directory.

@@ -24,7 +24,6 @@ pub mod types;
 
 pub mod breadcrumb;
 pub(crate) mod caddy;
-pub mod jool;
 pub mod journal;
 pub mod resolver;
 pub mod startup_cleanup;
@@ -273,6 +272,19 @@ pub trait DataPlane: Send + Sync + 'static {
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>>;
 }
 
+/// The host's NAT64 translator, which the runtime installs while workloads
+/// need it and removes when the host goes idle.
+// spec: NAT64#translator-lifecycle
+pub trait AddressTranslator: Send + Sync + 'static {
+    /// Install the translator. Setting up one already installed is not an
+    /// error.
+    fn set_up(&self) -> BoxFuture<'_, Result<(), BoxError>>;
+
+    /// Remove the translator. Removing one that is not installed is not an
+    /// error.
+    fn tear_down(&self) -> BoxFuture<'_, Result<(), BoxError>>;
+}
+
 // ---------------------------------------------------------------------------
 // System
 // ---------------------------------------------------------------------------
@@ -285,6 +297,8 @@ pub struct System {
     pub volume_store: volume_store::VolumeStore,
     /// Where log streams are read from.
     pub journal: Arc<dyn journal::JournalSource>,
+    /// The host's NAT64 translator.
+    pub translator: Arc<dyn AddressTranslator>,
     /// Whether the container runtime and process manager are reachable.
     /// While either is not, the daemon runs degraded: the
     /// backend is an erroring stub (see [`unavailable`]), the OI, database and
@@ -351,6 +365,7 @@ pub struct Platform {
     pub data_plane: Arc<dyn DataPlane>,
     pub journal: Arc<dyn journal::JournalSource>,
     pub storage: Arc<dyn volume_store::VolumeStorage>,
+    pub translator: Arc<dyn AddressTranslator>,
 }
 
 /// Result of `System::setup` / `System::setup_stubbed`: the assembled system
@@ -431,6 +446,7 @@ impl System {
             data_plane: platform.data_plane,
             volume_store,
             journal: platform.journal,
+            translator: platform.translator,
             backends,
         });
         Ok((system, caddy_admin_client))
@@ -480,6 +496,7 @@ impl System {
             data_plane: data_plane_arc,
             volume_store,
             journal,
+            translator: Arc::new(stub::StubTranslator),
             backends,
         });
         Ok((system, caddy_admin_client))
@@ -508,6 +525,7 @@ impl System {
             data_plane: Arc::new(stub::StubDataPlane),
             volume_store,
             journal: Arc::new(stub::StubJournal),
+            translator: Arc::new(stub::StubTranslator),
             backends,
         });
         Ok((system, caddy_admin_client))
@@ -532,6 +550,7 @@ impl System {
             )
             .expect("the volume store opens"),
             journal: Arc::new(stub::StubJournal),
+            translator: Arc::new(stub::StubTranslator),
             backends,
         }
     }

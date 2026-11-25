@@ -494,6 +494,7 @@ async fn main() {
             data_plane: Arc::new(data_plane),
             journal,
             storage,
+            translator: Arc::new(seedling_linux::jool::Jool),
         };
         System::setup(platform, node_prefix, &data_dir)
             .await
