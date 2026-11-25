@@ -146,10 +146,10 @@ Given an empty map, it MUST return an empty string.
 A value MUST be one of:
 
 - empty;
-- a single quote, any characters other than a single quote, and a single quote;
+- a single quote, any characters other than a single quote, a carriage return or NUL, and a single quote;
 - one or more of the ASCII letters and digits and the characters `_`, `-`, `.`, `/`, `:`, `@`, `%`, `+`, `,` and `=`.
 
-`decode_env` MUST raise a script error at any other line, including one holding a carriage return, a double quote, a backslash, a `$`, an `export` prefix, or anything after a value.
+`decode_env` MUST raise a script error at any other line, including one with a carriage return, or a double quote, a backslash or a `$` outside a single-quoted value, an `export` prefix, or anything after a value.
 It MUST accept a final line with no line feed.
 Each value MUST decode to a string holding the characters between its quotes, or the value itself when unquoted.
 
