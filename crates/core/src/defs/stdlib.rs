@@ -10,6 +10,7 @@ mod bytes;
 mod encoding;
 mod fields;
 pub(crate) mod kinds;
+mod quoting;
 mod random;
 
 // spec: STD#the-std-module
@@ -19,6 +20,7 @@ pub fn module() -> rhai::Module {
     kinds::register(&mut module);
     random::register(&mut module);
     encoding::register(&mut module);
+    quoting::register(&mut module);
     module
 }
 
