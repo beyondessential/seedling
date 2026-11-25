@@ -16,7 +16,9 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | --- | --- |
 | [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) and [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) | the requirement keywords above |
 | [Rhai](https://rhai.rs/book/) | the scripting language BSL is written in, under [BSL](language/overview.md) |
-| [TOML 1.0.0](https://toml.io/en/v1.0.0) | the bundle metadata file and web interface configuration, under [BND](language/bundle.md), [WEB](web/serving.md) |
+| [TOML 1.0.0](https://toml.io/en/v1.0.0) | the bundle metadata file and web interface configuration, under [BND](language/bundle.md), [WEB](web/serving.md), and TOML that std helpers write, under [FMT](language/structured-formats.md) |
+| [TOML 1.1.0](https://toml.io/en/v1.1.0) | TOML that std helpers read, under [FMT](language/structured-formats.md) |
+| [YAML 1.2.2](https://yaml.org/spec/1.2.2/) | YAML that std helpers write and read, under [FMT](language/structured-formats.md) |
 | [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) | Seedling versions and `version-semver` parameters, under [BND](language/bundle.md), [STS](interface/status.md), [VER](language/version.md) |
 | [Cargo version requirement syntax](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#version-requirement-syntax) | version requirements, under [BND](language/bundle.md) |
 | [Repology version comparison algorithm](https://github.com/repology/libversion/blob/master/doc/ALGORITHM.md) | the order of `version` parameters, under [VER](language/version.md) |
@@ -65,7 +67,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [PHC string format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md) | password hash encoding, under [WEB](web/serving.md), [RND](language/random.md) |
 | [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) | base64 and hex encodings, under [DEFN](interface/definitions.md), [TCAN](runtime/tls/canopy.md), [RND](language/random.md), [ENC](language/encoding.md) |
 | [RFC 1952](https://www.rfc-editor.org/rfc/rfc1952) | gzip, under [DEFN](interface/definitions.md) |
-| [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) | JSON, under [WIRE](interface/wire.md), [AUD](runtime/audit-log.md), [WEB](web/serving.md) |
+| [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) | JSON, under [WIRE](interface/wire.md), [AUD](runtime/audit-log.md), [WEB](web/serving.md), [FMT](language/structured-formats.md) |
 | [JSON Lines](https://jsonlines.org/) | the audit log format, under [AUD](runtime/audit-log.md) |
 | [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | timestamps, under [APPS](interface/apps.md), [EVT](interface/events.md), [FLTS](interface/faults.md), [FWD](interface/port-forwards.md), [IMGM](interface/images.md), [INGM](interface/site-ingresses.md), [LOG](interface/logs.md), [RLY](interface/canopy-relay.md), [SHL](interface/shells.md), [SVCM](interface/services.md), [TPL](interface/templates.md), [VOLM](interface/volumes.md), [WEB](web/serving.md) |
 | [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) | UUIDs, under [IDN](runtime/identity.md), [RND](language/random.md), [ENC](language/encoding.md) |

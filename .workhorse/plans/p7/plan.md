@@ -13,6 +13,17 @@ Add each with `cargo add` at implementation time so the pinned version is the cu
 - Env files: no crate fits. `dotenvy` expands `$VAR` from the process environment, which breaks std helper replicability and leaks the daemon's environment; the other candidates are unmaintained.
   Seedling writes its own: a small winnow parser for the strict grammar (bare or single-quoted values, blank lines, `#` comment lines), and an encoder that single-quotes every value.
 
+## Steps
+
+- [ ] `cargo add saphyr` (and winnow, if not already a dependency of the crate holding the std module).
+- [ ] Shared value walk: position tracking for refusal errors, the 128-deep nesting limit, `Version`/`SemVer` as text, Blob and other opaque types refused.
+- [ ] JSON encode and decode on `serde_json`, with integers outside the signed 64-bit range refused rather than read as floats (unlike `defs/json.rs::to_dynamic`).
+- [ ] YAML encode and decode on `saphyr`: core schema only, one document, alias budget of 100 000, non-string keys refused; tests pinning the quoting cases in the spec.
+- [ ] TOML encode and decode on `toml`, checking the encoder's output parses as TOML 1.0.0 (no 1.1-only syntax).
+- [ ] Env encoder and winnow decoder.
+- [ ] Redaction: withhold encoder results like ENC helpers; for decoder results, withhold each string within, keys included, counting each toward the derived values limit.
+- [ ] Update `docs/bsl-scripting.md`.
+
 ## Explicitly rejected
 
 - INI encoder and decoder. INI has no specification, and dialects disagree on quoting, escapes and inline comments, so the same file means different things to different readers and no refusal rule makes it safe.
