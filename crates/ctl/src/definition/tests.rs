@@ -136,7 +136,8 @@ fn repo(marker: &str, key: &str, source: &str) -> tempfile::TempDir {
 // spec: CLI#definition-export
 #[test]
 fn an_exported_bundle_with_includes_pushes_again_unchanged() {
-    let files = assembled(&repo(".git", "errors", "../pages")).unwrap();
+    let dir = repo(".git", "errors", "../pages");
+    let files = read_folder_definition(&dir.path().join("apps/def")).unwrap();
     let wire: Map<String, Value> = files
         .iter()
         .map(|(p, c)| (p.clone(), json!(BASE64.encode(c))))
