@@ -199,6 +199,17 @@ fn relative(folder: &Path, boundary: &Path) -> Result<String, String> {
         .map(|parts| parts.join("/"))
 }
 
+/// The source paths the include table in `metadata` names for a definition
+/// folder at `within`, leaving out those out of bounds, which are never read.
+// spec: CLI#include-assembly
+pub(super) fn source_paths(within: &str, metadata: &[u8]) -> Result<Vec<String>, String> {
+    Ok(included(metadata)
+        .map_err(|e| e.to_string())?
+        .values()
+        .filter_map(|value| source_path(within, value))
+        .collect())
+}
+
 /// A key's source path from the boundary, or `None` where it is out of
 /// bounds and so must not be read.
 // spec: CLI#include-assembly

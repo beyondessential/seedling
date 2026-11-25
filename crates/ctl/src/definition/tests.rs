@@ -96,8 +96,7 @@ fn a_github_tarball_yields_the_named_folder() {
         tar_file(b, "org-repo-abc123/apps/other/app.seed.rhai", b"no");
     });
     let dir = tempfile::tempdir().unwrap();
-    let unwritten = github::extract_repository(&data, dir.path()).unwrap();
-    let files = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap();
+    let files = github::extract_definition(&data, dir.path(), "apps/web").unwrap();
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         vec!["app.seed.rhai", "pages/500.html"]
@@ -237,7 +236,7 @@ fn a_tarball_entry_may_not_escape_the_repository_or_be_a_link_in_the_folder() {
         b.append(&header, &b"owned"[..]).unwrap();
     });
     let dir = tempfile::tempdir().unwrap();
-    let e = github::extract_repository(&escaping, dir.path()).unwrap_err();
+    let e = github::extract_definition(&escaping, dir.path(), "").unwrap_err();
     assert!(e.contains("outside the repository"), "{e}");
     assert!(!dir.path().parent().unwrap().join("escaped").exists());
 
@@ -254,7 +253,7 @@ fn a_tarball_entry_may_not_escape_the_repository_or_be_a_link_in_the_folder() {
         b.append(&header, &b"owned"[..]).unwrap();
     });
     let dir = tempfile::tempdir().unwrap();
-    let e = github::extract_repository(&leading, dir.path()).unwrap_err();
+    let e = github::extract_definition(&leading, dir.path(), "").unwrap_err();
     assert!(e.contains("outside the repository"), "{e}");
     assert!(!dir.path().join("planted").exists());
 
@@ -269,10 +268,9 @@ fn a_tarball_entry_may_not_escape_the_repository_or_be_a_link_in_the_folder() {
             );
         });
         let dir = tempfile::tempdir().unwrap();
-        let unwritten = github::extract_repository(&linked, dir.path()).unwrap();
-        assert!(!dir.path().join("apps/web/stolen").exists());
-        let e = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap_err();
+        let e = github::extract_definition(&linked, dir.path(), "apps/web").unwrap_err();
         assert!(e.contains("not a regular file"), "{e}");
+        assert!(!dir.path().join("apps/web/stolen").exists());
     }
 }
 
@@ -291,8 +289,7 @@ fn a_github_folder_includes_from_elsewhere_in_the_repository() {
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/docs/latest", "v2");
     });
     let dir = tempfile::tempdir().unwrap();
-    let unwritten = github::extract_repository(&data, dir.path()).unwrap();
-    let files = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap();
+    let files = github::extract_definition(&data, dir.path(), "apps/web").unwrap();
     assert_eq!(files["lib/db.seed.rhai"], b"db;");
 
     let escaping = tarball(|b| {
@@ -303,8 +300,7 @@ fn a_github_folder_includes_from_elsewhere_in_the_repository() {
         );
     });
     let dir = tempfile::tempdir().unwrap();
-    let unwritten = github::extract_repository(&escaping, dir.path()).unwrap();
-    let e = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap_err();
+    let e = github::extract_definition(&escaping, dir.path(), "apps/web").unwrap_err();
     assert!(e.ends_with("lies outside the repository"), "{e}");
 }
 
@@ -321,8 +317,7 @@ fn a_github_include_through_a_link_or_beneath_one_is_refused() {
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
     });
     let dir = tempfile::tempdir().unwrap();
-    let unwritten = github::extract_repository(&through, dir.path()).unwrap();
-    let e = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap_err();
+    let e = github::extract_definition(&through, dir.path(), "apps/web").unwrap_err();
     assert!(e.contains("apps/shared is not a regular file"), "{e}");
 
     let beneath = tarball(|b| {
@@ -330,7 +325,7 @@ fn a_github_include_through_a_link_or_beneath_one_is_refused() {
         tar_file(b, "o-r-abc/apps/shared/passwd", b"x");
     });
     let dir = tempfile::tempdir().unwrap();
-    let e = github::extract_repository(&beneath, dir.path()).unwrap_err();
+    let e = github::extract_definition(&beneath, dir.path(), "apps").unwrap_err();
     assert!(e.contains("at or beneath apps/shared"), "{e}");
     assert!(!dir.path().join("apps/shared").exists());
 
@@ -341,7 +336,7 @@ fn a_github_include_through_a_link_or_beneath_one_is_refused() {
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
     });
     let dir = tempfile::tempdir().unwrap();
-    let e = github::extract_repository(&link_last, dir.path()).unwrap_err();
+    let e = github::extract_definition(&link_last, dir.path(), "apps").unwrap_err();
     assert!(e.contains("at or beneath apps/shared"), "{e}");
     assert!(!dir.path().join("apps/shared").exists());
 }
@@ -353,8 +348,7 @@ fn a_github_folder_beneath_a_link_is_refused() {
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps", "elsewhere");
     });
     let dir = tempfile::tempdir().unwrap();
-    let unwritten = github::extract_repository(&data, dir.path()).unwrap();
-    let e = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap_err();
+    let e = github::extract_definition(&data, dir.path(), "apps/web").unwrap_err();
     assert!(e.contains("apps is not a regular file"), "{e}");
 }
 
@@ -611,11 +605,10 @@ fn a_github_url_folder_may_not_climb_out_of_the_repository() {
     let data = tarball(|b| tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;"));
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("repo");
-    let unwritten = github::extract_repository(&data, &root).unwrap();
     write(dir.path(), "outside/app.seed.rhai", b"not this");
-    let e = github::read_repository_folder(&root, "apps/../../outside", &unwritten).unwrap_err();
+    let e = github::extract_definition(&data, &root, "apps/../../outside").unwrap_err();
     assert!(e.contains("outside the repository"), "{e}");
-    let files = github::read_repository_folder(&root, "apps/./web/", &unwritten).unwrap();
+    let files = github::extract_definition(&data, &root, "apps/./web/").unwrap();
     assert_eq!(files["app.seed.rhai"], b"app;");
 }
 
@@ -655,7 +648,7 @@ fn an_archive_entry_named_as_a_link_is_not_written() {
         tar_file(b, "o-r-abc/apps/shared", b"shadow");
     });
     let dir = tempfile::tempdir().unwrap();
-    let e = github::extract_repository(&data, dir.path()).unwrap_err();
+    let e = github::extract_definition(&data, dir.path(), "apps").unwrap_err();
     assert!(e.contains("at or beneath apps/shared"), "{e}");
     assert!(!dir.path().join("apps/shared").exists());
 }
@@ -702,4 +695,35 @@ async fn a_source_breaking_the_bundle_rules_is_refused_before_it_is_sent() {
     };
     let e = args.resolve().await.unwrap_err();
     assert!(e.contains("seedling"), "{e}");
+}
+
+// spec: CLI#definition-sources
+// spec: CLI#include-assembly
+#[test]
+fn only_the_definition_and_its_sources_are_unpacked_from_a_github_archive() {
+    let big = vec![0u8; seedling_bundle::BUNDLE_SIZE_LIMIT + 1];
+    let data = tarball(|b| {
+        tar_file(
+            b,
+            "o-r-abc/apps/web/seedling.toml",
+            b"[include]\n\"lib\" = \"../common\"",
+        );
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        tar_file(b, "o-r-abc/apps/common/db.seed.rhai", b"db;");
+        tar_file(b, "o-r-abc/assets/huge.bin", &big);
+        tar_file(b, "o-r-abc/README.md", b"readme");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let files = github::extract_definition(&data, dir.path(), "apps/web").unwrap();
+    assert_eq!(files["lib/db.seed.rhai"], b"db;");
+    assert!(!dir.path().join("assets").exists());
+    assert!(!dir.path().join("README.md").exists());
+
+    let wanting_it = tarball(|b| {
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        tar_file(b, "o-r-abc/apps/web/huge.bin", &big);
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let e = github::extract_definition(&wanting_it, dir.path(), "apps/web").unwrap_err();
+    assert!(e.contains("size limit"), "{e}");
 }
