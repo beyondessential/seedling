@@ -152,6 +152,23 @@ pub fn register(engine: &mut Engine) {
     // spec: COL#coercion
     engine.register_fn("col", collection::col);
 
+    // spec: APP#the-app-variable
+    // A closure captures a scope variable as one shared cell, and a method
+    // chain holds a lock on a shared root for its whole length, so a closure
+    // invoked from `app.action(..).invoke(..)` would find `app` locked. Rhai
+    // never shares a resolved variable, so each closure captures its own copy
+    // of the handle; every copy holds the same app.
+    engine.on_var(|name, _, ctx| {
+        if name != "app" {
+            return Ok(None);
+        }
+        Ok(ctx
+            .scope()
+            .get(name)
+            .filter(|value| value.is::<app::App>())
+            .cloned())
+    });
+
     // spec: STD#the-std-module
     engine.register_static_module("std", stdlib::module().into());
 

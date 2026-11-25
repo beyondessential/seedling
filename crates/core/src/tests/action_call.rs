@@ -610,8 +610,7 @@ fn a_closure_can_pass_on_the_param_map_it_received() {
                 params: #{ pinned: #{ kind: "version-semver" }, loose: #{ kind: "version" } },
             });
             app.on_action("outer", |rt, _p| {
-                let middle = app.action("middle");
-                middle.invoke(#{ pinned: "v1.2.3", loose: "2.0" });
+                app.action("middle").invoke(#{ pinned: "v1.2.3", loose: "2.0" });
             });
         "#,
         "outer",
@@ -729,4 +728,24 @@ fn a_plain_sub_action_param_holding_a_derived_value_is_protected_and_replays() {
     let second = script.replace("DSN", r#""changed""#);
     let (result, _) = run_outer_in_replay_context(&second, pending, Some(cipher));
     result.expect("replay must recover the recorded dsn");
+}
+
+// spec: ACN#action-invocation
+#[test]
+fn chained_invocations_nest_three_levels_deep() {
+    invoke_action(
+        r#"
+            app.on_action("inner", |rt, p| {});
+            app.on_action("middle", |rt, p| {
+                app.action("inner").invoke();
+            });
+            app.on_action("outer", |rt, _p| {
+                app.action("middle").invoke(#{});
+            });
+        "#,
+        "outer",
+        rhai::Map::new(),
+    )
+    .map_err(err_string)
+    .expect("a chained invocation leaves app free for the closure it runs");
 }
