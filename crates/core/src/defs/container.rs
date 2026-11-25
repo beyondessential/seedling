@@ -716,8 +716,10 @@ impl ContainerDef {
                     Duration::from_secs(1),
                     Some(Duration::from_secs(u64::from(u32::MAX))),
                 )?;
-                ext(this).lock().stop_timeout_secs =
-                    Some(u32::try_from(secs).expect("take_whole_secs holds it to the u32 range"));
+                let secs = u32::try_from(secs).map_err(|_| -> Box<EvalAltResult> {
+                    format!("`stop_timeout` must be at most {} seconds", u32::MAX).into()
+                })?;
+                ext(this).lock().stop_timeout_secs = Some(secs);
                 Ok(this.clone())
             },
         );
