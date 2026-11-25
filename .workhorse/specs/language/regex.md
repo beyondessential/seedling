@@ -121,15 +121,3 @@ When a pattern's compiled size exceeds what remains of that limit, the helper MU
 >
 > Using up the remainder means a script that catches the error and tries again cannot keep compiling large patterns, since every later pattern is refused as soon as compiling starts.
 > The size of a compiled pattern is measured by the engine, so a Seedling release can change how large a given pattern counts as.
-
-## Text examined
-
-Each search a method of a `Regex` runs MUST count every byte of the UTF-8 encoding of the text that the search reads toward the regex text examined [limit](../runtime/engine-limits.md#limits).
-A byte that a search reads more than once, such as to find where its match starts or what the match's groups captured, MUST count once for each reading.
-A byte that several searches read MUST count once for each of them.
-
-> [!NOTE]
-> A single search reads each byte of its text a bounded number of times, but a method that finds every match runs one search after another, and a search can read to the end of the text before reporting a match near its start.
-> Counting what each search reads bounds that rescanning, which would otherwise take time growing with the square of the text's length, while an ordinary pass over a long text costs about its length once.
->
-> How far a search reads to settle its result depends on how the engine searches, so a Seedling release can change the count at which a method reaches the limit.
