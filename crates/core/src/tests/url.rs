@@ -283,3 +283,49 @@ fn a_url_origin_finds_an_at_sign_the_url_parser_reads_past_whitespace() {
         );
     }
 }
+
+// spec: URL#hosts
+#[test]
+fn a_url_with_credentials_or_a_port_and_no_host_has_no_host() {
+    assert_eq!(
+        texts("parse_url", "postgresql://user@/db?host=/run/postgresql"),
+        pairs(&[
+            ("scheme", "postgresql"),
+            ("path", "/db"),
+            ("query", "host=/run/postgresql"),
+            ("username", "user"),
+        ])
+    );
+    assert_eq!(
+        texts("parse_url", "postgresql://us%40er:p%3Aw@:5433/db"),
+        pairs(&[
+            ("scheme", "postgresql"),
+            ("port", "5433"),
+            ("path", "/db"),
+            ("username", "us@er"),
+            ("password", "p:w"),
+        ])
+    );
+    assert_eq!(
+        texts("parse_url", "postgresql://user@"),
+        pairs(&[("scheme", "postgresql"), ("path", ""), ("username", "user")])
+    );
+}
+
+// spec: URL#hosts
+// spec: URL#userinfo
+// spec: URL#ports
+#[test]
+fn a_url_with_no_host_is_refused_where_it_would_be_with_one() {
+    for value in [
+        "https://user@/",
+        "http://:8080/",
+        "ws://user@/",
+        "postgresql://user@:0/db",
+        "postgresql://user@:99999/db",
+        "postgresql://user@:x/db",
+        "postgresql://a%0Ab@/db",
+    ] {
+        refusal("parse_url", value);
+    }
+}
