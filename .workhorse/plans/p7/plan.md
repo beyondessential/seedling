@@ -21,6 +21,7 @@ Add each with `cargo add` at implementation time so the pinned version is the cu
 - [ ] YAML encode and decode on `saphyr`: core schema only, one document, alias budget of 100 000, non-string keys refused; tests pinning the quoting cases in the spec.
 - [ ] TOML encode and decode on `toml`, checking the encoder's output parses as TOML 1.0.0 (no 1.1-only syntax).
 - [ ] Env encoder and winnow decoder.
+- [ ] Override Rhai's map `to_json` in `defs.rs` with a function that throws naming `std::encode_json`, as `sleep` is overridden. Removal is not possible: `disable_symbol` acts only on keyword and operator tokens, and `to_json` is part of Rhai's basic map package. Test that both `m.to_json()` and `Fn("to_json").call(m)` throw.
 - [ ] Redaction: withhold encoder results like ENC helpers; for decoder results, withhold each string within, keys included, counting each toward the derived values limit.
 - [ ] Update `docs/bsl-scripting.md`.
 

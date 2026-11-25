@@ -97,6 +97,11 @@ Every result that is not empty MUST end with a line feed.
 `encode_json` MUST write each array element and each object member on its own line, indented by two spaces for each level of nesting, and an empty array or object as `[]` or `{}`.
 It MUST escape in a string only the characters JSON requires escaped, and write every other character as itself.
 
+The runtime MUST raise a script error, naming `std::encode_json`, when a script calls Rhai's own `to_json` method on a map.
+
+> [!NOTE]
+> Rhai's method writes keys, units, Blobs and non-finite numbers by rules of its own, so keeping it would give scripts two JSON writers that disagree.
+
 ### YAML
 
 `encode_yaml` MUST write arrays and maps in block style, indented by two spaces for each level of nesting, and an empty array or map as `[]` or `{}`.
