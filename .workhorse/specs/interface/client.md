@@ -137,27 +137,24 @@ When the folder's [metadata file](../language/bundle.md#metadata-file) has an `i
 - where the source names a regular file, the CLI MUST place its contents at the key's bundle path;
 - where the source names a directory, the CLI MUST read it as it reads a definition folder, and place each file it yields at the key's bundle path joined with the file's path relative to the directory.
 
-A key's source path is the table's value for the key, read relative to the folder with `/` as its separator and normalised lexically as a [bundle path](../language/bundle.md#bundle-paths) is.
-
-The include boundary is the directory a source path is confined to:
+The include boundary is the directory within which every source the CLI reads lies:
 
 - for a folder on disk, the nearest directory at or above the folder that holds a `.git` or `.jj` entry, or the folder itself where none does;
 - for a GitHub URL, the root of the repository at the resolved commit, from which the CLI MUST read each source at that same commit.
 
-The CLI MUST report an error naming the key and send no request when its source path:
+A key's source path is the folder's path relative to the include boundary joined with the key's value, read with `/` as its separator, and normalised lexically as a [bundle path](../language/bundle.md#bundle-paths) is.
+A key's source is out of bounds when its value is absolute or contains a null byte, when its source path rises above the include boundary at any `..` segment during normalisation, or when a segment of its source path names a version-control metadata directory, such as `.git` or `.jj`.
+The CLI MUST NOT read a source that is out of bounds.
 
-- is absolute or contains a null byte;
-- rises above the include boundary at any `..` segment during normalisation;
-- has a segment that names a version-control metadata directory, such as `.git` or `.jj`;
-- passes through or names a symlink, or names anything other than a regular file or a directory;
-- names a directory that yields no file, or yields a file named `seedling.toml` at any depth.
+The CLI MUST report an error naming the key and send no request when a source it reads:
 
-Where the folder itself holds files at or beneath a key's bundle path, once `.seedignore` exclusions are applied:
+- is reached from the include boundary through a symlink, or is itself a symlink or anything other than a regular file or a directory;
+- is a directory that yields no file, or yields a file named `seedling.toml` at any depth.
 
-- if the source path names a file or directory, the CLI MUST report an error naming the key and send no request unless the folder's files there have the same paths and contents as the files the source yields;
-- if the source path names nothing, the CLI MUST use the folder's files.
+Where the folder itself holds files at or beneath a key's bundle path, once `.seedignore` exclusions are applied, the CLI MUST use the folder's files when the key's source is out of bounds or names nothing.
+Otherwise, the CLI MUST report an error naming the key and send no request unless the folder's files there have the same paths and contents as the files the source yields.
 
-The CLI MUST report an error naming the key and send no request when neither the source path nor the folder holds a file at or beneath the key's bundle path.
+Where the folder holds no file at or beneath a key's bundle path, the CLI MUST report an error naming the key and send no request when the key's source is out of bounds or names nothing.
 An included file MUST be placed in the bundle whether or not a `.seedignore` pattern in the folder matches its bundle path.
 
 > [!NOTE]
@@ -167,7 +164,7 @@ An included file MUST be placed in the bundle whether or not a `.seedignore` pat
 > Only the folder's own metadata file is read, so a `seedling.toml` in a shared directory is refused rather than copied in where it would look as though it applied.
 
 > [!NOTE]
-> Using the folder's own copy where the source is absent lets an [exported](#definition-export) bundle be pushed again as it stands, while a stale copy is caught whenever its source can be read.
+> Using the folder's own copy where the source is out of bounds or absent lets an [exported](#definition-export) bundle be pushed again as it stands, wherever it was exported to, while a stale copy is caught whenever its source can be read.
 
 ## Parameter changes
 
