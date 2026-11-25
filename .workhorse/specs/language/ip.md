@@ -13,7 +13,7 @@ Applies to the `ip-address`, `ip-subnet` and `ip-range` [param kinds](action.md#
 | IPv6 text form | the textual representation of an IPv6 address, as defined in [RFC 4291](https://www.rfc-editor.org/rfc/rfc4291) section 2.2 |
 | IPv4-mapped IPv6 address | an IPv6 address carrying an IPv4 address in its low 32 bits under the prefix `::ffff:0:0/96`, as defined in [RFC 4291](https://www.rfc-editor.org/rfc/rfc4291) section 2.5.5.2 |
 | prefix length | the number of leading bits an address block fixes, as in the CIDR notation of [RFC 4632](https://www.rfc-editor.org/rfc/rfc4632) section 3.1 |
-| canonical IPv6 text | the text representation of an IPv6 address recommended by [RFC 5952](https://www.rfc-editor.org/rfc/rfc5952) section 4 |
+| canonical IPv6 text | the text representation of an IPv6 address recommended by [RFC 5952](https://www.rfc-editor.org/rfc/rfc5952) section 4, with an IPv4-mapped IPv6 address in the mixed notation of its section 5 |
 
 ## Terminology
 
