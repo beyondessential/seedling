@@ -25,6 +25,14 @@ On Windows, a path only the daemon reaches is `todo!()`; a path `seedling-ctl` r
 CI runs clippy on `seedling-core` for macOS and Windows on every PR.
 Core's test suite runs on Linux only; T6's check tests run on all three platforms.
 
+`seedling-linux` and the daemon are Linux-only crates.
+CI and release builds on macOS and Windows name their packages with `-p`; `cargo build --workspace` is a Linux command.
+
+### Host facts
+
+Host facts are a trait with no default implementation in core; `seedling-linux` implements it.
+Off Linux, `seedling-ctl` takes memory as undetermined unless `--const` sets it, which is filed on T6.
+
 ### Specs follow the boundary
 
 The generic specs name host facilities, the snapshotting volume store and the packet filter, rather than BTRFS and nftables; the Linux platform spec settles them with the detail the generic specs dropped.
@@ -37,3 +45,5 @@ The `nftables_failed` fault is `packet_filter_failed`.
 - Putting the Unix-only code in core behind platform traits.
 - Gating `runtime/` and `oi/` behind a cargo feature that `seedling-ctl` leaves off.
 - Running core's full test suite on macOS and Windows.
+- Making `seedling-linux` compile to nothing off Linux so a bare workspace build passes everywhere.
+- A portable default for host facts in core.
