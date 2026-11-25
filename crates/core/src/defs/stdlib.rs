@@ -58,7 +58,7 @@ fn too_large(what: &str) -> Box<EvalAltResult> {
 
 // spec: LIM#limits
 /// Refuse a result of `len` beyond `limit`, 0 being no limit.
-fn within(len: usize, limit: usize, what: &str) -> Result<(), Box<EvalAltResult>> {
+pub(crate) fn within(len: usize, limit: usize, what: &str) -> Result<(), Box<EvalAltResult>> {
     if limit != 0 && len > limit {
         return Err(too_large(what));
     }
@@ -66,7 +66,9 @@ fn within(len: usize, limit: usize, what: &str) -> Result<(), Box<EvalAltResult>
 }
 
 /// What the engine calls a string in a size error.
-const STRING: &str = "Length of string";
+pub(crate) const STRING: &str = "Length of string";
+/// What the engine calls an array in a size error.
+pub(crate) const ARRAY: &str = "Size of array/BLOB";
 /// What the engine calls a Blob in a size error.
 const BLOB: &str = "Size of BLOB";
 
@@ -105,7 +107,7 @@ fn unary(
         .set_into_module(module, move |ctx: NativeCallContext, a: Dynamic| f(&ctx, a));
 }
 
-fn max_string(ctx: &NativeCallContext) -> usize {
+pub(crate) fn max_string(ctx: &NativeCallContext) -> usize {
     ctx.engine().max_string_size()
 }
 

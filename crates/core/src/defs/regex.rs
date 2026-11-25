@@ -24,7 +24,7 @@ use winnow::{
 
 use crate::{
     defs::{
-        stdlib::helper_limits,
+        stdlib::{ARRAY, STRING, helper_limits, max_string, within},
         take::{take_closure, take_string},
     },
     runtime::seeds,
@@ -269,15 +269,19 @@ impl CustomType for Regex {
             )
             .with_fn(
                 "find_all",
-                |this: &mut Self, text: Dynamic| -> Result<rhai::Array, Box<EvalAltResult>> {
+                |ctx: NativeCallContext,
+                 this: &mut Self,
+                 text: Dynamic|
+                 -> Result<rhai::Array, Box<EvalAltResult>> {
                     let text = take_string("text", text)?;
                     let mut positions = Positions::new(&text);
-                    Ok(this
-                        .0
-                        .regex
-                        .find_iter(&text)
-                        .map(|m| match_map(&text, &mut positions, m.start(), m.end()))
-                        .collect())
+                    bounded(
+                        &ctx,
+                        this.0
+                            .regex
+                            .find_iter(&text)
+                            .map(|m| match_map(&text, &mut positions, m.start(), m.end())),
+                    )
                 },
             )
             .with_fn(
@@ -296,15 +300,19 @@ impl CustomType for Regex {
             )
             .with_fn(
                 "captures_all",
-                |this: &mut Self, text: Dynamic| -> Result<rhai::Array, Box<EvalAltResult>> {
+                |ctx: NativeCallContext,
+                 this: &mut Self,
+                 text: Dynamic|
+                 -> Result<rhai::Array, Box<EvalAltResult>> {
                     let text = take_string("text", text)?;
                     let mut positions = Positions::new(&text);
-                    Ok(this
-                        .0
-                        .regex
-                        .captures_iter(&text)
-                        .map(|caps| captures_map(&text, &mut positions, &caps))
-                        .collect())
+                    bounded(
+                        &ctx,
+                        this.0
+                            .regex
+                            .captures_iter(&text)
+                            .map(|caps| captures_map(&text, &mut positions, &caps)),
+                    )
                 },
             )
             .with_fn(
@@ -329,19 +337,24 @@ impl CustomType for Regex {
             )
             .with_fn(
                 "split",
-                |this: &mut Self, text: Dynamic| -> Result<rhai::Array, Box<EvalAltResult>> {
+                |ctx: NativeCallContext,
+                 this: &mut Self,
+                 text: Dynamic|
+                 -> Result<rhai::Array, Box<EvalAltResult>> {
                     let text = take_string("text", text)?;
-                    Ok(this
-                        .0
-                        .regex
-                        .split(&text)
-                        .map(|span| text[span.range()].into())
-                        .collect())
+                    bounded(
+                        &ctx,
+                        this.0
+                            .regex
+                            .split(&text)
+                            .map(|span| text[span.range()].into()),
+                    )
                 },
             )
             .with_fn(
                 "split",
-                |this: &mut Self,
+                |ctx: NativeCallContext,
+                 this: &mut Self,
                  text: Dynamic,
                  limit: Dynamic|
                  -> Result<rhai::Array, Box<EvalAltResult>> {
@@ -354,12 +367,13 @@ impl CustomType for Regex {
                             format!("`limit` must be at least 1, got {limit}").into()
                         },
                     )?;
-                    Ok(this
-                        .0
-                        .regex
-                        .splitn(&text, limit)
-                        .map(|span| text[span.range()].into())
-                        .collect())
+                    bounded(
+                        &ctx,
+                        this.0
+                            .regex
+                            .splitn(&text, limit)
+                            .map(|span| text[span.range()].into()),
+                    )
                 },
             );
 
@@ -497,8 +511,27 @@ fn replace(
             }
         }
         last = whole.end();
+        // spec: LIM#limits
+        within(out.len(), max_string(ctx), STRING)?;
     }
     out.push_str(&text[last..]);
+    within(out.len(), max_string(ctx), STRING)?;
+    Ok(out)
+}
+
+// spec: LIM#limits
+/// Collect a method's results, refusing them once they pass the engine's
+/// array limit rather than building them all for the engine to refuse.
+fn bounded(
+    ctx: &NativeCallContext,
+    items: impl Iterator<Item = Dynamic>,
+) -> Result<rhai::Array, Box<EvalAltResult>> {
+    let limit = ctx.engine().max_array_size();
+    let mut out = rhai::Array::new();
+    for item in items {
+        out.push(item);
+        within(out.len(), limit, ARRAY)?;
+    }
     Ok(out)
 }
 

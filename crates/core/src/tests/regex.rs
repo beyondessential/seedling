@@ -360,3 +360,35 @@ fn parse_regex_applies_the_single_line_rule_and_returns_a_regex() {
     let err = failure(r#"let p = "a\nb"; std::parse_regex(p)"#);
     assert!(!err.contains("not a valid regular expression"), "{err}");
 }
+
+// spec: LIM#limits
+#[test]
+fn every_match_results_are_held_to_the_array_limit() {
+    let limits = crate::ScriptLimits {
+        max_array_size: 100,
+        ..crate::ScriptLimits::default()
+    };
+    for method in ["find_all", "captures_all", "split"] {
+        let source = format!(r#"let t = ""; t.pad(500, "a"); std::regex("a").{method}(t)"#);
+        let err = eval_with(&limits, &source).expect_err(method);
+        assert!(
+            matches!(*err, rhai::EvalAltResult::ErrorDataTooLarge(..)),
+            "{method}: {err:?}"
+        );
+    }
+}
+
+// spec: LIM#limits
+#[test]
+fn a_replacement_is_held_to_the_string_limit() {
+    let limits = crate::ScriptLimits {
+        max_string_size: 1_000,
+        ..crate::ScriptLimits::default()
+    };
+    let source = r#"let t = ""; t.pad(500, "a"); std::regex("a").replace_all(t, "bbbbbbbbbb")"#;
+    let err = eval_with(&limits, source).expect_err("too long");
+    assert!(
+        matches!(*err, rhai::EvalAltResult::ErrorDataTooLarge(..)),
+        "{err:?}"
+    );
+}
