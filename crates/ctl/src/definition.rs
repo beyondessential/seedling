@@ -7,6 +7,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use seedling_bundle::METADATA_FILE;
 use serde_json::{Map, Value, json};
 
 /// Where a definition comes from.
@@ -24,7 +25,6 @@ pub(super) struct DefinitionArgs {
 /// A definition resolved on this side, before it is sent.
 #[derive(Debug, PartialEq)]
 pub(super) enum Definition {
-    Script(String),
     Bundle {
         files: BTreeMap<String, Vec<u8>>,
         origin: Option<(String, String)>,
@@ -39,7 +39,6 @@ pub(super) enum Definition {
 // spec: CLI#definition-sources
 #[derive(Clone, Copy)]
 pub(super) struct DefinitionKeys {
-    pub script: &'static str,
     pub bundle: &'static str,
     pub reference: &'static str,
     /// `None` where the request has nowhere to report an origin.
@@ -49,14 +48,12 @@ pub(super) struct DefinitionKeys {
 impl DefinitionKeys {
     /// `/apps/create` and `/apps/update`.
     pub const APP: Self = Self {
-        script: "script",
         bundle: "bundle",
         reference: "reference",
         origin: Some("origin"),
     };
     /// `/templates/create` and `/templates/update`.
     pub const TEMPLATE: Self = Self {
-        script: "body",
         bundle: "bundle",
         reference: "reference",
         origin: Some("origin"),
@@ -64,7 +61,6 @@ impl DefinitionKeys {
     /// The definition `/apps/plan` is asked to compare against, which it
     /// never installs and so records no origin for.
     pub const PROPOSED: Self = Self {
-        script: "proposed_script",
         bundle: "proposed_bundle",
         reference: "proposed_reference",
         origin: None,
@@ -76,9 +72,6 @@ impl Definition {
     pub fn fields(&self, keys: DefinitionKeys) -> Map<String, Value> {
         let mut out = Map::new();
         match self {
-            Self::Script(text) => {
-                out.insert(keys.script.to_owned(), json!(text));
-            }
             Self::Bundle { files, origin } => {
                 let encoded: Map<String, Value> = files
                     .iter()
@@ -117,11 +110,39 @@ impl DefinitionArgs {
                 origin: None,
             }))
         } else {
-            std::fs::read_to_string(&path)
-                .map(|t| Some(Definition::Script(t)))
-                .map_err(|e| format!("cannot read {source}: {e}"))
+            Ok(Some(Definition::Bundle {
+                files: read_lone_file(&path)?,
+                origin: None,
+            }))
         }
     }
+}
+
+/// Read a lone file as a bundle holding it under its own name, with a
+/// metadata file naming it as the only script file.
+// spec: CLI#definition-sources
+pub(super) fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("{} names no file", path.display()))?
+        .to_str()
+        .ok_or_else(|| format!("{}: the file's name is not valid UTF-8", path.display()))?;
+    if name == METADATA_FILE {
+        return Err(format!(
+            "{}: a lone {METADATA_FILE} is not a definition; push its folder instead",
+            path.display()
+        ));
+    }
+    let contents =
+        std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let metadata = toml::Table::from_iter([(
+        "script".to_owned(),
+        toml::Value::Array(vec![toml::Value::String(name.to_owned())]),
+    )]);
+    Ok(BTreeMap::from([
+        (name.to_owned(), contents),
+        (METADATA_FILE.to_owned(), metadata.to_string().into_bytes()),
+    ]))
 }
 
 /// Resolve `args` or exit with the error.

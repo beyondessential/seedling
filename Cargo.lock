@@ -5080,11 +5080,13 @@ dependencies = [
  "quinn",
  "reqwest",
  "rustls",
+ "seedling-bundle",
  "seedling-protocol",
  "serde_json",
  "tar",
  "tempfile",
  "tokio",
+ "toml 1.2.1+spec-1.1.0",
  "tracing",
  "whoami",
 ]

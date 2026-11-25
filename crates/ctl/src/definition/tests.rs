@@ -102,14 +102,49 @@ fn a_pushed_bundle_carries_its_origin() {
     let fields = def.fields(DefinitionKeys::APP);
     assert_eq!(fields["bundle"]["app.seed.rhai"], BASE64.encode(b"app;"));
     assert_eq!(fields["origin"]["revision"], "abc");
-    assert_eq!(
-        Definition::Script("x".into()).fields(DefinitionKeys::TEMPLATE),
-        json!({ "body": "x" }).as_object().unwrap().clone()
-    );
+    assert!(def.fields(DefinitionKeys::TEMPLATE).contains_key("bundle"));
     assert_eq!(
         Definition::Reference("ghcr.io/o/d:1".into()).fields(DefinitionKeys::APP)["reference"],
         "ghcr.io/o/d:1"
     );
+}
+
+// spec: CLI#definition-sources
+#[test]
+fn a_lone_file_is_a_bundle_holding_it_under_its_own_name() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "tamanu central.seed.rhai", b"app;");
+    let files = read_lone_file(&dir.path().join("tamanu central.seed.rhai")).unwrap();
+    assert_eq!(files["tamanu central.seed.rhai"], b"app;");
+    let metadata: toml::Table =
+        toml::from_str(std::str::from_utf8(&files["seedling.toml"]).unwrap()).unwrap();
+    assert_eq!(
+        metadata,
+        toml::from_str::<toml::Table>(r#"script = ["tamanu central.seed.rhai"]"#).unwrap()
+    );
+    assert_eq!(files.len(), 2);
+    seedling_bundle::Bundle::from_files(files)
+        .unwrap()
+        .script()
+        .unwrap();
+}
+
+// spec: CLI#definition-sources
+#[test]
+fn a_lone_seedling_toml_or_a_non_utf8_name_is_refused() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "seedling.toml", b"");
+    let err = read_lone_file(&dir.path().join("seedling.toml")).unwrap_err();
+    assert!(err.contains("seedling.toml"), "{err}");
+
+    let odd = dir
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"app-\xff.rhai"));
+    std::fs::write(&odd, b"app;").unwrap();
+    let err = read_lone_file(&odd).unwrap_err();
+    assert!(err.contains("not valid UTF-8"), "{err}");
 }
 
 // spec: CLI#parameter-changes
