@@ -14,6 +14,10 @@ pub(crate) mod kinds;
 mod quoting;
 mod random;
 
+/// The name a script reaches the helpers by.
+// spec: STD#the-std-module
+pub const MODULE: &str = "std";
+
 // spec: STD#the-std-module
 /// The `std` module, holding every helper BSL offers.
 pub fn module() -> rhai::Module {
@@ -23,6 +27,7 @@ pub fn module() -> rhai::Module {
     encoding::register(&mut module);
     quoting::register(&mut module);
     formats::register(&mut module);
+    super::regex::register(&mut module);
     module
 }
 
@@ -34,6 +39,7 @@ pub fn module() -> rhai::Module {
 pub struct HelperLimits {
     pub derived_values: usize,
     pub password_hashes: usize,
+    pub regex_compiled_size: usize,
 }
 
 /// The limits the calling evaluation is held to.
@@ -41,7 +47,7 @@ pub struct HelperLimits {
 /// The tag is the runtime's, never the script's: an engine that does not
 /// carry the limits was not built by `setup_language`, and its helpers derive
 /// nothing rather than deriving without them.
-fn helper_limits(ctx: &NativeCallContext) -> Result<HelperLimits, Box<EvalAltResult>> {
+pub(crate) fn helper_limits(ctx: &NativeCallContext) -> Result<HelperLimits, Box<EvalAltResult>> {
     ctx.tag()
         .and_then(|tag| tag.read_lock::<HelperLimits>().map(|l| *l))
         .ok_or_else(|| {
@@ -56,7 +62,7 @@ fn too_large(what: &str) -> Box<EvalAltResult> {
 
 // spec: LIM#limits
 /// Refuse a result of `len` beyond `limit`, 0 being no limit.
-fn within(len: usize, limit: usize, what: &str) -> Result<(), Box<EvalAltResult>> {
+pub(crate) fn within(len: usize, limit: usize, what: &str) -> Result<(), Box<EvalAltResult>> {
     if limit != 0 && len > limit {
         return Err(too_large(what));
     }
@@ -64,13 +70,13 @@ fn within(len: usize, limit: usize, what: &str) -> Result<(), Box<EvalAltResult>
 }
 
 /// What the engine calls a string in a size error.
-const STRING: &str = "Length of string";
+pub(crate) const STRING: &str = "Length of string";
+/// What the engine calls an array in a size error.
+pub(crate) const ARRAY: &str = "Size of array/BLOB";
+/// What the engine calls an object map in a size error.
+pub(crate) const MAP: &str = "Size of object map";
 /// What the engine calls a Blob in a size error.
 const BLOB: &str = "Size of BLOB";
-/// What the engine calls an array in a size error.
-const ARRAY: &str = "Size of array/BLOB";
-/// What the engine calls an object map in a size error.
-const MAP: &str = "Size of object map";
 
 // spec: SEC#redaction
 /// The forms of a Blob that the runtime withholds: its bytes, its UTF-8
@@ -107,7 +113,7 @@ fn unary(
         .set_into_module(module, move |ctx: NativeCallContext, a: Dynamic| f(&ctx, a));
 }
 
-fn max_string(ctx: &NativeCallContext) -> usize {
+pub(crate) fn max_string(ctx: &NativeCallContext) -> usize {
     ctx.engine().max_string_size()
 }
 

@@ -53,6 +53,7 @@ pub fn check_due_schedules(
     db: &Db,
     scheduler: &mut Scheduler,
     now: Timestamp,
+    limits: &crate::defs::stdlib::HelperLimits,
     installed_app: &dyn Fn(&AppName) -> Option<ScheduledApp>,
 ) -> Vec<FiredSchedule> {
     // spec: SCHED#firing
@@ -163,7 +164,7 @@ pub fn check_due_schedules(
             // A scheduled run supplies no params, so each declared param takes
             // its default; a run that fails that is not made, and says so.
             let key = FaultKey::new(&row.app, "schedule_params_invalid", row.action.as_str());
-            let validation = validate_empty_invocation(schemas.get(&row.action));
+            let validation = validate_empty_invocation(schemas.get(&row.action), limits);
             let stamp_fire = |db: &Db| {
                 if let Err(e) = db::upsert_schedule_fired(
                     db,
@@ -311,12 +312,17 @@ pub fn clear_faults_of_unscheduled_actions(
 // spec: ACN#scheduled-actions
 fn validate_empty_invocation(
     schema: Option<&BTreeMap<ParamName, ParamDef>>,
+    limits: &crate::defs::stdlib::HelperLimits,
 ) -> Result<ParamMap, String> {
     let Some(schema) = schema else {
         return Ok(ParamMap::default());
     };
-    crate::runtime::action_params::apply_schema(schema, serde_json::Map::new())
-        .map_err(|e| e.to_string())
+    crate::runtime::action_params::apply_schema(
+        schema,
+        serde_json::Map::new(),
+        &mut crate::defs::regex::Budget::of(limits),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Wrapper for the main loop to call periodically. Tracks its own last-check
@@ -365,6 +371,11 @@ mod tests {
 
     fn no_schemas() -> Arc<BTreeMap<ActionName, BTreeMap<ParamName, ParamDef>>> {
         Arc::default()
+    }
+
+    /// The limits a scheduled run's defaults are parsed under.
+    fn limits() -> crate::defs::stdlib::HelperLimits {
+        crate::ScriptLimits::default().helpers()
     }
 
     fn required_text_param() -> BTreeMap<ParamName, ParamDef> {
@@ -458,7 +469,7 @@ mod tests {
         .unwrap();
 
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert_eq!(fired.len(), 1);
@@ -479,7 +490,7 @@ mod tests {
 
         let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert!(fired.is_empty(), "an unreadable schedule must not fire");
@@ -497,7 +508,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert_eq!(fired.len(), 1);
@@ -521,7 +532,7 @@ mod tests {
 
         let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert!(fired.is_empty());
@@ -535,7 +546,7 @@ mod tests {
         db.conn
             .execute_batch("ALTER TABLE gone RENAME TO action_schedules;")
             .unwrap();
-        check_due_schedules(&db, &mut scheduler, now, &|_| {
+        check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert!(
@@ -572,14 +583,14 @@ mod tests {
 
         let now: Timestamp = "2026-04-21T18:37:22Z".parse().unwrap();
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert_eq!(fired.len(), 1, "missed hourly schedule must catch up");
 
         // After firing we record last_fired_at = now, so the immediate next
         // check sees the next boundary still in the future.
-        let fired_again = check_due_schedules(&db, &mut scheduler, now, &|_| {
+        let fired_again = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert!(
@@ -611,7 +622,7 @@ mod tests {
             action_name("backup"),
             required_text_param(),
         )]));
-        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), Arc::clone(&schemas)))
         });
         assert!(fired.is_empty(), "the closure is not run");
@@ -622,7 +633,7 @@ mod tests {
         assert_eq!(filed[0].subject, "backup", "the action is the subject");
 
         // The fire is recorded, so the next check is not another failure.
-        check_due_schedules(&db, &mut scheduler, now, &|_| {
+        check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
             Some((1, installed(), Arc::clone(&schemas)))
         });
         assert_eq!(
@@ -642,7 +653,7 @@ mod tests {
         ));
         let schemas = Arc::new(BTreeMap::from([(action_name("backup"), with_default)]));
         let later: Timestamp = "2026-04-21T19:37:22Z".parse().unwrap();
-        let fired = check_due_schedules(&db, &mut scheduler, later, &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, later, &limits(), &|_| {
             Some((1, installed(), Arc::clone(&schemas)))
         });
         assert_eq!(fired.len(), 1, "the declared default satisfies the schema");

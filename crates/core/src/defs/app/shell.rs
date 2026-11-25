@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
+use rhai::{EvalAltResult, FnPtr, Map, NativeCallContext, TypeBuilder};
 use seedling_protocol::names::{ParamName, ShellName};
 
 use super::super::action::ShellDef;
@@ -56,7 +56,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         )
         .with_fn(
             "on_shell",
-            |this: &mut App,
+            |ctx: NativeCallContext,
+             this: &mut App,
              name: &str,
              closure: FnPtr,
              options: Map|
@@ -67,7 +68,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 reject_unknown_keys("on_shell options", &options, &["description", "params"])?;
                 let desc = super::extract_description(&options)?;
                 // spec: ACN#param-schemas
-                let params = super::action::parse_action_params(&options)?;
+                let params = super::action::parse_action_params(&ctx, &options)?;
                 declare_shell(this, shell_name, closure, desc, params)
             },
         );

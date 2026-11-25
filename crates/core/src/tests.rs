@@ -42,6 +42,7 @@ mod job;
 mod param;
 mod pod;
 mod purl;
+mod regex;
 mod runtime;
 mod service;
 mod stdlib;
@@ -329,7 +330,7 @@ fn eval_merged(
     script_ast: &AST,
     call_source: &str,
 ) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
-    let call_ast = engine.compile(call_source)?;
+    let call_ast = crate::defs::compile(engine, call_source)?;
     // The script's functions only: its statements already ran, as in replay.
     let merged = script_ast.clone_functions_only().merge(&call_ast);
     engine.eval_ast_with_scope(scope, &merged)
@@ -343,7 +344,7 @@ pub fn run_script(
 ) -> Result<AST, Box<rhai::EvalAltResult>> {
     let _seed =
         crate::runtime::seeds::AppSeedFrame::enter(&crate::runtime::seeds::AppSeed::for_tests());
-    let ast = engine.compile(source)?;
+    let ast = crate::defs::compile(engine, source)?;
     engine.run_ast_with_scope(scope, &ast)?;
     Ok(ast)
 }

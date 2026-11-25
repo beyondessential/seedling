@@ -171,7 +171,7 @@ let version = app.param("version")
     .kind("text")           // text (one line) | multiline | email | password | weak-password | random
                             // | boolean | integer | quantity | choice | version | version-semver | purl
                             // | url | url-origin | hostname | ip-address | ip-subnet | ip-range
-                            // | duration
+                            // | duration | regex
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -578,6 +578,26 @@ app.deployment("db").stop_timeout("2m");
 app.deployment("api").stop_timeout(grace.parsed() * 2);
 ```
 
+### Regular expressions
+
+`std::regex(pattern)` compiles a pattern in the [Rust `regex` crate's syntax](https://docs.rs/regex/1/regex/#syntax) and returns a `Regex`. Searches run in time linear in the text, with no backtracking, so the syntax has no backreferences or look-around. A search finds a match anywhere in the text; anchor the pattern with `^` and `$` to match the whole of it.
+
+```rhai
+let kv = std::regex("(?<key>[a-z_]+)=(?<value>[^;]*)");
+
+kv.is_match("a=1")                       // true
+kv.find("x; a=1")                        // #{ text: "a=1", start: 3, end: 6 }
+kv.find_all("a=1;b=2").map(|m| m.text)   // ["a=1", "b=2"]
+kv.captures("a=1").named.value.text      // "1"
+kv.replace_all("a=1;b=2", "$value=$key") // "1=a;2=b"
+kv.replace_all("a=1", |c| c.named.key.text.to_upper())  // "A"
+std::regex(",\\s*").split("a, b,c", 2)   // ["a", "b,c"]
+```
+
+Positions count characters, as `sub_string` does. `captures` gives `groups`, every group in order with the whole match first and `()` for a group that took no part, and `named`, the named groups by name. `find` and `captures` give `()` when nothing matches. In a replacement string, `$1`, `$name` and `${name}` insert a group and `$$` a `$`; a reference to a group the pattern does not have, or a stray `$`, throws, whether or not anything matched. A replacement closure is called with each match's captures and returns the text to insert as it is.
+
+A pattern written as a string literal is checked when the definition is evaluated, so `std::regex("(")` fails the evaluation even in an action that never runs. The `regex` param kind takes a pattern from an operator: `std::parse_regex` and `param.parsed()` return the `Regex`, and a malformed pattern is refused when the value is set. Compiling counts toward a per-evaluation budget of 32 MiB of compiled pattern (`--script-max-regex-compiled-size`); a pattern too big for what is left throws, and uses the rest of the budget up.
+
 ### Derived random values
 
 A script that needs a password, a token or an identifier draws it from a seed the runtime holds, rather than from a random source, so the value is the same on every evaluation:
@@ -710,7 +730,7 @@ let toml = std::encode_toml(settings);
 let defaults = std::decode_yaml(app.file("defaults.yaml"));
 ```
 
-Every encoder writes map keys in sorted order and one fixed layout, so the same value always gives the same text. A value the format cannot hold throws, naming where it sits and why, rather than being dropped or converted: `()` in TOML or an env file, an infinite number in JSON, an array or nested map in an env file, and a Blob anywhere (encode it with one of the encodings first). A version is written as its text. YAML quotes any string an older YAML reader could take for something else, such as `no`, `on` or `0755`. An env file single-quotes every value, so a value holding a single quote or a line break throws.
+Every encoder writes map keys in sorted order and one fixed layout, so the same value always gives the same text. A value the format cannot hold throws, naming where it sits and why, rather than being dropped or converted: `()` in TOML or an env file, an infinite number in JSON, an array or nested map in an env file, and a Blob anywhere (encode it with one of the encodings first). A version is written as its text, and a regex as its pattern. YAML quotes any string an older YAML reader could take for something else, such as `no`, `on` or `0755`. An env file single-quotes every value, so a value holding a single quote or a line break throws.
 
 Decoders are strict: text that is not a document of the format throws, naming the line it stops being one, and so does a key given twice or an integer too large for BSL. YAML is read under the YAML 1.2 core schema, so `yes` and `on` are strings, and a document holding more than one document, a custom tag or a non-string key throws. TOML date-times come back as strings. `std::decode_env` reads only blank lines, `#` comments and `KEY=value` entries with a bare or single-quoted value; double quotes, escapes, `$` expansion and `export` throw, because the readers of env files disagree on them.
 

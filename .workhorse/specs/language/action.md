@@ -66,11 +66,12 @@ A `name` naming no declared action MUST throw.
 The runtime MUST call the invoked closure with the caller's runtime handle.
 How the invoked closure shares the caller's operation is specified by [action composition](../runtime/operations.md#action-composition).
 
-Every value in `params` MUST be a unit, a boolean, an integer, a finite floating-point number, a string, a `Version`, a `SemVer`, an `IpAddress`, an `IpSubnet`, an `IpRange`, a `Duration`, or an array or map of such values.
+Every value in `params` MUST be a unit, a boolean, an integer, a finite floating-point number, a string, a `Version`, a `SemVer`, an `IpAddress`, an `IpSubnet`, an `IpRange`, a `Duration`, a `Regex`, or an array or map of such values.
 Any other value MUST make `invoke` throw.
 A `Version` or `SemVer` MUST be taken as its [text](version.md#text-of-a-version).
 An `IpAddress`, `IpSubnet` or `IpRange` MUST be taken as its [canonical form](ip.md#text-of-a-value).
 A `Duration` MUST be taken as its [text](duration.md#text-of-a-duration).
+A `Regex` MUST be taken as its [pattern](regex.md#compiling-a-pattern).
 
 > [!NOTE]
 > A closure can pass the param map it received to `invoke` unchanged.
@@ -152,6 +153,7 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `ip-address` | `family`, optional | an IPv4 or IPv6 address, of `family` where one is given | an `IpAddress`, as [address values](ip.md#address-values) specify |
 | `ip-subnet` | `family`, optional | an IPv4 or IPv6 subnet, of `family` where one is given | an `IpSubnet`, as [subnet values](ip.md#subnet-values) specify |
 | `ip-range` | `family`, optional | a range of IPv4 or IPv6 addresses, of `family` where one is given | an `IpRange`, as [range values](ip.md#range-values) specify |
+| `regex` | none | a regular expression | a `Regex`, as [regular expressions](regex.md#compiling-a-pattern) specify |
 | `boolean` | none | `true` or `false` | the value as a boolean |
 | `integer` | `range`, optional | a whole number, within `range` where one is given | the value as an integer |
 | `quantity` | `range`, optional | a [quantity](#quantities), within `range` where one is given | its amount as an integer |
@@ -250,7 +252,7 @@ Where it rejects a value that would be a quantity but for its suffix, its error 
 
 ### Presentation of kinds
 
-A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname`, `ip-address`, `ip-subnet`, `ip-range` or `duration` param, and a multi-line input for a `multiline` param.
+A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname`, `ip-address`, `ip-subnet`, `ip-range`, `duration` or `regex` param, and a multi-line input for a `multiline` param.
 A presentation layer SHOULD offer a toggle for a `boolean` param, a numeric input limited to `range` for an `integer` param, and a selection among `options`, in the order the script declared them, for a `choice` param.
 A presentation layer SHOULD offer a single-line input for a `quantity` param, and SHOULD show the amount the value resolves to while it is entered.
 A presentation layer SHOULD show the bounds a `duration` param's kind declares beside its input.

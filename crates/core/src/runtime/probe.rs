@@ -258,7 +258,7 @@ fn probe_handler(
         .get(kind.as_str())
         .and_then(|by_name| by_name.get(handler_name));
     let stored = app.stored.lock().clone();
-    let resolved_params = match resolve_params(schema, supplied, &stored) {
+    let resolved_params = match resolve_params(engine, schema, supplied, &stored) {
         Ok(params) => params,
         Err(msg) => {
             return HandlerProbe {
@@ -387,11 +387,13 @@ fn run_probe(
             .with_operation_seed(&seed, &probe_sensitive);
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
-        engine.compile(call_script).ok().and_then(|ast| {
-            engine
-                .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
-                .err()
-        })
+        crate::defs::compile(engine, call_script)
+            .ok()
+            .and_then(|ast| {
+                engine
+                    .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
+                    .err()
+            })
     };
 
     let gathered_images = images.lock().clone();
@@ -413,10 +415,12 @@ fn run_probe(
 /// are, giving the param map or the reason the handler cannot be probed.
 // spec: IMG#probe-parameters
 fn resolve_params(
+    engine: &Engine,
     schema: &BTreeMap<ParamName, ParamDef>,
     supplied: Option<&serde_json::Map<String, serde_json::Value>>,
     stored: &BTreeMap<String, String>,
 ) -> Result<ParamMap, String> {
+    let limits = crate::defs::regex::engine_limits(engine)?;
     let has_value = |v: &&serde_json::Value| v.as_str() != Some("");
     let mut params = serde_json::Map::new();
     for name in schema.keys() {
@@ -435,7 +439,8 @@ fn resolve_params(
             params.insert(key.to_owned(), value);
         }
     }
-    apply_schema(schema, params).map_err(|e| e.to_string())
+    apply_schema(schema, params, &mut crate::defs::regex::Budget::of(&limits))
+        .map_err(|e| e.to_string())
 }
 
 /// How many parameters the closure `pointer` declares, or `None` where the
@@ -454,15 +459,15 @@ mod tests {
     use rhai::Engine;
 
     fn setup_engine_and_app(script: &str) -> (Engine, AST, App) {
-        let mut engine = Engine::new();
-        defs::register(&mut engine);
-        let (mut scope, app) = defs::scope(Default::default()).expect("the scope builds");
+        let (engine, mut scope, app) =
+            crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+                .expect("the scope builds");
         app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = AppName::new("testapp").unwrap();
             d
         });
-        let ast = engine.compile(script).expect("compile");
+        let ast = crate::defs::compile(&engine, script).expect("compile");
         engine
             .run_ast_with_scope(&mut scope, &ast)
             .expect("run script");

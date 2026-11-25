@@ -392,9 +392,13 @@ mod tests {
                 let sched = Arc::clone(&oi.state.scheduler);
                 let phase = Arc::clone(&phase);
                 move |db| {
-                    check_due_schedules(db, &mut sched.lock(), now, &|_| {
-                        Some((1, Arc::clone(&phase), Default::default()))
-                    })
+                    check_due_schedules(
+                        db,
+                        &mut sched.lock(),
+                        now,
+                        &crate::ScriptLimits::default().helpers(),
+                        &|_| Some((1, Arc::clone(&phase), Default::default())),
+                    )
                 }
             });
             assert_eq!(fired.len(), 1);

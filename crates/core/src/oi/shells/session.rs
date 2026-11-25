@@ -421,8 +421,12 @@ pub(super) fn validate_shell_params(
     >,
     submitted: serde_json::Map<String, serde_json::Value>,
 ) -> Result<ParamMap, seedling_protocol::error::OiError> {
-    let params = crate::runtime::action_params::apply_schema(schema, submitted)
-        .map_err(crate::oi::handler::actions::validation_error_to_oi)?;
+    let params = crate::runtime::action_params::apply_schema(
+        schema,
+        submitted,
+        &mut crate::defs::regex::Budget::of(&state.script_limits.helpers()),
+    )
+    .map_err(crate::oi::handler::actions::validation_error_to_oi)?;
     crate::runtime::action_params::validate_volume_params(
         schema,
         &params,
@@ -694,8 +698,7 @@ pub(super) async fn run_app_shell(
             .script()
             .map_err(|e| e.to_string())
             .and_then(|script| {
-                engine
-                    .compile(script.text())
+                crate::defs::compile(&engine, script.text())
                     .map_err(|e| script.remap_error(&e.to_string()))
             });
         let ast = match compiled {

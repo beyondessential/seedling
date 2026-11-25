@@ -84,9 +84,10 @@ The runtime MUST encrypt the persisted parameters and seed with the cipher it us
 The persisted parameters MUST be the [param map](../language/action.md#param-map) the action closure receives, holding parser results as [param delivery](../language/action.md#param-delivery) specifies.
 On replay, the runtime MUST pass the action closure the persisted parameters, without validating or parsing them again.
 The runtime MUST restore each `Version` or `SemVer` in the persisted parameters as a value of the same type with the same [text](../language/version.md#text-of-a-version).
+The runtime MUST restore each `Regex` in the persisted parameters as a `Regex` of the same [pattern](../language/regex.md#compiling-a-pattern), without counting it toward any limit.
 
 > [!NOTE]
-> Restoring a version depends on its text alone, so it cannot reject a value that was accepted when the operation began.
+> Restoring a version or a pattern depends on its text alone, so it cannot reject a value that was accepted when the operation began.
 
 The runtime MUST clear the persisted operation when the operation ends.
 

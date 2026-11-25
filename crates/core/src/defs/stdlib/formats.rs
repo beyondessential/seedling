@@ -13,6 +13,7 @@ use super::{
 };
 use crate::defs::{
     ip::{IpAddress, IpRange, IpSubnet},
+    regex::Regex,
     take::take_map,
     version::{SemVer, Version},
 };
@@ -250,6 +251,10 @@ impl Holds {
             return Ok(Tree::Str(value.cast::<IpRange>().to_string()));
         }
         // take: dispatch
+        if value.is::<Regex>() {
+            return Ok(Tree::Str(value.cast::<Regex>().pattern().to_owned()));
+        }
+        // take: dispatch
         if value.is_array() {
             if !self.nested {
                 return Err(at.refused(&format!("{} has no arrays", self.name)));
@@ -449,4 +454,8 @@ fn within_limits(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests evaluate snippets of BSL directly, not definitions"
+)]
 mod tests;

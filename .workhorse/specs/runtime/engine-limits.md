@@ -19,9 +19,11 @@ The runtime MUST bound the resources a single evaluation of a BSL script can con
 | array length | elements, or bytes of a Blob | 10 000 | `--script-max-array-size` |
 | object map size | entries | 10 000 | `--script-max-map-size` |
 | derived values | calls to a [derivation helper](../language/random.md#derivation-helper), and helper results [withheld as derived values](secrets.md#redaction) | 1 000 | `--script-max-derived-values` |
+| regex compiled size | bytes of [patterns compiled](../language/regex.md#compiled-size) | 33 554 432 (32 MiB) | `--script-max-regex-compiled-size` |
 | password hashes | calls to a [password hash helper](../language/random.md#password-hash-helper) | 16 | `--script-max-password-hashes` |
 
 An evaluation that exceeds any limit MUST fail with an error.
+A pattern that would exceed the regex compiled size limit MUST instead raise a script error, as [compiled size](../language/regex.md#compiled-size) specifies.
 
 > [!NOTE]
 > A password hash helper is a derivation helper, so each call to one counts toward both the derived values and the password hashes limits.
@@ -31,7 +33,7 @@ The expression nesting limit MUST apply both at the top level of a script and wi
 Functions in a script's scope MAY NOT pause evaluation for any span of time, other than using the methods of a [runtime handle](../language/rt.md#runtime-handle).
 
 An operator MAY override each limit with its daemon option when the daemon starts.
-Setting the operations, expression nesting, string, array, object map, derived values or password hashes limit to 0 MUST remove that limit.
+Setting the operations, expression nesting, string, array, object map, derived values, regex compiled size or password hashes limit to 0 MUST remove that limit.
 The daemon MUST refuse to start with a function call nesting depth of 0.
 
 > [!NOTE]

@@ -27,7 +27,7 @@ reqwest.workspace = true
 # method called on `app` (`app.on_action("x", |rt, _| { ... app ... })`), which fails
 # with ErrorDataRace before any script runs, and every BSL script is written
 # that way.
-rhai = { version = "=1.25.1", features = ["metadata", "no_time"] }
+rhai = { version = "=1.25.1", features = ["internals", "metadata", "no_time"] }
 rtnetlink = "0.24.0"
 rusqlite = { version = "0.42.0", features = ["bundled"] }
 rustix = { version = "1.1.6", features = ["fs", "process"] }
@@ -82,6 +82,7 @@ purl = { version = "0.1.6", default-features = false }
 url = "2.5.8"
 idna = "1.1.0"
 percent-encoding = "2.3.2"
+regex-automata = "0.4.18"
 winnow = "1.0.5"
 num-bigint = "0.4.8"
 saphyr = "0.3.4"

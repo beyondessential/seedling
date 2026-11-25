@@ -437,7 +437,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
     let (engine, _scope, _stub_app) =
         crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle))
             .map_err(OiError::script_error)?;
-    let ast = match engine.compile(script.text()) {
+    let ast = match crate::defs::compile(&engine, script.text()) {
         Ok(a) => a,
         Err(e) => {
             return Err(OiError::script_error(format!(
@@ -547,7 +547,7 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
             return;
         }
     };
-    let ast = match engine.compile(script.text()) {
+    let ast = match crate::defs::compile(&engine, script.text()) {
         Ok(a) => a,
         Err(e) => {
             tracing::warn!(

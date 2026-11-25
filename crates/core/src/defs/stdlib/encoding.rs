@@ -244,4 +244,8 @@ fn parse_hyphenated(text: &str) -> Result<uuid::Uuid, Box<EvalAltResult>> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests evaluate snippets of BSL directly, not definitions"
+)]
 mod tests;

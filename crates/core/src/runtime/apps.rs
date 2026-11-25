@@ -15,6 +15,7 @@ use crate::{
     defs::{
         app::App,
         param_def::{ParsedValue, SuppliedValue},
+        regex::Budget,
     },
     runtime::{
         db::{Db, DbHandle},
@@ -988,9 +989,8 @@ fn run_seeded_definition(
     // becomes a ScriptError and is surfaced as a fault by the caller.
     // spec: BND#script-formation
     let remap = |e: Box<rhai::EvalAltResult>| ScriptError(script.remap_error(&e.to_string()));
-    let ran = engine
-        .compile(script.text())
-        .map_err(|e| remap(e.into()))
+    let ran = crate::defs::compile(&engine, script.text())
+        .map_err(remap)
         .and_then(|ast| {
             engine
                 .run_ast_with_scope(&mut scope, &ast)
@@ -1004,13 +1004,13 @@ fn run_seeded_definition(
         Err(e) => return (app, Err(e)),
     };
     // spec: BSL#evaluation
-    if let Err(e) = crate::defs::finish_evaluation(&app) {
+    if let Err(e) = crate::defs::finish_evaluation(&app, limits) {
         return (app, Err(ScriptError(e)));
     }
     let (Some(proposed), Some(mut validators)) = (validate, validators) else {
         return (app, Ok(Vec::new()));
     };
-    let parsed = match check_kinds(&app.def.load().params, proposed) {
+    let parsed = match check_kinds(&app.def.load().params, proposed, &limits.helpers()) {
         Ok(parsed) => parsed,
         // spec: PARAM#kind-checks
         // No validator runs while any kind rejects its value.
@@ -1048,13 +1048,16 @@ pub fn canonical_values(values: &BTreeMap<String, SuppliedValue>) -> BTreeMap<St
 fn check_kinds(
     declared: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
     proposed: &BTreeMap<String, SuppliedValue>,
+    limits: &crate::defs::stdlib::HelperLimits,
 ) -> Result<BTreeMap<String, ParsedValue>, Vec<Rejection>> {
     let mut parsed = BTreeMap::new();
     let mut rejections = Vec::new();
+    // spec: REX#compiled-size
+    let mut budget = Budget::of(limits);
     for (name, value) in proposed {
         // An unset parameter is not checked; an empty stored value is.
         let result = match declared.get(name.as_str()) {
-            Some(def) => def.kind.parse_supplied(value),
+            Some(def) => def.kind.parse_supplied(value, &mut budget),
             None if matches!(value, SuppliedValue::Text(_)) => continue,
             None => Err(
                 "a boolean or integer is given for a parameter the definition does not \

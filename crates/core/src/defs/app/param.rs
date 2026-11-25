@@ -4,6 +4,7 @@ use rhai::{EvalAltResult, Map, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
 use super::super::param_def::{ParamDef, ParamKind, SuppliedValue, take_kind};
+use super::super::regex::Budget;
 use super::super::take::{reject_unknown_keys, take_bool, take_map, take_string};
 use super::App;
 
@@ -49,8 +50,11 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 // spec: ACN#volume-params
 pub(super) fn parse_param_defs(
     map: &Map,
+    limits: &super::super::stdlib::HelperLimits,
 ) -> Result<BTreeMap<ParamName, ParamDef>, Box<EvalAltResult>> {
     let mut reqs = BTreeMap::new();
+    // spec: REX#compiled-size
+    let mut budget = Budget::of(limits);
     for (key, value) in map {
         // A non-map entry used to be skipped outright, so the param simply
         // did not exist — and a non-string `kind` fell back to the default,
@@ -105,9 +109,10 @@ pub(super) fn parse_param_defs(
             secret,
         };
         // spec: ACN#param-schemas
-        def.check_default().map_err(|e| -> Box<EvalAltResult> {
-            format!("param `{key}` default_value: {e}").into()
-        })?;
+        def.check_default(&mut budget)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("param `{key}` default_value: {e}").into()
+            })?;
         // spec: ACN#param-schemas
         def.check_secret()
             .map_err(|e| -> Box<EvalAltResult> { format!("param `{key}` secret: {e}").into() })?;

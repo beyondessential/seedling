@@ -9,6 +9,7 @@ fn engine() -> Engine {
     engine.set_default_tag(Dynamic::from(HelperLimits {
         derived_values: 0,
         password_hashes: 0,
+        regex_compiled_size: 0,
     }));
     engine
 }
@@ -106,6 +107,26 @@ fn an_ip_value_is_written_as_its_canonical_form() {
         ),
         "A='2001:db8::1'\nR='10.0.0.0-10.0.0.3'\nS='10.0.0.0/8'\n"
     );
+}
+
+// spec: FMT#values-each-format-holds
+#[test]
+fn a_regex_is_written_as_its_pattern() {
+    let mut engine = engine();
+    engine.register_fn("re", |s: &str| {
+        crate::defs::regex::compile(s, &mut crate::defs::regex::Budget::unlimited()).unwrap()
+    });
+    for (src, want) in [
+        (
+            r#"std::encode_json(#{ r: re("^a+$") })"#,
+            "{\n  \"r\": \"^a+$\"\n}\n",
+        ),
+        (r#"std::encode_yaml(#{ r: re("a+") })"#, "r: a+\n"),
+        (r#"std::encode_toml(#{ r: re("a+") })"#, "r = \"a+\"\n"),
+        (r#"std::encode_env(#{ R: re("a+") })"#, "R='a+'\n"),
+    ] {
+        assert_eq!(engine.eval::<String>(src).unwrap(), want, "{src}");
+    }
 }
 
 // spec: FMT#refusal

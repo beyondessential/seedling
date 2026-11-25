@@ -8,6 +8,10 @@ pub mod sysconst;
 pub mod system;
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests evaluate snippets of BSL directly, not definitions"
+)]
 mod tests;
 
 /// Configurable limits for the Rhai script engine.
@@ -30,6 +34,8 @@ pub struct ScriptLimits {
     pub max_derived_values: usize,
     // spec: LIM#limits
     pub max_password_hashes: usize,
+    // spec: LIM#limits
+    pub max_regex_compiled_size: usize,
 }
 
 impl Default for ScriptLimits {
@@ -43,6 +49,18 @@ impl Default for ScriptLimits {
             max_map_size: 10_000,
             max_derived_values: 1_000,
             max_password_hashes: 16,
+            max_regex_compiled_size: 33_554_432,
+        }
+    }
+}
+
+impl ScriptLimits {
+    /// The limits the `std` helpers and the kind parsers hold values to.
+    pub fn helpers(&self) -> defs::stdlib::HelperLimits {
+        defs::stdlib::HelperLimits {
+            derived_values: self.max_derived_values,
+            password_hashes: self.max_password_hashes,
+            regex_compiled_size: self.max_regex_compiled_size,
         }
     }
 }
@@ -61,10 +79,12 @@ pub fn setup_language(
     engine.set_max_string_size(limits.max_string_size);
     engine.set_max_array_size(limits.max_array_size);
     engine.set_max_map_size(limits.max_map_size);
-    engine.set_default_tag(rhai::Dynamic::from(defs::stdlib::HelperLimits {
-        derived_values: limits.max_derived_values,
-        password_hashes: limits.max_password_hashes,
-    }));
+    engine.set_default_tag(rhai::Dynamic::from(limits.helpers()));
+    // spec: REX#compiling-a-pattern
+    // Optimisation would carry a `const` into a call's argument, which the
+    // literal-pattern check must not take for a literal, so `defs::compile`
+    // optimises once it has checked.
+    engine.set_optimization_level(rhai::OptimizationLevel::None);
 
     defs::register(&mut engine);
     let (scope, app) = defs::scope(bundle)?;
@@ -78,7 +98,7 @@ mod engine_limits_tests {
     fn eval(limits: ScriptLimits, src: &str) -> Result<(), Box<rhai::EvalAltResult>> {
         let (engine, mut scope, _app) =
             setup_language(&limits, Default::default()).expect("the scope builds");
-        let ast = engine.compile(src)?;
+        let ast = crate::defs::compile(&engine, src)?;
         engine.run_ast_with_scope(&mut scope, &ast)
     }
 

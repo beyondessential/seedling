@@ -125,6 +125,7 @@ fn single_line_kinds_refuse_control_characters_and_separators() {
             "parse_ip_address",
             "parse_ip_subnet",
             "parse_ip_range",
+            "parse_regex",
             "parse_volume",
             "parse_quantity",
         ] {

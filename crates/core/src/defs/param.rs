@@ -1,8 +1,10 @@
-use rhai::{CustomType, Dynamic, EvalAltResult, FnPtr, TypeBuilder};
+use rhai::{CustomType, Dynamic, EvalAltResult, FnPtr, NativeCallContext, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
 use super::app::{App, ensure_not_validating};
 use super::param_def::{SuppliedValue, take_kind};
+use super::regex::Budget;
+use super::stdlib::helper_limits;
 use super::take::take_closure;
 
 // spec: PARAM#declaration
@@ -17,11 +19,16 @@ pub struct Param {
 
 /// Check each parameter's default and secret flag against its kind, which the
 /// script may have declared before or after either.
-pub(super) fn check_params(def: &super::app::AppDef) -> Result<(), String> {
+pub(super) fn check_params(
+    def: &super::app::AppDef,
+    limits: &super::stdlib::HelperLimits,
+) -> Result<(), String> {
+    // spec: REX#compiled-size
+    let mut budget = Budget::of(limits);
     for (name, param) in &def.params {
         // spec: PARAM#kind-checks
         param
-            .check_default()
+            .check_default(&mut budget)
             .map_err(|e| format!("the default of parameter '{name}' is rejected: {e}"))?;
         // spec: PARAM#secret-parameters
         param
@@ -72,7 +79,7 @@ impl CustomType for Param {
         // spec: PARAM#values
         builder.with_fn(
             "parsed",
-            |this: &mut Self| -> Result<Dynamic, Box<EvalAltResult>> {
+            |ctx: NativeCallContext, this: &mut Self| -> Result<Dynamic, Box<EvalAltResult>> {
                 let value = this.effective_value()?;
                 let kind = this
                     .app
@@ -82,9 +89,14 @@ impl CustomType for Param {
                     .get(&this.name)
                     .map(|def| def.kind.clone())
                     .unwrap_or_default();
-                let parsed = kind.parse(&value).map_err(|e| -> Box<EvalAltResult> {
-                    format!("param '{}': {e}", this.name).into()
-                })?;
+                // A value the runtime already checked is not the script's own
+                // call to a parser, so it counts toward no limit.
+                let mut budget = Budget::of(&helper_limits(&ctx)?);
+                let parsed =
+                    kind.parse(&value, &mut budget)
+                        .map_err(|e| -> Box<EvalAltResult> {
+                            format!("param '{}': {e}", this.name).into()
+                        })?;
                 Ok(parsed.into_dynamic())
             },
         );
