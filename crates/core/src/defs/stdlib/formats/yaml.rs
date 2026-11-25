@@ -30,10 +30,9 @@ pub(super) fn encode(tree: &Tree) -> String {
         .dump(&to_yaml(tree))
         .expect("writing YAML to a string does not fail");
     // The emitter starts every document with an explicit `---`.
-    let mut text = text
-        .strip_prefix("---\n")
-        .map(str::to_owned)
-        .unwrap_or(text);
+    if text.starts_with("---\n") {
+        text.replace_range(..4, "");
+    }
     // spec: FMT#layout
     text.push('\n');
     text
