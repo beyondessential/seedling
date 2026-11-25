@@ -6,9 +6,7 @@
 // page changes only with the definition. Not a production definition.
 //
 // Browse https://language-tour.demo.internal/ for the table, or
-// /results.json for the same data. Values derived from the app's seed are
-// kept apart in /random.json, since anything computed from one is withheld
-// where the app is described.
+// /results.json for the same data.
 
 app.description("Demo: the standard helpers and the values they return, evaluated and served as a table");
 
@@ -162,6 +160,26 @@ let formats = [
     row.call(`std::decode_env(app.file("samples/app.env"))`, std::decode_env(app.file("samples/app.env"))),
 ];
 
+// ── Derived random values ────────────────────────────────────────────────────
+
+// Each value is derived from the app's seed and its label, so it is the same
+// on every evaluation and changes when an operator rotates the seed. Anything
+// derived from the seed is a secret the runtime withholds wherever it
+// describes the app, so the rows show each value's shape and never the value.
+let alphanumeric = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+let token = std::random_string("token", 24, alphanumeric);
+let uuid = std::uuid_v4("instance-id");
+let random = [
+    row.call(`std::random_bytes("bytes", 8).len()`, std::random_bytes("bytes", 8).len()),
+    row.call(`std::parse_regex("^[A-Za-z0-9]{24}$").is_match(std::random_string("token", 24, alphanumeric))`,
+        std::parse_regex("^[A-Za-z0-9]{24}$").is_match(token)),
+    row.call(`std::uuid_v4("instance-id").sub_string(14, 1)`, uuid.sub_string(14, 1)),
+    row.call(`std::password_argon2id("token-hash", token).split("$").extract(1..4)`,
+        std::password_argon2id("token-hash", token).split("$").extract(1..4)),
+    row.call(`std::password_bcrypt("token-hash", token).split("$").extract(1..3)`,
+        std::password_bcrypt("token-hash", token).split("$").extract(1..3)),
+];
+
 let sections = [
     #{ title: "Parsing a kind", rows: parsing },
     #{ title: "Versions", rows: versions },
@@ -171,21 +189,8 @@ let sections = [
     #{ title: "Regular expressions", rows: regexes },
     #{ title: "Digests and encodings", rows: encodings },
     #{ title: "Structured formats", rows: formats },
+    #{ title: "Derived random values, by shape", rows: random },
 ];
-
-// ── Derived random values ────────────────────────────────────────────────────
-
-// Each value is derived from the app's seed and its label, so it is the same
-// on every evaluation and changes when an operator rotates the seed.
-let alphanumeric = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-let token = std::random_string("token", 24, alphanumeric);
-let random = #{
-    random_bytes: std::encode_hex(std::random_bytes("bytes", 8)),
-    random_string: token,
-    uuid_v4: std::uuid_v4("instance-id"),
-    password_argon2id: std::password_argon2id("token-hash", token),
-    password_bcrypt: std::password_bcrypt("token-hash", token),
-};
 
 // ── Serving the results ──────────────────────────────────────────────────────
 
@@ -206,13 +211,11 @@ for section in sections {
     }
     page += "</table>\n";
 }
-page += `<p><a href="/random.json">Derived random values</a></p>\n`;
 
 let www = app.volume("www")
     .readonly()
     .write("/index.html", page)
-    .write("/results.json", std::encode_json(sections))
-    .write("/random.json", std::encode_json(random));
+    .write("/results.json", std::encode_json(sections));
 
 let web = app.service("web").http(80);
 web.ingress(hostname.value(), 443)
