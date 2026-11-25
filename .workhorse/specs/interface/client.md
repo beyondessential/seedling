@@ -107,7 +107,7 @@ The CLI MUST send a definition as [definition sources](definitions.md#definition
 
 | source | sent as |
 | --- | --- |
-| a path to a file | the file's text as `script`, or as `body` for a template |
+| a path to a file | a bundle holding the file under its own name and a [metadata file](../language/bundle.md#metadata-file) whose only field is `script`, naming that file, as `bundle` |
 | a path to a folder | the folder as `bundle`, read as [Definition folders](#definition-folders) specifies |
 | `https://github.com/<owner>/<repo>/tree/<ref>/<folder>` | the named folder at the named branch, tag or commit as `bundle` |
 | `--ref <reference>` | the reference as `reference`, for the server to fetch |
@@ -117,8 +117,13 @@ Where the URL's path could split into a ref and a folder in several ways, the CL
 The CLI MAY authenticate to GitHub with the token in the `GITHUB_TOKEN` environment variable.
 The CLI MUST report an error and send no request when the folder holds no files, or when the downloaded archive holds an entry that is not a regular file or directory or that lies outside the folder.
 
+The CLI MUST report an error and send no request when a path to a file names a file called `seedling.toml`, or one whose name is not valid UTF-8.
+
 > [!NOTE]
 > Downloading the folder on the client means the host needs no access to GitHub.
+
+> [!NOTE]
+> Sending a file under its own name means its script errors name the file its author wrote, and an [export](#definition-export) gives that file back.
 
 ## Definition folders
 
@@ -188,17 +193,12 @@ If a path in the bundle is absolute, or has an empty or `..` segment, the CLI MU
 
 `definitions pack <source> <file>` MUST write the bundle that `source` yields, read and assembled as a definition source sent as `bundle` is, to `file` as the layer of a [definition artefact](definitions.md#fetching): a gzip-compressed tar archive whose root is the bundle root, holding only regular files and the directories containing them.
 `source` MUST be a path to a file, a path to a folder, or a GitHub URL, as [definition sources](#definition-sources) give them.
-From a path to a file, the CLI MUST pack a bundle holding the file under its own name and a [metadata file](../language/bundle.md#metadata-file) whose only field is `script`, naming that file.
-If that file is named `seedling.toml`, the CLI MUST report an error and write nothing.
 If `file` exists, the CLI MUST report an error and write nothing.
 Packing the same bundle twice with the same CLI MUST write the same bytes.
 
 > [!NOTE]
 > A packed bundle is pushed to a registry with a general-purpose OCI tool, so the CLI holds no registry credentials of its own.
 > Writing the same bytes for the same bundle gives an unchanged definition the same digest when it is published again.
-
-> [!NOTE]
-> A packed file keeps its name so that the bundle reads as its author wrote it, which means it is not the bundle the same file gives when pushed as `script`, and the two have different content hashes.
 
 ## Registry tags
 
