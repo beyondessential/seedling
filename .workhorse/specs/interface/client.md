@@ -115,7 +115,7 @@ The CLI MUST send a definition as [definition sources](definitions.md#definition
 For a GitHub URL, the CLI MUST resolve the branch, tag or commit to a commit, download the folder at that commit itself, and send `origin` with `url` set to the URL as given and `revision` set to the commit's id.
 Where the URL's path could split into a ref and a folder in several ways, the CLI MUST try the shortest ref first.
 The CLI MAY authenticate to GitHub with the token in the `GITHUB_TOKEN` environment variable.
-The CLI MUST report an error and send no request when the folder holds no files, or when the downloaded archive holds an entry that is not a regular file or directory or that lies outside the folder.
+The CLI MUST report an error and send no request when the folder holds no files, or when an entry the CLI reads from the downloaded archive is not a regular file or directory, or lies outside the repository.
 
 The CLI MUST report an error and send no request when a path to a file names a file called `seedling.toml`, or one whose name is not valid UTF-8.
 
