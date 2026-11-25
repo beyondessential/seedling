@@ -400,11 +400,12 @@ fn decoded(ctx: &NativeCallContext, text: &ByteArg, tree: Tree) -> HelperResult 
     within_limits(ctx, &tree, 0)?;
     // spec: SEC#redaction
     // An empty string withholds nothing, and a string repeated is one value.
-    let mut strings = BTreeSet::new();
-    tree.strings(&mut strings);
+    // The strings are gathered only when the text holds a withheld value.
     settle(ctx, &held(&[text]), || {
+        let mut strings = BTreeSet::new();
+        tree.strings(&mut strings);
         strings
-            .iter()
+            .into_iter()
             .filter(|s| !s.is_empty())
             .map(|s| vec![s.as_bytes().to_vec()])
             .collect()
