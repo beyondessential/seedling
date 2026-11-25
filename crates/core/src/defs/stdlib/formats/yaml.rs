@@ -1,6 +1,9 @@
 //! YAML, written by saphyr's emitter and read from saphyr's parser.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write as _,
+};
 
 use rhai::EvalAltResult;
 use saphyr::{Mapping, Scalar, ScalarStyle, Yaml, YamlEmitter};
@@ -72,7 +75,8 @@ fn string(s: &str) -> Yaml<'static> {
             '\t' => quoted.push_str("\\t"),
             '\r' => quoted.push_str("\\r"),
             c if c < ' ' || c == '\u{7f}' || unprintable(c) => {
-                quoted.push_str(&format!("\\u{:04x}", u32::from(c)));
+                write!(quoted, "\\u{:04x}", u32::from(c))
+                    .expect("writing to a string does not fail");
             }
             c => quoted.push(c),
         }
