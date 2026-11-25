@@ -12,7 +12,7 @@
 // `seedling-ctl apps params set params-tour name=value` and reload the page:
 // the deployment is restarted with the new page. A value its kind or a
 // validator refuses, such as a `pool` outside the `subnet`, is refused with
-// the reason and nothing changes. Not a production definition.
+// the reason and nothing changes.
 
 app.description("Demo: one parameter of every kind, its default, its parsed value and its validators, rendered into a web page");
 app.canopy_type("seedling-demo");

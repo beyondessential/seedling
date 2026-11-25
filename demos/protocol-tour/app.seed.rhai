@@ -6,7 +6,7 @@
 // sit a TCP and a UDP echo server and a request-echo server. It also shows
 // how ingresses are identified, which of them can share a port, the HTTPS
 // redirect, and a service left without an ingress of its own for an operator
-// to attach a site ingress to. Not a production definition.
+// to attach a site ingress to.
 //
 // Every hostname is a param, so two installs can share hostnames or differ.
 // Installing the demo a second time under another app name with the same

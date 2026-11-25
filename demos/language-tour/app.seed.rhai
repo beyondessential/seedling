@@ -3,7 +3,7 @@
 // Calls each standard helper the other demos do not already use, and the
 // methods of the values they return, then serves every expression beside its
 // result. Everything is computed when the definition is evaluated, so the
-// page changes only with the definition. Not a production definition.
+// page changes only with the definition.
 //
 // Browse https://language-tour.demo.internal/ for the table, or
 // /results.json for the same data.

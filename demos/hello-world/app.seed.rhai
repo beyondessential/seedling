@@ -2,7 +2,7 @@
 //
 // The smallest app that serves something: one Deployment running a
 // request-echo server, one HTTP service, and one HTTPS ingress on a hostname
-// param. Not a production definition.
+// param.
 
 app.description("Demo: the smallest Seedling app, an echo server behind one HTTPS ingress");
 app.canopy_type("seedling-demo");

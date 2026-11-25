@@ -7,8 +7,7 @@
 // out. The script writes what it reads from the bundle into a volume, and a
 // web server shows the result over HTTPS: a home page rendered from the
 // metadata and the release notes, the files written into the volume, and a
-// copy of the whole bundle as the host received it. Not a production
-// definition.
+// copy of the whole bundle as the host received it.
 //
 // Try on a dev VM:
 //   seedling-ctl definitions pack demos/bundle-tour /tmp/bundle-tour.tar.gz

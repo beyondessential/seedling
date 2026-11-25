@@ -7,7 +7,7 @@
 // services' ports and the external volume, and a page on an HTTPS ingress
 // shows what they read through each, refreshed every 10 seconds. Two actions
 // write into the external volume and resolve an external volume the
-// definition never declares. Not a production definition.
+// definition never declares.
 //
 // Installed with nothing mapped, the page still answers: the services part
 // reports that nothing answered, and the volume part keeps its placeholder,

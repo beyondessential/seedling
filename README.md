@@ -38,4 +38,4 @@ Documentation is a bit sparse at the moment.
 
 ## Demos
 
-The definitions in [demos/](./demos/) show and exercise Seedling's features, one area each. They are not production definitions.
+The definitions in [demos/](./demos/) show and exercise Seedling's features, one area each; [its README](./demos/README.md) lists them.

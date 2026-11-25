@@ -11,7 +11,7 @@
 // file writes, and the host constants size and shape what runs.
 //
 // Browse https://workloads-tour.demo.internal/report for what the containers
-// see from inside. Not a production definition.
+// see from inside.
 
 app.description("Demo: deployments, jobs, containers, pods and volumes, every feature of each");
 app.canopy_type("seedling-demo");

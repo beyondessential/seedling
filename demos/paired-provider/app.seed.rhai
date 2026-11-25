@@ -5,8 +5,7 @@
 // services, one HTTP and one plain TCP, and an exported volume holding a
 // declared file, a file a deployment keeps rewriting, and a Unix socket.
 // paired-consumer reaches all of them once an operator maps its external
-// service and volume slots here; its header lists the steps. Not a production
-// definition.
+// service and volume slots here; its header lists the steps.
 //
 // Try on a dev VM:
 //   seedling-ctl apps create paired-provider demos/paired-provider

@@ -4,8 +4,7 @@
 // the same helper script and the same folder from demos/shared, so one copy in
 // the repository serves two definitions. This one builds its web server with
 // the shared helper and serves the shared page as its home page. Install both
-// and the same page, with the same stylesheet, answers on each hostname. Not a
-// production definition.
+// and the same page, with the same stylesheet, answers on each hostname.
 //
 // Try on a dev VM:
 //   seedling-ctl apps create bundle-share demos/bundle-share

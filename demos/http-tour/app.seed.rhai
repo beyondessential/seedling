@@ -6,7 +6,7 @@
 // compression, balancing across replicas, rate limiting, header operations,
 // and how a route's settings resolve against its service's. A second, smaller
 // service shows the fallback route a service is served through when no pod
-// binds any of its prefixes. Not a production definition.
+// binds any of its prefixes.
 //
 // The echo server prints the request it received (method, path, protocol and
 // every header) along with the Hostname and IP of the replica that answered.

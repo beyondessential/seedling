@@ -3,7 +3,7 @@
 // A small web page served from a "store" volume whose data format is kept
 // current by gates, with operator actions and shells that drive every method
 // of the runtime handle. The store is a text file and a format number, so
-// nothing here stands for real data. Not a production definition.
+// nothing here stands for real data.
 //
 // Gates, in declaration order:
 //   - `migrate` initialises the store on its first run and steps it up one
