@@ -4,9 +4,9 @@
 use std::fmt;
 
 use jiff::{SpanRelativeTo, fmt::friendly::SpanParser};
-use rhai::{CustomType, Dynamic, EvalAltResult, FLOAT, INT, TypeBuilder};
+use rhai::{CustomType, EvalAltResult, FLOAT, INT, TypeBuilder};
 
-use super::param_def::line_breaking_character;
+use super::{compare::refuse_mixed_comparisons, param_def::line_breaking_character};
 
 const NANOS_PER_MICRO: u64 = 1_000;
 const NANOS_PER_MILLI: u64 = 1_000_000;
@@ -211,21 +211,11 @@ impl CustomType for Duration {
             .with_fn("<=", |a: &mut Self, b: Self| *a <= b)
             .with_fn(">", |a: &mut Self, b: Self| *a > b)
             .with_fn(">=", |a: &mut Self, b: Self| *a >= b);
-        for op in ["==", "!=", "<", "<=", ">", ">="] {
-            builder
-                .with_fn(
-                    op,
-                    move |_: &mut Self, b: Dynamic| -> Result<bool, Box<EvalAltResult>> {
-                        Err(mixed(op, Self::NAME, b.type_name()))
-                    },
-                )
-                .with_fn(
-                    op,
-                    move |a: Dynamic, _: Self| -> Result<bool, Box<EvalAltResult>> {
-                        Err(mixed(op, a.type_name(), Self::NAME))
-                    },
-                );
-        }
+        refuse_mixed_comparisons(
+            &mut builder,
+            Self::NAME,
+            "a Duration compares only with a Duration",
+        );
 
         // spec: DUR#arithmetic-on-durations
         builder
@@ -255,11 +245,6 @@ impl CustomType for Duration {
             .on_print(|this: &mut Self| this.to_string())
             .on_debug(|this: &mut Self| this.to_string());
     }
-}
-
-// spec: DUR#comparing-durations
-fn mixed(op: &str, left: &str, right: &str) -> Box<EvalAltResult> {
-    format!("cannot compare {left} {op} {right}: a Duration compares only with a Duration").into()
 }
 
 /// The unit a `duration` kind's `precision` designates, and the units of a

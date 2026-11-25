@@ -186,6 +186,11 @@ fn comparing_a_duration_with_another_type_throws() {
         let reason = refusal(&format!("{other} < {}", d("90s")));
         assert!(reason.contains("cannot compare"), "{other}: {reason}");
     }
+    let reason = refusal(&format!("{} == std::parse_version(\"1.0\")", d("90s")));
+    assert!(
+        reason.contains("cannot compare Duration == Version"),
+        "{reason}"
+    );
 }
 
 // spec: DUR#arithmetic-on-durations
