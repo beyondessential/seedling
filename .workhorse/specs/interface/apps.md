@@ -207,7 +207,7 @@ Whenever an instance's `health` changes, the runtime MUST emit an `InstanceHealt
 | `ingress` | `service` (string), `hostname` (string), `port` (integer), `tls` (boolean), `dtls` (boolean), `http_terminate` (`"http1"`, `"http2"` or null), `redirect` (`{ "port": <integer>, "code": <integer> }` or null), `description` (string or null) |
 | `deployment` | `container`, `pod`, `scale` (`{ "low": <integer>, "high": <integer> }`), `on_update` (`"rolling"` or `"replace"`), `on_terminate` (`"recreate"`), `priority` (string), `description` (string or null) |
 | `job` | `container`, `pod`, `deadline` (seconds, or null), `description` (string or null) |
-| `volume` | `readonly` (boolean), `tmpfs` (boolean), `writes` (object of path to contents), `exported` (boolean), `export_description` (string or null), `description` (string or null) |
+| `volume` | `readonly` (boolean), `tmpfs` (boolean), `writes` (object of path to contents, or to `null` for a [redacted](#redacted-values) write), `exported` (boolean), `export_description` (string or null), `description` (string or null) |
 | `external_volume` | `description` (string or null) |
 | `external_service` | `description` (string or null) |
 
@@ -216,8 +216,8 @@ A `container` object has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `image` | string or null | the image reference |
-| `command`, `args` | array of strings or null | the entrypoint and its arguments |
-| `env` | object | each environment variable's name and value, or `null` for a [redacted](#redacted-environment-values) value |
+| `command`, `args` | array or null | the entrypoint and its arguments, each a string, or `null` where [redacted](#redacted-values) |
+| `env` | object | each environment variable's name and value, or `null` for a [redacted](#redacted-values) value |
 | `volume_mounts` | object | for each mount path, `{ "kind": "volume", "name": <string or null> }` or `{ "kind": "external_volume", "name": <string> }` |
 | `on_exit` | string | `"default"`, `"restart"`, `"terminate"` or `"restart_on_failure"` |
 | `memory` | string or null | the memory limit |
@@ -226,7 +226,7 @@ A `container` object has these members.
 | `writable_rootfs` | boolean | whether the root filesystem is writable |
 | `pids_limit` | integer or null | the process limit |
 | `workdir`, `user` | string or null | the working directory and user |
-| `healthcheck` | object or null | `kind` (`"command"`), `cmd` (array of strings), `interval_secs`, `timeout_secs`, `retries`, `start_period_secs`, and `on_failure` (`"replace"` or `"monitor"`) |
+| `healthcheck` | object or null | `kind` (`"command"`), `cmd` (array, each element a string or `null` where [redacted](#redacted-values)), `interval_secs`, `timeout_secs`, `retries`, `start_period_secs`, and `on_failure` (`"replace"` or `"monitor"`) |
 | `stop_signal` | string or null | the stop signal |
 | `stop_timeout_secs` | integer or null | the stop timeout |
 
@@ -235,10 +235,13 @@ A `container` object has these members.
 A `pod` object has the members `service_mounts`, each `"<service>:<port>"`; `http_bindings`, each `"<pod port> -> <service> <prefix>"`; and `tcp_bindings` and `udp_bindings`, each `"<pod port> -> <service>:<port>"`.
 Each is an array of strings in ascending order.
 
-### Redacted environment values
+### Redacted values
 
-The server MUST report as `null` the value of an environment variable whose value contains the stored value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true.
-It MUST also report as `null` the value of an environment variable whose value contains a [withheld value](../runtime/secrets.md#withheld-value) that the evaluation declaring the resource returned, in any form the [redaction](../runtime/secrets.md#redaction) of derived values names.
+The server MUST report as `null` each string in `def` that contains a [sensitive value](../runtime/secrets.md#sensitive-value), whatever type the tables above give it.
+This covers an environment variable's value, a declared file write's contents, and each element of a container's `command`, `args` and health check `cmd`, as well as every other string member.
+A member's name that contains a sensitive value, such as a declared file write's path, MUST be reported with each occurrence masked as [withheld values](../runtime/secrets.md#withheld-values) specifies for free text.
+The server MUST likewise report as `null` each description and each parameter's `default_value` that `/apps/list` or `/apps/show` reports anywhere else, including in `dynamic_resources`, `params` and `actions`, where it contains a sensitive value.
+The server MUST match them against the app's sensitive values as [matching](../runtime/secrets.md#matching) specifies.
 
 ### Proxy settings
 
@@ -302,19 +305,27 @@ Each entry of `params` has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `name` | string | the parameter's name |
-| `kind` | string | `text`, `multiline`, `email`, `password`, `weak-password`, `random`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname` or `volume` |
+| `kind` | string | the name of its [kind](../language/action.md#param-kinds) |
+| `range` | object or null | for an `integer` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values or `null` as the rule below gives, and `null` otherwise |
+| `options` | array of strings or null | for a `choice` kind, its options in the order the script declared them, and `null` otherwise |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
-| `default_value` | string or null | its default value |
+| `default_value` | string or null | its default value, or `null` where it is secret |
 | `secret` | boolean | its effective [secret flag](../language/parameter.md#secret-parameters) |
 | `is_set` | boolean | whether it has a stored value |
-| `value` | string or null | its stored value, or `null` where it is unset or secret |
+| `value` | string or null | its stored value, or `null` where it is unset, secret or withheld |
 
-When a parameter's effective secret flag is true, its `value` MUST be `null` whether or not a value is stored.
-A client MUST use `is_set` to tell an unset secret from a set one.
+In `range`, `min` MUST be `null` where the range starts at the smallest signed 64-bit integer, and `max` MUST be `null` where it ends at the largest, whether that end is inclusive or exclusive.
+
+> [!NOTE]
+> Many JSON clients hold numbers as double-precision floats, which represent integers exactly only up to 2^53 in magnitude, so a bound beyond that may be read imprecisely.
+
+When a parameter's effective secret flag is true, its `value` and `default_value` MUST be `null` whether or not either is set.
+A parameter's `value` MUST also be `null` where it contains a [sensitive value](../runtime/secrets.md#sensitive-value) of the app, matched as [matching](../runtime/secrets.md#matching) specifies.
+A client MUST use `is_set` to tell an unset parameter from a withheld one.
 
 Each entry of `unknown_params` has the members `name` and `value`.
-`value` MUST be `null` for a value held in secret storage.
+`value` MUST be `null` for a value held in secret storage, and for one that contains a sensitive value of the app.
 An unknown parameter's value has no effect until the definition declares the parameter.
 
 ### Actions
@@ -326,7 +337,7 @@ Each entry of `actions` has these members.
 | `name` | string | the action's name |
 | `description` | string or null | its description |
 | `kind` | string | `action` or `shell` |
-| `params` | object | for each parameter its schema declares, `{ "kind", "required", "description", "default_value", "secret" }` as in `params` above |
+| `params` | object | for each parameter its schema declares, `{ "kind", "range", "options", "required", "description", "default_value", "secret" }` as in `params` above |
 | `schedules` | array | one `{ "cronexpr", "last_fired_at", "next_fire_at" }` for each [schedule](../language/action.md#scheduled-actions) attached to the action |
 
 Shells have no schedules.
@@ -421,4 +432,4 @@ Each entry of `params` has these members.
 | `new_value` | string or null | present when `redacted` is not: the value after the change, or `null` where the change unset it |
 | `redacted` | boolean | present, and true, when the values are withheld |
 
-The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was [protected](../runtime/secrets.md#storage) when the change was recorded.
+The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was [protected](../runtime/secrets.md#storage) when the change was recorded or contains a [sensitive value](../runtime/secrets.md#sensitive-value) of the app.

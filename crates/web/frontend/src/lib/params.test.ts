@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateRandomHex, initialParamValues, paramsBlocker, type ParamEntries } from "./params";
+import { generateRandomHex, initialParamValues, integerProblem, paramsBlocker, type ParamEntries } from "./params";
 
 const def = (over: Record<string, unknown>) => ({
   kind: "text",
@@ -57,5 +57,20 @@ describe("generateRandomHex", () => {
     const a = generateRandomHex();
     expect(a).toMatch(/^[0-9a-f]{64}$/);
     expect(generateRandomHex()).not.toBe(a);
+  });
+});
+
+describe("integerProblem", () => {
+  // spec: ACN#kind-parsers
+  it("accepts only the decimal form within the range", () => {
+    expect(integerProblem("", null)).toBeNull();
+    expect(integerProblem("-12", null)).toBeNull();
+    expect(integerProblem("9223372036854775807", null)).toBeNull();
+    for (const value of ["01", "+1", "-0", "1.5", "1e3"]) {
+      expect(integerProblem(value, null)).toBe("Must be a whole number");
+    }
+    expect(integerProblem("0", { min: 1, max: null })).toBe("Must be at least 1");
+    expect(integerProblem("6", { min: null, max: 5 })).toBe("Must be at most 5");
+    expect(integerProblem("5", { min: 1, max: 5 })).toBeNull();
   });
 });

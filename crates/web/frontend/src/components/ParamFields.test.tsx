@@ -74,4 +74,61 @@ describe("ParamFields", () => {
     fireEvent.mouseDown(screen.getByRole("combobox"));
     await waitFor(() => expect(screen.getByRole("option", { name: /bigdisk/ })).toBeTruthy());
   });
+
+  // spec: ACN#presentation-of-kinds
+  it("offers a toggle for a boolean param that an optional one can be cleared from", () => {
+    function Probe({ required }: { required: boolean }) {
+      const [values, setValues] = useState<Record<string, string>>({ flag: "true" });
+      return (
+        <>
+          <ParamFields
+            entries={[["flag", def({ kind: "boolean", required })]] as ParamEntries}
+            values={values}
+            onChange={(k, v) => setValues((s) => ({ ...s, [k]: v }))}
+          />
+          <output>{JSON.stringify(values.flag)}</output>
+        </>
+      );
+    }
+    const { unmount } = renderWithSession(<Probe required={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "false" }));
+    expect(screen.getByRole("status").textContent).toBe('"false"');
+    fireEvent.click(screen.getByRole("button", { name: "false" }));
+    expect(screen.getByRole("status").textContent).toBe('""');
+    unmount();
+
+    renderWithSession(<Probe required={true} />);
+    fireEvent.click(screen.getByRole("button", { name: "true" }));
+    expect(screen.getByRole("status").textContent).toBe('"true"');
+  });
+
+  // spec: ACN#presentation-of-kinds
+  it("offers a number input limited to an integer param's range", () => {
+    renderWithSession(
+      <Form entries={[["port", def({ kind: "integer", range: { min: 1, max: 65535 } })]] as ParamEntries} />,
+    );
+    const input = screen.getByLabelText(/port/, { selector: "input" }) as HTMLInputElement;
+    expect(input.type).toBe("number");
+    expect(input.min).toBe("1");
+    expect(input.max).toBe("65535");
+    fireEvent.change(input, { target: { value: "70000" } });
+    expect(screen.getByText("Must be between 1 and 65535")).toBeTruthy();
+    expect((screen.getByText("submit") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input, { target: { value: "8080" } });
+    expect((screen.getByText("submit") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // spec: ACN#presentation-of-kinds
+  it("offers a choice param's options in their declared order, and none for an optional one", async () => {
+    renderWithSession(
+      <Form
+        entries={
+          [["tier", def({ kind: "choice", required: false, options: ["small", "large", "medium"] })]] as ParamEntries
+        }
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole("combobox"));
+    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(4));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["None", "small", "large", "medium"]);
+  });
 });

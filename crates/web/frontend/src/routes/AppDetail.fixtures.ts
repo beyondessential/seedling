@@ -91,6 +91,8 @@ export const params: AppParam[] = [
     is_set: true,
     secret: false,
     kind: "string",
+    range: null,
+    options: null,
     required: false,
     description: "Public hostname",
     default_value: null,
@@ -101,6 +103,8 @@ export const params: AppParam[] = [
     is_set: true,
     secret: true,
     kind: "password",
+    range: null,
+    options: null,
     required: true,
     description: null,
     default_value: null,
@@ -111,6 +115,8 @@ export const params: AppParam[] = [
     is_set: false,
     secret: false,
     kind: "string",
+    range: null,
+    options: null,
     required: false,
     description: null,
     default_value: "4",
@@ -138,6 +144,8 @@ export const reindexAction: AppAction = {
   params: {
     depth: {
       kind: "string",
+      range: null,
+      options: null,
       required: false,
       description: "How deep to go",
       default_value: "2",
@@ -161,6 +169,8 @@ export const psqlShellAction: AppAction = {
   params: {
     database: {
       kind: "string",
+      range: null,
+      options: null,
       required: true,
       description: "Database to connect to",
       default_value: "main",

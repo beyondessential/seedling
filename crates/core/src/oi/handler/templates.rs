@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 
 use super::{
     appdef_json::{
-        action_entry_json, param_schema_entry_json, resource_static_json, shell_entry_json,
+        action_entry_json, param_schema_entry_json, redact_def_strings, redact_definition_text,
+        resource_static_json, shell_entry_json,
     },
     apps as apps_handler,
     definition::{self, DefinitionInput, Resolved},
@@ -343,26 +344,36 @@ pub(crate) fn preview_template(
         &state.script_limits,
     );
     let def = app.def.load();
+    // spec: TPL#preview
+    let sensitive = def.sensitive(&empty_params);
 
-    let resources_json: Vec<Value> = def
+    let mut resources_json: Vec<Value> = def
         .resources
         .iter()
         .map(|(id, resource)| resource_static_json(id.kind, id.name.as_str(), resource, &def))
         .collect();
+    redact_def_strings(&mut resources_json, &sensitive);
 
     let params_json: Vec<Value> = def
         .params
         .iter()
-        .map(|(k, schema)| param_schema_entry_json(k.as_str(), schema))
+        .map(|(k, schema)| {
+            let mut entry = param_schema_entry_json(k.as_str(), schema);
+            redact_definition_text(&mut entry, &sensitive);
+            entry
+        })
         .collect();
 
     let mut actions_json: Vec<Value> = def.actions.values().map(action_entry_json).collect();
     for s in def.shells.values() {
         actions_json.push(shell_entry_json(s));
     }
+    for entry in &mut actions_json {
+        redact_definition_text(entry, &sensitive);
+    }
 
     Ok(json!({
-        "description": def.description,
+        "description": def.description.as_deref().filter(|d| !sensitive.found_in(d)),
         "resources": resources_json,
         "params": params_json,
         "actions": actions_json,

@@ -137,7 +137,7 @@ The handlers are every action, every shell and every gate's body the app declare
 | --- | --- | --- | --- |
 | `app` | string | yes | the app's name |
 | `proposed_script` | string | no | script source to probe in place of the app's stored script |
-| `action_params` | object | no | parameter values per handler: handler `kind` to an object of handler `name` to an object of parameter name to string value |
+| `action_params` | object | no | parameter values per handler: handler `kind` to an object of handler `name` to an object of parameter name to value, each of a type [action parameters](actions.md#action-parameters) allows |
 | `lenient` | boolean | no, default `false` | reports a handler with unresolved required parameters as skipped rather than as an error |
 
 The server MUST reject a request naming an app that is not registered with `not_found`.
@@ -146,7 +146,7 @@ The server MUST reject a `proposed_script` for an app whose script spans several
 The server MUST reject a script that fails to compile or evaluate with `script_error`.
 
 A value in `action_params` MUST take precedence over the handler's stored and default values, as [probe parameters](../runtime/images.md#probe-parameters) specifies.
-A handler with a required parameter that resolves to no value MUST NOT be probed.
+A handler with a required parameter that resolves to no value, or with a parameter whose resolved value its kind rejects, MUST NOT be probed.
 When `lenient` is `true`, the server MUST report such a handler with a `skipped_reason`.
 When `lenient` is `false`, the server MUST report it with an `error`.
 The other handlers MUST be probed either way.

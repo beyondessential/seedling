@@ -24,6 +24,7 @@ use serde_json::Value as JsonValue;
 use crate::defs::resource::Resource;
 use crate::runtime::ResourceInstance;
 use crate::runtime::barrier::VolumeWriteTarget;
+use crate::runtime::redact::SensitiveValues;
 
 /// Names the rt.* call (or synthetic event) for the journal record.
 ///
@@ -141,7 +142,13 @@ impl Breadcrumb<'_> {
         };
 
         let call = self.kind.rt_call();
-        let message = self.kind.message();
+        // spec: ACTU#breadcrumbs
+        // A breadcrumb that records a value is written by an operation's or
+        // a shell session's closure, whose scope holds the values to mask.
+        let sensitive = crate::runtime::seeds::operation_scope()
+            .map(|scope| scope.values())
+            .unwrap_or_default();
+        let message = self.kind.message(&sensitive);
         let pos = self.script_pos.and_then(|p| {
             if p.is_none() {
                 None
@@ -207,7 +214,19 @@ impl BreadcrumbKind<'_> {
         }
     }
 
-    fn message(&self) -> String {
+    // spec: ACTU#breadcrumbs
+    // spec: SEC#withheld-values
+    /// The breadcrumb's message, with each occurrence of a value in
+    /// `sensitive` masked.
+    fn message(&self, sensitive: &SensitiveValues) -> String {
+        let message = self.unmasked_message(sensitive);
+        sensitive.mask(&message).into_owned()
+    }
+
+    /// The message before masking. A sub-action's params are masked one by
+    /// one here, since serialising them escapes characters a sensitive value
+    /// may hold, and the whole message would then no longer contain it.
+    fn unmasked_message(&self, sensitive: &SensitiveValues) -> String {
         match self {
             BreadcrumbKind::Start { resources, defs } => {
                 format!("rt.start{}", fmt_resources_with_defs(resources, defs))
@@ -250,9 +269,13 @@ impl BreadcrumbKind<'_> {
                 let summary = if params.is_empty() {
                     String::new()
                 } else {
+                    let masked: JsonMap<String, JsonValue> = params
+                        .iter()
+                        .map(|(k, v)| (k.clone(), sensitive.mask_json(v)))
+                        .collect();
                     format!(
                         " {}",
-                        serde_json::to_string(params).unwrap_or_else(|_| "{}".into())
+                        serde_json::to_string(&masked).unwrap_or_else(|_| "{}".into())
                     )
                 };
                 format!("Action.invoke({}){summary}", name.as_str())
@@ -421,6 +444,18 @@ mod tests {
         ResourceInstance::new_anonymous(app(), ResourceKind::Job)
     }
 
+    fn none() -> SensitiveValues {
+        SensitiveValues::default()
+    }
+
+    fn holding(values: &[&str]) -> SensitiveValues {
+        let mut sensitive = SensitiveValues::default();
+        for value in values {
+            sensitive.insert(value);
+        }
+        sensitive
+    }
+
     #[test]
     fn rt_call_names_are_stable() {
         let r = deployment_inst("api");
@@ -484,7 +519,7 @@ mod tests {
                 resources: &resources,
                 defs: &defs
             }
-            .message(),
+            .message(&none()),
             "rt.start(api)",
         );
     }
@@ -500,7 +535,7 @@ mod tests {
                 resources: &resources,
                 defs: &defs
             }
-            .message(),
+            .message(&none()),
             format!("rt.start({display})"),
         );
     }
@@ -514,8 +549,63 @@ mod tests {
                 target: &r,
                 argv: &argv
             }
-            .message(),
+            .message(&none()),
             "rt.exec(api, [echo, 'hello world'])",
+        );
+    }
+
+    // spec: ACTU#breadcrumbs
+    #[test]
+    fn exec_message_masks_each_sensitive_value_in_place() {
+        let r = deployment_inst("db");
+        let argv = vec![
+            "psql".to_owned(),
+            "-c".to_owned(),
+            "ALTER USER app PASSWORD 'hunter2'".to_owned(),
+            "--token=Xy7Qz9".to_owned(),
+        ];
+        assert_eq!(
+            BreadcrumbKind::Exec {
+                target: &r,
+                argv: &argv
+            }
+            .message(&holding(&["hunter2", "Xy7Qz9"])),
+            "rt.exec(db, [psql, -c, 'ALTER USER app PASSWORD '<redacted>'', --token=<redacted>])",
+        );
+    }
+
+    // spec: ACTU#breadcrumbs
+    #[test]
+    fn sub_action_message_masks_a_value_its_serialising_would_escape() {
+        use seedling_protocol::names::ActionName;
+        let name = ActionName::new("migrate").unwrap();
+        let mut params = JsonMap::new();
+        params.insert(
+            "dsn".into(),
+            JsonValue::String(r#"password="p\w" host=db"#.into()),
+        );
+        params.insert("attempts".into(), JsonValue::from(31337));
+        let msg = BreadcrumbKind::SubAction {
+            name: &name,
+            params: &params,
+        }
+        .message(&holding(&[r#""p\w""#, "31337"]));
+        assert_eq!(
+            msg,
+            r#"Action.invoke(migrate) {"dsn":"password=<redacted> host=db","attempts":"<redacted>"}"#,
+        );
+    }
+
+    // spec: ACTU#breadcrumbs
+    #[test]
+    fn unit_create_message_masks_its_source_call() {
+        assert_eq!(
+            BreadcrumbKind::UnitCreate {
+                unit: "seedling-tamanu-anon.service",
+                source_call: "rt.start(<image: psql; cmd: --password=hunter2>)",
+            }
+            .message(&holding(&["hunter2"])),
+            "created unit seedling-tamanu-anon.service from rt.start(<image: psql; cmd: --password=<redacted>>)",
         );
     }
 
@@ -527,7 +617,7 @@ mod tests {
                 target: &r,
                 signal: "SIGHUP"
             }
-            .message(),
+            .message(&none()),
             "rt.signal(api, SIGHUP)",
         );
     }
@@ -539,7 +629,7 @@ mod tests {
             "ghcr.io/example/worker:v1".to_owned(),
         ];
         assert_eq!(
-            BreadcrumbKind::WarmImages { refs: &refs }.message(),
+            BreadcrumbKind::WarmImages { refs: &refs }.message(&none()),
             "rt.warm_images([ghcr.io/example/api:v1, ghcr.io/example/worker:v1])",
         );
     }
@@ -554,7 +644,7 @@ mod tests {
             name: &name,
             params: &params,
         }
-        .message();
+        .message(&none());
         assert!(
             msg.starts_with("Action.invoke(warm-images) "),
             "expected leading invoke + name, got: {msg}",
@@ -572,7 +662,7 @@ mod tests {
                 name: &name,
                 params: &params
             }
-            .message(),
+            .message(&none()),
             "Action.invoke(warm-images)",
         );
     }
@@ -584,7 +674,7 @@ mod tests {
                 unit: "seedling-tamanu-api-abc12345.service",
                 source_call: "rt.start(deployment/api)",
             }
-            .message(),
+            .message(&none()),
             "created unit seedling-tamanu-api-abc12345.service from rt.start(deployment/api)",
         );
     }
@@ -596,7 +686,7 @@ mod tests {
                 operation_id: "abc-123",
                 committed_len: 7
             }
-            .message(),
+            .message(&none()),
             "replay pass: op=abc-123 committed=7",
         );
     }
@@ -614,7 +704,7 @@ mod tests {
                 path: "/etc/config",
                 len: 42
             }
-            .message(),
+            .message(&none()),
             "rt.write(config, /etc/config, len=42)",
         );
     }

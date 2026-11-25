@@ -656,7 +656,7 @@ async fn initiate_runs(state: &Arc<OiState>, app: &Tracked, gates: &AppGates, wo
             state,
             &app.name,
             OperationTarget::Gate(name.clone()),
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             app.generation,
             "gate",
             &app.phase,

@@ -4,7 +4,7 @@ id: SEC
 
 # Secret storage
 
-Applies to how the [runtime](../overview.md#runtime) protects secret values at rest, holds the seeds that [derived random values](../language/random.md) come from, and withholds secret parameter values and derived values from operators.
+Applies to how the [runtime](../overview.md#runtime) protects secret values at rest, holds the seeds that [derived random values](../language/random.md) come from, and withholds sensitive values from operators.
 
 ## Terminology
 
@@ -27,6 +27,10 @@ A value returned by a derivation helper, from either seed.
 ### Withheld value
 
 A secret parameter's value, a derived value, or a helper result the runtime withholds as a derived value, as [redaction](#redaction) specifies.
+
+### Sensitive value
+
+A non-empty value that is the stored or default value of a secret parameter, a value the [generation history](#generation-history) records for a parameter that is secret now or records protected, the value of an action or shell param whose [`secret`](../language/action.md#param-schemas) is `true`, whether supplied or defaulted, or a derived value, including a helper result the runtime withholds as one.
 
 ## Secret key
 
@@ -101,11 +105,10 @@ The runtime MUST decrypt protected history values when it reconstructs a past ge
 
 ## Redaction
 
-The runtime MUST NOT return the value of a secret parameter to a caller of the [Operator Interface](../overview.md#operator-interface).
-The runtime MUST NOT write a secret parameter's value to its logs, or emit it in an [event](../interface/events.md).
+The runtime MUST NOT return a sensitive value to a caller of the [Operator Interface](../overview.md#operator-interface), write one to its logs, or emit one in an [event](../interface/events.md).
+It MUST withhold a value that contains a sensitive value wherever it would withhold the sensitive value itself.
 It MUST NOT return a value recorded in the generation history if the parameter is secret now, or if the value was protected when it was recorded.
 
-The runtime MUST withhold every derived value under the same rules as a secret parameter's value, wherever it would withhold one.
 A Blob derived value MUST be withheld in each text encoding of it that BSL offers a script.
 
 The runtime MUST withhold the result of a helper that [digests and encodings](../language/encoding.md) specify as a derived value when any of its arguments contains a withheld value.
@@ -121,7 +124,52 @@ Each result withheld this way MUST count toward the derived values [limit](engin
 > No minimum length applies, so a short secret value withholds more results than it needs to, which an operator can see, rather than fewer, which an operator could not.
 > A bundle's files come from the definition, not from secret storage or a seed.
 
-A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as [describing an app](../interface/apps.md#parameters) and the [generation history](../interface/apps.md#generation-history) define.
+Redaction applies to what the runtime records and reports itself, such as definition summaries, parameter values, history, events, breadcrumbs, fault descriptions, error messages and its own log lines.
+The runtime MUST relay the output of a workload container or a shell session unchanged.
+
+> [!NOTE]
+> A workload's output is the app's own, and the runtime cannot tell a value the app chose to print from one it leaked.
+> Masking it would also corrupt output that happens to contain a short sensitive value, such as a binary stream or a terminal session.
+
+### Matching
+
+The runtime MUST match a value against the sensitive values of the app it concerns: the stored and default values of its secret parameters, every value its generation history records for a parameter that is secret now or records protected, the default values of the secret params of its actions and shells, and the derived values the evaluation of its current definition returned.
+It MUST also match a value a lifecycle operation or a shell session records against that operation's or session's sensitive values: the values of its own secret params and of the secret params of every action it has invoked, and the derived values its action closures returned.
+A helper result computed in an action closure is withheld as a derived value when an argument contains one of the operation's or session's sensitive values.
+It MUST match a value it reports from an earlier record, such as a generation history entry, against the sensitive values current when it builds the response or event reporting it.
+
+> [!NOTE]
+> A secret's earlier values stay sensitive after it changes, since anything that recorded or quoted one before the change still holds it.
+
+> [!NOTE]
+> A short sensitive value, such as a one-character weak password, withholds every value that contains it.
+> This fails safe, and a longer secret is the operator's remedy.
+
+### Withheld values
+
+A response or event withholding a structured value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as describing an app's [parameters](../interface/apps.md#parameters) and [redacted values](../interface/apps.md#redacted-values), and the [generation history](../interface/apps.md#generation-history) define.
+
+In free text, such as a log line, a breadcrumb, a fault description or an error message, the runtime MUST replace each stretch of the text that an occurrence of a sensitive value covers with `<redacted>`, and keep the rest as it is.
+
+> [!NOTE]
+> Masking each occurrence rather than the whole text keeps a command or message readable enough to debug from, and leaks no more than withholding it entirely.
+
+### Responses and events
+
+The runtime MUST check each response the [Operator Interface](../overview.md#operator-interface) returns, and each [event](../interface/events.md) it emits, as a whole before sending it.
+Each string in it that contains a sensitive value of the app it concerns MUST be masked as free text is, unless the string is an identifier.
+Each number in it that contains a sensitive value, other than an identifier, MUST be replaced by its text masked as free text is.
+A response concerns the app its request names, and an event the app it names.
+Within either, an object that names an app concerns that app.
+
+An identifier is a member that names or identifies something rather than describing it: a name, an id, a kind or type, a state or status, a code, or a time.
+
+A definition or template retrieved through [definition retrieval](../interface/apps.md#definition-retrieval) or [template inspection](../interface/templates.md#inspection) is returned as stored.
+
+> [!NOTE]
+> The check catches a sensitive value in a member no rule above names, so that a new member cannot leak one by being left out of them.
+> A name is how a client refers to what the runtime reports, so masking one would break the reference while protecting only what a script chose to put there.
+> A definition is the operator's own text, and returning it altered would corrupt the next update made from it.
 
 ## Migration
 

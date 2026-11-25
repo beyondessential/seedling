@@ -599,8 +599,9 @@ async fn main() {
     let event_tx = seedling_protocol::events::new_event_channel();
     seedling_core::runtime::faults::init(event_tx.clone());
 
-    // Audit log — subscribe before anything emits events.
-    let _audit_handle = audit::spawn_audit_task(args.audit_log, event_tx.subscribe(), db.clone());
+    // Audit log: subscribe before anything emits events. The task that writes
+    // it starts once the state it masks each entry against exists.
+    let audit_rx = event_tx.subscribe();
 
     // spec: HIST#autonomous-operations
     // Before the reconciler starts, so no record it makes can be caught. Fatal
@@ -829,6 +830,14 @@ async fn main() {
         &oi_state,
     )));
 
+    // spec: AUD#entries
+    let _audit_handle = audit::spawn_audit_task(
+        args.audit_log,
+        audit_rx,
+        db.clone(),
+        seedling_core::oi::audit_entries(Arc::clone(&oi_state)),
+    );
+
     // ---------------------------------------------------------------------------
     // Decide whether to replay an interrupted lifecycle operation, restore the
     // queue, and start each installed app. Runs after OiState is built but
@@ -1025,7 +1034,7 @@ async fn main() {
                                 seedling_protocol::events::OperationTarget::Action(fire.action),
                                 op_id,
                                 seedling_core::oi::handler::actions::lifecycle::OperationParams::Requested(
-                                    serde_json::Map::new(),
+                                    fire.params,
                                 ),
                                 fire.generation,
                                 "schedule".to_owned(),
@@ -1449,7 +1458,10 @@ fn start_replay(
                     operation = %target,
                     "interrupted operation has no persisted params (legacy row); replaying with empty map"
                 );
-                (serde_json::Map::new(), Default::default())
+                (
+                    seedling_core::runtime::param_map::ParamMap::default(),
+                    Default::default(),
+                )
             }
             Err(e) => {
                 tracing::error!(

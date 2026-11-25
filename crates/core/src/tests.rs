@@ -148,7 +148,7 @@ pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
         registry: Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
         active_progress: hooks.active_progress,
         tick_notify: None,
-        params: serde_json::Map::new(),
+        params: crate::runtime::param_map::ParamMap::default(),
         db: None,
         cipher: None,
         operation_volume_bindings: hooks.operation_volume_bindings,
@@ -158,6 +158,7 @@ pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
         executor: hooks.executor,
         exclusions: Default::default(),
         operation_seed: crate::runtime::seeds::Seed::for_tests(),
+        sensitive: crate::runtime::redact::Scope::empty(),
     }
 }
 

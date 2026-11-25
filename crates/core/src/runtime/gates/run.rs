@@ -276,7 +276,7 @@ impl Run<'_> {
                 db,
                 &cipher,
                 &record,
-                &serde_json::Map::new(),
+                &crate::runtime::param_map::ParamMap::default(),
                 &HashMap::new(),
             )
         });
@@ -555,7 +555,7 @@ impl Run<'_> {
                 &app,
                 db,
                 Ok(BoundParams {
-                    params: serde_json::Map::new(),
+                    params: crate::runtime::param_map::ParamMap::default(),
                     bindings: HashMap::new(),
                 }),
                 active_progress,

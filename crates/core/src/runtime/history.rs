@@ -848,7 +848,7 @@ pub fn save_current_operation(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
     op: &CurrentOperation,
-    params: &serde_json::Map<String, serde_json::Value>,
+    params: &crate::runtime::param_map::ParamMap,
     volume_bindings: &OperationVolumeBindings,
 ) -> Result<(), OperationPersistError> {
     let plaintext = serde_json::to_string(params).map_err(OperationPersistError::Json)?;
@@ -974,7 +974,7 @@ pub fn load_operation_seed(
 pub fn load_current_operation_params(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
-) -> Result<Option<serde_json::Map<String, serde_json::Value>>, OperationPersistError> {
+) -> Result<Option<crate::runtime::param_map::ParamMap>, OperationPersistError> {
     let ciphertext = db
         .conn
         .query_row(
@@ -993,7 +993,7 @@ pub fn load_current_operation_params(
         .decrypt(&ciphertext)
         .map_err(OperationPersistError::Cipher)?;
     use secrecy::ExposeSecret;
-    let map: serde_json::Map<String, serde_json::Value> =
+    let map: crate::runtime::param_map::ParamMap =
         serde_json::from_str(plaintext.expose_secret()).map_err(OperationPersistError::Json)?;
     Ok(Some(map))
 }

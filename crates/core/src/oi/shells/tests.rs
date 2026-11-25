@@ -365,7 +365,9 @@ fn run_shell_session(
             Arc::clone(&entry.tick_notify),
         )
     };
-    let params = params.as_object().cloned().unwrap_or_default();
+    let params = crate::runtime::param_map::ParamMap::from_values(
+        params.as_object().cloned().unwrap_or_default(),
+    );
     let stop = StopSignal::new();
     let session_id = SessionId::generate();
     let slot = sessions.open(session_id);
@@ -602,19 +604,42 @@ fn a_shell_whose_volume_param_cannot_be_bound_does_not_run_its_closure() {
     assert!(!reason.contains("the closure ran"), "{reason}");
 }
 
+// spec: SEC#withheld-values
+// spec: SEC#matching
+#[test]
+fn a_shell_failure_masks_a_secret_param_it_quotes() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{ throw `bad token ${{p.token}}`; }}, #{{
+            params: #{{ "token": #{{ kind: "text", secret: true }} }},
+        }});"#
+    );
+    let reason = run_shell(
+        &script,
+        serde_json::json!({ "token": "Tui-Harbour-58" }),
+        &FakeHost::answering(Ok(ShellExit::ended())),
+        None,
+    )
+    .reason
+    .expect("the session fails");
+    assert!(reason.contains("bad token <redacted>"), "{reason}");
+    assert!(!reason.contains("Tui-Harbour-58"), "{reason}");
+}
+
 // spec: ACN#param-delivery
 #[test]
 fn params_a_shell_declares_no_schema_for_still_reach_its_closure() {
     let oi = TestOi::new();
-    let submitted = std::collections::BTreeMap::from([("greeting".to_owned(), "hello".to_owned())]);
+    let mut submitted = serde_json::Map::new();
+    submitted.insert("greeting".to_owned(), serde_json::json!("hello"));
     let params = super::session::validate_shell_params(
         &oi.state,
         &std::collections::BTreeMap::new(),
-        &submitted,
+        submitted,
     )
     .unwrap();
     assert_eq!(
-        params["greeting"], "hello",
+        params.get("greeting").unwrap(),
+        "hello",
         "an undeclared param was dropped"
     );
 }
@@ -672,6 +697,35 @@ fn what_a_shell_closure_starts_is_desired_and_recorded_against_the_session() {
         records[0].creator,
         crate::runtime::desired::DynamicCreator::ShellSession
     );
+}
+
+// spec: APPS#redacted-values
+// spec: SEC#matching
+#[test]
+fn a_dynamic_resource_description_quoting_a_secret_param_is_recorded_as_none() {
+    let script = format!(
+        r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{
+            shell.attach(tools);
+            rt.start(app.job().image("{SHELL_JOB}").command("true").description(`migrate with ${{p.token}}`));
+            rt.start(app.job().image("{SHELL_JOB}").command("true").description("plain"));
+        }}, #{{
+            params: #{{ "token": #{{ kind: "text", secret: true }} }},
+        }});"#
+    );
+    let ran = run_shell_session(
+        &script,
+        serde_json::json!({ "token": "Tui-Harbour-58" }),
+        &FakeHost::answering(Ok(ShellExit::exited(0))),
+        None,
+        |_| {},
+    );
+    assert_eq!(ran.outcome.reason, None);
+    let mut descriptions: Vec<_> = session_records(&ran)
+        .into_iter()
+        .map(|r| r.description)
+        .collect();
+    descriptions.sort();
+    assert_eq!(descriptions, [None, Some("plain".to_owned())]);
 }
 
 // spec: RT#starting-resources
@@ -981,5 +1035,38 @@ fn a_shell_closure_leaves_out_what_a_gate_came_to_hold_after_the_session_opened(
         started,
         vec!["plain", "tools"],
         "api is held by a gate that held it only after the session opened"
+    );
+}
+
+// spec: SHL#opening-an-app-shell
+// spec: ACN#param-delivery
+#[test]
+fn a_shell_param_takes_its_native_json_type_and_reaches_the_closure_parsed() {
+    use crate::defs::param_def::{ParamDef, ParamKind};
+
+    let oi = TestOi::new();
+    let schema = std::collections::BTreeMap::from([(
+        seedling_protocol::names::ParamName::new("verbose").unwrap(),
+        ParamDef {
+            kind: ParamKind::Boolean,
+            required: true,
+            default_value: None,
+            description: None,
+            secret: None,
+        },
+    )]);
+    let mut submitted = serde_json::Map::new();
+    submitted.insert("verbose".to_owned(), serde_json::json!(true));
+    let params = super::session::validate_shell_params(&oi.state, &schema, submitted).unwrap();
+    assert!(params.to_rhai().unwrap()["verbose"].as_bool().unwrap());
+
+    let mut submitted = serde_json::Map::new();
+    submitted.insert("verbose".to_owned(), serde_json::json!(1));
+    let err = super::session::validate_shell_params(&oi.state, &schema, submitted)
+        .expect_err("an integer is not a boolean");
+    assert!(
+        err.message.contains("an integer is given"),
+        "{}",
+        err.message
     );
 }

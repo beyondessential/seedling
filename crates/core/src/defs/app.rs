@@ -478,7 +478,42 @@ pub struct AppDef {
     pub gates: BTreeMap<GateName, GateDef>,
     /// Values the evaluation derived from the app seed, withheld wherever
     /// secret parameter values are.
-    pub derived: crate::runtime::seeds::DerivedValues,
+    pub derived: crate::runtime::redact::SensitiveValues,
+}
+
+impl AppDef {
+    // spec: SEC#matching
+    /// The sensitive values of an app with this definition and `stored`
+    /// parameter values: the stored and default values of the parameters it
+    /// marks secret, the default values of its actions' and shells' secret
+    /// params, and the values its evaluation derived.
+    pub fn sensitive(
+        &self,
+        stored: &BTreeMap<String, String>,
+    ) -> crate::runtime::redact::SensitiveValues {
+        let mut values = self.derived.clone();
+        for (name, schema) in self.params.iter().filter(|(_, p)| p.is_secret()) {
+            if let Some(value) = stored.get(name.as_str()) {
+                values.insert(value);
+            }
+            if let Some(default) = &schema.default_value {
+                values.insert(default.canonical());
+            }
+        }
+        let schemas = self
+            .actions
+            .values()
+            .map(|a| &a.params)
+            .chain(self.shells.values().map(|s| &s.params));
+        for schema in schemas.flat_map(|params| params.values()) {
+            if schema.is_secret()
+                && let Some(default) = &schema.default_value
+            {
+                values.insert(default.canonical());
+            }
+        }
+        values
+    }
 }
 
 fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAltResult>> {
@@ -596,6 +631,13 @@ impl App {
     /// Take the selections the script gave this app's gates, leaving none.
     pub(crate) fn take_gate_selections(&self) -> BTreeMap<GateName, Collection> {
         take_gate_selections(self.evaluation)
+    }
+
+    // spec: SEC#matching
+    /// The app's own sensitive values: the stored values of the parameters
+    /// its definition marks secret, and the values its evaluation derived.
+    pub fn sensitive(&self) -> crate::runtime::redact::SensitiveValues {
+        self.def.load().sensitive(&self.stored.lock())
     }
 
     /// Guard the evaluation this app is declared by, releasing the

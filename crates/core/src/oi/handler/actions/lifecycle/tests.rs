@@ -111,7 +111,7 @@ fn run_poke(cancel: bool, break_persistence: bool) -> Run {
         &app,
         db.clone(),
         Ok(BoundParams {
-            params: serde_json::Map::new(),
+            params: crate::runtime::param_map::ParamMap::default(),
             bindings: HashMap::new(),
         }),
         Arc::new(RwLock::new(None)),
@@ -218,7 +218,7 @@ fn a_replayed_closure_restarts_the_deployment_only_once() {
             &app,
             db.clone(),
             Ok(BoundParams {
-                params: serde_json::Map::new(),
+                params: crate::runtime::param_map::ParamMap::default(),
                 bindings: HashMap::new(),
             }),
             Arc::new(RwLock::new(None)),
@@ -291,7 +291,7 @@ fn an_operation_runs_against_its_generation_not_the_current_one() {
         &current,
         db.clone(),
         Ok(BoundParams {
-            params: serde_json::Map::new(),
+            params: crate::runtime::param_map::ParamMap::default(),
             bindings: HashMap::new(),
         }),
         Arc::new(RwLock::new(None)),
@@ -334,23 +334,38 @@ fn a_volume_param_that_cannot_be_bound_fails_the_dispatch_rather_than_being_skip
     let mut params = serde_json::Map::new();
     params.insert("data".into(), serde_json::json!("vanished"));
 
-    let err = super::bind_volume_params(&oi.state, &schema, params, "op-1")
-        .err()
-        .expect("a volume that is not there cannot be bound");
+    let err = super::bind_volume_params(
+        &oi.state,
+        &schema,
+        crate::runtime::param_map::ParamMap::from_values(params),
+        "op-1",
+    )
+    .err()
+    .expect("a volume that is not there cannot be bound");
     assert!(err.contains("no longer exists"), "{err}");
 
     // A param that was not supplied binds nothing and is not an error.
-    let none = super::bind_volume_params(&oi.state, &schema, serde_json::Map::new(), "op-1")
-        .expect("an absent optional volume param is not a failure");
+    let none = super::bind_volume_params(
+        &oi.state,
+        &schema,
+        crate::runtime::param_map::ParamMap::default(),
+        "op-1",
+    )
+    .expect("an absent optional volume param is not a failure");
     assert!(none.bindings.is_empty());
 
     // An empty one is an absent one, not a volume named "".
     let mut params = serde_json::Map::new();
     params.insert("data".into(), serde_json::json!(""));
-    let empty = super::bind_volume_params(&oi.state, &schema, params, "op-1")
-        .expect("an empty optional volume param is not a failure");
+    let empty = super::bind_volume_params(
+        &oi.state,
+        &schema,
+        crate::runtime::param_map::ParamMap::from_values(params),
+        "op-1",
+    )
+    .expect("an empty optional volume param is not a failure");
     assert!(empty.bindings.is_empty());
-    assert!(!empty.params.contains_key("data"));
+    assert!(empty.params.get("data").is_none());
 }
 
 // spec: OPS#operation-scoped-volumes
@@ -378,6 +393,7 @@ fn a_replayed_operation_binds_its_volumes_under_their_persisted_names() {
     let binding = "seedling-op-interrupted-0".to_owned();
     let mut params = serde_json::Map::new();
     params.insert("data_volume".into(), serde_json::json!(binding));
+    let params = crate::runtime::param_map::ParamMap::from_values(params);
     let bindings = HashMap::from([(
         binding,
         crate::defs::volume::OperationVolumeBinding {
@@ -665,7 +681,7 @@ fn rt_start_fails_when_the_dynamic_resource_cannot_be_recorded() {
         &app,
         db,
         Ok(BoundParams {
-            params: serde_json::Map::new(),
+            params: crate::runtime::param_map::ParamMap::default(),
             bindings: HashMap::new(),
         }),
         Arc::clone(&progress),
@@ -736,7 +752,7 @@ fn run_gate_body(
         app,
         db.clone(),
         Ok(BoundParams {
-            params: serde_json::Map::new(),
+            params: crate::runtime::param_map::ParamMap::default(),
             bindings: HashMap::new(),
         }),
         Arc::new(RwLock::new(None)),
@@ -965,7 +981,7 @@ fn rt_start_leaves_out_what_a_gate_holds_and_what_waits_on_it_except_in_that_gat
         &app,
         db.clone(),
         Ok(BoundParams {
-            params: serde_json::Map::new(),
+            params: crate::runtime::param_map::ParamMap::default(),
             bindings: HashMap::new(),
         }),
         Arc::new(RwLock::new(None)),
@@ -1075,7 +1091,7 @@ fn run_action_body(app: &App, name: &str, db: &DbHandle, operation_id: &str) -> 
         app,
         db.clone(),
         Ok(BoundParams {
-            params: serde_json::Map::new(),
+            params: crate::runtime::param_map::ParamMap::default(),
             bindings: HashMap::new(),
         }),
         Arc::new(RwLock::new(None)),
@@ -1190,13 +1206,16 @@ fn a_call_that_would_act_on_a_workload_fails_while_what_gates_hold_cannot_be_rea
 }
 
 /// What the action `derive` threw when replayed against an operation persisted
-/// with `seed`, as after a restart severs everything held in memory.
-fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
+/// with `seed`, as after a restart severs everything held in memory. The
+/// action throws `thrown`, an expression over the derived value `id`.
+fn derived_on_replay(seed: &crate::runtime::seeds::Seed, thrown: &str) -> String {
     let name = AppName::new("demo").unwrap();
-    let script = r#"app.on_action("derive", |rt, _p| { throw std::uuid_v4("id"); });"#;
+    let script = format!(
+        r#"app.on_action("derive", |rt, _p| {{ let id = std::uuid_v4("id"); throw {thrown}; }});"#
+    );
     let (app, _) = crate::runtime::apps::evaluate_script(
         &name,
-        script,
+        &script,
         &Default::default(),
         &crate::ScriptLimits::default(),
     );
@@ -1217,7 +1236,7 @@ fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
                 db,
                 &cipher,
                 &record,
-                &serde_json::Map::new(),
+                &crate::runtime::param_map::ParamMap::default(),
                 &HashMap::new(),
             )
             .unwrap();
@@ -1230,7 +1249,7 @@ fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
         &app,
         db,
         Ok(BoundParams {
-            params: serde_json::Map::new(),
+            params: crate::runtime::param_map::ParamMap::default(),
             bindings: HashMap::new(),
         }),
         Arc::new(RwLock::new(None)),
@@ -1256,11 +1275,32 @@ fn derived_on_replay(seed: &crate::runtime::seeds::Seed) -> String {
 // spec: SEC#operation-seeds
 #[test]
 fn a_replay_derives_from_the_seed_on_record() {
+    // A part of the derived value is not the value itself, so it is not
+    // withheld from what the throw reports.
+    let prefix = r#"id.sub_string(0, 8)"#;
     let seed = crate::runtime::seeds::Seed::from_bytes([1; 32]);
-    let first = derived_on_replay(&seed);
-    assert_eq!(first, derived_on_replay(&seed));
+    let first = derived_on_replay(&seed, prefix);
+    assert_eq!(first, derived_on_replay(&seed, prefix));
     assert_ne!(
         first,
-        derived_on_replay(&crate::runtime::seeds::Seed::from_bytes([2; 32]))
+        derived_on_replay(&crate::runtime::seeds::Seed::from_bytes([2; 32]), prefix)
     );
+}
+
+// spec: SEC#withheld-values
+// spec: SEC#matching
+#[test]
+fn a_failure_masks_a_value_the_operation_derived() {
+    let seed = crate::runtime::seeds::Seed::from_bytes([1; 32]);
+    let thrown = derived_on_replay(&seed, r#"`password=${id};`"#);
+    assert!(thrown.contains("password=<redacted>;"), "{thrown}");
+}
+
+// spec: SEC#matching
+// spec: SEC#redaction
+#[test]
+fn a_failure_masks_a_helper_result_computed_from_a_value_the_operation_derived() {
+    let seed = crate::runtime::seeds::Seed::from_bytes([1; 32]);
+    let thrown = derived_on_replay(&seed, r#"`hex=${std::encode_hex(id)};`"#);
+    assert!(thrown.contains("hex=<redacted>;"), "{thrown}");
 }

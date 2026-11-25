@@ -168,23 +168,45 @@ let vol = app.volume("data")
 
 ```rhai
 let version = app.param("version")
-    .kind("text")           // text (one line) | multiline | email | password | weak-password | random | version | version-semver | purl | url | url-origin | hostname
+    .kind("text")           // text (one line) | multiline | email | password | weak-password | random
+                            // | boolean | integer | choice | version | version-semver | purl
+                            // | url | url-origin | hostname
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
     .description("Docker image tag to deploy");
 
 version.value()             // "latest" when no operator value is stored
+version.parsed()            // the kind's parser result for value(): here the same string
 version.is_set()            // false while only the default is in effect
 
 version.validate(|value, all| {
-    // throw to reject the proposed value; `all` maps every set param
-    // to its proposed value
+    // throw to reject the proposed value; `value` and each entry of `all`,
+    // which maps every declared param that would be set, are parser results
     if !value.starts_with("2.12") { throw "this definition runs 2.12.x"; }
 });
 ```
 
-Every set value is first checked against its kind, by the kind's [parser](#parsing-a-kind): `text` and every kind but `multiline` hold a single line with no control characters, `email` needs an address and `password` a strong one. A value its kind refuses is rejected with the parser's reason, and its validator does not run. An empty stored value is checked like any other; unset a parameter to clear it.
+A kind that takes arguments is given as a kind map, a `name` and the kind's arguments. `integer` takes an optional `range`, and `choice` takes its `options`, which it requires:
+
+```rhai
+let port = app.param("port")
+    .kind(#{ name: "integer", range: 1..=65535 })  // or 1..65536; `1..` has no upper bound
+    .default_value(8080);                          // a boolean or integer default is stored as its text
+let tier = app.param("tier")
+    .kind(#{ name: "choice", options: ["small", "large"] })
+    .default_value("small");
+let canary = app.param("canary").kind("boolean").required(false);
+
+port.parsed()               // 8080, an integer
+canary.is_set() && canary.parsed()  // a boolean, without comparing against "true"
+```
+
+A range with no start, such as `..10`, starts at 0, so give the start of a range that takes negative values. `default_value("")` removes a default. A default the kind refuses fails the evaluation once the script has finished, since `kind` and `default_value` can be called in either order. A `boolean` or `choice` parameter cannot be secret, since the definition lists every value it can take; the same goes for action and shell params.
+
+Every set value is first checked against its kind, by the kind's [parser](#parsing-a-kind): `text` and every kind but `multiline` hold a single line with no control characters, `email` needs an address, `password` a strong one, `boolean` exactly `true` or `false`, `integer` a whole number in plain decimal form within its range, and `choice` one of its options, matched case-sensitively. A value its kind refuses is rejected with the parser's reason, and while any value is refused no validator runs. An empty stored value is checked like any other; unset a parameter to clear it.
+
+Operator interfaces offer a toggle for a `boolean` parameter, a number input for an `integer` one and a selection for a `choice` one. Clients setting parameters through `/apps/params/set` may send a JSON boolean or integer for those kinds; it is stored as its text.
 
 A validator decides whether a proposed value is acceptable. It runs before any definition update or parameter change is stored, against the values the app would hold if the request went through, so it sees the new definition's rules alongside the new values. A rejection refuses the request with `validation_failed` and the thrown value as the reason; nothing changes. A validator runs only while its param is set (use `required` for presence), gets no `rt`, and may not define resources. Call `validate` at most once per param, at the top level.
 
@@ -378,6 +400,8 @@ app.on_shell("check", |rt, shell, _param| {
 });
 ```
 
+A closure's `param` map holds each declared param that has a value as its kind's [parser result](#parsing-a-kind): an `email` param is a map of `local` and `domain`, a `boolean` a boolean, an `integer` an integer and a `version` a `Version`. A declared param left without a value is absent, so test it with `"name" in param`. Params a schema does not declare arrive as they were given. Operators and clients may send a JSON boolean or integer for a `boolean` or `integer` param, as well as its text.
+
 ## Standard helpers
 
 Helpers for parsing, checking and encoding values live in the `std` module, and are called by their qualified name, as `std::name(arguments)`. Keeping them in a module means a helper added in a later Seedling version cannot collide with a function or variable your script already defines. `std` is available everywhere a script runs: at the top level, in action and shell closures, in gate bodies and in validators.
@@ -392,7 +416,7 @@ Calling a helper that does not exist throws, like any unknown function. Which he
 
 ### Parsing a kind
 
-Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname` and `std::parse_volume`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, and `std::parse_choice(v, ["small", "large"])`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
 
 ```rhai
 let contact = std::parse_email("ops@example.org");
@@ -402,7 +426,7 @@ contact.domain  // "example.org"
 app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
-`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, and `std::parse_hostname` the hostname in its ASCII form, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean and `std::parse_integer` an integer. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, and `std::parse_hostname` the hostname in its ASCII form, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
 
 ### Versions
 
@@ -427,7 +451,7 @@ release.matches("~2.71")      // true
 std::parse_version_semver("2.71.4-rc.1").matches("~2.71")    // false
 
 app.param("version").kind("version-semver").validate(|v, all| {
-    if !std::parse_version_semver(v).matches("~2.71") { throw "this definition runs 2.71.x"; }
+    if !v.matches("~2.71") { throw "this definition runs 2.71.x"; }
 });
 ```
 
@@ -446,7 +470,7 @@ let purl = std::parse_purl("pkg:npm/%40scope/foo@1.2.0?arch=x64&checksum=SHA256:
 purl.version >= std::parse_version("1.0")    // true
 
 app.param("dependency").kind("purl").validate(|v, all| {
-    if std::parse_purl(v).type != "npm" { throw "an npm package is needed"; }
+    if v.type != "npm" { throw "an npm package is needed"; }
 });
 ```
 
@@ -462,7 +486,7 @@ let db = std::parse_url("postgres://app:p%40ss@DB.Internal:5432/app?sslmode=requ
 //    query: "sslmode=require", username: "app", password: "p@ss" }
 
 app.param("database").kind("url").secret(true).validate(|v, all| {
-    if std::parse_url(v).scheme != "postgres" { throw "a postgres:// URL is needed"; }
+    if v.scheme != "postgres" { throw "a postgres:// URL is needed"; }
 });
 ```
 
@@ -514,7 +538,7 @@ Pitfalls:
 - **An operation's values differ in the next operation.** Anything that must outlast the operation is derived at the top level, or written into a volume by the operation that derived it.
 - **Every argument is part of the value.** Changing a length or an alphabet gives a different value, not a longer or shorter one; two uses that need different secrets need different labels.
 - **App-seeded values change when the seed does:** when an operator rotates it, when the app is deregistered and registered again, and when an app is moved to another host, which registers it there afresh. Data written with the old values keeps them, so a database whose password came from the seed needs its password changed to match.
-- **Derived values are withheld like secret parameters.** An environment value that holds one reads as `null` when an operator describes the app.
+- **Derived values are withheld like secret parameters.** Any string that holds one reads as `null` when an operator describes the app, and it is masked as `<redacted>` in breadcrumbs, errors and faults. A short value is masked wherever it appears, even by chance.
 
 #### Password hashes
 
@@ -801,7 +825,7 @@ if published != () {
     version.default_value(published);
     let major = std::parse_version_semver(published).major();
     version.validate(|value, all| {
-        if std::parse_version_semver(value).major() != major { throw `this definition runs ${major}.x`; }
+        if value.major() != major { throw `this definition runs ${major}.x`; }
     });
 }
 ```
@@ -896,7 +920,7 @@ The operator picks the volume from the action invocation dialog (web UI) or via 
 
 `Action.invoke(params?)` runs another action's closure inline, in the calling closure's runtime. Get the handle either by capturing the return of `app.on_action(...)` or by looking it up by name with `app.action(name)`. Both produce the same `Action` value. `app.action(name)` is only valid in dynamic context — it throws when called from the static top-level.
 
-`params` follows the called action's declared schema: required fields must be present, defaults are applied to absent optional fields, unknown or reserved-suffix keys (`*_volume`, `*_filename`) are rejected, and `kind: "volume"` references must resolve to a real site volume. Validation happens before the closure runs, and errors throw with the field name. Operator-invoked actions get the same validation, so a sub-action invocation behaves exactly like an operator dispatching the action manually.
+`params` follows the called action's declared schema: required fields must be present, defaults are applied to absent optional fields, reserved-suffix keys (`*_volume`, `*_filename`) are rejected, undeclared keys pass through as given, and `kind: "volume"` references must resolve to a real site volume. A `boolean` or `integer` param may be given as a boolean or integer as well as its text, and a `Version` or `SemVer` is taken as its text, so a closure can pass on the param map it received. Validation happens before the closure runs, and errors throw with the field name. Operator-invoked actions get the same validation, so a sub-action invocation behaves exactly like an operator dispatching the action manually.
 
 ```rhai
 let migrate = app.on_action("migrate", |rt, p| {

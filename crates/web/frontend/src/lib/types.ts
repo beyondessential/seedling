@@ -230,12 +230,20 @@ export interface AppResource {
   description?: string | null;
 }
 
+/** An `integer` kind's least and greatest values, null where unbounded. */
+export interface IntRange {
+  min: number | null;
+  max: number | null;
+}
+
 export interface AppParam {
   name: string;
   value: string | null;
   is_set: boolean;
   secret: boolean;
   kind: string;
+  range: IntRange | null;
+  options: string[] | null;
   required: boolean;
   description: string | null;
   default_value: string | null;
@@ -299,6 +307,8 @@ export interface CurrentOperation {
 
 export interface ParamSchema {
   kind: string;
+  range: IntRange | null;
+  options: string[] | null;
   required: boolean;
   description: string;
   default_value: string | null;

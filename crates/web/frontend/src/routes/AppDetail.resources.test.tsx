@@ -128,6 +128,56 @@ describe("AppDetail params", () => {
     );
   });
 
+  // spec: ACN#presentation-of-kinds
+  it("edits a boolean or integer param with its own input", async () => {
+    const typed = (name: string, kind: string, over: Record<string, unknown> = {}) => ({
+      name,
+      kind,
+      value: null,
+      is_set: false,
+      secret: false,
+      required: false,
+      description: null,
+      default_value: null,
+      range: null,
+      options: null,
+      ...over,
+    });
+    const { request } = mount(
+      baseFixtures(
+        makeDetail({
+          params: [
+            typed("canary", "boolean"),
+            typed("replicas", "integer", { range: { min: 1, max: 9 } }),
+          ],
+        }),
+      ),
+      "write",
+    );
+    expect(await screen.findByText("canary")).toBeTruthy();
+
+    const canary = screen.getByText("canary").closest("tr") as HTMLElement;
+    fireEvent.click(within(canary).getByRole("button", { name: "Set" }));
+    expect(iconButton("Stage this change").disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "true" }));
+    fireEvent.click(iconButton("Stage this change"));
+
+    const replicas = screen.getByText("replicas").closest("tr") as HTMLElement;
+    fireEvent.click(within(replicas).getByRole("button", { name: "Set" }));
+    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "12" } });
+    expect(iconButton("Stage this change").disabled).toBe(true);
+    fireEvent.change(input, { target: { value: "3" } });
+    fireEvent.click(iconButton("Stage this change"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(callsTo(request, "/apps/params/set")).toEqual([
+        ["/apps/params/set", { app: "myapp", params: { canary: "true", replicas: "3" } }],
+      ]),
+    );
+  });
+
   // spec: UI#operator-capabilities
   // spec: UI#guarded-controls
   it("stages the unset of an optional param with the other edits", async () => {

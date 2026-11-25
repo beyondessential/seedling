@@ -294,10 +294,9 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub registry: Arc<dyn InstanceRegistry>,
     pub active_progress: Option<Arc<RwLock<Option<OperationProgress>>>>,
     pub tick_notify: Option<Arc<Notify>>,
-    /// Action params passed by the invoker. For install actions, contains the
-    /// validated requirements. Empty map for actions with no params.
+    /// The param map the closure receives. Empty for actions with no params.
     // spec: OPS#persistence
-    pub params: serde_json::Map<String, serde_json::Value>,
+    pub params: crate::runtime::param_map::ParamMap,
     /// DB handle for persisting dynamic resources created during the operation.
     pub db: Option<crate::runtime::db::DbHandle>,
     /// Cipher for sealing and opening the secret parameters of a recorded
@@ -332,6 +331,10 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// every pass of the operation or shell session.
     // spec: SEC#operation-seeds
     pub operation_seed: crate::runtime::seeds::Seed,
+    /// The sensitive values of the operation or shell session, which its
+    /// closures' derived values join as they are derived.
+    // spec: SEC#matching
+    pub sensitive: crate::runtime::redact::Scope,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
@@ -346,6 +349,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         engine,
         script_ast,
         operation_seed,
+        sensitive,
         operation_id,
         app,
         subject,
@@ -510,7 +514,15 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     };
     scope.push("__bsl_rt", rt);
     scope.push("__bsl_closure", closure);
-    let param_map = crate::defs::json::to_map(&params);
+    let param_map = match params.to_rhai() {
+        Ok(param_map) => param_map,
+        Err(e) => {
+            return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                e.into(),
+                rhai::Position::NONE,
+            )));
+        }
+    };
     scope.push("__bsl_param", param_map);
     if is_shell {
         scope.push("__bsl_shell", super::shell::ShellControl::new());
@@ -554,7 +566,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         let _guard =
             ActionClosureGuard::new(action_def, op_id_str.clone(), operation_volume_bindings)
                 .with_active_rt(rt_for_table)
-                .with_operation_seed(&operation_seed);
+                .with_operation_seed(&operation_seed, &sensitive);
         engine.eval_ast_with_scope::<Dynamic>(scope, &call_ast)
     });
 

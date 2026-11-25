@@ -25,6 +25,7 @@ use crate::{
         },
         dynamic_cleanup::cleanup_dynamic_resources,
         identity::{InstanceVariant, ResourceInstance},
+        param_map::ParamMap,
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
     system::{
@@ -115,7 +116,7 @@ pub(crate) async fn open_shell_session(
         rows: u16,
         cols: u16,
         #[serde(default)]
-        params: Option<std::collections::BTreeMap<String, String>>,
+        params: Option<serde_json::Map<String, serde_json::Value>>,
     }
     #[derive(serde::Deserialize)]
     struct Request {
@@ -228,7 +229,7 @@ pub(crate) async fn open_shell_session(
     // the schema fills defaults and checks kinds, `volume` params must name a
     // site volume, and params the schema does not declare reach the closure.
     let validated_params =
-        match validate_shell_params(&state, &shell_params_schema, &submitted_params) {
+        match validate_shell_params(&state, &shell_params_schema, submitted_params) {
             Ok(params) => params,
             Err(e) => {
                 let code = serde_json::to_value(e.code)
@@ -418,21 +419,16 @@ pub(super) fn validate_shell_params(
         seedling_protocol::names::ParamName,
         crate::defs::param_def::ParamDef,
     >,
-    submitted: &std::collections::BTreeMap<String, String>,
-) -> Result<serde_json::Map<String, serde_json::Value>, seedling_protocol::error::OiError> {
-    let mut params: serde_json::Map<String, serde_json::Value> = submitted
-        .iter()
-        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-        .collect();
-    crate::runtime::action_params::apply_schema(schema, &mut params)
-        .and_then(|()| {
-            crate::runtime::action_params::validate_volume_params(
-                schema,
-                &params,
-                &crate::oi::handler::actions::StateVolumeLookup(state),
-            )
-        })
+    submitted: serde_json::Map<String, serde_json::Value>,
+) -> Result<ParamMap, seedling_protocol::error::OiError> {
+    let params = crate::runtime::action_params::apply_schema(schema, submitted)
         .map_err(crate::oi::handler::actions::validation_error_to_oi)?;
+    crate::runtime::action_params::validate_volume_params(
+        schema,
+        &params,
+        &crate::oi::handler::actions::StateVolumeLookup(state),
+    )
+    .map_err(crate::oi::handler::actions::validation_error_to_oi)?;
     Ok(params)
 }
 
@@ -634,7 +630,7 @@ pub(super) async fn run_app_shell(
         seedling_protocol::names::ParamName,
         crate::defs::param_def::ParamDef,
     >,
-    validated_params: serde_json::Map<String, serde_json::Value>,
+    validated_params: ParamMap,
     stop: &StopSignal,
     host: Arc<dyn ShellHost>,
     session: SessionProgress,
@@ -738,6 +734,36 @@ pub(super) async fn run_app_shell(
                 return ScriptEnd::Failed("no seed could be drawn for the session".into());
             }
         };
+        // spec: SEC#matching
+        let sensitive = {
+            let (name, cipher, def, stored) = (
+                app_name_for_task.clone(),
+                Arc::clone(&cipher),
+                app.def.load_full(),
+                app.stored.lock().clone(),
+            );
+            match db.call(move |db| {
+                crate::runtime::apps::sensitive_values(db, &cipher, &name, &def, &stored)
+            }) {
+                Ok(values) => crate::runtime::redact::Scope::new(values),
+                Err(e) => {
+                    tracing::error!(
+                        app = %app_name_for_task, shell = %shell_name_for_task,
+                        "the app's sensitive values cannot be read: {e}"
+                    );
+                    return ScriptEnd::Failed("the app's sensitive values cannot be read".into());
+                }
+            }
+        };
+        {
+            let def = app.def.load();
+            let schema = def.shells.get(&shell_name_for_task).map(|s| &s.params);
+            sensitive.insert_secret_params(validated_params.values(), |name| {
+                schema
+                    .and_then(|schema| schema.get(name))
+                    .is_some_and(|p| p.is_secret())
+            });
+        }
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,
@@ -778,6 +804,7 @@ pub(super) async fn run_app_shell(
                     app: &app,
                     subject: Subject::Shell(shell_name_for_task.as_str()),
                     operation_seed: operation_seed.clone(),
+                    sensitive: sensitive.clone(),
                     log: &log,
                     world: Arc::clone(&world),
                     registry: Arc::clone(&registry),
@@ -804,11 +831,13 @@ pub(super) async fn run_app_shell(
             match result {
                 OperationResult::Completed => break ScriptEnd::Completed,
                 OperationResult::Failed(e) => {
+                    // spec: SEC#withheld-values
+                    let why = sensitive.values().mask(&e.to_string()).into_owned();
                     tracing::error!(
                         app = %app_name_for_task, shell = %shell_name_for_task,
-                        "shell closure failed: {e}"
+                        "shell closure failed: {why}"
                     );
-                    break ScriptEnd::Failed(format!("the shell's script failed: {e}"));
+                    break ScriptEnd::Failed(format!("the shell's script failed: {why}"));
                 }
                 // spec: OPS#cancellation
                 OperationResult::Cancelled => break ScriptEnd::Cancelled,

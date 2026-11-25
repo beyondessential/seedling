@@ -422,7 +422,11 @@ fn run_outer_in_replay_context(
     let result =
         defs::app::with_action_call_table(captured.actions.clone(), Some(outer_name), || {
             let _guard = ActionClosureGuard::new(action_def_arc, String::new(), HashMap::new())
-                .with_active_rt(rt);
+                .with_active_rt(rt)
+                .with_operation_seed(
+                    &crate::runtime::seeds::Seed::for_tests(),
+                    &crate::runtime::redact::Scope::empty(),
+                );
             let call_ast = engine
                 .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
                 .expect("call ast must compile");
@@ -521,4 +525,161 @@ fn sub_action_with_secret_params_fails_without_a_secret_key() {
             .as_deref()
             .is_none_or(|x| !x.contains("s3cret-value"))
     }));
+}
+
+// spec: ACN#param-delivery
+// spec: ACN#action-invocation
+#[test]
+fn an_invoked_closure_receives_parser_results() {
+    invoke_action(
+        r#"
+            app.on_action("inner", |rt, p| {
+                if p.flag != true { throw `flag is ${p.flag}`; }
+                if p.count != 5 { throw `count is ${p.count}`; }
+                if p.port != 8080 { throw `port is ${p.port}`; }
+                if p.contact.local != "ops" || p.contact.domain != "example.org" {
+                    throw "contact is not split";
+                }
+                if type_of(p.pinned) != "Version" { throw `pinned is ${type_of(p.pinned)}`; }
+                if "unset" in p { throw "an unset param is present"; }
+            }, #{
+                params: #{
+                    flag: #{ kind: "boolean" },
+                    count: #{ kind: "integer" },
+                    port: #{ kind: #{ name: "integer", range: 1..=65535 } },
+                    contact: #{ kind: "email" },
+                    pinned: #{ kind: "version" },
+                    unset: #{ kind: "integer", required: false },
+                },
+            });
+            app.on_action("outer", |rt, _p| {
+                app.action("inner").invoke(#{
+                    flag: true,
+                    count: 5,
+                    port: "8080",
+                    contact: "ops@example.org",
+                    pinned: "16.4",
+                });
+            });
+        "#,
+        "outer",
+        rhai::Map::new(),
+    )
+    .expect("the invoked closure sees parser results");
+}
+
+// spec: ACN#param-schemas
+// spec: ACN#action-invocation
+#[test]
+fn a_native_value_for_a_kind_that_is_not_its_own_is_refused() {
+    let err = invoke_action(
+        r#"
+            app.on_action("inner", |rt, p| {}, #{
+                params: #{ flag: #{ kind: "boolean" }, label: #{ kind: "text" } },
+            });
+            app.on_action("outer", |rt, _p| {
+                app.action("inner").invoke(#{ flag: 1, label: "x" });
+            });
+        "#,
+        "outer",
+        rhai::Map::new(),
+    )
+    .expect_err("an integer is not a boolean");
+    let msg = err_string(err);
+    assert!(
+        msg.contains("an integer is given for a param of kind boolean"),
+        "{msg}"
+    );
+}
+
+// spec: ACN#action-invocation
+#[test]
+fn a_closure_can_pass_on_the_param_map_it_received() {
+    invoke_action(
+        r#"
+            app.on_action("inner", |rt, p| {
+                if type_of(p.pinned) != "SemVer" { throw `pinned is ${type_of(p.pinned)}`; }
+                if p.pinned.to_string() != "v1.2.3" { throw `pinned is ${p.pinned}`; }
+                if type_of(p.loose) != "string" { throw `loose is ${type_of(p.loose)}`; }
+            }, #{
+                params: #{ pinned: #{ kind: "version-semver" }, loose: #{ kind: "text" } },
+            });
+            app.on_action("middle", |rt, p| {
+                app.action("inner").invoke(p);
+            }, #{
+                params: #{ pinned: #{ kind: "version-semver" }, loose: #{ kind: "version" } },
+            });
+            app.on_action("outer", |rt, _p| {
+                let middle = app.action("middle");
+                middle.invoke(#{ pinned: "v1.2.3", loose: "2.0" });
+            });
+        "#,
+        "outer",
+        rhai::Map::new(),
+    )
+    .expect("versions pass on as their text");
+}
+
+// spec: OPS#persistence
+// spec: OPS#sub-action-parameters
+#[test]
+fn a_recorded_version_param_replays_as_a_version() {
+    let source = r#"
+        app.on_action("inner", |rt, p| {
+            if type_of(p.pinned) != "Version" { throw `pinned is ${type_of(p.pinned)}`; }
+            if p.pinned.to_string() != PINNED { throw `pinned is ${p.pinned}`; }
+        }, #{ params: #{ pinned: #{ kind: "version" } } });
+        app.on_action("outer", |rt, _p| {
+            app.action("inner").invoke(#{ pinned: SUPPLIED });
+        });
+    "#;
+    let first = source
+        .replace("PINNED", r#""v16.4""#)
+        .replace("SUPPLIED", r#""v16.4""#);
+    let (result, pending) = run_outer_in_replay_context(&first, Vec::new(), None);
+    result.expect("outer must run");
+    let extra = sub_action_payload(&pending);
+    assert!(
+        extra.contains(r#""versions":{"pinned":"version"}"#),
+        "{extra}"
+    );
+
+    // A script now supplying another value replays with the recorded one.
+    let second = source
+        .replace("PINNED", r#""v16.4""#)
+        .replace("SUPPLIED", r#""17""#);
+    let (result, _) = run_outer_in_replay_context(&second, pending, None);
+    result.expect("replay restores the recorded version");
+}
+
+// spec: HIST#action-calls
+// spec: SEC#matching
+#[test]
+fn a_plain_sub_action_param_holding_a_derived_value_is_protected_and_replays() {
+    let script = r#"
+        app.on_action("inner", |rt, p| {
+            if p.dsn != "postgres://app:" + std::random_string("pw", 20, "abcdefghjkmnpqrstuvwxyz") + "@db" {
+                throw "inner saw the wrong dsn";
+            }
+        }, #{ params: #{ "dsn": #{ kind: "text" } } });
+        app.on_action("outer", |rt, _p| {
+            let pw = std::random_string("pw", 20, "abcdefghjkmnpqrstuvwxyz");
+            app.action("inner").invoke(#{ dsn: DSN });
+        });
+    "#;
+    let cipher = Arc::new(crate::runtime::secrets::Cipher::for_tests());
+    let first = script.replace("DSN", r#""postgres://app:" + pw + "@db""#);
+    let (result, pending) =
+        run_outer_in_replay_context(&first, Vec::new(), Some(Arc::clone(&cipher)));
+    result.expect("outer must run");
+    let extra = sub_action_payload(&pending);
+    assert!(
+        !extra.contains("postgres://app:"),
+        "a param holding a derived value is not recorded in the clear: {extra}"
+    );
+
+    // spec: OPS#sub-action-parameters
+    let second = script.replace("DSN", r#""changed""#);
+    let (result, _) = run_outer_in_replay_context(&second, pending, Some(cipher));
+    result.expect("replay must recover the recorded dsn");
 }

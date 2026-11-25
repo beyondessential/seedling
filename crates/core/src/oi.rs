@@ -3,10 +3,12 @@ pub mod canopy;
 pub mod forwards;
 pub mod handler;
 pub mod logs;
+pub(crate) mod redaction;
 pub mod server;
 pub mod shells;
 pub mod state;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use redaction::audit_entries;
 pub use server::{DEFAULT_PORT, run};

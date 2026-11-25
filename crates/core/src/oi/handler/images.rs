@@ -379,7 +379,7 @@ pub(crate) struct DiscoverParams {
     /// name, then param name to string.
     // spec: IMGM#image-discovery
     #[serde(default)]
-    pub action_params: HashMap<String, HashMap<String, HashMap<String, String>>>,
+    pub action_params: HashMap<String, HashMap<String, serde_json::Map<String, serde_json::Value>>>,
     #[serde(default)]
     pub lenient: bool,
 }

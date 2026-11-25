@@ -329,7 +329,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     oi.state.scheduler.lock().admit(
         &app,
         &OperationTarget::Action(action),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -380,7 +380,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     sched.admit(
         &other,
         &OperationTarget::Action(backup.clone()),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &installed(),
@@ -389,7 +389,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     let queued = sched.admit(
         &demo,
         &OperationTarget::Action(backup),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &installed(),
@@ -1366,7 +1366,7 @@ fn admit(oi: &TestOi, app: &str, action: &str) {
     oi.state.scheduler.lock().admit(
         &AppName::new(app).expect("app name"),
         &OperationTarget::Action(ActionName::new(action).expect("action name")),
-        serde_json::Map::new(),
+        crate::runtime::param_map::ParamMap::default(),
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
@@ -1631,7 +1631,7 @@ fn an_unreadable_schedule_record_makes_the_description_internal() {
     assert_eq!(code, "internal");
 }
 
-// spec: APPS#redacted-environment-values
+// spec: APPS#redacted-values
 #[test]
 fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_values() {
     let oi = TestOi::new();
@@ -1675,7 +1675,7 @@ fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_valu
     );
 }
 
-// spec: APPS#redacted-environment-values
+// spec: APPS#redacted-values
 // spec: SEC#redaction
 #[test]
 fn an_env_value_containing_a_derived_value_is_null() {
@@ -1714,6 +1714,410 @@ fn an_env_value_containing_a_derived_value_is_null() {
         "computed from nothing withheld: {env}"
     );
     assert_eq!(env["PLAIN"], json!("visible"));
+}
+
+// spec: APPS#redacted-values
+#[test]
+fn every_string_in_a_description_holding_a_sensitive_value_is_null_on_its_own() {
+    let oi = TestOi::new();
+    let script = r#"
+        let key = app.param("api-key").kind("password").required(false);
+        let pw = std::random_string("db-password", 24, "abcdefghijklmnopqrstuvwxyz0123456789");
+        let secret = if key.is_set() { key.value() } else { "unset" };
+        let data = app.volume("data")
+            .write("/conf/key", "key=" + secret)
+            .write("/keys/" + pw + ".pem", "public")
+            .write("/conf/pw", pw)
+            .write("/conf/plain", "visible");
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .command(["nginx", "--key=" + secret])
+            .arg(["--pw", pw, "--plain"])
+            .healthcheck(#{ kind: "command", cmd: ["check", "--key=" + secret] })
+            .mount("/data", data);
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "api-key": "hunter2-Gravel-Otter-91" } }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let def_of = |name: &str| {
+        shown["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap()["def"]
+            .clone()
+    };
+    let writes = &def_of("data")["writes"];
+    assert_eq!(writes["/conf/key"], json!(null), "{writes}");
+    assert_eq!(writes["/conf/pw"], json!(null), "{writes}");
+    assert_eq!(writes["/conf/plain"], json!("visible"));
+    assert_eq!(writes["/keys/<redacted>.pem"], json!("public"), "{writes}");
+
+    let container = &def_of("web")["container"];
+    assert_eq!(container["command"], json!(["nginx", null]), "{container}");
+    assert_eq!(
+        container["args"],
+        json!(["--pw", null, "--plain"]),
+        "{container}"
+    );
+    assert_eq!(
+        container["healthcheck"]["cmd"],
+        json!(["check", null]),
+        "{container}"
+    );
+    assert!(
+        !shown.to_string().contains("hunter2-Gravel-Otter-91"),
+        "{shown}"
+    );
+}
+
+// spec: APPS#redacted-values
+#[test]
+fn descriptions_and_defaults_outside_def_holding_a_sensitive_value_are_null() {
+    let oi = TestOi::new();
+    let script = r#"
+        let pw = std::random_string("db-password", 24, "abcdefghijklmnopqrstuvwxyz0123456789");
+        app.description("seeded with " + pw);
+        app.param("seed").required(false).default_value(pw).description("defaults to " + pw);
+        app.param("plain").required(false).default_value("visible").description("shown");
+        app.on_action("rotate", |rt, p| {}, #{
+            description: "rotates " + pw,
+            params: #{ "target": #{ kind: "text", default_value: pw, description: "kept" } },
+        });
+        app.deployment("web").image("docker.io/library/nginx:1.29");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(shown["description"], json!(null), "{shown}");
+    let param = |name: &str| {
+        shown["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(param("seed")["default_value"], json!(null));
+    assert_eq!(param("seed")["description"], json!(null));
+    assert_eq!(param("plain")["default_value"], json!("visible"));
+    assert_eq!(param("plain")["description"], json!("shown"));
+    let action = &shown["actions"][0];
+    assert_eq!(action["description"], json!(null), "{action}");
+    assert_eq!(
+        action["params"]["target"]["default_value"],
+        json!(null),
+        "{action}"
+    );
+    assert_eq!(
+        action["params"]["target"]["description"],
+        json!("kept"),
+        "{action}"
+    );
+
+    let listed = oi.call("/apps/list", json!({})).unwrap();
+    assert_eq!(listed[0]["description"], json!(null), "{listed}");
+}
+
+// spec: APPS#parameters
+// spec: SEC#sensitive-value
+#[test]
+fn a_secret_default_is_withheld_and_withholds_what_holds_it() {
+    let oi = TestOi::new();
+    let script = r#"
+        let key = app.param("api-key").kind("password").required(false).default_value("Moa-Kettle-12");
+        app.on_shell("tools", |rt, shell, p| {}, #{
+            params: #{ "token": #{ kind: "text", secret: true, default_value: "Weta-Lantern-40" } },
+        });
+        app.deployment("web")
+            .image("docker.io/library/nginx:1.29")
+            .env("KEY", "k=" + key.value())
+            .env("TOKEN", "t=Weta-Lantern-40")
+            .env("PLAIN", "visible");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let key = shown["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "api-key")
+        .unwrap();
+    assert_eq!(key["default_value"], json!(null), "{key}");
+    let shell = shown["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "tools")
+        .unwrap();
+    assert_eq!(
+        shell["params"]["token"]["default_value"],
+        json!(null),
+        "{shell}"
+    );
+    let env = &shown["resources"][0]["def"]["container"]["env"];
+    assert_eq!(env["KEY"], json!(null), "{env}");
+    assert_eq!(env["TOKEN"], json!(null), "{env}");
+    assert_eq!(env["PLAIN"], json!("visible"));
+    for value in ["Moa-Kettle-12", "Weta-Lantern-40"] {
+        assert!(
+            !shown.to_string().contains(value),
+            "{value} leaked: {shown}"
+        );
+    }
+}
+
+// spec: APPS#parameters
+// spec: APPS#generation-history
+// spec: SEC#matching
+#[test]
+fn a_plain_parameter_holding_a_secret_value_is_withheld_once_the_secret_is_set() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("db-password").kind("password").required(false);
+                app.param("db-url").required(false);
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    let url = "postgres://app:Quokka-Ledger-77@db/app";
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "db-url": url } }),
+    )
+    .unwrap();
+    let url_value = |oi: &TestOi| {
+        let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+        shown["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "db-url")
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(url_value(&oi), json!(url));
+
+    let mut rx = oi.state.event_tx.subscribe();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "db-password": "Quokka-Ledger-77", "db-url": url.to_owned() + "?sslmode=require" } }),
+    )
+    .unwrap();
+
+    assert_eq!(url_value(&oi), json!(null));
+
+    let generations = oi
+        .call("/apps/generations", json!({ "app": "demo" }))
+        .unwrap();
+    for entry in generations.as_array().unwrap() {
+        for change in entry["params"].as_array().into_iter().flatten() {
+            if change["name"] == "db-url" {
+                assert_eq!(change["redacted"], true, "{entry}");
+            }
+        }
+    }
+    assert!(
+        !generations.to_string().contains("Quokka-Ledger-77"),
+        "an entry recorded before the secret was set is withheld now: {generations}"
+    );
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(serde_json::to_value(&event).unwrap());
+    }
+    let changed = events
+        .iter()
+        .find(|e| e["type"] == "ParamsChanged")
+        .expect("a ParamsChanged event");
+    let url_change = changed["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "db-url")
+        .unwrap();
+    assert_eq!(url_change["redacted"], true, "{changed}");
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains("Quokka-Ledger-77")
+    );
+}
+
+// spec: SEC#matching
+#[test]
+fn a_one_character_secret_withholds_every_string_holding_it() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("pin").kind("weak-password").required(false);
+                app.deployment("web")
+                    .image("docker.io/library/nginx:1.29")
+                    .env("WITH", "seven")
+                    .env("WITHOUT", "abc");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "pin": "e" } }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let web = &shown["resources"][0];
+    assert_eq!(web["name"], "web");
+    let env = &web["def"]["container"]["env"];
+    assert_eq!(env["WITH"], json!(null), "{env}");
+    assert_eq!(env["WITHOUT"], json!("abc"), "{env}");
+}
+
+// spec: SEC#matching
+#[test]
+fn a_fault_quoting_a_value_that_became_sensitive_is_masked_when_served() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("db-password").kind("password").required(false);
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.state.db.call(|db| {
+        crate::runtime::faults::file_fault(
+            db,
+            &seedling_protocol::names::AppName::new("demo").unwrap(),
+            None,
+            None,
+            None,
+            "operation_failed",
+            "migrate failed: cannot reach postgres://app:Kiwi-Anchor-63@db",
+        )
+        .unwrap();
+    });
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "db-password": "Kiwi-Anchor-63" } }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let listed = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+    for (from, served) in [("describe", &shown["faults"]), ("listing", &listed)] {
+        let fault = served
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["kind"] == "operation_failed")
+            .unwrap_or_else(|| panic!("{from}: {served}"));
+        assert_eq!(
+            fault["description"], "migrate failed: cannot reach postgres://app:<redacted>@db",
+            "{from}"
+        );
+    }
+}
+
+// spec: SEC#matching
+#[test]
+fn a_secrets_earlier_value_stays_withheld_after_it_changes() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("db-password").kind("password").required(false);
+                app.param("db-url").required(false);
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": {
+            "db-password": "Pukeko-Ember-24",
+            "db-url": "postgres://app:Pukeko-Ember-24@db/app",
+        } }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "params": { "db-password": "Takahe-Cinder-88" } }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let url = shown["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "db-url")
+        .unwrap();
+    assert_eq!(url["value"], json!(null), "{url}");
+    let generations = oi
+        .call("/apps/generations", json!({ "app": "demo" }))
+        .unwrap();
+    assert!(
+        !generations.to_string().contains("Pukeko-Ember-24"),
+        "{generations}"
+    );
+}
+
+// spec: SEC#withheld-values
+#[test]
+fn a_validator_rejection_masks_a_secret_value_it_quotes() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("token").kind("password").required(false).validate(|v, all| {
+                    if v.len() < 30 { throw `token ${v} is too short`; }
+                });
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+
+    let (code, message) = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "params": { "token": "Kea-Basin-31" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "validation_failed", "{message}");
+    assert!(
+        message.contains("token <redacted> is too short"),
+        "{message}"
+    );
+    assert!(!message.contains("Kea-Basin-31"), "{message}");
 }
 
 // spec: APPS#resources
@@ -2149,6 +2553,8 @@ fn a_withholding_gate_fault_outranks_installing() {
     assert_eq!(status_of(&oi, "demo"), "faulted");
 }
 
+/// The app's listed description, which the scripts below set to the first
+/// part of a derived value: the value itself is withheld.
 fn listed_description(oi: &TestOi, app: &str) -> String {
     let list = oi.call("/apps/list", json!({})).unwrap();
     list.as_array()
@@ -2164,7 +2570,7 @@ fn listed_description(oi: &TestOi, app: &str) -> String {
 #[test]
 fn each_registration_has_a_seed_of_its_own() {
     let oi = TestOi::new();
-    let script = r#"app.description(std::uuid_v4("id"));"#;
+    let script = r#"app.description(std::uuid_v4("id").sub_string(0, 8));"#;
     oi.call("/apps/create", json!({ "app": "demo", "script": script }))
         .unwrap();
     oi.call("/apps/create", json!({ "app": "other", "script": script }))
@@ -2220,7 +2626,7 @@ fn rotating_the_seed_changes_derived_values_at_the_same_generation() {
     use seedling_protocol::events::OiEvent;
 
     let oi = TestOi::new();
-    let script = r#"app.description(std::uuid_v4("id"));"#;
+    let script = r#"app.description(std::uuid_v4("id").sub_string(0, 8));"#;
     oi.call("/apps/create", json!({ "app": "demo", "script": script }))
         .unwrap();
     let before = listed_description(&oi, "demo");
@@ -2310,7 +2716,7 @@ fn rotation_is_refused_while_an_operation_or_change_holds_the_app() {
         oi.state.scheduler.lock().admit(
             app,
             &backup,
-            serde_json::Map::new(),
+            crate::runtime::param_map::ParamMap::default(),
             1,
             "test",
             &installed(),
@@ -2377,4 +2783,66 @@ fn rotation_that_cannot_read_the_parameters_changes_nothing() {
         .unwrap_err();
     assert_eq!(code, "internal");
     assert_eq!(stored_seed(&oi, "demo"), seed, "the seed is unchanged");
+}
+
+// spec: APPS#parameters
+// spec: APPS#actions
+#[test]
+fn a_description_reports_each_param_range_and_options() {
+    let oi = TestOi::new();
+    let script = r#"
+        app.param("port").kind(#{ name: "integer", range: 1..=65535 }).required(false);
+        app.param("above").kind(#{ name: "integer", range: 1.. }).required(false);
+        app.param("upto").kind(#{ name: "integer", range: ..5 }).required(false);
+        app.param("from").kind(#{ name: "integer", range: -3..= }).required(false);
+        app.param("count").kind("integer").default_value(3);
+        app.param("tier").kind(#{ name: "choice", options: ["small", "large", "medium"] })
+            .required(false);
+        app.param("flag").kind("boolean").default_value(true);
+        app.on_action("scale", |rt, p| {}, #{ params: #{
+            open: #{ kind: #{ name: "integer", range: 1..=10 } },
+            size: #{ kind: #{ name: "choice", options: ["b", "a"] } },
+        } });
+        app.deployment("web");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let param = |name: &str| {
+        desc["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("{name} described"))
+            .clone()
+    };
+    assert_eq!(param("port")["range"], json!({ "min": 1, "max": 65535 }));
+    assert_eq!(param("above")["range"], json!({ "min": 1, "max": null }));
+    assert_eq!(param("upto")["range"], json!({ "min": 0, "max": 4 }));
+    assert_eq!(param("from")["range"], json!({ "min": -3, "max": null }));
+    assert_eq!(param("count")["range"], json!(null));
+    assert_eq!(param("count")["kind"], "integer");
+    assert_eq!(param("count")["default_value"], "3");
+    assert_eq!(param("flag")["default_value"], "true");
+    assert_eq!(
+        param("tier")["options"],
+        json!(["small", "large", "medium"])
+    );
+    assert_eq!(param("tier")["range"], json!(null));
+    assert_eq!(param("port")["options"], json!(null));
+
+    let scale = desc["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "scale")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        scale["params"]["open"]["range"],
+        json!({ "min": 1, "max": 10 })
+    );
+    assert_eq!(scale["params"]["size"]["options"], json!(["b", "a"]));
 }

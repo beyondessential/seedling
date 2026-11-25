@@ -44,7 +44,7 @@ fn facility_params() -> BTreeMap<String, String> {
         ("public-hostname", "facility.example.org"),
         ("central-url", "https://central.example.org"),
         ("facility-id", "facility-1"),
-        ("sync-password", "pw"),
+        ("sync-password", "correct-horse-battery-staple"),
         ("auth-secret", "a"),
     ])
 }
@@ -408,7 +408,7 @@ fn the_tamanu_definitions_refuse_a_database_or_role_name_that_needs_quoting() {
                 &AppName::new_unchecked("demo"),
                 &bundle,
                 &base,
-                &proposed,
+                &crate::runtime::apps::supplied_values(&proposed),
                 &crate::runtime::seeds::AppSeed::for_tests(),
                 &crate::ScriptLimits::default(),
             );

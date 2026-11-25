@@ -27,10 +27,9 @@ use crate::defs::param_def::ParamDef;
 use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
 use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
+use crate::runtime::param_map::ParamMap;
+use crate::runtime::redact::{REDACTED, SensitiveValues};
 use crate::runtime::secrets::Cipher;
-
-/// What the journal shows in place of a secret param's value.
-const REDACTED: &str = "<redacted>";
 
 type Schema = BTreeMap<ParamName, ParamDef>;
 
@@ -86,7 +85,9 @@ pub fn call_action(
     let _frame = SubActionFrame::enter(action_name.clone());
 
     let rt_dyn = Dynamic::from(rt);
-    let params_dyn = crate::defs::json::to_map(&call_params);
+    let params_dyn = call_params
+        .to_rhai()
+        .map_err(|e| -> Box<EvalAltResult> { format!("Action.invoke: {e}").into() })?;
 
     let _result = fnptr.call_within_context::<Dynamic>(ctx, (rt_dyn, params_dyn))?;
     Ok(())
@@ -99,18 +100,19 @@ fn validate_call_params(
     rt: &RuntimeInstance,
     schema: Option<&Schema>,
     params: Map,
-) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
-    let mut json_params = rhai_map_to_json(params)?;
+) -> Result<ParamMap, Box<EvalAltResult>> {
+    let json_params = crate::defs::json::from_map(params)
+        .map_err(|e| -> Box<EvalAltResult> { format!("Action.invoke: param {e}").into() })?;
     action_params::reject_reserved_keys(&json_params).map_err(validation_to_eval)?;
 
     let Some(schema) = schema else {
-        return Ok(json_params);
+        return Ok(ParamMap::from_values(json_params));
     };
 
-    action_params::apply_schema(schema, &mut json_params).map_err(validation_to_eval)?;
-    action_params::validate_volume_params(schema, &json_params, &RtVolumeLookup(rt))
+    let params = action_params::apply_schema(schema, json_params).map_err(validation_to_eval)?;
+    action_params::validate_volume_params(schema, &params, &RtVolumeLookup(rt))
         .map_err(validation_to_eval)?;
-    Ok(json_params)
+    Ok(params)
 }
 
 /// Pull the action's param schema out of the runtime context's frozen
@@ -154,7 +156,7 @@ fn resolve_call_params(
     rt: &RuntimeInstance,
     action_name: &ActionName,
     params: Map,
-) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
+) -> Result<ParamMap, Box<EvalAltResult>> {
     let schema = action_schema(rt, action_name)?;
     let Some(ctx) = rt.ctx.as_ref() else {
         // Stub / language-only context — nothing to record and nothing to
@@ -174,7 +176,9 @@ fn resolve_call_params(
             Ok(Some(entry)) => {
                 let cipher = g.cipher.clone();
                 drop(g);
-                return recover_recorded_params(action_name, &entry, cipher.as_deref());
+                let params = recover_recorded_params(action_name, &entry, cipher.as_deref())?;
+                hold_secret_params(schema.as_ref(), params.values());
+                return Ok(params);
             }
             Ok(None) => {}
             Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
@@ -182,12 +186,19 @@ fn resolve_call_params(
     }
 
     let validated = validate_call_params(rt, schema.as_ref(), params)?;
+    hold_secret_params(schema.as_ref(), validated.values());
 
     let SplitParams {
         plain,
         secret,
         journal,
-    } = split_secret_params(schema.as_ref(), &validated);
+    } = split_secret_params(
+        schema.as_ref(),
+        &validated,
+        &crate::runtime::seeds::operation_scope()
+            .map(|scope| scope.values())
+            .unwrap_or_default(),
+    );
 
     let mut g = ctx.lock();
     let idx = g.call_index;
@@ -195,6 +206,11 @@ fn resolve_call_params(
         "action": action_name.as_str(),
         "params": &plain,
     });
+    // spec: OPS#persistence
+    if !validated.versions().is_empty() {
+        payload["versions"] =
+            serde_json::to_value(validated.versions()).expect("version types serialise as strings");
+    }
     if !secret.is_empty() {
         let cipher = g.cipher.clone().ok_or_else(|| -> Box<EvalAltResult> {
             "Action.invoke: no secret key to protect the call's secret params"
@@ -235,7 +251,7 @@ fn recover_recorded_params(
     action_name: &ActionName,
     entry: &ActionLogEntry,
     cipher: Option<&Cipher>,
-) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
+) -> Result<ParamMap, Box<EvalAltResult>> {
     let payload: JsonValue = entry
         .extra
         .as_deref()
@@ -325,36 +341,73 @@ fn recover_recorded_params(
             .into());
         }
     }
-    Ok(params)
+
+    // spec: OPS#persistence
+    let versions = payload
+        .get("versions")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| -> Box<EvalAltResult> {
+            format!(
+                "replay diverged at call {}: the log records version params that cannot be \
+                 read ({e})",
+                entry.call_index
+            )
+            .into()
+        })?
+        .unwrap_or_default();
+    Ok(ParamMap::with_versions(params, versions))
+}
+
+// spec: SEC#matching
+/// Hold the values of the called action's secret params, supplied or
+/// defaulted, as sensitive values of the running operation.
+fn hold_secret_params(schema: Option<&Schema>, params: &JsonMap<String, JsonValue>) {
+    let (Some(schema), Some(scope)) = (schema, crate::runtime::seeds::operation_scope()) else {
+        return;
+    };
+    scope.insert_secret_params(params, |name| {
+        schema.get(name).is_some_and(ParamDef::is_secret)
+    });
 }
 
 /// A call's validated params, divided for recording.
 struct SplitParams {
     /// The params recorded readable in the log entry.
     plain: JsonMap<String, JsonValue>,
-    /// The secret params, recorded encrypted.
+    /// The params recorded encrypted: the secret ones, and those whose value
+    /// contains a sensitive value.
     secret: JsonMap<String, JsonValue>,
-    /// Every param, with each secret one's value redacted, for the journal.
+    /// Every param, with each secret one's value redacted and each sensitive
+    /// value another holds masked, for the journal.
     journal: JsonMap<String, JsonValue>,
 }
 
 // spec: SEC#storage
 // spec: SEC#redaction
+// spec: HIST#action-calls
 fn split_secret_params(
     schema: Option<&Schema>,
-    validated: &JsonMap<String, JsonValue>,
+    validated: &ParamMap,
+    sensitive: &SensitiveValues,
 ) -> SplitParams {
-    let mut plain = validated.clone();
+    let mut plain = JsonMap::new();
     let mut secret = JsonMap::new();
-    let mut journal = validated.clone();
-    for (name, _) in schema
-        .into_iter()
-        .flatten()
-        .filter(|(_, def)| def.is_secret())
-    {
-        if let Some(value) = plain.remove(name.as_str()) {
-            secret.insert(name.as_str().to_owned(), value);
-            journal.insert(name.as_str().to_owned(), JsonValue::from(REDACTED));
+    let mut journal = JsonMap::new();
+    for (name, value) in validated.values() {
+        let is_secret = schema
+            .and_then(|schema| schema.get(name.as_str()))
+            .is_some_and(ParamDef::is_secret);
+        if is_secret {
+            secret.insert(name.clone(), value.clone());
+            journal.insert(name.clone(), JsonValue::from(REDACTED));
+        } else if sensitive.found_in_json(value) {
+            secret.insert(name.clone(), value.clone());
+            journal.insert(name.clone(), sensitive.mask_json(value));
+        } else {
+            plain.insert(name.clone(), value.clone());
+            journal.insert(name.clone(), value.clone());
         }
     }
     SplitParams {
@@ -407,50 +460,6 @@ fn validation_to_eval(e: ParamValidationError) -> Box<EvalAltResult> {
         Dynamic::from(e.to_string()),
         Position::NONE,
     ))
-}
-
-fn rhai_map_to_json(map: Map) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
-    let mut out = JsonMap::new();
-    for (k, v) in map {
-        out.insert(k.to_string(), rhai_dynamic_to_json(v)?);
-    }
-    Ok(out)
-}
-
-fn rhai_dynamic_to_json(v: Dynamic) -> Result<JsonValue, Box<EvalAltResult>> {
-    if v.is_unit() {
-        Ok(JsonValue::Null)
-    } else if v.is_bool() {
-        Ok(JsonValue::Bool(v.cast::<bool>()))
-    } else if v.is_int() {
-        Ok(JsonValue::from(v.cast::<i64>()))
-    } else if v.is_float() {
-        // spec: BSL#arguments
-        // A non-finite number has no form in the param map; null would be a
-        // different value than the script passed.
-        let f = v.cast::<f64>();
-        serde_json::Number::from_f64(f)
-            .map(JsonValue::Number)
-            .ok_or_else(|| format!("Action.invoke: param value {f} is not a finite number").into())
-    } else if v.is_string() {
-        Ok(JsonValue::String(v.into_string().unwrap_or_default()))
-    } else if v.is_array() {
-        let arr: rhai::Array = v.cast();
-        let mut out = Vec::with_capacity(arr.len());
-        for item in arr {
-            out.push(rhai_dynamic_to_json(item)?);
-        }
-        Ok(JsonValue::Array(out))
-    } else if v.is_map() {
-        let map: Map = v.cast();
-        Ok(JsonValue::Object(rhai_map_to_json(map)?))
-    } else {
-        Err(format!(
-            "Action.invoke: param value is of unsupported type {}",
-            v.type_name()
-        )
-        .into())
-    }
 }
 
 // spec: ACN#volume-params
@@ -512,10 +521,55 @@ mod tests {
         }))
         .unwrap();
 
-        let split = split_secret_params(Some(&schema), &validated);
+        let split = split_secret_params(
+            Some(&schema),
+            &ParamMap::from_values(validated),
+            &SensitiveValues::default(),
+        );
         assert_eq!(split.journal["token"], REDACTED);
         assert_eq!(split.journal["label"], "plain-label");
         assert_eq!(split.secret["token"], "s3cret-value");
         assert!(!split.plain.contains_key("token"));
+    }
+
+    // spec: HIST#action-calls
+    #[test]
+    fn a_plain_param_holding_a_sensitive_value_is_sealed_and_masked() {
+        let validated: JsonMap<String, JsonValue> = serde_json::from_value(serde_json::json!({
+            "url": "postgres://app:hunter2@db/app",
+            "port": 5432,
+            "label": "plain-label",
+        }))
+        .unwrap();
+        let mut sensitive = SensitiveValues::default();
+        sensitive.insert("hunter2");
+        sensitive.insert("5432");
+
+        let split = split_secret_params(None, &ParamMap::from_values(validated), &sensitive);
+        assert_eq!(split.secret["url"], "postgres://app:hunter2@db/app");
+        assert_eq!(split.secret["port"], 5432);
+        assert_eq!(split.journal["url"], "postgres://app:<redacted>@db/app");
+        assert_eq!(split.journal["port"], REDACTED);
+        assert_eq!(split.plain.keys().collect::<Vec<_>>(), ["label"]);
+        assert_eq!(split.journal["label"], "plain-label");
+    }
+
+    // spec: HIST#action-calls
+    #[test]
+    fn a_nested_value_its_json_text_would_escape_is_sealed() {
+        let validated: JsonMap<String, JsonValue> = serde_json::from_value(serde_json::json!({
+            "conn": { "user": "app", "password": r#"Tok"en\99"# },
+        }))
+        .unwrap();
+        let mut sensitive = SensitiveValues::default();
+        sensitive.insert(r#"Tok"en\99"#);
+
+        let split = split_secret_params(None, &ParamMap::from_values(validated), &sensitive);
+        assert!(split.plain.is_empty(), "the param is not recorded readable");
+        assert_eq!(split.secret["conn"]["password"], r#"Tok"en\99"#);
+        assert_eq!(
+            split.journal["conn"],
+            serde_json::json!({ "user": "app", "password": REDACTED })
+        );
     }
 }

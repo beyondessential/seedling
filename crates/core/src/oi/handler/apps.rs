@@ -391,29 +391,6 @@ pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
     }
 }
 
-pub(crate) fn serialize_param_schema(
-    schema: &std::collections::BTreeMap<
-        seedling_protocol::names::ParamName,
-        crate::defs::param_def::ParamDef,
-    >,
-) -> serde_json::Map<String, Value> {
-    schema
-        .iter()
-        .map(|(k, req)| {
-            (
-                k.as_str().to_owned(),
-                json!({
-                    "kind": req.kind.as_str(),
-                    "required": req.required,
-                    "description": req.description,
-                    "default_value": req.default_value,
-                    "secret": req.is_secret(),
-                }),
-            )
-        })
-        .collect()
-}
-
 // spec: APPS#listing
 // spec: CTL#resource-stop
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
@@ -456,6 +433,11 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let result: Vec<Value> = standings
         .into_iter()
         .map(|(name, standing, description)| {
+            // spec: APPS#redacted-values
+            let description = match description {
+                Some(d) if super::params::current_sensitive(state, &name)?.found_in(&d) => None,
+                d => d,
+            };
             let mut obj = json!({
                 "name": name,
                 "status": standing.status.name(),
@@ -475,9 +457,9 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                     OperationTarget::Gate(gate) => obj["gate"] = json!(gate),
                 }
             }
-            obj
+            Ok(obj)
         })
-        .collect();
+        .collect::<Result<_, OiError>>()?;
     Ok(json!(result))
 }
 
@@ -500,8 +482,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     })?;
 
     // Names come from AppDef; values come from the params table. A value in
-    // secret storage is never returned: it is read only to find where else it
-    // shows, and the names of those params are what the listing keeps.
+    // secret storage is never returned: it is read only to match against, and
+    // the listing keeps the names of the params that hold one.
     // spec: SEC#redaction
     let name_owned = params.app.clone();
     let cipher = Arc::clone(&state.cipher);
@@ -518,10 +500,31 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             ))
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to read params: {e}")))?;
+    // spec: SEC#matching
+    // The app's sensitive values as they stand: what is stored now, under the
+    // running definition, as `current_sensitive` reads them.
+    let sensitive = {
+        let mut stored = plain_params.clone();
+        stored.extend(secret_params.iter().map(|(k, v)| (k.clone(), v.clone())));
+        let (app, cipher, def) = (
+            params.app.clone(),
+            Arc::clone(&state.cipher),
+            entry.app.def.load_full(),
+        );
+        state
+            .db
+            .call(move |db| {
+                crate::runtime::apps::sensitive_values(db, &cipher, &app, &def, &stored)
+            })
+            .map_err(|e| {
+                OiError::internal(format!("cannot read the app's sensitive values: {e}"))
+            })?
+    };
     let secret_param_names: std::collections::BTreeSet<String> =
-        secret_params.keys().cloned().collect();
+        secret_params.into_keys().collect();
 
     // Fetch all active faults for this app once, then split by level.
+
     let name_owned = params.app.clone();
     let all_faults_for_app = state
         .db
@@ -599,16 +602,19 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             let mut obj = param_schema_entry_json(k.as_str(), schema);
             let is_set =
                 plain_params.contains_key(k.as_str()) || secret_param_names.contains(k.as_str());
+            // spec: APPS#parameters
             let value = if schema.is_secret() {
                 Value::Null
             } else {
                 plain_params
                     .get(k.as_str())
+                    .filter(|v| !sensitive.found_in(v))
                     .map(|v| Value::String(v.clone()))
                     .unwrap_or(Value::Null)
             };
             obj["value"] = value;
             obj["is_set"] = json!(is_set);
+            super::appdef_json::redact_definition_text(&mut obj, &sensitive);
             obj
         })
         .collect();
@@ -618,7 +624,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // spec: SEC#redaction
     let unknown_params_json: Vec<Value> = plain_params
         .iter()
-        .map(|(k, v)| (k, Value::String(v.clone())))
+        .map(|(k, v)| {
+            if sensitive.found_in(v) {
+                (k, Value::Null)
+            } else {
+                (k, Value::String(v.clone()))
+            }
+        })
         .chain(secret_param_names.iter().map(|k| (k, Value::Null)))
         .filter(|(k, _)| !def.params.contains_key(k.as_str()))
         .collect::<BTreeMap<_, _>>()
@@ -798,27 +810,10 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             )
         })?;
 
-    // spec: APPS#redacted-environment-values
-    // An environment value that contains the stored value of a parameter whose
-    // effective secret flag is true is reported as null.
-    let secret_values: Vec<&str> = def
-        .params
-        .iter()
-        .filter(|(_, schema)| schema.is_secret())
-        .flat_map(|(k, _)| {
-            plain_params
-                .get(k.as_str())
-                .or_else(|| secret_params.get(k.as_str()))
-        })
-        .map(String::as_str)
-        .filter(|v| !v.is_empty())
-        .collect();
-    super::appdef_json::redact_secret_env(&mut resources_json, |v| {
-        secret_values.iter().any(|s| v.contains(s))
-            // spec: SEC#redaction — and so does one containing a value the
-            // evaluation derived from the app seed.
-            || def.derived.found_in(v)
-    });
+    super::appdef_json::redact_def_strings(&mut resources_json, &sensitive);
+    for entry in &mut actions_json {
+        super::appdef_json::redact_definition_text(entry, &sensitive);
+    }
 
     // Dynamic resources (created inside action closures, not in AppDef).
     // Returned as a separate top-level field so consumers can choose whether
@@ -934,12 +929,18 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             })?
     };
 
+    let mut dynamic_resources_json = dynamic_resources_json;
+    for entry in &mut dynamic_resources_json {
+        super::appdef_json::redact_definition_text(entry, &sensitive);
+    }
+
     let mut desc = json!({
         "status": status.name(),
         "generation": generation,
         // spec: DEFN#provenance-reporting
         "definition": entry.source.to_json(&entry.bundle),
-        "description": def.description,
+        // spec: APPS#redacted-values
+        "description": def.description.as_deref().filter(|d| !sensitive.found_in(d)),
         // spec: APPS#description
         "canopy_type": def.canopy_type,
         "priority": app_priority.as_str(),
@@ -1096,6 +1097,10 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
             .map(|e| e.app.def.load().params.clone())
             .unwrap_or_default()
     };
+    // spec: SEC#matching
+    // An entry is matched against the sensitive values current now, not
+    // those of when it was recorded.
+    let sensitive = super::params::current_sensitive(state, &params.app)?;
 
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let name_owned = params.app.clone();
@@ -1179,7 +1184,15 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                             .is_some_and(|d| d.is_secret());
                         let mut entry = serde_json::Map::new();
                         entry.insert("name".into(), json!(p.name));
-                        if is_secret || p.previous_value_redacted || p.new_value_redacted {
+                        let holds_sensitive = [&p.previous_value, &p.new_value]
+                            .into_iter()
+                            .flatten()
+                            .any(|v| sensitive.found_in(v));
+                        if is_secret
+                            || p.previous_value_redacted
+                            || p.new_value_redacted
+                            || holds_sensitive
+                        {
                             entry.insert("redacted".into(), json!(true));
                         } else {
                             entry.insert(
@@ -1279,17 +1292,18 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         .map_err(|e| OiError::internal(format!("db params: {e}")))?;
 
     // Build the proposed param map from current with the proposals overlaid.
-    let proposed_param_map = match &params.proposed_params {
-        Some(changes) => changes.applied_to(&current_params),
-        None => current_params.clone(),
+    let proposed_supplied = match &params.proposed_params {
+        Some(changes) => changes.proposed(&current_params),
+        None => crate::runtime::apps::supplied_values(&current_params),
     };
+    let proposed_param_map = crate::runtime::apps::canonical_values(&proposed_supplied);
 
     let seed = registered_seed(state, &params.app)?;
     let (proposed_app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
         &proposed_bundle,
         &proposed_param_map,
-        &proposed_param_map,
+        &proposed_supplied,
         &seed,
         &state.script_limits,
     );
@@ -1869,10 +1883,11 @@ pub(crate) fn update_app(
 
     // spec: APPS#update — the parameter changes are carried in the same step
     // as the definition.
-    let proposed = match &params.params {
-        Some(changes) => changes.applied_to(&current_params),
-        None => current_params.clone(),
+    let proposed_supplied = match &params.params {
+        Some(changes) => changes.proposed(&current_params),
+        None => crate::runtime::apps::supplied_values(&current_params),
     };
+    let proposed = crate::runtime::apps::canonical_values(&proposed_supplied);
     let edits = match &params.params {
         Some(changes) => changes.edits(&current_params),
         None => Vec::new(),
@@ -1885,7 +1900,7 @@ pub(crate) fn update_app(
         &params.app,
         &bundle,
         &proposed,
-        &proposed,
+        &proposed_supplied,
         &seed,
         &state.script_limits,
     );
@@ -2036,6 +2051,8 @@ pub(crate) fn update_app(
     tracing::info!(app = %name, generation, "updated app");
     // spec: EVT#app-events
     // spec: SEC#generation-history
+    // spec: SEC#matching
+    let sensitive = super::params::sensitive_after_change(state, &params.app);
     ctx.events.app_updated(
         &params.app,
         generation,
@@ -2043,7 +2060,7 @@ pub(crate) fn update_app(
         source.to_json(&bundle),
         stored
             .iter()
-            .map(super::params::StoredEdit::event_entry)
+            .map(|e| e.event_entry(sensitive.as_ref()))
             .collect(),
     );
     Ok(json!({ "generation": generation }))
