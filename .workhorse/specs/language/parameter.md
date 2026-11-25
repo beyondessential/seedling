@@ -50,12 +50,12 @@ A schema method MUST throw when called in the [action context](app.md#action-con
 | --- | --- | --- |
 | `kind(kind: string \| map)` | how the parameter is presented and checked, as a [kind](action.md#kind-arguments) | `"text"` |
 | `required(required: bool)` | whether the parameter needs a value | `false` |
-| `default_value(value: string \| bool \| int)` | the value [`value()`](#values) returns when none is stored | none |
+| `default_value(value: string \| bool \| int \| Duration)` | the value [`value()`](#values) returns when none is stored | none |
 | `description(description: string)` | a human-readable description | none |
 | `secret(secret: bool)` | whether the value is [secret](#secret-parameters) | implied by `kind` |
 
 `default_value("")` MUST declare no default, and MUST remove any default declared before.
-`default_value` given a boolean or an integer MUST declare its [canonical form](action.md#kind-parsers) as the default.
+`default_value` given a boolean, an integer or a `Duration` MUST declare its [canonical form](action.md#kind-parsers) as the default.
 
 `kind` MUST accept every valid [kind](action.md#kind-arguments) other than `volume`, with the meaning [param kinds](action.md#param-kinds) give it.
 `kind` MUST throw when given the `volume` kind, which only action and shell [params](action.md#param-schemas) accept, or anything that is not a valid kind.
@@ -83,7 +83,7 @@ The runtime MUST NOT run any [validator](#validators) while any parameter that w
 > Validators then always see every set parameter as its kind's parser result, so none mistakes a rejected value for an unset one.
 
 Once a script's evaluation has run to completion, the runtime MUST check each declared default against its parameter's kind, and MUST fail the evaluation if the kind rejects one, naming the parameter and giving the parser's error.
-The runtime MUST likewise fail the evaluation where a default was given as a boolean and the kind is not `boolean`, or as an integer and the kind is neither `integer` nor `quantity`.
+The runtime MUST likewise fail the evaluation where a default was given as a boolean and the kind is not `boolean`, as an integer and the kind is neither `integer` nor `quantity`, or as a `Duration` and the kind is not `duration`.
 
 > [!NOTE]
 > `kind` and `default_value` may be called in either order, so the pair can be checked only once the script has finished declaring them.

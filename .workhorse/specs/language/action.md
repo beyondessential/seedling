@@ -105,14 +105,14 @@ A param schema is an object map from param name to a param definition, which is 
 | --- | --- | --- | --- |
 | `kind` | string or map | `"text"` | how the value is presented and validated, as a [kind](#kind-arguments) |
 | `required` | boolean | `true` | whether the param needs a value |
-| `default_value` | string, boolean or integer | none | the value taken when none is supplied |
+| `default_value` | string, boolean, integer or `Duration` | none | the value taken when none is supplied |
 | `description` | string | none | free-form text telling operators the value's meaning or purpose |
 | `secret` | boolean | by kind | whether the value is sensitive |
 
 Declaring a param schema MUST throw if any param name is not a valid name, any definition is not a map, a definition carries any other key, a key's value is not of the type in the table, `kind` is not a valid [kind](#kind-arguments), or a non-empty `default_value` is one its kind's [parser](#kind-parsers) rejects.
 An empty `default_value` MUST be treated as no `default_value`.
-Declaring a param schema MUST throw if a `default_value` is a boolean and the kind is not `boolean`, or is an integer and the kind is neither `integer` nor `quantity`.
-A boolean or integer `default_value` MUST be taken as its [canonical form](#kind-parsers).
+Declaring a param schema MUST throw if a `default_value` is a boolean and the kind is not `boolean`, is an integer and the kind is neither `integer` nor `quantity`, or is a `Duration` and the kind is not `duration`.
+A boolean, integer or `Duration` `default_value` MUST be taken as its [canonical form](#kind-parsers).
 
 `secret` defaults to `true` for the `password` and `weak-password` kinds and to `false` for every other kind.
 Declaring a param schema MUST throw if a param whose kind is `boolean` or `choice` has `secret` set to `true`, as such a param cannot be [secret](parameter.md#secret-parameters).
@@ -210,7 +210,7 @@ It SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/use
 `std::parse_integer` MUST accept exactly the decimal forms of signed 64-bit integers within `range`, or of any signed 64-bit integer where it is given no `range`.
 The decimal form of an integer is its digits with no leading zero, preceded by `-` where the integer is negative, with zero written `0`.
 
-The canonical form of a boolean is `true` or `false`, and the canonical form of an integer is its decimal form.
+The canonical form of a boolean is `true` or `false`, the canonical form of an integer is its decimal form, and the canonical form of a `Duration` is its [text form](duration.md#text-of-a-duration).
 Where `std::parse_integer` rejects an integer for falling outside `range`, its error SHOULD state the range.
 
 `std::parse_choice` MUST accept exactly the strings equal to one of `options`, compared case-sensitively.
