@@ -1385,8 +1385,8 @@ impl RuntimeInstance {
     /// Replay-safe: an entry committed in a prior pass is skipped on the
     /// next replay so the signal is sent at most once. The actual signal
     /// delivery goes through the operation's `container_signaler` hook
-    /// (set by the operation loop in `runtime/operations.rs`),
-    /// which calls into the system actuator.
+    /// (built in `runtime/operations/adapters.rs`), which calls into the
+    /// system actuator.
     fn do_signal(
         &mut self,
         resources: Vec<ResourceInstance>,
@@ -1763,8 +1763,8 @@ impl RuntimeInstance {
     /// Write a file into a volume at action runtime. Replay-safe: an entry
     /// committed in a prior pass is skipped on the next replay so the write
     /// is performed at most once. Resolution of the target volume to a host
-    /// path goes through the operation's `volume_writer` hook (set by the
-    /// operation loop in `runtime/operations.rs`).
+    /// path goes through the operation's `volume_writer` hook (built in
+    /// `runtime/operations/adapters.rs`).
     fn do_write(
         &mut self,
         target: VolumeWriteTarget,
