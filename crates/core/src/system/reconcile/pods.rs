@@ -546,10 +546,17 @@ async fn actuate_one_pod(
         let already_completed = completed_jobs.contains(&dr.instance.id);
         // spec: JOB#deadline
         let past_deadline = obs.is_running && job_deadline_passed(db, &dr.instance, &dr.definition);
-        let is_done = obs.has_exited
-            || (!obs.container_exists && !obs.is_running && previously_ran)
-            || already_completed
-            || past_deadline;
+        let is_done = job_is_done(
+            &JobStanding {
+                has_exited: obs.has_exited,
+                container_exists: obs.container_exists,
+                is_running: obs.is_running,
+                unit_activating: obs.unit_activating,
+                previously_ran,
+            },
+            already_completed,
+            past_deadline,
+        );
         if is_done {
             // Always call stop: even when the container is already gone (--rm)
             // and the unit is merely Inactive, the pod network must be removed.
@@ -1366,6 +1373,31 @@ fn instances_waiting_on_targets(
 /// Whether the Job instance has been running for longer than its deadline,
 /// counted from the moment it last reached Running.
 // spec: JOB#deadline
+/// What one observation says about a Job instance's own run, apart from
+/// what the runtime remembers of it.
+struct JobStanding {
+    has_exited: bool,
+    container_exists: bool,
+    is_running: bool,
+    unit_activating: bool,
+    /// The container was seen running, or the runtime started its unit.
+    previously_ran: bool,
+}
+
+/// Whether a Job instance is finished, and only to be cleaned up.
+///
+/// A container that exited or is gone has terminated of its own accord,
+/// unless the supervisor is bringing the unit up: a job restarted on
+/// failure has no container during the pause before its restart, and
+/// stopping it then would end it after its first failure.
+// spec: AUTO#job-completion
+// spec: AUTO#restart-pacing
+fn job_is_done(job: &JobStanding, already_completed: bool, past_deadline: bool) -> bool {
+    let terminated = !job.unit_activating
+        && (job.has_exited || (!job.container_exists && !job.is_running && job.previously_ran));
+    terminated || already_completed || past_deadline
+}
+
 fn job_deadline_passed(db: &DbHandle, instance: &ResourceInstance, definition: &Resource) -> bool {
     let Resource::Job(job) = definition else {
         return false;
@@ -1675,5 +1707,55 @@ mod update_tests {
         let (a, b) = (desired("a"), desired("b"));
         let (oa, ob) = (observed(&a, true, true), observed(&b, false, false));
         assert!(starts_held_by_stale_instances(OnUpdate::Rolling, &[&oa, &ob]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod job_completion_tests {
+    use super::*;
+
+    fn gone(unit_activating: bool) -> JobStanding {
+        JobStanding {
+            has_exited: false,
+            container_exists: false,
+            is_running: false,
+            unit_activating,
+            previously_ran: true,
+        }
+    }
+
+    // spec: AUTO#job-completion
+    #[test]
+    fn a_job_whose_container_is_gone_after_running_is_done() {
+        assert!(job_is_done(&gone(false), false, false));
+        let exited = JobStanding {
+            has_exited: true,
+            container_exists: true,
+            ..gone(false)
+        };
+        assert!(job_is_done(&exited, false, false));
+    }
+
+    // spec: AUTO#restart-pacing
+    #[test]
+    fn a_job_the_supervisor_is_about_to_restart_is_not_done() {
+        assert!(
+            !job_is_done(&gone(true), false, false),
+            "a job restarted on failure has no container during the pause before its restart"
+        );
+        let exited = JobStanding {
+            has_exited: true,
+            container_exists: true,
+            ..gone(true)
+        };
+        assert!(!job_is_done(&exited, false, false));
+    }
+
+    // spec: AUTO#job-completion
+    // spec: JOB#deadline
+    #[test]
+    fn a_remembered_completion_or_a_passed_deadline_ends_a_job_the_supervisor_restarts() {
+        assert!(job_is_done(&gone(true), true, false));
+        assert!(job_is_done(&gone(true), false, true));
     }
 }
