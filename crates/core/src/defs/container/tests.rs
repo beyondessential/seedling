@@ -192,6 +192,7 @@ fn a_timing_is_a_duration_in_whole_seconds() {
         ]);
         let err = parse_healthcheck(m).expect_err("refused");
         assert!(err.to_string().contains(expected), "{err}");
+        assert!(err.to_string().contains("`healthcheck.timeout`"), "{err}");
     }
     for value in [
         Dynamic::from("1m 30s"),

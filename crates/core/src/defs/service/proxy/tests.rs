@@ -248,7 +248,8 @@ fn balance_rejects_bad_values() {
     assert!(parse_balance(negative).is_err());
 
     let number = map(vec![("try_duration", Dynamic::from(5_i64))]);
-    assert!(parse_balance(number).is_err());
+    let err = parse_balance(number).expect_err("a number is not a duration");
+    assert!(err.to_string().contains("`balance.try_duration`"), "{err}");
 
     // Zero interval with the try duration left at its non-zero default.
     let spin = map(vec![("interval", Dynamic::from("0s"))]);
@@ -362,6 +363,13 @@ fn rate_limit_parses_durations() {
         parse_rate_limit(fractional).expect("valid").window_secs,
         0.5
     );
+
+    let number = map(vec![
+        ("max_events", Dynamic::from(5_i64)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    let err = parse_rate_limit(number).expect_err("a number is not a duration");
+    assert!(err.to_string().contains("`rate_limit.window`"), "{err}");
 }
 
 // spec: HTTP#rate-limiting

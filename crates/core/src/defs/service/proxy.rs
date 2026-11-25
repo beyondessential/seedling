@@ -925,7 +925,7 @@ pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<Ev
     let window_secs = match window {
         None => return Err("rate_limit requires `window`".into()),
         Some(value) => {
-            let window = take_duration("window", value)?;
+            let window = take_duration("rate_limit.window", value)?;
             if !(MIN_WINDOW..=MAX_WINDOW).contains(&window) {
                 return Err(format!(
                     "rate_limit `window` must be from {MIN_WINDOW} to {MAX_WINDOW}, got {window}"
@@ -1147,7 +1147,7 @@ fn collect_removals(
 // spec: HTTP#balancing
 fn take_seconds(map: &mut Map, key: &str) -> Result<Option<f64>, Box<EvalAltResult>> {
     map.remove(key)
-        .map(|value| take_duration(key, value).map(Duration::as_secs_f64))
+        .map(|value| take_duration(&format!("balance.{key}"), value).map(Duration::as_secs_f64))
         .transpose()
 }
 

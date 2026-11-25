@@ -225,7 +225,12 @@ fn take_check_secs(
     least: u64,
 ) -> Result<u64, Box<EvalAltResult>> {
     match map.remove(key) {
-        Some(value) => take_whole_secs(key, value, Duration::from_secs(least), None),
+        Some(value) => take_whole_secs(
+            &format!("healthcheck.{key}"),
+            value,
+            Duration::from_secs(least),
+            None,
+        ),
         None => Ok(default),
     }
 }
