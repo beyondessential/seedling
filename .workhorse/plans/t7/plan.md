@@ -41,6 +41,7 @@ Of what it calls, the NAT64 detection (`nat64::detect_external_nat64`, a DNS loo
 
 The process manager takes what a workload is, and `seedling-linux` turns that into what the Linux platform spec settles: slice names and weights, OOM score adjustments and restart pacing.
 Unit names stay in core, because the reconciler matches units against recorded identity.
+So do `IDLE_CMD`, which scripts see at evaluation and so reads the same in `definitions check` on every platform, and the supervisor's unit-state vocabulary the observer reads (`start-limit-hit`, sub-states), which sits with unit naming. Neither stops core building on Windows.
 
 ### Specs follow the boundary
 
@@ -127,3 +128,4 @@ Each trait goes beside the existing four in `system.rs`, with a stub in `system/
 - A portable default for host facts in core.
 - Leaving the Linux-settled values (slices, OOM scores, restart pacing) in core.
 - Moving unit naming to `seedling-linux`, which would rework how the reconciler names and finds units.
+- Moving `IDLE_CMD` or the supervisor's unit-state vocabulary to `seedling-linux`.
