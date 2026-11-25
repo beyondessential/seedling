@@ -12,26 +12,26 @@ use crate::defs::{
     version::{SemVer, Version},
 };
 
-/// The param map: each value as JSON, with a version parser result held as
-/// its text, and its type kept beside the map. A purl's components are held
-/// as a map whose version is likewise its text.
+/// The param map: each value as JSON, with a parser result of a BSL type of
+/// its own held as its text, and that type kept beside the map. A purl's
+/// components are held as a map whose version is likewise its text.
 ///
 /// The types are kept apart from the values because an undeclared param is
 /// passed as supplied, so no shape of JSON value can be reserved to mark a
-/// version.
+/// typed one.
 // spec: ACN#param-map
 // spec: OPS#persistence
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ParamMap {
     values: serde_json::Map<String, Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    versions: BTreeMap<String, VersionType>,
+    types: BTreeMap<String, ParsedType>,
 }
 
-/// Which parser result holding a version a param's value stands for.
+/// Which parser result of a BSL type of its own a param's value stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum VersionType {
+pub enum ParsedType {
     /// A `Version`, held as its text.
     Version,
     /// A `SemVer`, held as its text.
@@ -42,31 +42,31 @@ pub enum VersionType {
 }
 
 impl ParamMap {
-    /// A map of plain JSON values, holding no version.
+    /// A map of plain JSON values, holding no typed value.
     pub fn from_values(values: serde_json::Map<String, Value>) -> Self {
         Self {
             values,
-            versions: BTreeMap::new(),
+            types: BTreeMap::new(),
         }
     }
 
-    /// A map of `values`, of which those `versions` names hold a version's
+    /// A map of `values`, of which those `types` names hold a typed value's
     /// text.
-    pub fn with_versions(
+    pub fn with_types(
         values: serde_json::Map<String, Value>,
-        versions: BTreeMap<String, VersionType>,
+        types: BTreeMap<String, ParsedType>,
     ) -> Self {
-        Self { values, versions }
+        Self { values, types }
     }
 
-    /// The values, with each version as its text.
+    /// The values, with each typed value as its text.
     pub fn values(&self) -> &serde_json::Map<String, Value> {
         &self.values
     }
 
-    /// The type of each param holding a version's text.
-    pub fn versions(&self) -> &BTreeMap<String, VersionType> {
-        &self.versions
+    /// The type of each param holding a typed value's text.
+    pub fn types(&self) -> &BTreeMap<String, ParsedType> {
+        &self.types
     }
 
     pub fn get(&self, key: &str) -> Option<&Value> {
@@ -79,19 +79,19 @@ impl ParamMap {
 
     /// Set `key` to a plain JSON value.
     pub fn insert(&mut self, key: String, value: Value) {
-        self.versions.remove(&key);
+        self.types.remove(&key);
         self.values.insert(key, value);
     }
 
     pub fn remove(&mut self, key: &str) -> Option<Value> {
-        self.versions.remove(key);
+        self.types.remove(key);
         self.values.remove(key)
     }
 
     /// Set `key` to a kind's parser result.
     // spec: ACN#param-delivery
     pub fn insert_parsed(&mut self, key: String, parsed: ParsedValue) {
-        let (value, version) = match parsed {
+        let (value, ty) = match parsed {
             ParsedValue::Value(text) => (Value::String(text), None),
             ParsedValue::Email { local, domain } => (
                 serde_json::json!({ "local": local, "domain": domain }),
@@ -99,8 +99,8 @@ impl ParamMap {
             ),
             ParsedValue::Bool(b) => (Value::Bool(b), None),
             ParsedValue::Int(n) => (Value::from(n), None),
-            ParsedValue::Version(v) => (Value::String(v.to_string()), Some(VersionType::Version)),
-            ParsedValue::SemVer(v) => (Value::String(v.to_string()), Some(VersionType::SemVer)),
+            ParsedValue::Version(v) => (Value::String(v.to_string()), Some(ParsedType::Version)),
+            ParsedValue::SemVer(v) => (Value::String(v.to_string()), Some(ParsedType::SemVer)),
             url @ (ParsedValue::Url(_) | ParsedValue::UrlOrigin(_)) => (
                 crate::defs::json::from_dynamic(url.into_dynamic())
                     .expect("a URL's components are strings and an integer"),
@@ -109,34 +109,34 @@ impl ParamMap {
             purl @ ParsedValue::Purl(_) => (
                 crate::defs::json::from_dynamic(purl.into_dynamic())
                     .expect("a purl's components are strings, arrays, maps and a Version"),
-                Some(VersionType::Purl),
+                Some(ParsedType::Purl),
             ),
         };
         self.insert(key.clone(), value);
-        if let Some(version) = version {
-            self.versions.insert(key, version);
+        if let Some(ty) = ty {
+            self.types.insert(key, ty);
         }
     }
 
-    /// The map as the closure receives it, with each version restored from
-    /// its text.
+    /// The map as the closure receives it, with each typed value restored
+    /// from its text.
     ///
     /// Restoring depends on the text alone, so it fails only for a map that
     /// was not built by [`Self::insert_parsed`]; that is reported rather than
-    /// delivering the text in the version's place.
+    /// delivering the text in the typed value's place.
     // spec: OPS#persistence
     pub fn to_rhai(&self) -> Result<rhai::Map, String> {
         let mut map = rhai::Map::new();
         for (key, value) in &self.values {
-            let value = match self.versions.get(key) {
-                Some(version) => restore_version(key, *version, value)?,
+            let value = match self.types.get(key) {
+                Some(ty) => restore(key, *ty, value)?,
                 None => crate::defs::json::to_dynamic(value),
             };
             map.insert(key.as_str().into(), value);
         }
-        if let Some(key) = self.versions.keys().find(|k| !self.values.contains_key(*k)) {
+        if let Some(key) = self.types.keys().find(|k| !self.values.contains_key(*k)) {
             return Err(format!(
-                "param {key:?} is recorded as a version but has no value"
+                "param {key:?} is recorded as a typed value but has no value"
             ));
         }
         Ok(map)
@@ -144,11 +144,11 @@ impl ParamMap {
 }
 
 // spec: OPS#persistence
-fn restore_version(key: &str, version: VersionType, value: &Value) -> Result<Dynamic, String> {
-    match version {
-        VersionType::Version => restore_text(key, value, Version::parse),
-        VersionType::SemVer => restore_text(key, value, SemVer::parse),
-        VersionType::Purl => {
+fn restore(key: &str, ty: ParsedType, value: &Value) -> Result<Dynamic, String> {
+    match ty {
+        ParsedType::Version => restore_text(key, value, Version::parse),
+        ParsedType::SemVer => restore_text(key, value, SemVer::parse),
+        ParsedType::Purl => {
             let Value::Object(components) = value else {
                 return Err(format!(
                     "param {key:?} is recorded as a purl but is not a map"
@@ -163,7 +163,7 @@ fn restore_version(key: &str, version: VersionType, value: &Value) -> Result<Dyn
     }
 }
 
-/// Restore a version from the text `value` holds.
+/// Restore a typed value from the text `value` holds.
 fn restore_text<T: Clone + Send + Sync + 'static>(
     key: &str,
     value: &Value,
@@ -171,10 +171,10 @@ fn restore_text<T: Clone + Send + Sync + 'static>(
 ) -> Result<Dynamic, String> {
     let Value::String(text) = value else {
         return Err(format!(
-            "param {key:?} is recorded as a version but is not text"
+            "param {key:?} is recorded as a typed value but is not text"
         ));
     };
     parse(text)
         .map(Dynamic::from)
-        .map_err(|e| format!("param {key:?} cannot be restored as a version: {e}"))
+        .map_err(|e| format!("param {key:?} cannot be restored as its type: {e}"))
 }

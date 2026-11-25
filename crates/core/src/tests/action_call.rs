@@ -639,10 +639,7 @@ fn a_recorded_version_param_replays_as_a_version() {
     let (result, pending) = run_outer_in_replay_context(&first, Vec::new(), None);
     result.expect("outer must run");
     let extra = sub_action_payload(&pending);
-    assert!(
-        extra.contains(r#""versions":{"pinned":"version"}"#),
-        "{extra}"
-    );
+    assert!(extra.contains(r#""types":{"pinned":"version"}"#), "{extra}");
 
     // A script now supplying another value replays with the recorded one.
     let second = source
