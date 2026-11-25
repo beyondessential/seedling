@@ -90,7 +90,18 @@ fn duration_refuses_a_sign_ago_and_calendar_units() {
 // spec: DUR#duration-syntax
 #[test]
 fn duration_refuses_iso_8601_a_bare_number_and_the_empty_string() {
-    for value in ["PT1H30M", "90", "", "5 parsecs", "1h1h"] {
+    for value in [
+        "PT1H30M",
+        "90",
+        "",
+        "5 parsecs",
+        "1h1h",
+        "5s AGO",
+        "5s Ago",
+        "1Y",
+        "1MO",
+        "1H",
+    ] {
         let reason = refusal(&d(value));
         assert!(reason.contains("not a duration"), "{value:?}: {reason}");
     }
