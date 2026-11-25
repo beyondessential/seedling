@@ -22,33 +22,11 @@ pub(super) const HOLDS: Holds = Holds {
 
 // spec: FMT#json
 pub(super) fn encode(tree: &Tree) -> String {
-    let mut text =
-        serde_json::to_string_pretty(&to_value(tree)).expect("a JSON value always serialises");
+    let mut text = serde_json::to_string_pretty(tree)
+        .expect("lowering refuses every value JSON has no form for");
     // spec: FMT#layout
     text.push('\n');
     text
-}
-
-fn to_value(tree: &Tree) -> serde_json::Value {
-    use serde_json::Value;
-    match tree {
-        Tree::Unit => Value::Null,
-        Tree::Bool(b) => Value::Bool(*b),
-        Tree::Int(i) => Value::from(*i),
-        Tree::Float(f) => Value::Number(
-            serde_json::Number::from_f64(*f).expect("lowering refuses non-finite numbers"),
-        ),
-        Tree::Str(s) => Value::String(s.clone()),
-        Tree::Array(items) => Value::Array(items.iter().map(to_value).collect()),
-        // spec: FMT#key-order
-        // The entries are already in key order, which the object keeps.
-        Tree::Map(entries) => Value::Object(
-            entries
-                .iter()
-                .map(|(k, v)| (k.clone(), to_value(v)))
-                .collect(),
-        ),
-    }
 }
 
 // spec: FMT#decoding

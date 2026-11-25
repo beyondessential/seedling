@@ -4,6 +4,7 @@
 use std::{collections::BTreeSet, fmt};
 
 use rhai::{Dynamic, EvalAltResult, FuncRegistration, NativeCallContext};
+use serde::{Serialize, Serializer};
 
 use super::{
     ARRAY, MAP, STRING,
@@ -149,6 +150,23 @@ impl Tree {
                     .map(|(k, v)| (k.into(), v.into_dynamic()))
                     .collect(),
             ),
+        }
+    }
+}
+
+/// The value as serde's data model holds it, for the writers built on serde.
+impl Serialize for Tree {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Tree::Unit => serializer.serialize_unit(),
+            Tree::Bool(b) => serializer.serialize_bool(*b),
+            Tree::Int(i) => serializer.serialize_i64(*i),
+            Tree::Float(f) => serializer.serialize_f64(*f),
+            Tree::Str(s) => serializer.serialize_str(s),
+            Tree::Array(items) => serializer.collect_seq(items),
+            // spec: FMT#key-order
+            // The entries are already in key order, which the writer keeps.
+            Tree::Map(entries) => serializer.collect_map(entries.iter().map(|(k, v)| (k, v))),
         }
     }
 }
