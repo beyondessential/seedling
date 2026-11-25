@@ -218,6 +218,9 @@ fn yaml_escapes_characters_no_plain_scalar_may_hold() {
     assert_eq!(text(&format!("std::decode_yaml({})", lit(&out))), s);
 }
 
+// The TOML tests pin the toml crate's layout, so a change to it in a later
+// version of the crate shows up here.
+
 // spec: FMT#toml
 #[test]
 fn toml_writes_tables_after_key_value_lines() {
@@ -232,16 +235,17 @@ fn toml_writes_tables_after_key_value_lines() {
                 "a key": 1,
                 nan: 0.0 / 0.0,
                 inf: -1.0 / 0.0,
-                big: 1e300,
+                ratio: 2.5,
                 none_here: #{},
+                only_sub: #{ inner: #{ x: 1 } },
             })"#
         ),
         r#""a key" = 1
-big = 1e+300
 empty = []
 inf = -inf
 list = [1, "two", { three = 3 }, []]
 nan = nan
+ratio = 2.5
 title = "x"
 
 [db]
@@ -251,6 +255,9 @@ port = 5432
 ssl = true
 
 [none_here]
+
+[only_sub.inner]
+x = 1
 
 [[servers]]
 name = "a"
@@ -269,8 +276,8 @@ name = "b"
 #[test]
 fn toml_strings_escape_what_toml_1_0_requires() {
     assert_eq!(
-        text(r#"std::encode_toml(#{ s: "\"\\\u0008\t\n\u000c\r\u001b\u007fé" })"#),
-        "s = \"\\\"\\\\\\b\\t\\n\\f\\r\\u001B\\u007Fé\"\n"
+        text(r#"std::encode_toml(#{ s: "\"\\\u0008\t\n\u000c\r\u001b\u007fé'" })"#),
+        "s = \"\"\"\n\"\\\\\\b\\t\n\\f\\r\\u001B\\u007Fé'\"\"\"\n"
     );
 }
 

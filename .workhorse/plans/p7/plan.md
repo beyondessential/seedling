@@ -7,8 +7,8 @@ Add each with `cargo add` at implementation time so the pinned version is the cu
 
 - JSON: `serde_json`, already a dependency.
   serde_json reads an integer too large for 64 bits, and `-0`, as a float, so the decoder scans the number tokens' text once (valid only up to where serde_json accepts the text) and classifies each number from it in the order the visitor meets them.
-- TOML: `toml`, already a dependency, for reading only (it reads TOML 1.1, refuses duplicate keys, out-of-range integers and overflowing floats itself).
-  The writer is Seedling's own, a short emitter of TOML 1.0, so the layout the spec fixes (key/value lines before tables, `[[array]]` only for non-empty arrays of maps, sorted keys) does not depend on the crate's serialiser.
+- TOML: `toml`, already a dependency, writing and reading. It writes TOML 1.0 for every value BSL lowers to, and reads TOML 1.1, refusing duplicate keys, out-of-range integers and overflowing floats itself.
+  Seedling's tests pin its layout, so a change to it in a later version of the crate is caught there.
 - YAML: `saphyr` and `saphyr-parser` 0.3.4 (YAML 1.2). 0.4 was under a week old, inside the local cargo minimum publish age.
   The emitter writes; it already quotes the YAML 1.1 boolean and null words and numeric-looking strings, and leaves `y`/`n` bare. Strings holding C1 controls or U+FFFE/U+FFFF are escaped and double-quoted before reaching it, since it would write them bare.
   The reader is a small loader over saphyr-parser's events, resolving the core schema itself so that tags, out-of-range numbers, duplicate and non-string keys, the alias budget and nesting depth are all checked where they occur, with the line.
