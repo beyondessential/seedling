@@ -24,10 +24,10 @@ Adds the `url`, `url-origin` and `hostname` kinds and their `std::parse_*` helpe
 
 ## Shared ingress hostname check
 
-- [ ] Add `pub(crate) fn check_hostname(hostname: &str) -> Result<(), String>` to `crates/core/src/defs/ingress.rs`, carrying the body of `service.rs`'s `validate_hostname` and its `// spec: ING#hostnames`
-- [ ] Remove `validate_hostname` from `crates/core/src/defs/service.rs`; the `ingress()` builder calls `check_hostname(hostname)?`, the `String` converting into `EvalAltResult`
-- [ ] Remove `validate_hostname` and its doc comment from `crates/core/src/oi/handler/ingresses.rs`; the create handler maps the error to `OiError::new(ErrorCode::RequirementsInvalid, _)`
-- [ ] Run the existing ingress tests in `tests/ingress.rs` and `oi/handler/ingresses/tests.rs`; the messages keep their wording, so any test asserting on them still matches
+- [x] Add `pub(crate) fn check_hostname(hostname: &str) -> Result<(), String>` to `crates/core/src/defs/ingress.rs`, carrying the body of `service.rs`'s `validate_hostname` and its `// spec: ING#hostnames`
+- [x] Remove `validate_hostname` from `crates/core/src/defs/service.rs`; the `ingress()` builder calls `check_hostname(hostname)?`, the `String` converting into `EvalAltResult`
+- [x] Remove `validate_hostname` and its doc comment from `crates/core/src/oi/handler/ingresses.rs`; the create handler maps the error to `OiError::new(ErrorCode::RequirementsInvalid, _)`
+- [x] Run the existing ingress tests in `tests/ingress.rs` and `oi/handler/ingresses/tests.rs`; the messages keep their wording, so any test asserting on them still matches
 
 ## Parsers (`crates/core/src/defs/url.rs`)
 

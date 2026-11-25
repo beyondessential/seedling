@@ -35,6 +35,43 @@ pub struct RedirectDef {
     pub code: u16,
 }
 
+/// Whether `hostname` meets the rules for an ingress hostname, or why not.
+// spec: ING#hostnames
+pub(crate) fn check_hostname(hostname: &str) -> Result<(), String> {
+    if hostname.is_empty() || hostname.len() > 253 {
+        return Err(format!(
+            "hostname must be 1–253 characters, got {}",
+            hostname.len()
+        ));
+    }
+
+    if hostname.contains('*') {
+        return Err("wildcard hostnames are not permitted".to_owned());
+    }
+
+    for label in hostname.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return Err(format!(
+                "each hostname label must be 1–63 characters, got '{}' ({})",
+                label,
+                label.len()
+            ));
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err(format!(
+                "hostname label must not start or end with a hyphen: '{label}'"
+            ));
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(format!(
+                "hostname label contains invalid characters: '{label}'"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 // spec: ING#declaration
 #[derive(Debug, Clone)]
 pub struct Ingress {

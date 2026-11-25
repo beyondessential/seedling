@@ -8,7 +8,7 @@ use super::{
     Freezable, Holder, Port,
     app::AppDef,
     export::ExportOptions,
-    ingress::Ingress,
+    ingress::{Ingress, check_hostname},
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
 use crate::runtime::identity::InstanceId;
@@ -233,7 +233,7 @@ pub(crate) fn declare_ingress(
         return Err("ingress() is not available on an anonymous service".into());
     }
     let port = Port::new(port)?;
-    validate_hostname(hostname)?;
+    check_hostname(hostname)?;
     let ingress = Ingress::new(service.clone(), hostname.into(), port);
     let arc = service
         .app_def
@@ -1026,36 +1026,4 @@ impl CustomType for ExternalService {
                 },
             );
     }
-}
-
-// spec: ING#hostnames
-fn validate_hostname(hostname: &str) -> Result<(), Box<EvalAltResult>> {
-    if hostname.is_empty() || hostname.len() > 253 {
-        return Err(format!("hostname must be 1–253 characters, got {}", hostname.len()).into());
-    }
-
-    if hostname.contains('*') {
-        return Err("wildcard hostnames are not permitted".into());
-    }
-
-    for label in hostname.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            return Err(format!(
-                "each hostname label must be 1–63 characters, got '{}' ({})",
-                label,
-                label.len()
-            )
-            .into());
-        }
-        if label.starts_with('-') || label.ends_with('-') {
-            return Err(
-                format!("hostname label must not start or end with a hyphen: '{label}'").into(),
-            );
-        }
-        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err(format!("hostname label contains invalid characters: '{label}'").into());
-        }
-    }
-
-    Ok(())
 }
