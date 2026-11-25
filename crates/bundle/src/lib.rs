@@ -57,7 +57,12 @@ pub const DEFAULT_SCRIPT: &str = "app.seed.rhai";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BundleError {
     // spec: DEFN#bundle-rules
-    Invalid(String),
+    Invalid {
+        message: String,
+        /// Where in the bundle the broken rule lies, where it lies in one
+        /// place.
+        place: Option<Place>,
+    },
     // spec: DEFN#seedling-version-support
     Unsupported {
         requirement: String,
@@ -68,7 +73,7 @@ pub enum BundleError {
 impl fmt::Display for BundleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Invalid(msg) => f.write_str(msg),
+            Self::Invalid { message, .. } => f.write_str(message),
             Self::Unsupported {
                 requirement,
                 running,
@@ -85,15 +90,41 @@ impl std::error::Error for BundleError {}
 impl From<BundleError> for OiError {
     fn from(e: BundleError) -> Self {
         let code = match &e {
-            BundleError::Invalid(_) => ErrorCode::BundleInvalid,
+            BundleError::Invalid { .. } => ErrorCode::BundleInvalid,
             BundleError::Unsupported { .. } => ErrorCode::UnsupportedSeedling,
         };
         OiError::new(code, e.to_string())
     }
 }
 
+/// Where in a bundle a broken rule lies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    /// The metadata file, at this line where the error has one.
+    MetadataFile { line: Option<usize> },
+    /// The file at this bundle path.
+    Path(String),
+}
+
 fn invalid(msg: impl Into<String>) -> BundleError {
-    BundleError::Invalid(msg.into())
+    BundleError::Invalid {
+        message: msg.into(),
+        place: None,
+    }
+}
+
+fn in_metadata(msg: impl Into<String>) -> BundleError {
+    BundleError::Invalid {
+        message: msg.into(),
+        place: Some(Place::MetadataFile { line: None }),
+    }
+}
+
+fn at_path(path: &str, msg: impl Into<String>) -> BundleError {
+    BundleError::Invalid {
+        message: msg.into(),
+        place: Some(Place::Path(path.to_owned())),
+    }
 }
 
 /// Normalise a bundle path: relative, `/`-separated, `.` and `..` resolved
@@ -174,7 +205,7 @@ impl Script {
     }
 
     /// The file and in-file line of a line of the concatenation.
-    fn locate(&self, line: usize) -> Option<(&str, usize)> {
+    pub fn locate(&self, line: usize) -> Option<(&str, usize)> {
         self.segments
             .iter()
             .find(|s| line >= s.first_line && line < s.first_line + s.lines)
@@ -288,22 +319,27 @@ impl Bundle {
                 .saturating_add(path.len())
                 .saturating_add(contents.len());
             if enforce_limit && total > BUNDLE_SIZE_LIMIT {
-                return Err(invalid(format!(
-                    "bundle exceeds the {BUNDLE_SIZE_LIMIT}-byte size limit at {path:?}"
-                )));
+                return Err(at_path(
+                    &path,
+                    format!("bundle exceeds the {BUNDLE_SIZE_LIMIT}-byte size limit at {path:?}"),
+                ));
             }
             if enforce_limit && out.len() >= BUNDLE_FILE_LIMIT {
-                return Err(invalid(format!(
-                    "bundle holds more than the {BUNDLE_FILE_LIMIT}-file limit at {path:?}"
-                )));
+                return Err(at_path(
+                    &path,
+                    format!(
+                        "bundle holds more than the {BUNDLE_FILE_LIMIT}-file limit at {path:?}"
+                    ),
+                ));
             }
             if let Some(dir) = overlapping(&out, &path) {
-                return Err(invalid(format!(
-                    "path {path:?} conflicts with {dir:?}: one is inside the other"
-                )));
+                return Err(at_path(
+                    &path,
+                    format!("path {path:?} conflicts with {dir:?}: one is inside the other"),
+                ));
             }
             if out.insert(path.clone(), Bytes::from(contents)).is_some() {
-                return Err(invalid(format!("path {path:?} appears twice")));
+                return Err(at_path(&path, format!("path {path:?} appears twice")));
             }
         }
         let table = read_metadata_file(out.get(METADATA_FILE).map(|b| b.as_ref()))?;
@@ -620,8 +656,15 @@ fn read_metadata_file(file: Option<&[u8]>) -> Result<toml::Table, BundleError> {
         return Ok(toml::Table::new());
     };
     let text = std::str::from_utf8(bytes)
-        .map_err(|_| invalid(format!("{METADATA_FILE} is not valid UTF-8")))?;
-    toml::from_str(text).map_err(|e| invalid(format!("{METADATA_FILE} cannot be parsed: {e}")))
+        .map_err(|_| in_metadata(format!("{METADATA_FILE} is not valid UTF-8")))?;
+    toml::from_str(text).map_err(|e| BundleError::Invalid {
+        message: format!("{METADATA_FILE} cannot be parsed: {e}"),
+        place: Some(Place::MetadataFile {
+            line: e
+                .span()
+                .map(|span| text[..span.start].matches('\n').count() + 1),
+        }),
+    })
 }
 
 // spec: BND#metadata-file
@@ -630,8 +673,8 @@ fn read_requirement(table: &toml::Table) -> Result<Option<VersionRequirement>, B
         None => Ok(None),
         Some(toml::Value::String(s)) => VersionRequirement::parse(s)
             .map(Some)
-            .map_err(|e| invalid(format!("{METADATA_FILE} field `seedling`: {e}"))),
-        Some(other) => Err(invalid(format!(
+            .map_err(|e| in_metadata(format!("{METADATA_FILE} field `seedling`: {e}"))),
+        Some(other) => Err(in_metadata(format!(
             "{METADATA_FILE} field `seedling` must be a string, got {}",
             other.type_str()
         ))),
@@ -661,7 +704,7 @@ fn read_metadata(table: &toml::Table) -> Result<Map<String, Value>, BundleError>
     match table.get("metadata") {
         None => Ok(Map::new()),
         Some(toml::Value::Table(table)) => metadata_map(table, "metadata"),
-        Some(other) => Err(invalid(format!(
+        Some(other) => Err(in_metadata(format!(
             "{METADATA_FILE} field `metadata` must be a table, got {}",
             other.type_str()
         ))),
@@ -689,28 +732,28 @@ fn read_script(
                 metadata.as_ref().map_err(Clone::clone)?;
             }
             other => {
-                return Err(invalid(format!(
+                return Err(in_metadata(format!(
                     "{METADATA_FILE} field `{other}` is not defined"
                 )));
             }
         }
     }
     if names.is_empty() {
-        return Err(invalid(format!(
+        return Err(in_metadata(format!(
             "{METADATA_FILE} field `script` lists no files"
         )));
     }
     let mut normalised: Vec<String> = Vec::with_capacity(names.len());
     for name in &names {
         let path = normalise_path(name)
-            .map_err(|e| invalid(format!("{METADATA_FILE} field `script`: {e}")))?;
+            .map_err(|e| in_metadata(format!("{METADATA_FILE} field `script`: {e}")))?;
         if normalised.contains(&path) {
-            return Err(invalid(format!(
+            return Err(in_metadata(format!(
                 "{METADATA_FILE} field `script` names {path:?} twice"
             )));
         }
         if path == METADATA_FILE {
-            return Err(invalid(format!(
+            return Err(in_metadata(format!(
                 "{METADATA_FILE} cannot itself be a script file"
             )));
         }
@@ -718,14 +761,21 @@ fn read_script(
     }
     let mut texts = Vec::with_capacity(normalised.len());
     for path in &normalised {
-        let bytes = files
-            .get(path)
-            .ok_or_else(|| invalid(format!("script file {path:?} is missing from the bundle")))?;
+        let bytes = files.get(path).ok_or_else(|| {
+            in_metadata(format!("script file {path:?} is missing from the bundle"))
+        })?;
         let text = std::str::from_utf8(bytes)
-            .map_err(|_| invalid(format!("script file {path:?} is not valid UTF-8")))?;
+            .map_err(|_| at_path(path, format!("script file {path:?} is not valid UTF-8")))?;
         texts.push((path.as_str(), text));
     }
     Ok(Script::concatenate(texts))
+}
+
+/// The Seedling version requirement a metadata file declares, read before,
+/// and without, any other field.
+// spec: BND#metadata-file
+pub fn requirement(metadata_file: &[u8]) -> Result<Option<VersionRequirement>, BundleError> {
+    read_requirement(&read_metadata_file(Some(metadata_file))?)
 }
 
 /// The `include` table a metadata file declares, each normalised key mapped
@@ -754,7 +804,7 @@ fn read_include(files: &BTreeMap<String, Bytes>, value: toml::Value) -> Result<(
                 .next()
                 .is_some_and(|(k, _)| k.starts_with(&beneath));
         if !present {
-            return Err(invalid(format!(
+            return Err(in_metadata(format!(
                 "{METADATA_FILE} field `include` key {path:?} holds no file in the bundle"
             )));
         }
@@ -765,7 +815,7 @@ fn read_include(files: &BTreeMap<String, Bytes>, value: toml::Value) -> Result<(
 // spec: BND#included-files
 fn include_table(value: toml::Value) -> Result<BTreeMap<String, String>, BundleError> {
     let toml::Value::Table(table) = value else {
-        return Err(invalid(format!(
+        return Err(in_metadata(format!(
             "{METADATA_FILE} field `include` must be a table of strings, got {}",
             value.type_str()
         )));
@@ -773,7 +823,7 @@ fn include_table(value: toml::Value) -> Result<BTreeMap<String, String>, BundleE
     let mut keys: BTreeMap<String, String> = BTreeMap::new();
     for (key, source) in table {
         let at =
-            |msg: String| invalid(format!("{METADATA_FILE} field `include` key {key:?} {msg}"));
+            |msg: String| in_metadata(format!("{METADATA_FILE} field `include` key {key:?} {msg}"));
         let source = match source {
             toml::Value::String(s) if !s.is_empty() => s,
             toml::Value::String(_) => return Err(at("has an empty source path".to_owned())),
@@ -820,7 +870,7 @@ fn metadata_value(value: &toml::Value, at: &str) -> Result<Value, BundleError> {
         toml::Value::Float(f) => serde_json::Number::from_f64(*f)
             .map(Value::Number)
             .ok_or_else(|| {
-                invalid(format!(
+                in_metadata(format!(
                     "{METADATA_FILE} field `{at}` is {f}, which is not a finite number"
                 ))
             })?,
@@ -839,7 +889,7 @@ fn metadata_value(value: &toml::Value, at: &str) -> Result<Value, BundleError> {
 
 fn script_list(value: toml::Value) -> Result<Vec<String>, BundleError> {
     let wrong = |got: &str| {
-        invalid(format!(
+        in_metadata(format!(
             "{METADATA_FILE} field `script` must be an array of strings, got {got}"
         ))
     };

@@ -10,8 +10,8 @@ use std::{fmt, sync::Arc, time::Duration};
 use bytes::Bytes;
 use futures_util::{StreamExt, future::BoxFuture};
 use seedling_bundle::{
-    ARTIFACT_TYPE, BUNDLE_SIZE_LIMIT, Bundle, BundleError, LAYER_MEDIA_TYPE, VERSIONS_ANNOTATION,
-    VersionRequirement,
+    ARTIFACT_TYPE, BUNDLE_SIZE_LIMIT, Bundle, BundleError, LAYER_MEDIA_TYPE, Place,
+    VERSIONS_ANNOTATION, VersionRequirement,
 };
 use seedling_protocol::error::{ErrorCode, OiError};
 use semver::Version;
@@ -384,9 +384,12 @@ pub async fn fetch(
         )));
     }
     if layer.size.is_some_and(|s| s > BLOB_SIZE_LIMIT as u64) {
-        return Err(FetchError::Bundle(BundleError::Invalid(format!(
-            "definition layer exceeds the {BUNDLE_SIZE_LIMIT}-byte bundle size limit"
-        ))));
+        return Err(FetchError::Bundle(BundleError::Invalid {
+            message: format!(
+                "definition layer exceeds the {BUNDLE_SIZE_LIMIT}-byte bundle size limit"
+            ),
+            place: None,
+        }));
     }
     let blob = registry
         .blob(&reference.parsed, &layer.digest, BLOB_SIZE_LIMIT)
@@ -406,11 +409,14 @@ pub async fn fetch(
         if let Some(annotated) = annotated
             && Some(annotated.as_str()) != declared.as_deref()
         {
-            return Err(FetchError::Bundle(BundleError::Invalid(format!(
-                "the {whose} annotation {VERSIONS_ANNOTATION} says {:?}, but the bundle declares {}",
-                annotated.as_str(),
-                declared.map_or("no requirement".to_owned(), |d| format!("{d:?}")),
-            ))));
+            return Err(FetchError::Bundle(BundleError::Invalid {
+                message: format!(
+                    "the {whose} annotation {VERSIONS_ANNOTATION} says {:?}, but the bundle declares {}",
+                    annotated.as_str(),
+                    declared.map_or("no requirement".to_owned(), |d| format!("{d:?}")),
+                ),
+                place: Some(Place::MetadataFile { line: None }),
+            }));
         }
     }
     Ok(Fetched { bundle, digest })

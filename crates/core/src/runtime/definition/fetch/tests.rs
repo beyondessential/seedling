@@ -100,7 +100,7 @@ fn a_bundle_contradicting_its_annotation_is_invalid() {
     reg.tag(REPO, "1", &digest);
     let err = block(fetch(&reg, &r(&format!("{REPO}:1")), &v("0.12.0"))).unwrap_err();
     assert!(
-        matches!(err, FetchError::Bundle(BundleError::Invalid(_))),
+        matches!(err, FetchError::Bundle(BundleError::Invalid { .. })),
         "{err:?}"
     );
 }
