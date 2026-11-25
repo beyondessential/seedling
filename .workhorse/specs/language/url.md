@@ -71,6 +71,13 @@ Where that succeeds, `host` MUST be the host it gives, as the host serialiser wr
 > The host serialiser writes a domain in ASCII and in lower case, with each internationalised label as an A-label, and an IPv6 address enclosed in `[` and `]`.
 > The URL parser leaves the host of a URL whose scheme is not a special scheme opaque, so without the second parse `postgres://DB.Example.org` and `https://db.example.org` would carry different hosts for the same server.
 
+Where the URL parser fails on a URL whose scheme is not a special scheme only because it gives a username, a password or a port with an empty host, `std::parse_url` MUST accept that URL, with no `host`.
+Its other components MUST be those the URL parser gives the same URL with a domain in place of the empty host.
+
+> [!NOTE]
+> A PostgreSQL connection URI names a connection over a Unix socket with an empty host, as in `postgresql://app@/db?host=/run/postgresql`, which the URL Standard refuses.
+> No host is filled in, because a script passing one on would connect somewhere other than where the URL points.
+
 ### Userinfo
 
 `std::parse_url` MUST reject a URL whose percent-decoded username or password is not valid UTF-8, or holds a character of a general category that [kind parsers](action.md#kind-parsers) reject in a value.
