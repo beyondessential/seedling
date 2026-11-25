@@ -3,19 +3,19 @@
 
 use std::{
     collections::BTreeMap,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use seedling_bundle::{
-    BUNDLE_FILE_LIMIT, BUNDLE_SIZE_LIMIT, Bundle, METADATA_FILE, VERSIONS_ANNOTATION,
-};
+use seedling_bundle::{Bundle, METADATA_FILE, VERSIONS_ANNOTATION};
 use serde_json::{Map, Value, json};
 
-use assembly::{Bounds, Unwritten, assemble, repository_of, source_paths};
+use assembly::{Bounds, assemble, relative, repository_of, source_paths};
+use tree::{Budget, Disk, read_file, read_folder};
 
 mod assembly;
+mod tree;
 
 /// Where a definition comes from.
 // spec: CLI#definition-sources
@@ -132,8 +132,6 @@ impl DefinitionArgs {
 /// repository it sits in.
 // spec: CLI#include-assembly
 pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let mut budget = Budget::full();
-    let mut files = read_folder(path, &mut budget)?;
     let folder = path
         .canonicalize()
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -142,14 +140,11 @@ pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<
         Some(root) => (root.as_path(), Bounds::Repository(root)),
         None => (folder.as_path(), Bounds::Folder),
     };
-    assemble(
-        &mut files,
-        &folder,
-        boundary,
-        bounds,
-        &Unwritten::default(),
-        &mut budget,
-    )?;
+    let tree = Disk::new(boundary);
+    let within = relative(&folder, boundary)?;
+    let mut budget = Budget::full();
+    let mut files = read_folder(&tree, &within, &mut budget)?;
+    assemble(&mut files, &tree, &within, bounds, &mut budget)?;
     Ok(files)
 }
 
@@ -168,7 +163,7 @@ pub(super) fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, S
             path.display()
         ));
     }
-    let contents = read_bounded(path, &mut Budget::full())?;
+    let contents = read_file(path, &mut Budget::full())?;
     let metadata = toml::Table::from_iter([(
         "script".to_owned(),
         toml::Value::Array(vec![toml::Value::String(name.to_owned())]),
@@ -248,137 +243,6 @@ pub(super) async fn resolve_or_exit(args: &DefinitionArgs) -> Option<Definition>
     })
 }
 
-/// Directories version-control systems keep their metadata in.
-const VCS_METADATA_DIRS: &[&str] = &[
-    ".git", ".jj", ".hg", ".sl", ".svn", ".bzr", ".pijul", "_darcs", "CVS",
-];
-
-/// Whether `entry` is version-control metadata: one of the directories above,
-/// or the `.git` file a linked work tree keeps in its place.
-fn is_vcs_metadata(entry: &ignore::DirEntry) -> bool {
-    let Some(name) = entry.file_name().to_str() else {
-        return false;
-    };
-    name == ".git"
-        || (entry.file_type().is_some_and(|t| t.is_dir()) && VCS_METADATA_DIRS.contains(&name))
-}
-
-/// Read a definition folder: every regular file, leaving out version-control
-/// metadata and what `.seedignore` excludes. Anything else that is not left
-/// out is an error, so nothing is sent.
-// spec: CLI#definition-folders
-pub(super) fn read_folder(
-    root: &Path,
-    budget: &mut Budget,
-) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let walker = ignore::WalkBuilder::new(root)
-        .standard_filters(false)
-        .hidden(false)
-        .follow_links(false)
-        .add_custom_ignore_filename(".seedignore")
-        .filter_entry(|e| !is_vcs_metadata(e))
-        .build();
-    let mut files = BTreeMap::new();
-    for entry in walker {
-        let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
-        let path = entry.path();
-        let rel = path
-            .strip_prefix(root)
-            .expect("walked paths are beneath the root");
-        let Some(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            continue;
-        }
-        if !file_type.is_file() {
-            return Err(format!(
-                "{} is not a regular file; definitions may only hold files and folders",
-                path.display()
-            ));
-        }
-        let rel = rel
-            .to_str()
-            .ok_or_else(|| format!("{} is not a UTF-8 path", path.display()))?
-            .to_owned();
-        budget.take_file(path, rel.len())?;
-        let contents = read_bounded(path, budget)?;
-        files.insert(rel, contents);
-    }
-    Ok(files)
-}
-
-/// What is left of the bundle limits while a definition is read, shared by
-/// the folder and every source it includes.
-///
-/// Reading stops once a definition could no longer make a bundle a server
-/// holds, so a folder far larger than any bundle, such as a whole repository
-/// named by mistake, is refused before it is held in memory. The count is a
-/// bound, not the rule: the bundle rules judge the assembled files.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct Budget {
-    files: usize,
-    bytes: usize,
-}
-
-impl Budget {
-    pub fn full() -> Self {
-        Self {
-            files: BUNDLE_FILE_LIMIT,
-            bytes: BUNDLE_SIZE_LIMIT,
-        }
-    }
-
-    /// Take one file, with a path `path_len` bytes long, from the budget.
-    pub fn take_file(&mut self, path: &Path, path_len: usize) -> Result<(), String> {
-        self.files = self.files.checked_sub(1).ok_or_else(|| {
-            format!(
-                "{} takes the definition past the {BUNDLE_FILE_LIMIT} files it may hold",
-                path.display()
-            )
-        })?;
-        self.take_bytes(path, path_len)
-    }
-
-    fn take_bytes(&mut self, path: &Path, len: usize) -> Result<(), String> {
-        self.bytes = self.bytes.checked_sub(len).ok_or_else(|| {
-            format!(
-                "{} takes the definition past its {BUNDLE_SIZE_LIMIT}-byte size limit",
-                path.display()
-            )
-        })?;
-        Ok(())
-    }
-
-    /// Read `from` to its end, taking what it holds from the budget and
-    /// refusing it as soon as it passes what is left.
-    fn read(&mut self, path: &Path, from: impl Read) -> Result<Vec<u8>, String> {
-        let mut contents = Vec::new();
-        from.take(self.bytes as u64 + 1)
-            .read_to_end(&mut contents)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        self.take_bytes(path, contents.len())?;
-        Ok(contents)
-    }
-
-    /// Return files already taken, as when files read from a source turn
-    /// out to be the ones a folder already holds.
-    pub fn give_back<'a>(&mut self, files: impl Iterator<Item = (&'a String, &'a Vec<u8>)>) {
-        for (path, contents) in files {
-            self.files += 1;
-            self.bytes += path.len() + contents.len();
-        }
-    }
-}
-
-/// Read a file, taking its contents from `budget`, and refusing it as soon as
-/// it passes what is left.
-pub(super) fn read_bounded(path: &Path, budget: &mut Budget) -> Result<Vec<u8>, String> {
-    let file =
-        std::fs::File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    budget.read(path, file)
-}
-
 /// A GitHub URL naming a folder: `https://github.com/<owner>/<repo>/tree/<rest>`,
 /// where `<rest>` is a ref followed by a path and the split between them is
 /// only known once the ref is resolved.
@@ -421,10 +285,12 @@ impl GithubUrl {
 }
 
 mod github {
+    use std::collections::BTreeMap;
 
-    use seedling_bundle::METADATA_FILE;
-
-    use super::{Bounds, Budget, GithubUrl, Unwritten, assemble, read_folder, source_paths};
+    use super::{
+        Bounds, Budget, GithubUrl, assemble, read_folder, source_paths,
+        tree::{Archive, Kind, locate},
+    };
 
     fn client() -> Result<reqwest::Client, String> {
         reqwest::Client::builder()
@@ -445,13 +311,7 @@ mod github {
     // spec: CLI#definition-sources
     pub(super) async fn download(
         url: &GithubUrl,
-    ) -> Result<
-        (
-            std::collections::BTreeMap<String, Vec<u8>>,
-            (String, String),
-        ),
-        String,
-    > {
+    ) -> Result<(BTreeMap<String, Vec<u8>>, (String, String)), String> {
         let client = client()?;
         let mut resolved = None;
         for (git_ref, folder) in url.splits() {
@@ -497,244 +357,42 @@ mod github {
             .await
             .map_err(|e| format!("cannot download {tarball}: {e}"))?;
 
-        let dir =
-            tempfile::tempdir().map_err(|e| format!("cannot make a temporary folder: {e}"))?;
-        let files = extract_definition(&bytes, dir.path(), &folder)?;
+        let files = read_definition(&bytes, &folder)?;
         if files.is_empty() {
             return Err(format!("{} holds no files", url.url));
         }
         Ok((files, (url.url.clone(), sha)))
     }
 
-    /// Read the definition at `folder` out of a GitHub tarball, unpacking it
-    /// into `root` with the sources its include table names, and assemble it.
+    /// Read the definition at `folder` out of a GitHub tarball, with what
+    /// its include table names from elsewhere in the repository.
     ///
-    /// Only the folder and its sources are written out, so a repository far
-    /// larger than any definition costs no more than the definition does.
+    /// The repository is read in memory, and only the folder and its sources
+    /// are held, so a repository far larger than any definition costs no more
+    /// than the definition does.
     // spec: CLI#definition-sources
     // spec: CLI#include-assembly
-    pub(super) fn extract_definition(
+    pub(super) fn read_definition(
         tarball: &[u8],
-        root: &std::path::Path,
         folder: &str,
-    ) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
-        // The folder comes from the URL, and is joined onto the extraction
-        // root, so it is held to the repository as an archive entry is.
+    ) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        // The folder comes from the URL, so it is held to the repository as
+        // an archive entry is.
         let folder = seedling_bundle::normalise_path(folder)
             .map_err(|e| format!("the URL's folder lies outside the repository: {e}"))?;
-        let scan = scan(tarball, &folder)?;
-        let sources = match &scan.metadata {
-            Some(metadata) => source_paths(&folder, metadata)?,
-            None => Vec::new(),
-        };
-        let wanted = Wanted::new(std::iter::once(folder.clone()).chain(sources));
-        extract(tarball, root, &scan.unwritten, &wanted)?;
-        read_repository_folder(root, &folder, &scan.unwritten)
-    }
-
-    /// Read `folder` out of an extracted repository and assemble what it
-    /// includes from the rest of it.
-    fn read_repository_folder(
-        root: &std::path::Path,
-        folder: &str,
-        unwritten: &Unwritten,
-    ) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
-        if let Some(special) = unwritten
-            .reached_by(folder)
-            .or_else(|| unwritten.within(folder))
-        {
-            return Err(format!(
-                "{special} is not a regular file; definitions may only hold files and folders"
-            ));
+        let mut archive = Archive::scan(tarball, &folder)?;
+        let mut wanted = vec![folder.clone()];
+        if let Some(metadata) = archive.metadata(&folder) {
+            wanted.extend(source_paths(&folder, metadata)?);
         }
-        let path = root.join(folder);
-        if !path.is_dir() {
-            return Ok(Default::default());
+        archive.load(tarball, &wanted)?;
+        if locate(&archive, &folder)? != Some(Kind::Dir) {
+            return Ok(BTreeMap::new());
         }
         let mut budget = Budget::full();
-        let mut files = read_folder(&path, &mut budget)?;
-        assemble(
-            &mut files,
-            &path,
-            root,
-            Bounds::Archive,
-            unwritten,
-            &mut budget,
-        )?;
+        let mut files = read_folder(&archive, &folder, &mut budget)?;
+        assemble(&mut files, &archive, &folder, Bounds::Archive, &mut budget)?;
         Ok(files)
-    }
-
-    /// What a first pass over a GitHub tarball learns before anything is
-    /// written.
-    struct Scan {
-        /// Every entry that is neither a file nor a directory. Such an entry
-        /// is never written: a symlink written out would let a later entry be
-        /// written through it, and it only matters if the definition reads
-        /// it. They are all recorded before anything is written, so an entry
-        /// at or beneath one is refused whichever comes first.
-        unwritten: Unwritten,
-        /// The definition folder's metadata file, which names the sources
-        /// to unpack beside the folder.
-        metadata: Option<Vec<u8>>,
-    }
-
-    fn scan(tarball: &[u8], folder: &str) -> Result<Scan, String> {
-        let metadata_path = if folder.is_empty() {
-            METADATA_FILE.to_owned()
-        } else {
-            format!("{folder}/{METADATA_FILE}")
-        };
-        let mut scan = Scan {
-            unwritten: Unwritten::default(),
-            metadata: None,
-        };
-        for entry in archive(tarball).entries().map_err(unreadable)? {
-            let entry = entry.map_err(unreadable)?;
-            // A path that is not UTF-8 can be neither a link a definition's
-            // path passes through nor a file it names.
-            let Some(EntryName::Utf8(name)) = entry_name(&entry.path().map_err(unreadable)?)?
-            else {
-                continue;
-            };
-            match entry.header().entry_type() {
-                tar::EntryType::Regular | tar::EntryType::Continuous if name == metadata_path => {
-                    let at = std::path::Path::new(&name);
-                    scan.metadata = Some(Budget::full().read(at, entry)?);
-                }
-                tar::EntryType::Directory
-                | tar::EntryType::Regular
-                | tar::EntryType::Continuous
-                | tar::EntryType::XGlobalHeader
-                | tar::EntryType::XHeader => {}
-                _ => scan.unwritten.record(name),
-            }
-        }
-        Ok(scan)
-    }
-
-    /// The paths, from the repository root, at or beneath which entries are
-    /// unpacked.
-    struct Wanted(Vec<(String, String)>);
-
-    impl Wanted {
-        fn new(paths: impl IntoIterator<Item = String>) -> Self {
-            Self(
-                paths
-                    .into_iter()
-                    .map(|path| {
-                        let beneath = format!("{path}/");
-                        (path, beneath)
-                    })
-                    .collect(),
-            )
-        }
-
-        fn holds(&self, name: &[u8]) -> bool {
-            self.0.iter().any(|(path, beneath)| {
-                path.is_empty() || name == path.as_bytes() || name.starts_with(beneath.as_bytes())
-            })
-        }
-    }
-
-    /// Unpack the files and directories of a GitHub tarball at or beneath
-    /// what is `wanted` into `dest`, dropping the one top-level directory
-    /// GitHub prefixes every entry with. What is written is held to the
-    /// bundle limits, and nothing else in the repository is judged.
-    // spec: CLI#definition-sources
-    fn extract(
-        tarball: &[u8],
-        dest: &std::path::Path,
-        unwritten: &Unwritten,
-        wanted: &Wanted,
-    ) -> Result<(), String> {
-        let mut budget = Budget::full();
-        for entry in archive(tarball).entries().map_err(unreadable)? {
-            let entry = entry.map_err(unreadable)?;
-            let name = match entry_name(&entry.path().map_err(unreadable)?)? {
-                Some(EntryName::Utf8(name)) if wanted.holds(name.as_bytes()) => name,
-                Some(EntryName::Other(lossy)) if wanted.holds(lossy.as_bytes()) => {
-                    return Err(format!(
-                        "the downloaded archive holds a non-UTF-8 path: {lossy}"
-                    ));
-                }
-                _ => continue,
-            };
-            let kind = entry.header().entry_type();
-            let written = matches!(
-                kind,
-                tar::EntryType::Directory | tar::EntryType::Regular | tar::EntryType::Continuous
-            );
-            if let Some(special) = unwritten.reached_by(&name).filter(|_| written) {
-                return Err(format!(
-                    "the downloaded archive holds {name} at or beneath {special}, which is not a file or directory"
-                ));
-            }
-            let target = dest.join(&name);
-            match kind {
-                tar::EntryType::Directory => {
-                    std::fs::create_dir_all(&target).map_err(unreadable)?;
-                }
-                tar::EntryType::Regular | tar::EntryType::Continuous => {
-                    if let Some(parent) = target.parent() {
-                        std::fs::create_dir_all(parent).map_err(unreadable)?;
-                    }
-                    let at = std::path::Path::new(&name);
-                    budget.take_file(at, name.len())?;
-                    let contents = budget.read(at, entry)?;
-                    std::fs::write(&target, contents).map_err(unreadable)?;
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn archive(tarball: &[u8]) -> tar::Archive<flate2::read::GzDecoder<&[u8]>> {
-        tar::Archive::new(flate2::read::GzDecoder::new(tarball))
-    }
-
-    fn unreadable(e: std::io::Error) -> String {
-        format!("the downloaded archive is unreadable: {e}")
-    }
-
-    /// An archive entry's path within the repository.
-    enum EntryName {
-        Utf8(String),
-        /// A path that is not UTF-8, with each invalid sequence replaced.
-        /// Everything before the first of them is kept, so it is at or
-        /// beneath a wanted path exactly when the path itself is.
-        Other(String),
-    }
-
-    /// An archive entry's path within the repository, `/`-separated, or
-    /// `None` for GitHub's prefix directory itself.
-    fn entry_name(path: &std::path::Path) -> Result<Option<EntryName>, String> {
-        // Every entry is written beneath the extraction root, so nothing but
-        // plain names may reach the join: an archive is not a trusted source
-        // of paths, whatever produced it. A path that is not plain cannot be
-        // placed in the repository at all, so whether the definition would
-        // read it cannot be known either, and the archive is refused
-        // whatever the entry. The prefix directory is checked too, so that a
-        // leading `..` is refused rather than dropped.
-        if path
-            .components()
-            .any(|c| !matches!(c, std::path::Component::Normal(_)))
-        {
-            return Err(format!(
-                "the downloaded archive holds an entry outside the repository: {}",
-                path.display()
-            ));
-        }
-        let mut components = path.components();
-        components.next();
-        let rel = components.as_path();
-        if rel.as_os_str().is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(match rel.to_str() {
-            Some(name) => EntryName::Utf8(name.to_owned()),
-            None => EntryName::Other(rel.to_string_lossy().into_owned()),
-        }))
     }
 }
 

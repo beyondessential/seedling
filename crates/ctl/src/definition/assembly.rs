@@ -2,7 +2,7 @@
 //! repository it sits in.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     io::ErrorKind,
     ops::Bound,
     path::{Component, Path, PathBuf},
@@ -10,47 +10,7 @@ use std::{
 
 use seedling_bundle::{METADATA_FILE, included, normalise_path};
 
-use super::{Budget, VCS_METADATA_DIRS, read_bounded, read_folder};
-
-/// The archive entries that were neither files nor directories, and so were
-/// never written out, by `/`-separated path from the include boundary.
-///
-/// Nothing may be written or read at or beneath one of them: on disk the
-/// path is missing, but in the repository it is a link.
-#[derive(Debug, Default)]
-pub(super) struct Unwritten(BTreeSet<String>);
-
-impl Unwritten {
-    pub fn record(&mut self, path: String) {
-        self.0.insert(path);
-    }
-
-    /// The recorded entry `path` is, or passes through on its way down from
-    /// the boundary.
-    pub fn reached_by(&self, path: &str) -> Option<&str> {
-        std::iter::successors(Some(path), |p| p.rsplit_once('/').map(|(parent, _)| parent))
-            .find_map(|p| self.0.get(p))
-            .map(String::as_str)
-    }
-
-    /// A recorded entry at or beneath `path`, where the boundary itself is
-    /// the empty path.
-    pub fn within(&self, path: &str) -> Option<&str> {
-        if path.is_empty() {
-            return self.0.first().map(String::as_str);
-        }
-        let beneath = format!("{path}/");
-        self.0
-            .get(path)
-            .or_else(|| {
-                self.0
-                    .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
-                    .next()
-                    .filter(|u| u.starts_with(&beneath))
-            })
-            .map(String::as_str)
-    }
-}
+use super::tree::{Budget, Kind, Tree, VCS_METADATA_DIRS, locate, read_folder};
 
 /// What an include boundary is, for telling the operator a source lies
 /// outside it.
@@ -98,25 +58,23 @@ pub(super) fn repository_of(folder: &Path) -> Result<Option<PathBuf>, String> {
 /// Place every file the folder's `include` table names into `files`, which
 /// holds what the folder itself yielded.
 ///
-/// `folder` lies within `boundary`, which `bounds` says what it is;
-/// `unwritten` names what an archive held there that is not on disk.
+/// `tree` is rooted at the include boundary, which `bounds` says what it is,
+/// and `folder` is the definition folder's path within it.
 // spec: CLI#include-assembly
 pub(super) fn assemble(
     files: &mut BTreeMap<String, Vec<u8>>,
-    folder: &Path,
-    boundary: &Path,
+    tree: &impl Tree,
+    folder: &str,
     bounds: Bounds<'_>,
-    unwritten: &Unwritten,
     budget: &mut Budget,
 ) -> Result<(), String> {
     let Some(metadata) = files.get(METADATA_FILE) else {
         return Ok(());
     };
     let table = included(metadata).map_err(|e| e.to_string())?;
-    let within = relative(folder, boundary)?;
     for (key, value) in &table {
         let at = |msg: String| format!("include {key:?} from {value:?}: {msg}");
-        let source = source_path(&within, value);
+        let source = source_path(folder, value);
         let has_copy = at_or_beneath(files, key).next().is_some();
         // A source matching the folder's copy adds nothing to the bundle, so
         // the copy's share of the budget is lent to reading it, and the
@@ -124,7 +82,7 @@ pub(super) fn assemble(
         let before = *budget;
         budget.give_back(at_or_beneath(files, key));
         let yielded = match &source {
-            Some(path) => read_source(boundary, path, unwritten, budget).map_err(at)?,
+            Some(path) => read_source(tree, path, budget).map_err(at)?,
             None => None,
         };
         let Some(yielded) = yielded else {
@@ -180,7 +138,7 @@ fn at_or_beneath<'a>(
 }
 
 /// `folder`'s path within `boundary`, `/`-separated.
-fn relative(folder: &Path, boundary: &Path) -> Result<String, String> {
+pub(super) fn relative(folder: &Path, boundary: &Path) -> Result<String, String> {
     let within = folder.strip_prefix(boundary).map_err(|_| {
         format!(
             "{} does not lie within {}",
@@ -230,68 +188,36 @@ fn source_path(within: &str, value: &str) -> Option<String> {
     Some(path)
 }
 
-/// Read the source at `path` beneath `boundary`: a file as one entry at the
-/// empty path, a directory as a definition folder, or `None` where nothing
-/// is there.
+/// Read the source at `path`: a file as one entry at the empty path, a
+/// directory as a definition folder, or `None` where nothing is there.
 // spec: CLI#include-assembly
 fn read_source(
-    boundary: &Path,
+    tree: &impl Tree,
     path: &str,
-    unwritten: &Unwritten,
     budget: &mut Budget,
 ) -> Result<Option<BTreeMap<String, Vec<u8>>>, String> {
-    // A recorded entry is missing on disk, so it is checked before the walk
-    // could take it for a source that names nothing.
-    if let Some(special) = unwritten.reached_by(path) {
-        return Err(format!("{special} is not a regular file or directory"));
-    }
-    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    let mut at = boundary.to_owned();
-    let mut prefix = String::new();
-    for (i, segment) in segments.iter().enumerate() {
-        if !prefix.is_empty() {
-            prefix.push('/');
+    match locate(tree, path)? {
+        None => Ok(None),
+        Some(Kind::File) => {
+            budget.take_file(&tree.show(path), 0)?;
+            let contents = tree.read(path, budget)?;
+            Ok(Some(BTreeMap::from([(String::new(), contents)])))
         }
-        prefix.push_str(segment);
-        at.push(segment);
-        let meta = match at.symlink_metadata() {
-            Ok(meta) => meta,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(format!("cannot read {}: {e}", at.display())),
-        };
-        if meta.file_type().is_symlink() {
-            return Err(format!("{prefix} is a symlink"));
+        Some(Kind::Dir) => {
+            let found = read_folder(tree, path, budget)?;
+            if found.is_empty() {
+                return Err(format!("{path} holds no files"));
+            }
+            if let Some(nested) = found
+                .keys()
+                .find(|p| p.rsplit('/').next() == Some(METADATA_FILE))
+            {
+                return Err(format!(
+                    "{path} holds {nested}, which would not be read; only the definition folder's own {METADATA_FILE} is"
+                ));
+            }
+            Ok(Some(found))
         }
-        let last = i + 1 == segments.len();
-        if !last && !meta.is_dir() {
-            return Ok(None);
-        }
+        Some(Kind::Other) => Err(format!("{path} is not a regular file or directory")),
     }
-    let meta = at
-        .symlink_metadata()
-        .map_err(|e| format!("cannot read {}: {e}", at.display()))?;
-    if meta.is_file() {
-        budget.take_file(&at, 0)?;
-        let contents = read_bounded(&at, budget)?;
-        return Ok(Some(BTreeMap::from([(String::new(), contents)])));
-    }
-    if !meta.is_dir() {
-        return Err(format!("{path} is not a regular file or directory"));
-    }
-    if let Some(special) = unwritten.within(path) {
-        return Err(format!("{special} is not a regular file or directory"));
-    }
-    let found = read_folder(&at, budget)?;
-    if found.is_empty() {
-        return Err(format!("{path} holds no files"));
-    }
-    if let Some(nested) = found
-        .keys()
-        .find(|p| p.rsplit('/').next() == Some(METADATA_FILE))
-    {
-        return Err(format!(
-            "{path} holds {nested}, which would not be read; only the definition folder's own {METADATA_FILE} is"
-        ));
-    }
-    Ok(Some(found))
 }

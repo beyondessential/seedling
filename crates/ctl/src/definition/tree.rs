@@ -1,0 +1,683 @@
+//! The trees a definition is read from, a folder on disk or a repository held
+//! in memory from a downloaded archive, and reading a definition folder out of
+//! either the same way.
+
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    hash::{DefaultHasher, Hash, Hasher},
+    io::{ErrorKind, Read},
+    ops::Bound,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+};
+
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use seedling_bundle::{BUNDLE_FILE_LIMIT, BUNDLE_SIZE_LIMIT, METADATA_FILE};
+
+/// Directories version-control systems keep their metadata in.
+pub(super) const VCS_METADATA_DIRS: &[&str] = &[
+    ".git", ".jj", ".hg", ".sl", ".svn", ".bzr", ".pijul", "_darcs", "CVS",
+];
+
+const IGNORE_FILE: &str = ".seedignore";
+
+/// What a path in a tree holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kind {
+    File,
+    Dir,
+    /// Anything else, such as a symlink, which a definition never reads
+    /// through.
+    Other,
+}
+
+/// The name of an entry in a directory.
+pub(super) enum Name {
+    Utf8(String),
+    /// A name that is not UTF-8, with each invalid sequence replaced.
+    Other(String),
+}
+
+impl Name {
+    fn shown(&self) -> &str {
+        match self {
+            Self::Utf8(name) | Self::Other(name) => name,
+        }
+    }
+}
+
+/// A tree of files a definition is read from. Paths are `/`-separated and
+/// relative to the tree's root, which is the empty path.
+pub(super) trait Tree {
+    /// What is at `path`, never following a link, or `None` where nothing is.
+    fn kind(&self, path: &str) -> Result<Option<Kind>, String>;
+
+    /// The entries directly within the directory at `dir`, in name order.
+    fn entries(&self, dir: &str) -> Result<Vec<(Name, Kind)>, String>;
+
+    /// The contents of the file at `path`, taken from `budget`.
+    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, String>;
+
+    /// `path` as the operator knows it.
+    fn show(&self, path: &str) -> String;
+}
+
+pub(super) fn join(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// What is at `path`, reached down from the root without passing through
+/// anything that is not a directory. A path reaching a link, or through one,
+/// is refused; a path through a file names nothing.
+pub(super) fn locate(tree: &impl Tree, path: &str) -> Result<Option<Kind>, String> {
+    let mut prefix = String::new();
+    let mut kind = tree.kind("")?;
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        if kind != Some(Kind::Dir) {
+            return Ok(None);
+        }
+        prefix = join(&prefix, segment);
+        kind = tree.kind(&prefix)?;
+        if kind == Some(Kind::Other) {
+            return Err(format!(
+                "{} is a symlink or other special file",
+                tree.show(&prefix)
+            ));
+        }
+    }
+    Ok(kind)
+}
+
+/// Read a definition folder: every regular file beneath `root`, keyed by its
+/// path relative to `root`, leaving out version-control metadata and what
+/// `.seedignore` excludes. Anything else that is not left out is an error,
+/// so nothing is sent.
+// spec: CLI#definition-folders
+pub(super) fn read_folder(
+    tree: &impl Tree,
+    root: &str,
+    budget: &mut Budget,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let mut files = BTreeMap::new();
+    let mut rules = Vec::new();
+    walk(tree, root, root, &mut rules, budget, &mut files)?;
+    Ok(files)
+}
+
+fn walk(
+    tree: &impl Tree,
+    root: &str,
+    dir: &str,
+    rules: &mut Vec<(String, Gitignore)>,
+    budget: &mut Budget,
+    files: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), String> {
+    let pushed = match ignore_rules(tree, dir)? {
+        Some(rule) => {
+            rules.push((dir.to_owned(), rule));
+            true
+        }
+        None => false,
+    };
+    for (name, kind) in tree.entries(dir)? {
+        let path = join(dir, name.shown());
+        if is_vcs_metadata(name.shown(), kind) || ignored(rules, &path, kind == Kind::Dir) {
+            continue;
+        }
+        if let Name::Other(_) = name {
+            return Err(format!("{} is not a UTF-8 path", tree.show(&path)));
+        }
+        match kind {
+            Kind::Dir => walk(tree, root, &path, rules, budget, files)?,
+            Kind::File => {
+                let rel = path
+                    .strip_prefix(root)
+                    .map(|p| p.trim_start_matches('/'))
+                    .unwrap_or(&path)
+                    .to_owned();
+                budget.take_file(&tree.show(&path), rel.len())?;
+                let contents = tree.read(&path, budget)?;
+                files.insert(rel, contents);
+            }
+            Kind::Other => {
+                return Err(format!(
+                    "{} is not a regular file; definitions may only hold files and folders",
+                    tree.show(&path)
+                ));
+            }
+        }
+    }
+    if pushed {
+        rules.pop();
+    }
+    Ok(())
+}
+
+/// The `.seedignore` rules of each directory, read once.
+type RulesCache = HashMap<String, Option<Gitignore>>;
+
+fn cached_rules(
+    tree: &impl Tree,
+    dir: &str,
+    cache: &mut RulesCache,
+) -> Result<Option<Gitignore>, String> {
+    if let Some(rules) = cache.get(dir) {
+        return Ok(rules.clone());
+    }
+    let rules = ignore_rules(tree, dir)?;
+    cache.insert(dir.to_owned(), rules.clone());
+    Ok(rules)
+}
+
+/// Whether a definition folder rooted at `root` leaves out the file at
+/// `path` beneath it, as [`read_folder`] would.
+fn left_out(
+    tree: &impl Tree,
+    root: &str,
+    path: &str,
+    cache: &mut RulesCache,
+) -> Result<bool, String> {
+    let mut rules = Vec::new();
+    if let Some(rule) = cached_rules(tree, root, cache)? {
+        rules.push((root.to_owned(), rule));
+    }
+    let below = path
+        .strip_prefix(root)
+        .map(|p| p.trim_start_matches('/'))
+        .unwrap_or(path);
+    let segments: Vec<&str> = below.split('/').collect();
+    let mut dir = root.to_owned();
+    for (i, segment) in segments.iter().enumerate() {
+        let at = join(&dir, segment);
+        let is_dir = i + 1 < segments.len();
+        let kind = if is_dir { Kind::Dir } else { Kind::File };
+        if is_vcs_metadata(segment, kind) || ignored(&rules, &at, is_dir) {
+            return Ok(true);
+        }
+        if is_dir {
+            if let Some(rule) = cached_rules(tree, &at, cache)? {
+                rules.push((at.clone(), rule));
+            }
+            dir = at;
+        }
+    }
+    Ok(false)
+}
+
+/// Whether `name` is version-control metadata: one of the directories above,
+/// or the `.git` file a linked work tree keeps in its place.
+fn is_vcs_metadata(name: &str, kind: Kind) -> bool {
+    name == ".git" || (kind == Kind::Dir && VCS_METADATA_DIRS.contains(&name))
+}
+
+/// The `.seedignore` rules a directory holds, read as gitignore patterns.
+fn ignore_rules(tree: &impl Tree, dir: &str) -> Result<Option<Gitignore>, String> {
+    let path = join(dir, IGNORE_FILE);
+    if tree.kind(&path)? != Some(Kind::File) {
+        return Ok(None);
+    }
+    let shown = tree.show(&path);
+    let text = String::from_utf8(tree.read(&path, &mut Budget::full())?)
+        .map_err(|_| format!("{shown} is not valid UTF-8"))?;
+    let mut builder = GitignoreBuilder::new(".");
+    for line in text.lines() {
+        builder
+            .add_line(None, line)
+            .map_err(|e| format!("{shown}: {e}"))?;
+    }
+    builder
+        .build()
+        .map(Some)
+        .map_err(|e| format!("{shown}: {e}"))
+}
+
+/// Whether the rules in force leave out `path`: the nearest directory's
+/// `.seedignore` that matches it decides, so a deeper file can bring back
+/// what a shallower one left out.
+fn ignored(rules: &[(String, Gitignore)], path: &str, is_dir: bool) -> bool {
+    for (dir, rule) in rules.iter().rev() {
+        let relative = if dir.is_empty() {
+            path
+        } else {
+            path.strip_prefix(dir.as_str())
+                .map(|p| p.trim_start_matches('/'))
+                .unwrap_or(path)
+        };
+        let matched = rule.matched(relative, is_dir);
+        if matched.is_ignore() {
+            return true;
+        }
+        if matched.is_whitelist() {
+            return false;
+        }
+    }
+    false
+}
+
+/// What is left of the bundle limits while a definition is read, shared by
+/// the folder and every source it includes.
+///
+/// Reading stops once a definition could no longer make a bundle a server
+/// holds, so a folder far larger than any bundle, such as a whole repository
+/// named by mistake, is refused before it is held in memory. The count is a
+/// bound, not the rule: the bundle rules judge the assembled files.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Budget {
+    files: usize,
+    bytes: usize,
+}
+
+impl Budget {
+    pub fn full() -> Self {
+        Self {
+            files: BUNDLE_FILE_LIMIT,
+            bytes: BUNDLE_SIZE_LIMIT,
+        }
+    }
+
+    /// Take one file, with a path `path_len` bytes long, from the budget.
+    pub fn take_file(&mut self, shown: &str, path_len: usize) -> Result<(), String> {
+        self.files = self.files.checked_sub(1).ok_or_else(|| {
+            format!("{shown} takes the definition past the {BUNDLE_FILE_LIMIT} files it may hold")
+        })?;
+        self.take_bytes(shown, path_len)
+    }
+
+    fn take_bytes(&mut self, shown: &str, len: usize) -> Result<(), String> {
+        self.bytes = self.bytes.checked_sub(len).ok_or_else(|| {
+            format!("{shown} takes the definition past its {BUNDLE_SIZE_LIMIT}-byte size limit")
+        })?;
+        Ok(())
+    }
+
+    /// Read `from` to its end, taking what it holds from the budget and
+    /// refusing it as soon as it passes what is left.
+    pub fn read(&mut self, shown: &str, from: impl Read) -> Result<Vec<u8>, String> {
+        let mut contents = Vec::new();
+        from.take(self.bytes as u64 + 1)
+            .read_to_end(&mut contents)
+            .map_err(|e| format!("cannot read {shown}: {e}"))?;
+        self.take_bytes(shown, contents.len())?;
+        Ok(contents)
+    }
+
+    /// Return files already taken, as when files read from a source turn
+    /// out to be the ones a folder already holds.
+    pub fn give_back<'a>(&mut self, files: impl Iterator<Item = (&'a String, &'a Vec<u8>)>) {
+        for (path, contents) in files {
+            self.files += 1;
+            self.bytes += path.len() + contents.len();
+        }
+    }
+}
+
+/// Read a file on disk, taking its contents from `budget`.
+pub(super) fn read_file(path: &Path, budget: &mut Budget) -> Result<Vec<u8>, String> {
+    let shown = path.display().to_string();
+    let file = std::fs::File::open(path).map_err(|e| format!("cannot read {shown}: {e}"))?;
+    budget.read(&shown, file)
+}
+
+/// A folder on disk, read without following links.
+pub(super) struct Disk {
+    root: PathBuf,
+}
+
+impl Disk {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    fn at(&self, path: &str) -> PathBuf {
+        if path.is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(path)
+        }
+    }
+}
+
+impl Tree for Disk {
+    fn kind(&self, path: &str) -> Result<Option<Kind>, String> {
+        let at = self.at(path);
+        match at.symlink_metadata() {
+            Ok(meta) if meta.is_file() => Ok(Some(Kind::File)),
+            Ok(meta) if meta.is_dir() => Ok(Some(Kind::Dir)),
+            Ok(_) => Ok(Some(Kind::Other)),
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+                Ok(None)
+            }
+            Err(e) => Err(format!("cannot read {}: {e}", at.display())),
+        }
+    }
+
+    fn entries(&self, dir: &str) -> Result<Vec<(Name, Kind)>, String> {
+        let at = self.at(dir);
+        let cannot = |e: std::io::Error| format!("cannot read {}: {e}", at.display());
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(&at).map_err(cannot)? {
+            let entry = entry.map_err(cannot)?;
+            let file_type = entry.file_type().map_err(cannot)?;
+            let kind = if file_type.is_file() {
+                Kind::File
+            } else if file_type.is_dir() {
+                Kind::Dir
+            } else {
+                Kind::Other
+            };
+            let name = entry.file_name();
+            let name = match name.to_str() {
+                Some(name) => Name::Utf8(name.to_owned()),
+                None => Name::Other(name.to_string_lossy().into_owned()),
+            };
+            found.push((name, kind));
+        }
+        found.sort_by(|(a, _), (b, _)| a.shown().cmp(b.shown()));
+        Ok(found)
+    }
+
+    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, String> {
+        read_file(&self.at(path), budget)
+    }
+
+    fn show(&self, path: &str) -> String {
+        self.at(path).display().to_string()
+    }
+}
+
+/// What an archive holds at a path.
+#[derive(Debug, Clone)]
+enum Held {
+    /// A file, with its contents where they were read.
+    File(Option<Arc<[u8]>>),
+    Dir,
+    Other,
+}
+
+/// A repository held in memory from a GitHub tarball.
+///
+/// It holds every link in the repository, every `.seedignore`, the metadata
+/// file of the definition folder it was read for, and what
+/// [`Archive::load`] reads beneath the paths a definition reads.
+pub(super) struct Archive {
+    entries: BTreeMap<String, Held>,
+}
+
+impl Archive {
+    /// Read what a definition at `folder` needs before anything else can be
+    /// known: every link, so that nothing is read through one, every
+    /// `.seedignore`, so that what a folder leaves out is not held, and the
+    /// folder's metadata file, which names the sources it includes.
+    pub fn scan(tarball: &[u8], folder: &str) -> Result<Self, String> {
+        let metadata = join(folder, METADATA_FILE);
+        let mut archive = Self {
+            entries: BTreeMap::new(),
+        };
+        let mut budget = Budget::full();
+        let mut tar = open(tarball);
+        for entry in tar.entries().map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            // A path that is not UTF-8 can be neither a link a definition's
+            // path passes through nor a file it reads by name.
+            let Some(EntryName::Utf8(name)) = entry_name(&entry.path().map_err(unreadable)?)?
+            else {
+                continue;
+            };
+            match held_kind(entry.header().entry_type()) {
+                Some(Kind::Other) => archive.hold(name, Held::Other)?,
+                Some(Kind::File)
+                    if name == metadata || name.rsplit('/').next() == Some(IGNORE_FILE) =>
+                {
+                    budget.take_file(&name, name.len())?;
+                    let contents = budget.read(&name, entry)?;
+                    archive.hold(name, Held::File(Some(contents.into())))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(archive)
+    }
+
+    /// The definition folder's metadata file, where it holds one.
+    pub fn metadata(&self, folder: &str) -> Option<&[u8]> {
+        match self.entries.get(&join(folder, METADATA_FILE)) {
+            Some(Held::File(Some(contents))) => Some(contents),
+            _ => None,
+        }
+    }
+
+    /// Read every file and directory at or beneath each of `wanted`, and
+    /// what lies on the way down to each.
+    ///
+    /// A file is read only where some definition folder rooted at a wanted
+    /// path would read it, and contents several paths share are held once,
+    /// within the bundle limits.
+    pub fn load(&mut self, tarball: &[u8], wanted: &[String]) -> Result<(), String> {
+        let beneath: Vec<String> = wanted.iter().map(|w| format!("{w}/")).collect();
+        let roots = |name: &str| -> Vec<&str> {
+            wanted
+                .iter()
+                .zip(&beneath)
+                .filter(|(w, b)| w.is_empty() || name == w.as_str() || name.starts_with(*b))
+                .map(|(w, _)| w.as_str())
+                .collect()
+        };
+        let on_the_way = |name: &str| {
+            let dir = format!("{name}/");
+            wanted.iter().any(|w| w.starts_with(&dir))
+        };
+        let mut budget = Budget::full();
+        let mut held: HashMap<u64, Vec<Arc<[u8]>>> = HashMap::new();
+        let mut cache = RulesCache::new();
+        let mut tar = open(tarball);
+        for entry in tar.entries().map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            let name = match entry_name(&entry.path().map_err(unreadable)?)? {
+                Some(EntryName::Utf8(name)) => name,
+                Some(EntryName::Other(lossy)) if !roots(&lossy).is_empty() => {
+                    return Err(format!(
+                        "the downloaded archive holds a non-UTF-8 path: {lossy}"
+                    ));
+                }
+                _ => continue,
+            };
+            let within = roots(&name);
+            if within.is_empty() && !on_the_way(&name) {
+                continue;
+            }
+            match held_kind(entry.header().entry_type()) {
+                Some(Kind::Dir) => self.hold(name, Held::Dir)?,
+                Some(Kind::File) => {
+                    if matches!(
+                        self.entries.get(&name),
+                        Some(Held::File(Some(_)) | Held::Other)
+                    ) {
+                        continue;
+                    }
+                    let mut read = false;
+                    for root in &within {
+                        if *root == name || !left_out(self, root, &name, &mut cache)? {
+                            read = true;
+                            break;
+                        }
+                    }
+                    let contents = if read {
+                        budget.take_file(&name, name.len())?;
+                        // Read against what one file may hold, so that
+                        // contents already held are not charged twice.
+                        let contents = Budget::full().read(&name, entry)?;
+                        Some(share(&mut held, &mut budget, &name, contents)?)
+                    } else {
+                        None
+                    };
+                    self.hold(name, Held::File(contents))?;
+                }
+                Some(Kind::Other) | None => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Hold `what` at `name`. A link stays a link whatever else the archive
+    /// claims is there, and a file and a directory at one path are refused.
+    fn hold(&mut self, name: String, what: Held) -> Result<(), String> {
+        match (self.entries.get(&name), &what) {
+            (None, _) | (Some(Held::File(None)), Held::File(_)) => {
+                self.entries.insert(name, what);
+            }
+            (Some(Held::Other), _) | (_, Held::Other) => {
+                self.entries.insert(name, Held::Other);
+            }
+            (Some(Held::Dir), Held::Dir) | (Some(Held::File(Some(_))), Held::File(_)) => {}
+            _ => {
+                return Err(format!(
+                    "the downloaded archive holds {name} as both a file and a directory"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Hold `contents`, once however many paths hold them: only contents not
+/// already held are taken from the budget.
+fn share(
+    held: &mut HashMap<u64, Vec<Arc<[u8]>>>,
+    budget: &mut Budget,
+    name: &str,
+    contents: Vec<u8>,
+) -> Result<Arc<[u8]>, String> {
+    let mut hasher = DefaultHasher::new();
+    contents.hash(&mut hasher);
+    let same = held.entry(hasher.finish()).or_default();
+    if let Some(existing) = same.iter().find(|h| h[..] == contents[..]) {
+        return Ok(existing.clone());
+    }
+    budget.take_bytes(name, contents.len())?;
+    let contents: Arc<[u8]> = contents.into();
+    same.push(contents.clone());
+    Ok(contents)
+}
+
+impl Tree for Archive {
+    fn kind(&self, path: &str) -> Result<Option<Kind>, String> {
+        if path.is_empty() {
+            return Ok(Some(Kind::Dir));
+        }
+        Ok(match self.entries.get(path) {
+            Some(Held::File(_)) => Some(Kind::File),
+            Some(Held::Dir) => Some(Kind::Dir),
+            Some(Held::Other) => Some(Kind::Other),
+            None => {
+                let beneath = format!("{path}/");
+                self.entries
+                    .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
+                    .next()
+                    .filter(|(p, _)| p.starts_with(&beneath))
+                    .map(|_| Kind::Dir)
+            }
+        })
+    }
+
+    fn entries(&self, dir: &str) -> Result<Vec<(Name, Kind)>, String> {
+        let beneath = if dir.is_empty() {
+            String::new()
+        } else {
+            format!("{dir}/")
+        };
+        // `a/b.txt` sorts between `a/b` and `a/b/c`, so the names beneath a
+        // directory are gathered as a set rather than by neighbour.
+        let mut names: BTreeSet<&str> = BTreeSet::new();
+        for (path, _) in self
+            .entries
+            .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
+        {
+            let Some(rest) = path.strip_prefix(&beneath) else {
+                break;
+            };
+            let name = rest.split('/').next().unwrap_or(rest);
+            if !name.is_empty() {
+                names.insert(name);
+            }
+        }
+        let mut found = Vec::with_capacity(names.len());
+        for name in names {
+            let kind = self.kind(&join(dir, name))?.expect("a listed name is held");
+            found.push((Name::Utf8(name.to_owned()), kind));
+        }
+        Ok(found)
+    }
+
+    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, String> {
+        match self.entries.get(path) {
+            Some(Held::File(Some(contents))) => budget.read(path, &contents[..]),
+            _ => Err(format!("{path} was not read from the downloaded archive")),
+        }
+    }
+
+    fn show(&self, path: &str) -> String {
+        path.to_owned()
+    }
+}
+
+/// The archive, decoded afresh for each pass rather than holding the
+/// decompressed repository.
+fn open(tarball: &[u8]) -> tar::Archive<flate2::read::GzDecoder<&[u8]>> {
+    tar::Archive::new(flate2::read::GzDecoder::new(tarball))
+}
+
+fn unreadable(e: std::io::Error) -> String {
+    format!("the downloaded archive is unreadable: {e}")
+}
+
+/// How an archive entry's type is held, or `None` for an entry that only
+/// carries headers for the next.
+fn held_kind(kind: tar::EntryType) -> Option<Kind> {
+    match kind {
+        tar::EntryType::Regular | tar::EntryType::Continuous => Some(Kind::File),
+        tar::EntryType::Directory => Some(Kind::Dir),
+        tar::EntryType::XGlobalHeader | tar::EntryType::XHeader => None,
+        _ => Some(Kind::Other),
+    }
+}
+
+/// An archive entry's path within the repository.
+enum EntryName {
+    Utf8(String),
+    /// A path that is not UTF-8, with each invalid sequence replaced.
+    /// Everything before the first of them is kept, so it is at or beneath a
+    /// path exactly when the path itself is.
+    Other(String),
+}
+
+/// An archive entry's path within the repository, `/`-separated, or `None`
+/// for GitHub's prefix directory itself.
+fn entry_name(path: &Path) -> Result<Option<EntryName>, String> {
+    // A path that is not plain cannot be placed in the repository at all, so
+    // whether a definition would read it cannot be known either, and the
+    // archive is refused whatever the entry. The prefix directory is checked
+    // too, so that a leading `..` is refused rather than dropped.
+    if path
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err(format!(
+            "the downloaded archive holds an entry outside the repository: {}",
+            path.display()
+        ));
+    }
+    let mut components = path.components();
+    components.next();
+    let rel = components.as_path();
+    if rel.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(match rel.to_str() {
+        Some(name) => EntryName::Utf8(name.to_owned()),
+        None => EntryName::Other(rel.to_string_lossy().into_owned()),
+    }))
+}
