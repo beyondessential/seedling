@@ -902,7 +902,7 @@ fn each_string_decoded_from_a_secret_is_withheld() {
 #[test]
 fn a_refusal_naming_a_secret_key_is_masked() {
     let (_, err) = evaluate_bundle(
-        crate::runtime::definition::Bundle::from_stored_script(
+        seedling_bundle::Bundle::from_stored_script(
             r#"
             let config = #{};
             config[app.param("token").secret(true).value()] = ();
@@ -926,7 +926,7 @@ fn a_refusal_naming_a_secret_key_is_masked() {
 fn each_decoded_string_counts_toward_the_derived_values_limit() {
     let evaluate = |max_derived_values: usize| {
         evaluate_bundle(
-            crate::runtime::definition::Bundle::from_stored_script(
+            seedling_bundle::Bundle::from_stored_script(
                 r#"std::decode_json(app.param("token").secret(true).value());"#,
             ),
             &[("token", r#"{"a": "x", "b": ["x", ""]}"#)],

@@ -66,6 +66,7 @@ miette = "7.6.0"
 semver = "1.0.28"
 base64 = "0.23.1"
 oci-client = "0.18.0"
+toml.workspace = true
 siphasher = "1.0.4"
 unicode-properties = { version = "0.1.5", default-features = false, features = ["general-category"] }
 strum = { version = "0.27.2", features = ["derive"] }
