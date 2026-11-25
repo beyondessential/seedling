@@ -240,7 +240,8 @@ When the CLI reports an error and checks nothing, because of an option it was gi
 | `validation` | a sample parameter value is rejected | the rejecting parameter and its reason, with one error for each such parameter |
 
 The location of an error is the file it lies in and, where it has one, the line within that file.
-For a file or folder source, the file MUST be given as the path the source names joined with the file's bundle path, and otherwise as the bundle path alone.
+For a file source, the file MUST be given as the path the source names.
+For a folder source, it MUST be given as the path the source names joined with the file's bundle path, and otherwise as the bundle path alone.
 
 Without `--json`, the CLI MUST print each error to standard error, beginning on a line of its own.
 An error with a location MUST begin with the file, then `:` and the line where it has one, then `: ` and the error's message.
