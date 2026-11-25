@@ -9,9 +9,16 @@ description = "Seedling app definition bundles: the bundle rules, content hash a
 base64 = "0.23.1"
 bytes = "1.12.1"
 flate2 = "1.1.11"
+ignore = { version = "0.4.34", optional = true }
 seedling-protocol = { path = "../protocol" }
 semver = "1.0.28"
 serde_json.workspace = true
 sha2.workspace = true
 tar = "0.4.46"
 toml.workspace = true
+
+[features]
+source = ["dep:ignore"]
+
+[dev-dependencies]
+tempfile = "3.27.0"

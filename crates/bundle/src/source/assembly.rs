@@ -8,9 +8,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use seedling_bundle::{METADATA_FILE, included, normalise_path};
-
 use super::tree::{Budget, Kind, Tree, VCS_METADATA_DIRS, locate, read_folder};
+use crate::{METADATA_FILE, included, normalise_path};
 
 /// What an include boundary is, for telling the operator a source lies
 /// outside it.

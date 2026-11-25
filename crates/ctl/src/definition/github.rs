@@ -3,10 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{
-    Bounds, Budget, assemble, read_folder, source_paths,
-    tree::{Archive, Kind, locate},
-};
+use seedling_bundle::source::read_archive_definition;
 
 /// A GitHub URL naming a folder: `https://github.com/<owner>/<repo>/tree/<rest>`,
 /// where `<rest>` is a ref followed by a path and the split between them is
@@ -114,40 +111,9 @@ pub(super) async fn download(
         .await
         .map_err(|e| format!("cannot download {tarball}: {e}"))?;
 
-    let files = read_definition(&bytes, &folder)?;
+    let files = read_archive_definition(&bytes, &folder)?;
     if files.is_empty() {
         return Err(format!("{} holds no files", url.url));
     }
     Ok((files, (url.url.clone(), sha)))
-}
-
-/// Read the definition at `folder` out of a GitHub tarball, with what
-/// its include table names from elsewhere in the repository.
-///
-/// The repository is read in memory, and only the folder and its sources
-/// are held, so a repository far larger than any definition costs no more
-/// than the definition does.
-// spec: CLI#definition-sources
-// spec: CLI#include-assembly
-pub(super) fn read_definition(
-    tarball: &[u8],
-    folder: &str,
-) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    // The folder comes from the URL, so it is held to the repository as
-    // an archive entry is.
-    let folder = seedling_bundle::normalise_path(folder)
-        .map_err(|e| format!("the URL's folder lies outside the repository: {e}"))?;
-    let mut archive = Archive::scan(tarball, &folder)?;
-    let mut wanted = vec![folder.clone()];
-    if let Some(metadata) = archive.metadata(&folder) {
-        wanted.extend(source_paths(&folder, metadata)?);
-    }
-    archive.load(tarball, &wanted)?;
-    if locate(&archive, &folder)? != Some(Kind::Dir) {
-        return Ok(BTreeMap::new());
-    }
-    let mut budget = Budget::full();
-    let mut files = read_folder(&archive, &folder, &mut budget)?;
-    assemble(&mut files, &archive, &folder, Bounds::Archive, &mut budget)?;
-    Ok(files)
 }

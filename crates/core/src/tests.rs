@@ -30,7 +30,7 @@ mod bundle;
 mod collection;
 mod constants;
 mod container;
-mod definitions;
+mod demos;
 mod deployment;
 mod description;
 mod duration;

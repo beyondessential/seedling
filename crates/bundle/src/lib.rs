@@ -17,6 +17,8 @@ use sha2::{Digest, Sha256};
 
 pub use version::VersionRequirement;
 
+#[cfg(feature = "source")]
+pub mod source;
 mod version;
 
 /// Upper bound on a bundle's total file size.
