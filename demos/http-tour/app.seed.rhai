@@ -111,10 +111,12 @@ let unlimited = web.route("/unlimited").rate_limit(false);
 // Header operations, every kind in both directions:
 //   curl -k -i https://http-tour.demo.internal/headers
 // The echo shows Host and User-Agent replaced, Accept removed, two
-// X-Tour-Note lines, and X-Tour replaced, since a route's operation wins for
-// each header it names while the service's stand for the rest. The response
-// carries two Set-Cookie lines, no Date, and Cache-Control from the second
-// headers() call, which layers over the first by header name.
+// X-Tour-Note lines, and X-Tour replaced. The response carries two Set-Cookie
+// lines, Cache-Control from the second headers() call, which layers over the
+// first by header name, and no X-Tour-Served-By. A route's operation wins
+// for each header it names, so the service's X-Tour and X-Tour-Served-By
+// operations do not apply here, while any header the route leaves alone
+// would still take the service's.
 let headers = web.route("/headers/")
     .headers(#{
         request: #{
@@ -129,7 +131,7 @@ let headers = web.route("/headers/")
         response: #{
             replace: #{ "Cache-Control": "no-store" },
             add: #{ "Set-Cookie": ["tour=headers; Path=/headers", "step=1; Path=/headers"] },
-            remove: ["Date"],
+            remove: ["X-Tour-Served-By"],
         },
     })
     .headers(#{ response: #{ replace: #{ "Cache-Control": "no-cache" } } });

@@ -185,9 +185,10 @@ app.deployment("whoami")
     .http(8080, web)
     .http(8080, site_target.http(80));
 
-// Certificates are obtained for every TLS-terminating ingress when the app
-// is installed. This action starts obtaining them ahead of time and waits
-// until each is served; the pass-through ingress has none and is skipped.
+// The runtime obtains a certificate for every TLS-terminating ingress on its
+// own. This action starts obtaining them and waits until each is served, as
+// a step that must not go ahead without them would; the pass-through ingress
+// needs none and is skipped.
 //   seedling-ctl apps action protocol-tour warm-certs
 app.on_action("warm-certs", |rt, _params| {
     rt.warm_certs(app).ready("5m");
