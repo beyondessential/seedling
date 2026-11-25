@@ -14,44 +14,67 @@ pub mod system;
 )]
 mod tests;
 
-/// Configurable limits for the Rhai script engine.
+/// Configurable limits for the Rhai script engine, read from the options the
+/// runtime and the CLI's definition check share.
 // spec: LIM#limits
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, clap::Args)]
 pub struct ScriptLimits {
+    /// Maximum operations per script evaluation (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-operations", default_value_t = 100_000)]
     pub max_operations: u64,
+    /// Maximum function call nesting depth (at least 1)
     // spec: LIM#limits
+    #[arg(long = "script-max-call-depth", default_value_t = 64, value_parser = parse_call_depth)]
     pub max_call_levels: usize,
+    /// Maximum expression nesting depth (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-expr-depth", default_value_t = 64)]
     pub max_expr_depth: usize,
+    /// Maximum string size in bytes (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-string-size", default_value_t = 1_048_576)]
     pub max_string_size: usize,
+    /// Maximum array size in elements (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-array-size", default_value_t = 10_000)]
     pub max_array_size: usize,
+    /// Maximum object map size in entries (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-map-size", default_value_t = 10_000)]
     pub max_map_size: usize,
+    /// Maximum calls to a derivation helper per evaluation (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-derived-values", default_value_t = 1_000)]
     pub max_derived_values: usize,
+    /// Maximum calls to a password hash helper per evaluation (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-password-hashes", default_value_t = 16)]
     pub max_password_hashes: usize,
+    /// Maximum bytes of patterns compiled by `std::regex` per evaluation (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-regex-compiled-size", default_value_t = 33_554_432)]
     pub max_regex_compiled_size: usize,
 }
 
 impl Default for ScriptLimits {
     fn default() -> Self {
-        Self {
-            max_operations: 100_000,
-            max_call_levels: 64,
-            max_expr_depth: 64,
-            max_string_size: 1_048_576,
-            max_array_size: 10_000,
-            max_map_size: 10_000,
-            max_derived_values: 1_000,
-            max_password_hashes: 16,
-            max_regex_compiled_size: 33_554_432,
+        #[derive(clap::Parser)]
+        struct Defaults {
+            #[command(flatten)]
+            limits: ScriptLimits,
         }
+        <Defaults as clap::Parser>::parse_from(["seedling"]).limits
     }
+}
+
+// spec: LIM#limits
+fn parse_call_depth(raw: &str) -> Result<usize, String> {
+    let depth: usize = raw.parse().map_err(|e| format!("{e}"))?;
+    if depth == 0 {
+        return Err("a call depth of 0 would allow no function calls".to_owned());
+    }
+    Ok(depth)
 }
 
 impl ScriptLimits {

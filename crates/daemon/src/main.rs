@@ -59,7 +59,7 @@ struct Args {
     logging: LoggingArgs,
 
     #[command(flatten)]
-    script_limits: ScriptLimitArgs,
+    script_limits: seedling_core::ScriptLimits,
 
     /// Maximum number of concurrently active bidirectional streams across all
     /// connections. Limits overall OI concurrency.
@@ -165,70 +165,6 @@ impl From<&GcArgs> for InstanceGcConfig {
     }
 }
 
-#[derive(clap::Args)]
-struct ScriptLimitArgs {
-    /// Maximum operations per script evaluation (0 = unlimited)
-    #[arg(long, default_value_t = 100_000)]
-    script_max_operations: u64,
-
-    /// Maximum function call nesting depth (at least 1)
-    #[arg(long, default_value_t = 64, value_parser = parse_call_depth)]
-    script_max_call_depth: usize,
-
-    /// Maximum expression nesting depth (0 = unlimited)
-    #[arg(long, default_value_t = 64)]
-    script_max_expr_depth: usize,
-
-    /// Maximum string size in bytes (0 = unlimited)
-    #[arg(long, default_value_t = 1_048_576)]
-    script_max_string_size: usize,
-
-    /// Maximum array size in elements (0 = unlimited)
-    #[arg(long, default_value_t = 10_000)]
-    script_max_array_size: usize,
-
-    /// Maximum object map size in entries (0 = unlimited)
-    #[arg(long, default_value_t = 10_000)]
-    script_max_map_size: usize,
-
-    /// Maximum calls to a derivation helper per evaluation (0 = unlimited)
-    #[arg(long, default_value_t = 1_000)]
-    script_max_derived_values: usize,
-
-    /// Maximum calls to a password hash helper per evaluation (0 = unlimited)
-    #[arg(long, default_value_t = 16)]
-    script_max_password_hashes: usize,
-
-    /// Maximum bytes of patterns compiled by `std::regex` per evaluation (0 = unlimited)
-    #[arg(long, default_value_t = 33_554_432)]
-    script_max_regex_compiled_size: usize,
-}
-
-// spec: LIM#limits
-fn parse_call_depth(raw: &str) -> Result<usize, String> {
-    let depth: usize = raw.parse().map_err(|e| format!("{e}"))?;
-    if depth == 0 {
-        return Err("a call depth of 0 would allow no function calls".to_owned());
-    }
-    Ok(depth)
-}
-
-impl From<ScriptLimitArgs> for seedling_core::ScriptLimits {
-    fn from(a: ScriptLimitArgs) -> Self {
-        Self {
-            max_operations: a.script_max_operations,
-            max_call_levels: a.script_max_call_depth,
-            max_expr_depth: a.script_max_expr_depth,
-            max_string_size: a.script_max_string_size,
-            max_array_size: a.script_max_array_size,
-            max_map_size: a.script_max_map_size,
-            max_derived_values: a.script_max_derived_values,
-            max_password_hashes: a.script_max_password_hashes,
-            max_regex_compiled_size: a.script_max_regex_compiled_size,
-        }
-    }
-}
-
 /// Create the tmpfs-volume root if it is absent. Its contents are left as they
 /// are: a restart of the runtime while the host stays up must not lose them.
 // spec: ACTU#volume-storage
@@ -296,7 +232,7 @@ async fn main() {
         .install_default()
         .expect("ring crypto provider already installed");
 
-    let script_limits: seedling_core::ScriptLimits = args.script_limits.into();
+    let script_limits = args.script_limits;
 
     let data_dir = args.data_dir;
 
@@ -1665,7 +1601,7 @@ mod tests {
     fn a_call_depth_of_zero_is_refused() {
         assert!(Args::try_parse_from(["seedling", "--script-max-call-depth", "0"]).is_err());
         let args = Args::try_parse_from(["seedling", "--script-max-call-depth", "3"]).unwrap();
-        assert_eq!(args.script_limits.script_max_call_depth, 3);
+        assert_eq!(args.script_limits.max_call_levels, 3);
     }
 
     // spec: LIM#limits
@@ -1683,9 +1619,9 @@ mod tests {
             "0",
         ])
         .unwrap();
-        assert_eq!(args.script_limits.script_max_operations, 0);
-        assert_eq!(args.script_limits.script_max_password_hashes, 0);
-        assert_eq!(args.script_limits.script_max_regex_compiled_size, 0);
+        assert_eq!(args.script_limits.max_operations, 0);
+        assert_eq!(args.script_limits.max_password_hashes, 0);
+        assert_eq!(args.script_limits.max_regex_compiled_size, 0);
     }
 
     fn iface(name: &str, ip: [u8; 4]) -> Interface {
