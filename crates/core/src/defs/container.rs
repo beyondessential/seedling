@@ -3,7 +3,7 @@ use std::{
     path::{Component, PathBuf},
 };
 
-use rhai::{Array, EvalAltResult, TypeBuilder};
+use rhai::{Array, Dynamic, EvalAltResult, TypeBuilder};
 use seedling_protocol::env::EnvVar;
 
 const FORBIDDEN_MOUNTPOINTS: &[&str] = &[
@@ -146,10 +146,14 @@ pub fn image_registry(image: &str) -> Option<&str> {
 
 use super::{
     Freezable, Holder,
+    duration::Duration,
     enums::OnExit,
     quantity::parse_quantity,
     resource::ResourceId,
-    take::{reject_unknown_keys, take_int_in_range, take_map, take_string, take_string_array},
+    take::{
+        reject_unknown_keys, take_int_in_range, take_map, take_string, take_string_array,
+        take_whole_secs,
+    },
     volume::{ExternalVolume, Volume},
 };
 
@@ -212,23 +216,17 @@ fn validate_capability(cap: &str) -> Result<String, Box<EvalAltResult>> {
     }
 }
 
-/// A healthcheck's number of seconds, which may not be below `least`.
-// spec: DEP#check-timing
-fn take_secs(
+/// A healthcheck duration in whole seconds, which may not be below `least`.
+// spec: DEP#health-checks
+fn take_check_secs(
     map: &mut rhai::Map,
     key: &str,
     default: u64,
     least: u64,
 ) -> Result<u64, Box<EvalAltResult>> {
-    let Some(value) = map.remove(key) else {
-        return Ok(default);
-    };
-    let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
-        format!("healthcheck `{key}` must be an integer number of seconds, got {t}").into()
-    })?;
-    match u64::try_from(n) {
-        Ok(secs) if secs >= least => Ok(secs),
-        _ => Err(format!("healthcheck `{key}` must be at least {least}, got {n}").into()),
+    match map.remove(key) {
+        Some(value) => take_whole_secs(key, value, least..=Duration::MAX_SECS),
+        None => Ok(default),
     }
 }
 
@@ -310,9 +308,10 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
     };
 
     // spec: DEP#check-timing
-    let interval_secs = take_secs(&mut map, "interval", HEALTHCHECK_DEFAULT_INTERVAL_SECS, 1)?;
-    let timeout_secs = take_secs(&mut map, "timeout", HEALTHCHECK_DEFAULT_TIMEOUT_SECS, 1)?;
-    let start_period_secs = take_secs(
+    let interval_secs =
+        take_check_secs(&mut map, "interval", HEALTHCHECK_DEFAULT_INTERVAL_SECS, 1)?;
+    let timeout_secs = take_check_secs(&mut map, "timeout", HEALTHCHECK_DEFAULT_TIMEOUT_SECS, 1)?;
+    let start_period_secs = take_check_secs(
         &mut map,
         "start_period",
         HEALTHCHECK_DEFAULT_START_PERIOD_SECS,
@@ -709,13 +708,11 @@ impl ContainerDef {
         // spec: CTR#stopping
         builder.with_fn(
             "stop_timeout",
-            move |this: &mut T, secs: i64| -> Result<T, Box<EvalAltResult>> {
+            move |this: &mut T, timeout: Dynamic| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                ext(this).lock().stop_timeout_secs = Some(take_int_in_range::<u32>(
-                    "stop_timeout",
-                    secs,
-                    1..=i64::from(u32::MAX),
-                )?);
+                let secs = take_whole_secs("stop_timeout", timeout, 1..=u64::from(u32::MAX))?;
+                ext(this).lock().stop_timeout_secs =
+                    Some(u32::try_from(secs).expect("take_whole_secs holds it to the u32 range"));
                 Ok(this.clone())
             },
         );

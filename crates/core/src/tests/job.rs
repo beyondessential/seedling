@@ -11,7 +11,7 @@ fn job_with_deadline() {
         app.job("migrate")
             .image("docker.io/library/db-tools:1.0")
             .command("migrate")
-            .deadline(300);
+            .deadline("300s");
     "#,
     );
     let def = app.def.load();
@@ -76,7 +76,7 @@ fn job_implements_pod_interface() {
 fn job_deadline_rejects_zero() {
     let _ = run_test_script_err(
         r#"
-        app.job("bad").deadline(0);
+        app.job("bad").deadline("0s");
     "#,
     );
 }
@@ -86,7 +86,17 @@ fn job_deadline_rejects_zero() {
 fn job_deadline_rejects_negative() {
     let _ = run_test_script_err(
         r#"
-        app.job("bad").deadline(-10);
+        app.job("bad").deadline("-10s");
     "#,
     );
+}
+
+// spec: JOB#deadline
+// spec: DUR#duration-arguments
+#[test]
+fn job_deadline_rejects_a_number_and_a_fraction_of_a_second() {
+    let number = run_test_script_err(r#"app.job("bad").deadline(10);"#).to_string();
+    assert!(number.contains("`deadline`"), "{number}");
+    let fraction = run_test_script_err(r#"app.job("bad").deadline("1500ms");"#).to_string();
+    assert!(fraction.contains("whole number of seconds"), "{fraction}");
 }

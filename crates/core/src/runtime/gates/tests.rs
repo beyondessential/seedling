@@ -243,7 +243,7 @@ fn a_valid_success_whose_check_could_not_be_run_is_undetermined() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
     let def = def(r#"
-        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline("5s");
         let migrate = app.gate("migrate").key("1.0.0").check(probe);
         app.deployment("api").image("docker.io/library/nginx:1").after(migrate);
     "#);
@@ -538,7 +538,7 @@ fn a_job_target_is_ready_by_its_most_recent_instances_outcome() {
     use crate::runtime::{history::insert_observation, identity::ResourceInstance};
     let db = Db::open_in_memory().unwrap();
     let def = def(r#"
-        let tool = app.job("tool").image("docker.io/library/tools:1").deadline(60);
+        let tool = app.job("tool").image("docker.io/library/tools:1").deadline("60s");
         app.gate("tooled").key(1).after(tool);
         app.deployment("web").image("docker.io/library/nginx:1").after(tool);
         "#);
@@ -823,7 +823,7 @@ fn a_gate_with_a_check_clears_a_dependant_to_start_from_stopped_only_once_a_chec
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
     let def = def(r#"
-        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(30);
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline("30s");
         let ready = app.gate("ready").key(1).check(probe);
         app.deployment("web").image("docker.io/library/nginx:1").after(ready);
         "#);

@@ -333,7 +333,7 @@ let start_intermediate = |rt| {
         .command(IDLE_CMD);
 
     let inter = rt.start(builder);
-    inter.running(60);
+    inter.running("60s");
     inter
 };
 
@@ -428,7 +428,7 @@ let database_check = app.job("database-check")
     .command(["sh", "-c",
         `psql -d postgres -tA -c "SELECT 1 FROM pg_database WHERE datname = '${sql_ident.call(db_name.value())}'" | grep -qx 1`
     ])
-    .deadline(30);
+    .deadline("30s");
 
 // The server waits on a database the operator's postgres fulfils, so this gate
 // runs until it is reachable and holds the migration back until then.

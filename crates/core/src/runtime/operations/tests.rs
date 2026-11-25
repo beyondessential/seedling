@@ -1025,7 +1025,7 @@ fn rt_start_and_rt_stop_leave_out_the_job_of_a_gates_check() {
     use crate::runtime::barrier::replay::DbActionLog;
 
     let script = r#"
-        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline("5s");
         app.gate("ready").key(1).check(probe).run(|rt| { rt.start(app); });
         app.deployment("plain").image("docker.io/library/nginx:1");
         app.on_action("poke", |rt, _p| { rt.start(app); });

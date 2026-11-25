@@ -84,23 +84,6 @@ pub fn take_whole_secs(
     Ok(secs)
 }
 
-/// Convert an integer or a finite floating-point number to a `f64`, or throw
-/// naming `what` and the actual type.
-pub fn take_number(what: &str, value: Dynamic) -> Result<f64, Box<EvalAltResult>> {
-    // take: dispatch
-    if let Ok(n) = value.as_int() {
-        return Ok(n as f64);
-    }
-    // take: dispatch
-    if let Ok(f) = value.as_float() {
-        if f.is_finite() {
-            return Ok(f);
-        }
-        return Err(format!("`{what}` must be a finite number, got {f}").into());
-    }
-    Err(format!("`{what}` must be a number, got {}", value.type_name()).into())
-}
-
 /// Convert to a map, or throw naming `what` and the actual type.
 pub fn take_map(what: &str, value: Dynamic) -> Result<rhai::Map, Box<EvalAltResult>> {
     let type_name = value.type_name();
@@ -260,21 +243,42 @@ mod tests {
         );
     }
 
+    // spec: DUR#duration-arguments
     #[test]
-    fn take_number_takes_integers_and_finite_floats_only() {
-        assert_eq!(take_number("interval", Dynamic::from(3_i64)).unwrap(), 3.0);
+    fn take_duration_takes_a_duration_or_its_text_only() {
+        let parsed = Duration::parse("90s").unwrap();
         assert_eq!(
-            take_number("interval", Dynamic::from(0.5_f64)).unwrap(),
-            0.5
+            take_duration("interval", Dynamic::from(parsed)).unwrap(),
+            parsed
+        );
+        assert_eq!(
+            take_duration("interval", Dynamic::from("1m 30s")).unwrap(),
+            parsed
         );
         for bad in [
-            Dynamic::from(f64::NAN),
-            Dynamic::from(f64::INFINITY),
-            Dynamic::from("3".to_owned()),
+            Dynamic::from(90_i64),
+            Dynamic::from(1.5_f64),
+            Dynamic::from("90"),
         ] {
-            let message = take_number("interval", bad).unwrap_err().to_string();
+            let message = take_duration("interval", bad).unwrap_err().to_string();
             assert!(message.contains("`interval`"), "{message}");
         }
+    }
+
+    // spec: DUR#duration-arguments
+    #[test]
+    fn take_whole_secs_refuses_a_fraction_and_holds_to_its_range() {
+        assert_eq!(
+            take_whole_secs("deadline", Dynamic::from("2m"), 1..=600).unwrap(),
+            120
+        );
+        let fraction = take_whole_secs("deadline", Dynamic::from("1500ms"), 1..=600).unwrap_err();
+        assert!(
+            fraction.to_string().contains("whole number of seconds"),
+            "{fraction}"
+        );
+        let short = take_whole_secs("deadline", Dynamic::from("0s"), 1..=600).unwrap_err();
+        assert!(short.to_string().contains("from 1s to 10m"), "{short}");
     }
 
     #[test]

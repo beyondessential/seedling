@@ -45,7 +45,7 @@ fn workload(kind: ResourceKind, name: &str) -> ResourceId {
 const WORKLOADS: &str = r#"
     let api = app.deployment("api").image("docker.io/library/nginx:1");
     let web = app.deployment("web").image("docker.io/library/nginx:1");
-    let tool = app.job("tool").image("docker.io/library/tools:1").deadline(60);
+    let tool = app.job("tool").image("docker.io/library/tools:1").deadline("60s");
 "#;
 
 // spec: GATE#declaration
@@ -264,10 +264,10 @@ fn a_check_is_a_named_job_with_a_deadline_and_an_optional_interval() {
     let app = run_test_script_app(&format!(
         r#"{WORKLOADS}
         app.gate("migrate").check(tool);
-        app.job("probe").image("docker.io/library/tools:1").deadline(5);
-        app.job("sniff").image("docker.io/library/tools:1").deadline(5);
-        app.gate("seed").check(app.job("probe"), #{{ interval: 30 }});
-        app.gate("later").check(app.job("sniff"), #{{ interval: 1.5 }});
+        app.job("probe").image("docker.io/library/tools:1").deadline("5s");
+        app.job("sniff").image("docker.io/library/tools:1").deadline("5s");
+        app.gate("seed").check(app.job("probe"), #{{ interval: "30s" }});
+        app.gate("later").check(app.job("sniff"), #{{ interval: "1m 30s" }});
         "#
     ));
     let def = app.def.load();
@@ -280,7 +280,7 @@ fn a_check_is_a_named_job_with_a_deadline_and_an_optional_interval() {
     );
     assert_eq!(
         def.gates["later"].check.as_ref().unwrap().interval,
-        Some(std::time::Duration::from_millis(1500))
+        Some(std::time::Duration::from_secs(90))
     );
 }
 
@@ -289,7 +289,7 @@ fn a_check_is_a_named_job_with_a_deadline_and_an_optional_interval() {
 fn calling_check_again_replaces_the_check() {
     let app = run_test_script_app(&format!(
         r#"{WORKLOADS}
-        app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        app.job("probe").image("docker.io/library/tools:1").deadline("5s");
         app.gate("migrate").check(tool).check(app.job("probe"));
         "#
     ));
@@ -325,13 +325,13 @@ fn a_check_that_is_not_a_named_job_with_a_deadline_throws() {
 #[test]
 fn a_check_takes_only_an_interval_of_at_least_a_second() {
     for (options, expected) in [
-        (r#"#{ interval: 0 }"#, "`interval`"),
-        (r#"#{ interval: 0.5 }"#, "`interval`"),
-        (r#"#{ interval: -3 }"#, "`interval`"),
+        (r#"#{ interval: "0s" }"#, "`interval`"),
+        (r#"#{ interval: "1500ms" }"#, "whole number of seconds"),
+        (r#"#{ interval: "-3s" }"#, "`interval`"),
         (r#"#{ interval: "5" }"#, "`interval`"),
-        (r#"#{ interval: 0.0 / 0.0 }"#, "`interval`"),
-        (r#"#{ every: 5 }"#, "every"),
-        (r#"#{ interval: 5, extra: 1 }"#, "extra"),
+        (r#"#{ interval: 5 }"#, "`interval`"),
+        (r#"#{ every: "5s" }"#, "every"),
+        (r#"#{ interval: "5s", extra: 1 }"#, "extra"),
     ] {
         let err = run_test_script_err(&format!(
             r#"{WORKLOADS}
@@ -359,7 +359,7 @@ fn a_job_checks_one_gate() {
 fn a_gate_may_declare_its_own_check_again() {
     run_test_script_app(&format!(
         r#"{WORKLOADS}
-        app.gate("migrate").check(tool).check(tool, #{{ interval: 10 }});"#
+        app.gate("migrate").check(tool).check(tool, #{{ interval: "10s" }});"#
     ));
 }
 
@@ -723,7 +723,7 @@ fn evaluating_the_same_definition_twice_gives_equal_gates() {
     let script = &format!(
         r#"{WORKLOADS}
         let g = app.gate("migrate").key(#{{a: 1}}).exclusive(app.select(#{{ types: [ResourceType.Deployment] }}))
-            .run(|rt| {{}}).check(tool, #{{ interval: 5 }});
+            .run(|rt| {{}}).check(tool, #{{ interval: "5s" }});
         api.after(g);"#
     );
     let first = evaluated(script);

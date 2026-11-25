@@ -691,7 +691,7 @@ fn a_validator_cannot_change_the_app_or_its_resources() {
         r#"dep.stop_signal("SIGTERM")"#,
         r#"dep.description("changed")"#,
         r#"job.image("registry.example/migrate:1")"#,
-        r#"job.deadline(60)"#,
+        r#"job.deadline("60s")"#,
         r#"svc.http(8080)"#,
         r#"svc.description("changed")"#,
         r#"svc.ingress("other.example.com", 443)"#,
@@ -977,7 +977,7 @@ fn default_value_takes_a_boolean_or_integer_as_its_canonical_form() {
     assert!(
         run_test_script_err(r#"app.param("xyz").default_value(1.5);"#)
             .to_string()
-            .contains("a string, a boolean or an integer")
+            .contains("a string, a boolean, an integer or a Duration")
     );
 }
 

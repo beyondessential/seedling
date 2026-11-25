@@ -202,7 +202,7 @@ fn gate_check_unavailable_stands_until_a_check_runs_to_an_outcome() {
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
     let def = def(r#"
-        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline("5s");
         let ready = app.gate("ready").key(1).check(probe);
         app.deployment("web").image("docker.io/library/nginx:1").after(ready);
         "#);
@@ -252,7 +252,7 @@ fn a_check_that_could_not_be_run_is_cleared_once_the_definition_no_longer_declar
     let db = Db::open_in_memory().unwrap();
     let cipher = Cipher::for_tests();
     let checked = def(r#"
-        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline("5s");
         let ready = app.gate("ready").key(1).check(probe);
         app.deployment("web").image("docker.io/library/nginx:1").after(ready);
         "#);
@@ -762,7 +762,7 @@ fn a_queued_run_of_a_gate_the_definition_no_longer_declares_is_withdrawn() {
 // ---------------------------------------------------------------------------
 
 const CHECKED: &str = r#"
-    let probe = app.job("probe").image("docker.io/library/tools:1").deadline(60);
+    let probe = app.job("probe").image("docker.io/library/tools:1").deadline("60s");
     let ready = app.gate("ready").key(1).check(probe);
     app.deployment("web").image("docker.io/library/nginx:1.29").after(ready);
 "#;
@@ -897,7 +897,7 @@ fn a_check_that_fails_invalidates_the_last_success_so_the_gate_is_run_again() {
 // spec: GRUN#checks
 #[test]
 fn a_check_with_an_interval_runs_every_interval_while_no_run_is_in_progress() {
-    let oi = installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: 1 })"));
+    let oi = installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: \"1s\" })"));
     let (def, cipher) = {
         let reg = oi.state.registry.read();
         (
@@ -932,7 +932,7 @@ fn a_check_with_an_interval_runs_every_interval_while_no_run_is_in_progress() {
 // spec: GRUN#checks
 #[test]
 fn a_check_with_an_interval_runs_for_an_unsatisfied_gate_whose_run_is_queued() {
-    let oi = installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: 1 })"));
+    let oi = installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: \"1s\" })"));
     let (def, cipher) = {
         let reg = oi.state.registry.read();
         (
@@ -985,7 +985,8 @@ fn a_check_with_an_interval_runs_for_an_unsatisfied_gate_whose_run_is_queued() {
 #[test]
 fn an_interval_check_is_due_from_the_last_check_the_record_holds_after_a_restart() {
     for (checked_ago, due) in [(120, true), (0, false)] {
-        let oi = installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: 60 })"));
+        let oi =
+            installed(&CHECKED.replace("check(probe)", "check(probe, #{ interval: \"60s\" })"));
         let key = {
             let reg = oi.state.registry.read();
             digest(

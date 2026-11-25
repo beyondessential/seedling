@@ -1,11 +1,13 @@
-use rhai::{CustomType, EvalAltResult, TypeBuilder};
+use rhai::{CustomType, Dynamic, EvalAltResult, TypeBuilder};
 
 use crate::runtime::barrier::runtime::is_in_action_closure;
 
 use super::{
     Freezable, Holder,
+    duration::Duration,
     pod::PodDef,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
+    take::take_whole_secs,
 };
 use crate::runtime::identity::InstanceId;
 
@@ -66,12 +68,10 @@ impl CustomType for Job {
         // spec: JOB#deadline
         builder.with_fn(
             "deadline",
-            |this: &mut Self, seconds: i64| -> Result<Job, Box<EvalAltResult>> {
+            |this: &mut Self, deadline: Dynamic| -> Result<Job, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                if seconds <= 0 {
-                    return Err("deadline must be a positive number of seconds".into());
-                }
-                this.def.lock().deadline = Some(seconds as u64);
+                let secs = take_whole_secs("deadline", deadline, 1..=Duration::MAX_SECS)?;
+                this.def.lock().deadline = Some(secs);
                 Ok(this.clone())
             },
         );

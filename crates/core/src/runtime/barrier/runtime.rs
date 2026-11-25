@@ -10,6 +10,8 @@ use seedling_protocol::names::AppName;
 use crate::defs::app::AppDef;
 use crate::defs::collection::Selector;
 use crate::defs::container::canonicalise_signal_name;
+use crate::defs::duration::Duration;
+use crate::defs::take::take_whole_secs;
 use crate::defs::volume::{
     ExternalVolume, OperationVolumeBinding, Volume, validate_volume_write_path,
 };
@@ -27,25 +29,14 @@ use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 /// Default deadline for `.scheduled()` — a pod not scheduled inside this
 /// window almost always indicates a cluster-level problem, not a slow workload.
 // spec: RT#barriers
-/// Resolve an explicit deadline argument against the state's default.
+/// Read an explicit deadline argument, a duration in whole seconds.
 ///
-/// `RT#barriers` says the argument must be a positive integer
-/// number of seconds, and that zero or absent means the state's default.
-/// Both used to go through `d.max(0) as u64`, so `0` became `Some(0)` — which
-/// the `elapsed >= d` check trips on the very next pass, the exact opposite
-/// of the documented fallback. A script writing `ready(0)` expecting the
-/// default 30s got "Barrier deadline of 0s exceeded" about two seconds later.
-///
-/// A negative is not a deadline at all, and the defs layer's rule is to throw
-/// on malformed input rather than coerce it into something that means
-/// something else.
+/// A zero deadline is refused rather than read as the state's default: the
+/// form without a deadline already selects the default, and a zero that
+/// arrived computed would otherwise fail the barrier on its next pass.
 // spec: RT#barriers
-fn resolve_deadline(d: i64, default_secs: u64) -> Result<u64, Box<EvalAltResult>> {
-    match d {
-        0 => Ok(default_secs),
-        d if d < 0 => Err(format!("deadline must be a positive number of seconds, got {d}").into()),
-        d => Ok(d as u64),
-    }
+fn take_deadline(deadline: Dynamic) -> Result<u64, Box<EvalAltResult>> {
+    take_whole_secs("deadline", deadline, 1..=Duration::MAX_SECS)
 }
 
 pub const DEFAULT_SCHEDULED_DEADLINE_SECS: u64 = 30;
@@ -2198,8 +2189,9 @@ impl CustomType for RuntimeInstance {
                 "stop",
                 |this: &mut Self,
                  resources: Dynamic,
-                 deadline: i64|
+                 deadline: Dynamic|
                  -> Result<(), Box<EvalAltResult>> {
+                    let deadline = take_deadline(deadline)?;
                     let extracted = this
                         .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
@@ -2210,7 +2202,6 @@ impl CustomType for RuntimeInstance {
                         })?;
                     // spec: RT#resources-a-gate-holds
                     let extracted = this.without_held(extracted)?;
-                    let deadline = resolve_deadline(deadline, default_stop_deadline(&extracted))?;
                     let instances = extracted.into_iter().map(|(r, _)| r).collect();
                     this.do_stop(instances, Some(deadline))
                 },
@@ -2948,12 +2939,9 @@ impl CustomType for Started {
             )
             .with_fn(
                 "scheduled",
-                |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
+                |this: &mut Self, d: Dynamic| -> Result<Started, Box<EvalAltResult>> {
                     this.refuse_on_warm("scheduled")?;
-                    this.check_barrier(
-                        LifecycleState::Scheduled,
-                        Some(resolve_deadline(d, DEFAULT_SCHEDULED_DEADLINE_SECS)?),
-                    )
+                    this.check_barrier(LifecycleState::Scheduled, Some(take_deadline(d)?))
                 },
             )
             .with_fn(
@@ -2965,12 +2953,9 @@ impl CustomType for Started {
             )
             .with_fn(
                 "running",
-                |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
+                |this: &mut Self, d: Dynamic| -> Result<Started, Box<EvalAltResult>> {
                     this.refuse_on_warm("running")?;
-                    this.check_barrier(
-                        LifecycleState::Running,
-                        Some(resolve_deadline(d, DEFAULT_RUNNING_DEADLINE_SECS)?),
-                    )
+                    this.check_barrier(LifecycleState::Running, Some(take_deadline(d)?))
                 },
             )
             .with_fn(
@@ -2981,11 +2966,8 @@ impl CustomType for Started {
             )
             .with_fn(
                 "ready",
-                |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
-                    this.check_barrier(
-                        LifecycleState::Ready,
-                        Some(resolve_deadline(d, DEFAULT_READY_DEADLINE_SECS)?),
-                    )
+                |this: &mut Self, d: Dynamic| -> Result<Started, Box<EvalAltResult>> {
+                    this.check_barrier(LifecycleState::Ready, Some(take_deadline(d)?))
                 },
             )
             // spec: RT#barriers
@@ -3009,12 +2991,9 @@ impl CustomType for Started {
             )
             .with_fn(
                 "terminated",
-                |this: &mut Self, d: i64| -> Result<Termination, Box<EvalAltResult>> {
+                |this: &mut Self, d: Dynamic| -> Result<Termination, Box<EvalAltResult>> {
                     this.refuse_on_warm("terminated")?;
-                    this.check_barrier(
-                        LifecycleState::Terminated,
-                        Some(resolve_deadline(d, DEFAULT_TERMINATED_DEADLINE_SECS)?),
-                    )?;
+                    this.check_barrier(LifecycleState::Terminated, Some(take_deadline(d)?))?;
                     Ok(this.compute_termination())
                 },
             )
@@ -3227,7 +3206,7 @@ mod tests {
     use super::{
         DEFAULT_READY_DEADLINE_SECS, DEFAULT_RUNNING_DEADLINE_SECS,
         DEFAULT_SCHEDULED_DEADLINE_SECS, DEFAULT_TERMINATED_DEADLINE_SECS,
-        STOP_DEADLINE_MARGIN_SECS, resolve_deadline,
+        STOP_DEADLINE_MARGIN_SECS, take_deadline,
     };
 
     fn anon_vol_names(op_id: &str, count: usize) -> Vec<Option<String>> {
@@ -3285,37 +3264,25 @@ mod tests {
     }
 
     // spec: RT#barriers
-    // Zero used to become `Some(0)`, which the `elapsed >= d` check trips on
-    // the very next pass — so `ready(0)`, written expecting the documented
-    // default, failed about two seconds later instead of waiting 30.
     #[test]
-    fn zero_means_the_states_default() {
-        assert_eq!(
-            resolve_deadline(0, DEFAULT_READY_DEADLINE_SECS).unwrap(),
-            DEFAULT_READY_DEADLINE_SECS
-        );
-        assert_eq!(
-            resolve_deadline(0, DEFAULT_TERMINATED_DEADLINE_SECS).unwrap(),
-            DEFAULT_TERMINATED_DEADLINE_SECS
-        );
+    fn a_deadline_is_a_whole_number_of_seconds() {
+        assert_eq!(take_deadline(rhai::Dynamic::from("45s")).unwrap(), 45);
+        assert_eq!(take_deadline(rhai::Dynamic::from("2m")).unwrap(), 120);
+        let err = take_deadline(rhai::Dynamic::from("1500ms")).expect_err("not whole seconds");
+        assert!(err.to_string().contains("whole number of seconds"), "{err}");
     }
 
     // spec: RT#barriers
     #[test]
-    fn a_positive_deadline_is_taken_as_given() {
-        assert_eq!(
-            resolve_deadline(45, DEFAULT_READY_DEADLINE_SECS).unwrap(),
-            45
-        );
+    fn a_zero_deadline_is_refused() {
+        let err = take_deadline(rhai::Dynamic::from("0s")).expect_err("zero is refused");
+        assert!(err.to_string().contains("0s"), "should name it: {err}");
     }
 
-    // spec: RT#barriers
-    // The spec says the argument must be positive; clamping a negative to
-    // zero would silently mean "fail immediately".
+    // spec: DUR#duration-arguments
     #[test]
-    fn a_negative_deadline_is_refused() {
-        let err = resolve_deadline(-5, DEFAULT_READY_DEADLINE_SECS)
-            .expect_err("a negative is not a deadline");
-        assert!(err.to_string().contains("-5"), "should name it: {err}");
+    fn a_number_is_not_a_deadline() {
+        let err = take_deadline(rhai::Dynamic::from(30_i64)).expect_err("a number is refused");
+        assert!(err.to_string().contains("duration"), "{err}");
     }
 }

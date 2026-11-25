@@ -194,7 +194,7 @@ fn a_workload_held_back_by_a_pending_check_waits_on_the_check_rather_than_the_sa
     oi.call(
         "/apps/create",
         json!({ "app": "demo", "script": r#"
-            let probe = app.job("probe").image("docker.io/library/tools:1").deadline(30);
+            let probe = app.job("probe").image("docker.io/library/tools:1").deadline("30s");
             let migrate = app.gate("migrate").key(1).check(probe);
             app.deployment("web").image("docker.io/library/nginx:1.29").after(migrate);
         "# }),

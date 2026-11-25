@@ -85,7 +85,7 @@ fn exercise_stop_with_deadline() {
         app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             rt.start(dep).ready();
-            rt.stop(dep, 10);
+            rt.stop(dep, "10s");
         });
     "#,
     );
@@ -203,10 +203,10 @@ fn started_state_methods_with_deadline() {
         app.on_action("start", |rt, _param| {
             let dep = app.deployment("web").image("docker.io/library/nginx:latest");
             let started = rt.start(dep);
-            started.scheduled(30);
-            started.running(30);
-            started.ready(30);
-            started.terminated(30);
+            started.scheduled("30s");
+            started.running("30s");
+            started.ready("30s");
+            started.terminated("30s");
         });
     "#,
     );

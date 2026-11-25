@@ -11,6 +11,8 @@ use std::{cmp::Ordering, collections::BTreeMap};
 
 use rhai::{Dynamic, EvalAltResult, Map};
 
+use crate::defs::{duration::Duration, take::take_duration};
+
 /// Caddy's own defaults, read from the source of the pinned proxy image so the
 /// emitter can leave a field out whenever it still holds its default.
 pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
@@ -28,8 +30,8 @@ pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
 /// The floor is a plausibility bound like the rest: a window is emitted as
 /// whole nanoseconds and only rounds away below about half a nanosecond, far
 /// under anything here.
-pub const MIN_WINDOW_SECS: f64 = 0.001;
-pub const MAX_WINDOW_SECS: f64 = 3_600.0;
+pub const MIN_WINDOW: Duration = Duration::from_millis(1);
+pub const MAX_WINDOW: Duration = Duration::from_secs(3_600);
 pub const MAX_MAX_EVENTS: u64 = 1_000;
 
 /// Bounds on one direction of one header declaration.
@@ -923,17 +925,14 @@ pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<Ev
     let window_secs = match window {
         None => return Err("rate_limit requires `window`".into()),
         Some(value) => {
-            // The range check rejects NaN and the infinities along with
-            // everything else outside it, so it is the only check needed.
-            let n = as_number(value, "rate_limit", "window")?;
-            if !(MIN_WINDOW_SECS..=MAX_WINDOW_SECS).contains(&n) {
+            let window = take_duration("window", value)?;
+            if !(MIN_WINDOW..=MAX_WINDOW).contains(&window) {
                 return Err(format!(
-                    "rate_limit `window` must be between {MIN_WINDOW_SECS} and \
-                     {MAX_WINDOW_SECS} seconds, got {n}"
+                    "rate_limit `window` must be from {MIN_WINDOW} to {MAX_WINDOW}, got {window}"
                 )
                 .into());
             }
-            n
+            window.as_secs_f64()
         }
     };
 
@@ -1144,34 +1143,12 @@ fn collect_removals(
     Ok(())
 }
 
+/// A balance duration, in seconds.
+// spec: HTTP#balancing
 fn take_seconds(map: &mut Map, key: &str) -> Result<Option<f64>, Box<EvalAltResult>> {
-    let Some(value) = map.remove(key) else {
-        return Ok(None);
-    };
-    let n = as_number(value, "balance", key)?;
-    if n < 0.0 {
-        return Err(format!("balance `{key}` must not be negative, got {n}").into());
-    }
-    if !n.is_finite() {
-        return Err(format!("balance `{key}` must be a finite number of seconds, got {n}").into());
-    }
-    Ok(Some(n))
-}
-
-/// Accepts both `10` and `10.0`: a whole number of seconds is the common case
-/// and rhai types that as an integer.
-fn as_number(value: Dynamic, what: &str, key: &str) -> Result<f64, Box<EvalAltResult>> {
-    if let Some(f) = value.clone().try_cast::<f64>() {
-        return Ok(f);
-    }
-    if let Some(i) = value.clone().try_cast::<i64>() {
-        return Ok(i as f64);
-    }
-    Err(format!(
-        "{what} `{key}` must be a number of seconds, got {}",
-        value.type_name()
-    )
-    .into())
+    map.remove(key)
+        .map(|value| take_duration(key, value).map(Duration::as_secs_f64))
+        .transpose()
 }
 
 // ---------------------------------------------------------------------------

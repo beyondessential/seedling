@@ -561,7 +561,7 @@ fn a_run_that_cannot_invalidate_the_last_success_fails_before_anything_else_is_d
 }
 
 const IMAGES: &str = r#"
-    let probe = app.job("probe").image("docker.io/library/tools:1").deadline(60);
+    let probe = app.job("probe").image("docker.io/library/tools:1").deadline("60s");
     let api = app.deployment("api").image("docker.io/library/api:1");
     app.deployment("other").image("docker.io/library/other:1");
     let migrate = app.gate("migrate").key(1).check(probe).exclusive(api).run(|rt, last| {
@@ -733,7 +733,7 @@ fn an_instance_with_a_start_that_has_not_ended_is_still_running_until_the_start_
 // ---------------------------------------------------------------------------
 
 const CHECKED: &str = r#"
-    let probe = app.job("probe").image("docker.io/library/tools:1").deadline(60);
+    let probe = app.job("probe").image("docker.io/library/tools:1").deadline("60s");
     let ready = app.gate("ready").key(1).check(probe);
     app.deployment("web").image("docker.io/library/nginx:1.29").after(ready);
 "#;

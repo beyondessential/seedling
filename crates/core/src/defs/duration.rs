@@ -37,6 +37,9 @@ impl Duration {
         nanos: i64::MAX as u64,
     };
 
+    /// The most whole seconds a duration holds.
+    pub const MAX_SECS: u64 = Self::MAX.nanos / NANOS_PER_SECOND;
+
     pub const fn from_secs(secs: u64) -> Self {
         Self {
             nanos: secs * NANOS_PER_SECOND,
