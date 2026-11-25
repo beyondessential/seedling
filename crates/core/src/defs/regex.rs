@@ -32,18 +32,19 @@ use crate::{
 
 /// The most bytes the cached patterns may hold, evicting the least recently
 /// used to make room for a new one.
-const CACHE_CAPACITY: usize = 256 << 20;
+const CACHE_CAPACITY: usize = 64 << 20;
 
 /// The DFA size the `regex` crate allows by default, which the engine builds
 /// beside the NFA where it fits.
 const DFA_SIZE_LIMIT: usize = 2 << 20;
 
-/// The lazy DFA cache size the `regex` crate allows by default, which a
-/// pattern grows into as it is searched, forward and in reverse.
-const HYBRID_CACHE_CAPACITY: usize = 2 << 20;
+/// The lazy DFA cache a pattern may grow into as it is searched, forward and
+/// in reverse. A pattern too large to search within it is searched by the
+/// engine's other linear-time engines instead.
+const HYBRID_CACHE_CAPACITY: usize = 64 << 10;
 
-/// What a cached pattern may come to hold beyond its compiled size once it
-/// has been searched: its forward and reverse lazy DFA caches at capacity.
+/// What a pattern may come to hold beyond what it is built into once it has
+/// been searched: its forward and reverse lazy DFA caches at capacity.
 const SEARCH_ALLOWANCE: usize = 2 * HYBRID_CACHE_CAPACITY;
 
 /// A compiled regular expression.
@@ -53,8 +54,8 @@ pub struct Regex(Arc<Compiled>);
 struct Compiled {
     pattern: String,
     regex: meta::Regex,
-    /// The bytes the compiled pattern occupies: the engine's measure of it,
-    /// with the pattern's text and this value.
+    /// The bytes the compiled pattern may hold: the engine's measure of it,
+    /// what its searches may grow, and the pattern's text and this value.
     size: usize,
 }
 
@@ -158,16 +159,11 @@ struct Cache {
     patterns: HashMap<String, Arc<Compiled>>,
     /// The cached patterns, least recently used first.
     order: VecDeque<String>,
-    /// What the cached patterns may hold, each its [`Cache::resident`] size.
+    /// What the cached patterns may hold.
     size: usize,
 }
 
 impl Cache {
-    /// What `compiled` may hold while cached, once searched.
-    fn resident(compiled: &Compiled) -> usize {
-        compiled.size + SEARCH_ALLOWANCE
-    }
-
     /// The cached `pattern`, marked as the most recently used.
     fn get(&mut self, pattern: &str) -> Option<Arc<Compiled>> {
         let compiled = self.patterns.get(pattern)?;
@@ -182,19 +178,18 @@ impl Cache {
     /// fits; one that could never fit is not held. Another evaluation may
     /// have cached the same pattern meanwhile, which is kept.
     fn insert(&mut self, compiled: &Arc<Compiled>) {
-        let resident = Self::resident(compiled);
-        if resident > CACHE_CAPACITY || self.patterns.contains_key(&compiled.pattern) {
+        if compiled.size > CACHE_CAPACITY || self.patterns.contains_key(&compiled.pattern) {
             return;
         }
-        while self.size + resident > CACHE_CAPACITY {
+        while self.size + compiled.size > CACHE_CAPACITY {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
             if let Some(evicted) = self.patterns.remove(&oldest) {
-                self.size -= Self::resident(&evicted);
+                self.size -= evicted.size;
             }
         }
-        self.size += resident;
+        self.size += compiled.size;
         self.order.push_back(compiled.pattern.clone());
         self.patterns
             .insert(compiled.pattern.clone(), Arc::clone(compiled));
@@ -242,9 +237,11 @@ fn build(pattern: &str, budget: &mut Budget) -> Result<Compiled, String> {
         .configure(config)
         .build(pattern)
         .map_err(|e| build_error(&e, budget))?;
-    // The engine reports nothing for a pattern it searches as a literal, so
-    // the text and the value holding it count too, and no pattern is free.
-    let size = regex.memory_usage() + pattern.len() + std::mem::size_of::<Compiled>();
+    // The engine reports what it built, not the caches its searches grow, nor
+    // anything for a pattern it searches as a literal, so those count too and
+    // no pattern is free.
+    let size =
+        regex.memory_usage() + SEARCH_ALLOWANCE + pattern.len() + std::mem::size_of::<Compiled>();
     Ok(Compiled {
         pattern: pattern.to_owned(),
         regex,
@@ -695,7 +692,7 @@ mod tests {
     }
 
     /// A compiled size making a pattern take a third of the cache.
-    const THIRD: usize = CACHE_CAPACITY / 3 - SEARCH_ALLOWANCE;
+    const THIRD: usize = CACHE_CAPACITY / 3;
 
     #[test]
     fn the_cache_evicts_the_least_recently_used_patterns_to_make_room() {
@@ -711,14 +708,14 @@ mod tests {
                 .iter()
                 .all(|p| cache.patterns.contains_key(*p))
         );
-        assert_eq!(cache.size, 3 * (THIRD + SEARCH_ALLOWANCE));
+        assert_eq!(cache.size, 3 * THIRD);
     }
 
     #[test]
     fn a_pattern_larger_than_the_cache_is_not_held() {
         let mut cache = Cache::default();
         cache.insert(&compiled("a", 100));
-        cache.insert(&compiled("b", CACHE_CAPACITY));
+        cache.insert(&compiled("b", CACHE_CAPACITY + 1));
         assert!(!cache.patterns.contains_key("b"));
         assert!(cache.patterns.contains_key("a"));
     }
@@ -728,7 +725,7 @@ mod tests {
         let mut cache = Cache::default();
         cache.insert(&compiled("a", 100));
         cache.insert(&compiled("a", 100));
-        assert_eq!(cache.size, 100 + SEARCH_ALLOWANCE);
+        assert_eq!(cache.size, 100);
         assert_eq!(cache.order.len(), 1);
     }
 }

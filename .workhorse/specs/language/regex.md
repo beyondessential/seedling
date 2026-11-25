@@ -120,4 +120,4 @@ When a pattern's compiled size exceeds what remains of that limit, the helper MU
 > The text of a pattern is already bounded by the string length limit.
 >
 > Using up the remainder means a script that catches the error and tries again cannot keep compiling large patterns, since every later pattern is refused as soon as compiling starts.
-> The size of a compiled pattern is measured by the engine, so a Seedling release can change how large a given pattern counts as.
+> The size of a compiled pattern includes the memory its searches may grow into, and is measured by the engine, so a Seedling release can change how large a given pattern counts as.

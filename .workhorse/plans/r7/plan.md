@@ -49,3 +49,4 @@ Adds `std::regex`, the `Regex` type, the `regex` param kind and its parser, the 
 - [x] `crates/core/src/tests/regex.rs`: compiling, searching, positions, captures, methods, split, replacements, compiled size, literal check.
 - [x] Param kind tests: refusal when set and as a default; persistence round trip; `tests/stdlib.rs` helper list.
 - [x] `docs/bsl-scripting.md`: regular expressions, the `regex` kind, the limit.
+- A pattern's counted size includes a fixed search allowance, its forward and reverse lazy DFA caches capped at 64 KiB each, so the evaluation budget and the shared cache both count what a searched pattern can come to hold. A pattern needing a larger lazy DFA cache is searched by the meta engine's other linear engines.
