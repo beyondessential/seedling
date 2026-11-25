@@ -22,13 +22,6 @@ use crate::runtime::barrier::{
 use crate::runtime::registry::{InstanceRegistry, InstanceReuse, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 
-// ---------------------------------------------------------------------------
-// Default barrier deadlines (seconds).
-// ---------------------------------------------------------------------------
-
-/// Default deadline for `.scheduled()` — a pod not scheduled inside this
-/// window almost always indicates a cluster-level problem, not a slow workload.
-// spec: RT#barriers
 /// Read an explicit deadline argument, a duration in whole seconds.
 ///
 /// A zero deadline is refused rather than read as the state's default: the
@@ -39,6 +32,13 @@ fn take_deadline(deadline: Dynamic) -> Result<u64, Box<EvalAltResult>> {
     take_whole_secs("deadline", deadline, Duration::from_secs(1), None)
 }
 
+// ---------------------------------------------------------------------------
+// Default barrier deadlines (seconds).
+// ---------------------------------------------------------------------------
+
+/// Default deadline for `.scheduled()` — a pod not scheduled inside this
+/// window almost always indicates a cluster-level problem, not a slow workload.
+// spec: RT#barriers
 pub const DEFAULT_SCHEDULED_DEADLINE_SECS: u64 = 30;
 
 /// Default deadline for `.running()` — same reasoning as `.scheduled()`.
