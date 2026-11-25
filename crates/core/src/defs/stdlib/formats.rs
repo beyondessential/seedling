@@ -11,6 +11,7 @@ use super::{
     max_string, settle, within,
 };
 use crate::defs::{
+    ip::{IpAddress, IpRange, IpSubnet},
     take::take_map,
     version::{SemVer, Version},
 };
@@ -219,6 +220,18 @@ impl Holds {
         // take: dispatch
         if let Some(version) = value.clone().try_cast::<SemVer>() {
             return Ok(Tree::Str(version.to_string()));
+        }
+        // take: dispatch
+        if let Some(addr) = value.clone().try_cast::<IpAddress>() {
+            return Ok(Tree::Str(addr.to_string()));
+        }
+        // take: dispatch
+        if let Some(subnet) = value.clone().try_cast::<IpSubnet>() {
+            return Ok(Tree::Str(subnet.to_string()));
+        }
+        // take: dispatch
+        if let Some(range) = value.clone().try_cast::<IpRange>() {
+            return Ok(Tree::Str(range.to_string()));
         }
         // take: dispatch
         if value.is_array() {

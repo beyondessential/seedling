@@ -93,6 +93,21 @@ fn a_version_is_written_as_its_text() {
     assert_eq!(out, "{\n  \"v\": \"1.2.3\"\n}\n");
 }
 
+// spec: FMT#values-each-format-holds
+#[test]
+fn an_ip_value_is_written_as_its_canonical_form() {
+    assert_eq!(
+        text(
+            r#"std::encode_env(#{
+                A: std::parse_ip_address("2001:DB8:0:0::1"),
+                S: std::parse_ip_subnet("10.0.0.0/8"),
+                R: std::parse_ip_range("10.0.0.0/30"),
+            })"#
+        ),
+        "A='2001:db8::1'\nR='10.0.0.0-10.0.0.3'\nS='10.0.0.0/8'\n"
+    );
+}
+
 // spec: FMT#refusal
 #[test]
 fn a_refusal_names_the_position_and_the_reason() {

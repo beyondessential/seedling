@@ -5,6 +5,7 @@
 - [x] JSON of a map is indented by two spaces, keys sorted, ending with a line feed (verifies spec: FMT#json)
 - [x] JSON takes a scalar, an empty array and an empty map, and escapes only what JSON requires (verifies spec: FMT#json)
 - [x] A Version is written as its text (verifies spec: FMT#values-each-format-holds)
+- [x] An IP address, subnet or range is written as its canonical form (verifies spec: FMT#values-each-format-holds)
 - [x] A refused value names its position and the reason, for each format (verifies spec: FMT#refusal)
 - [x] TOML and env encoders refuse an argument that is not a map (verifies spec: FMT#helpers)
 - [x] 64 levels of nesting encode and decode in every format; 65 throw (verifies spec: FMT#helpers)
