@@ -392,3 +392,13 @@ fn a_replacement_is_held_to_the_string_limit() {
         "{err:?}"
     );
 }
+
+// spec: REX#captures
+// spec: REX#positions
+#[test]
+fn nested_groups_have_their_own_character_positions() {
+    assert_eq!(
+        shown(r#"std::regex("((é)b)(c)").captures("xébc").groups.map(|g| [g.start, g.end])"#),
+        "[[1, 4], [1, 3], [1, 2], [3, 4]]"
+    );
+}

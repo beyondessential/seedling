@@ -452,11 +452,19 @@ impl<'t> Positions<'t> {
 
 // spec: REX#matches
 fn match_map(text: &str, positions: &mut Positions, start: usize, end: usize) -> Dynamic {
+    let start_at = positions.at(start);
+    let end_at = positions.clone().at(end);
+    span_map(text, start, end, start_at, end_at)
+}
+
+// spec: REX#matches
+/// A match of the text from byte `start` to byte `end`, which are at the
+/// positions `start_at` and `end_at`.
+fn span_map(text: &str, start: usize, end: usize, start_at: INT, end_at: INT) -> Dynamic {
     let mut map = rhai::Map::new();
     map.insert("text".into(), text[start..end].into());
-    map.insert("start".into(), positions.at(start).into());
-    let mut from_start = positions.clone();
-    map.insert("end".into(), from_start.at(end).into());
+    map.insert("start".into(), start_at.into());
+    map.insert("end".into(), end_at.into());
     map.into()
 }
 
@@ -466,12 +474,34 @@ fn captures_map(text: &str, positions: &mut Positions, caps: &Captures) -> Dynam
         .get_match()
         .expect("only a match's captures are mapped");
     positions.at(whole.start());
-    let groups: rhai::Array = (0..caps.group_len())
-        .map(|i| {
-            caps.get_group(i).map_or(Dynamic::UNIT, |span| {
-                // A group can start before an earlier group ends, so each is
-                // counted from the start of the whole match.
-                match_map(text, &mut positions.clone(), span.start, span.end)
+    // Groups nest and overlap, so their ends are counted in one pass over
+    // every bound in order, from the start of the whole match.
+    let spans: Vec<_> = (0..caps.group_len()).map(|i| caps.get_group(i)).collect();
+    let mut bounds: Vec<usize> = spans
+        .iter()
+        .flatten()
+        .flat_map(|span| [span.start, span.end])
+        .collect();
+    bounds.sort_unstable();
+    bounds.dedup();
+    let mut walk = positions.clone();
+    let at: Vec<INT> = bounds.iter().map(|&byte| walk.at(byte)).collect();
+    let position = |byte: usize| {
+        at[bounds
+            .binary_search(&byte)
+            .expect("every bound was counted")]
+    };
+    let groups: rhai::Array = spans
+        .iter()
+        .map(|span| {
+            span.map_or(Dynamic::UNIT, |span| {
+                span_map(
+                    text,
+                    span.start,
+                    span.end,
+                    position(span.start),
+                    position(span.end),
+                )
             })
         })
         .collect();
