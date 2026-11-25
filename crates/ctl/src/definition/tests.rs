@@ -727,3 +727,18 @@ fn only_the_definition_and_its_sources_are_unpacked_from_a_github_archive() {
     let e = github::extract_definition(&wanting_it, dir.path(), "apps/web").unwrap_err();
     assert!(e.contains("size limit"), "{e}");
 }
+
+// spec: CLI#include-assembly
+#[test]
+fn a_folder_at_its_repository_root_is_told_it_is_in_one() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), ".git/HEAD", b"x");
+    write(dir.path(), "app.seed.rhai", b"app;");
+    write(
+        dir.path(),
+        "seedling.toml",
+        b"[include]\n\"lib\" = \"../lib\"",
+    );
+    let e = read_assembled_folder(dir.path()).unwrap_err();
+    assert!(e.contains("lies outside the repository at"), "{e}");
+}

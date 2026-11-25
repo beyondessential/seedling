@@ -74,24 +74,25 @@ impl std::fmt::Display for Bounds<'_> {
     }
 }
 
-/// The include boundary of a folder on disk: the nearest directory at or
-/// above it holding a `.git` or `.jj` entry, or the folder itself.
+/// The repository a folder on disk sits in, if any: the nearest directory at
+/// or above it holding a `.git` or `.jj` entry. Where there is one it is the
+/// folder's include boundary, and where there is none the folder itself is.
 ///
 /// `folder` is canonical, so that its ancestors are the directories it
 /// really sits in.
 // spec: CLI#include-assembly
-pub(super) fn boundary_of(folder: &Path) -> Result<PathBuf, String> {
+pub(super) fn repository_of(folder: &Path) -> Result<Option<PathBuf>, String> {
     for dir in folder.ancestors() {
         for marker in [".git", ".jj"] {
             let at = dir.join(marker);
             match at.symlink_metadata() {
-                Ok(_) => return Ok(dir.to_owned()),
+                Ok(_) => return Ok(Some(dir.to_owned())),
                 Err(e) if e.kind() == ErrorKind::NotFound => {}
                 Err(e) => return Err(format!("cannot read {}: {e}", at.display())),
             }
         }
     }
-    Ok(folder.to_owned())
+    Ok(None)
 }
 
 /// Place every file the folder's `include` table names into `files`, which

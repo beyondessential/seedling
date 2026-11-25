@@ -13,7 +13,7 @@ use seedling_bundle::{
 };
 use serde_json::{Map, Value, json};
 
-use assembly::{Bounds, Unwritten, assemble, boundary_of, source_paths};
+use assembly::{Bounds, Unwritten, assemble, repository_of, source_paths};
 
 mod assembly;
 
@@ -142,16 +142,15 @@ pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<
     let folder = path
         .canonicalize()
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let boundary = boundary_of(&folder)?;
-    let bounds = if boundary == folder {
-        Bounds::Folder
-    } else {
-        Bounds::Repository(&boundary)
+    let repository = repository_of(&folder)?;
+    let (boundary, bounds) = match &repository {
+        Some(root) => (root.as_path(), Bounds::Repository(root)),
+        None => (folder.as_path(), Bounds::Folder),
     };
     assemble(
         &mut files,
         &folder,
-        &boundary,
+        boundary,
         bounds,
         &Unwritten::default(),
         &mut budget,
