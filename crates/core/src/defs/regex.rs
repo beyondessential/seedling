@@ -96,6 +96,15 @@ impl Budget {
     pub fn unlimited() -> Self {
         Self { remaining: None }
     }
+
+    // spec: REX#compiled-size
+    /// Use up what remains, giving how much that was, or `None` where there
+    /// is no limit to use up.
+    fn use_up(&mut self) -> Option<usize> {
+        let left = self.remaining?;
+        self.remaining = Some(0);
+        Some(left)
+    }
 }
 
 // spec: REX#compiled-size
@@ -184,12 +193,12 @@ pub fn compile(pattern: &str, budget: &mut Budget) -> Result<Regex, String> {
             compiled
         }
     };
-    if let Some(remaining) = &mut budget.remaining {
-        if compiled.size > *remaining {
-            let left = std::mem::take(remaining);
-            return Err(too_large(left));
+    if let Some(remaining) = budget.remaining {
+        if compiled.size > remaining {
+            budget.use_up();
+            return Err(too_large(remaining));
         }
-        *remaining -= compiled.size;
+        budget.remaining = Some(remaining - compiled.size);
     }
     Ok(Regex(compiled))
 }
@@ -217,8 +226,10 @@ fn build_error(e: &BuildError, budget: &mut Budget) -> String {
     if let Some(syntax) = e.syntax_error() {
         return format!("not a valid regular expression: {syntax}");
     }
-    if let (Some(_), Some(remaining)) = (e.size_limit(), &mut budget.remaining) {
-        return too_large(std::mem::take(remaining));
+    if e.size_limit().is_some()
+        && let Some(left) = budget.use_up()
+    {
+        return too_large(left);
     }
     format!("not a valid regular expression: {e}")
 }
