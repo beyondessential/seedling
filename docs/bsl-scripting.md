@@ -171,7 +171,7 @@ let version = app.param("version")
     .kind("text")           // text (one line) | multiline | email | password | weak-password | random
                             // | boolean | integer | quantity | choice | version | version-semver | purl
                             // | url | url-origin | hostname | ip-address | ip-subnet | ip-range
-                            // | duration
+                            // | duration | regex
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -577,6 +577,26 @@ Every option that takes a length of time, such as `stop_timeout`, `deadline`, a 
 app.deployment("db").stop_timeout("2m");
 app.deployment("api").stop_timeout(grace.parsed() * 2);
 ```
+
+### Regular expressions
+
+`std::regex(pattern)` compiles a pattern in the [Rust `regex` crate's syntax](https://docs.rs/regex/1/regex/#syntax) and returns a `Regex`. Searches run in time linear in the text, with no backtracking, so the syntax has no backreferences or look-around. A search finds a match anywhere in the text; anchor the pattern with `^` and `$` to match the whole of it.
+
+```rhai
+let kv = std::regex("(?<key>[a-z_]+)=(?<value>[^;]*)");
+
+kv.is_match("a=1")                       // true
+kv.find("x; a=1")                        // #{ text: "a=1", start: 3, end: 6 }
+kv.find_all("a=1;b=2").map(|m| m.text)   // ["a=1", "b=2"]
+kv.captures("a=1").named.value.text      // "1"
+kv.replace_all("a=1;b=2", "$value=$key") // "1=a;2=b"
+kv.replace_all("a=1", |c| c.named.key.text.to_upper())  // "A"
+std::regex(",\\s*").split("a, b,c", 2)   // ["a", "b,c"]
+```
+
+Positions count characters, as `sub_string` does. `captures` gives `groups`, every group in order with the whole match first and `()` for a group that took no part, and `named`, the named groups by name. `find` and `captures` give `()` when nothing matches. In a replacement string, `$1`, `$name` and `${name}` insert a group and `$$` a `$`; a reference to a group the pattern does not have, or a stray `$`, throws, whether or not anything matched. A replacement closure is called with each match's captures and returns the text to insert as it is.
+
+A pattern written as a string literal is checked when the definition is evaluated, so `std::regex("(")` fails the evaluation even in an action that never runs. The `regex` param kind takes a pattern from an operator: `std::parse_regex` and `param.parsed()` return the `Regex`, and a malformed pattern is refused when the value is set. Compiling counts toward a per-evaluation budget of 32 MiB of compiled pattern (`--script-max-regex-compiled-size`); a pattern too big for what is left throws, and uses the rest of the budget up.
 
 ### Derived random values
 

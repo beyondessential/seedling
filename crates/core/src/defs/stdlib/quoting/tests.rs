@@ -10,6 +10,7 @@ fn engine() -> Engine {
     engine.set_default_tag(Dynamic::from(HelperLimits {
         derived_values: 0,
         password_hashes: 0,
+        regex_compiled_size: 0,
     }));
     engine
 }

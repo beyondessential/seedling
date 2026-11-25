@@ -5075,6 +5075,7 @@ dependencies = [
  "quinn",
  "rand 0.10.3",
  "rcgen",
+ "regex-automata",
  "reqwest",
  "rhai",
  "rtnetlink",

@@ -209,8 +209,7 @@ pub(crate) fn language_for(
     let (engine, scope, _) =
         crate::setup_language(limits, Arc::clone(&app.bundle)).map_err(|e| e.to_string())?;
     let script = app.bundle.script().map_err(|e| e.to_string())?;
-    let ast = engine
-        .compile(script.text())
+    let ast = crate::defs::compile(&engine, script.text())
         .map_err(|e| script.remap_error(&e.to_string()))
         .map_err(|e| format!("script compile error: {e}"))?;
     Ok((engine, scope, ast))

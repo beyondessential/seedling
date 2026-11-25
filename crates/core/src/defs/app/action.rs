@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
-use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
+use rhai::{EvalAltResult, FnPtr, Map, NativeCallContext, TypeBuilder};
 use seedling_protocol::names::{ActionName, ParamName};
 
 use super::super::action::{Action, ActionDef};
+use super::super::stdlib::helper_limits;
 use super::super::take::{reject_unknown_keys, take_closure, take_map};
 use super::App;
 use crate::runtime::barrier::runtime::is_in_action_closure;
@@ -67,7 +68,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         )
         .with_fn(
             "on_action",
-            |this: &mut App,
+            |ctx: NativeCallContext,
+             this: &mut App,
              name: &str,
              closure: FnPtr,
              options: Map|
@@ -78,7 +80,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 reject_unknown_keys("on_action options", &options, &["description", "params"])?;
                 let desc = super::extract_description(&options)?;
                 // spec: ACN#param-schemas
-                let params = parse_action_params(&options)?;
+                let params = parse_action_params(&ctx, &options)?;
                 declare_action(this, "on_action", action_name, closure, desc, params)
             },
         );
@@ -107,10 +109,14 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 
 // spec: ACN#param-schemas
 pub(super) fn parse_action_params(
+    ctx: &NativeCallContext,
     options: &Map,
 ) -> Result<BTreeMap<ParamName, super::super::param_def::ParamDef>, Box<rhai::EvalAltResult>> {
     match options.get("params").cloned() {
-        Some(params) => super::param::parse_param_defs(&take_map("params", params)?),
+        Some(params) => super::param::parse_param_defs(
+            &take_map("params", params)?,
+            helper_limits(ctx)?.regex_compiled_size,
+        ),
         None => Ok(BTreeMap::new()),
     }
 }

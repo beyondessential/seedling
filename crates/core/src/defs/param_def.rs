@@ -14,6 +14,7 @@ use super::{
     ip::{Family, IpAddress, IpRange, IpSubnet, check_family, take_family},
     purl::{Purl, QualifierValue},
     quantity::{format_quantity, parse_quantity},
+    regex::{Budget, Regex},
     take::{reject_unknown_keys, take_duration, take_map, take_string, take_string_array},
     url::{Url, UrlOrigin, parse_hostname},
     version::{SemVer, Version},
@@ -64,9 +65,9 @@ impl ParamDef {
     /// kind rejects it.
     // spec: ACN#param-schemas
     // spec: PARAM#kind-checks
-    pub fn check_default(&self) -> Result<(), String> {
+    pub fn check_default(&self, budget: &mut Budget) -> Result<(), String> {
         match &self.default_value {
-            Some(default) => self.kind.parse_supplied(default).map(drop),
+            Some(default) => self.kind.parse_supplied(default, budget).map(drop),
             None => Ok(()),
         }
     }
@@ -95,6 +96,7 @@ pub enum ParamKindName {
     IpSubnet,
     IpRange,
     Duration,
+    Regex,
     Volume,
 }
 
@@ -121,6 +123,7 @@ impl ParamKindName {
             Self::IpSubnet => "ip-subnet",
             Self::IpRange => "ip-range",
             Self::Duration => "duration",
+            Self::Regex => "regex",
             Self::Volume => "volume",
         }
     }
@@ -204,6 +207,7 @@ pub enum ParamKind {
         family: Option<Family>,
     },
     Duration(DurationBounds),
+    Regex,
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -234,6 +238,7 @@ impl ParamKind {
             Self::IpSubnet { .. } => ParamKindName::IpSubnet,
             Self::IpRange { .. } => ParamKindName::IpRange,
             Self::Duration(_) => ParamKindName::Duration,
+            Self::Regex => ParamKindName::Regex,
             Self::Volume => ParamKindName::Volume,
         }
     }
@@ -286,8 +291,10 @@ impl ParamKind {
     /// Parse `value` as a value of this kind, or give the reason it is not
     /// one. This is the whole of the kind's check on a value, both for the
     /// runtime and for the kind's `std` helper.
+    ///
+    /// A pattern compiles within `budget`, which no other kind touches.
     // spec: ACN#kind-parsers
-    pub fn parse(&self, value: &str) -> Result<ParsedValue, String> {
+    pub fn parse(&self, value: &str, budget: &mut Budget) -> Result<ParsedValue, String> {
         if self.is_single_line() {
             reject_control_characters(value)?;
         }
@@ -380,6 +387,8 @@ impl ParamKind {
                 bounds.check(duration)?;
                 return Ok(ParsedValue::Duration(duration));
             }
+            // spec: REX#compiling-a-pattern
+            Self::Regex => return super::regex::compile(value, budget).map(ParsedValue::Regex),
             // spec: ACN#kind-parsers
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|e| e.to_string())?;
@@ -412,9 +421,13 @@ impl ParamKind {
     /// Parse a supplied value: a boolean or integer, for the kind that takes
     /// one, as its canonical form, and a string as [`Self::parse`] does.
     // spec: ACN#param-schemas
-    pub fn parse_supplied(&self, value: &SuppliedValue) -> Result<ParsedValue, String> {
+    pub fn parse_supplied(
+        &self,
+        value: &SuppliedValue,
+        budget: &mut Budget,
+    ) -> Result<ParsedValue, String> {
         self.check_type(value)?;
-        self.parse(&value.canonical())
+        self.parse(&value.canonical(), budget)
     }
 
     // spec: ACN#kind-parsers
@@ -512,6 +525,7 @@ fn kind_with(name: ParamKindName, arguments: KindArguments) -> ParamKind {
         ParamKindName::IpSubnet => ParamKind::IpSubnet { family },
         ParamKindName::IpRange => ParamKind::IpRange { family },
         ParamKindName::Duration => ParamKind::Duration(bounds),
+        ParamKindName::Regex => ParamKind::Regex,
         ParamKindName::Volume => ParamKind::Volume,
     }
 }
@@ -594,7 +608,7 @@ pub fn take_options(what: &str, value: Dynamic) -> Result<Vec<String>, Box<EvalA
             return Err(format!("`{what}` holds an empty option").into());
         }
         ParamKind::Text
-            .parse(option)
+            .parse(option, &mut Budget::unlimited())
             .map_err(|e| -> Box<EvalAltResult> {
                 format!("`{what}` option {option:?} {e}").into()
             })?;
@@ -782,6 +796,7 @@ pub enum ParsedValue {
     IpSubnet(IpSubnet),
     IpRange(IpRange),
     Duration(Duration),
+    Regex(Regex),
 }
 
 impl ParsedValue {
@@ -807,6 +822,7 @@ impl ParsedValue {
             Self::IpSubnet(subnet) => Dynamic::from(subnet),
             Self::IpRange(range) => Dynamic::from(range),
             Self::Duration(duration) => Dynamic::from(duration),
+            Self::Regex(regex) => Dynamic::from(regex),
         }
     }
 }

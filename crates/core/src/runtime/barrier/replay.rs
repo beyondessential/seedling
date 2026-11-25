@@ -548,9 +548,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // params, etc.) at creation time during run_file.  Re-executing the script
     // here would run top-level statements such as param.validate() inside the
     // ActionClosureGuard, which incorrectly triggers the in-closure guard check.
-    let call_ast = engine
-        .compile(call_script)
-        .expect("static call script must compile");
+    let call_ast =
+        crate::defs::compile(engine, call_script).expect("static call script must compile");
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
     // spec: ACN#action-invocation
     // The action call table makes captured FnPtrs available to

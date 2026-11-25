@@ -1,6 +1,6 @@
 //! A parser for every parameter kind, `std::parse_<kind>`.
 
-use rhai::{Dynamic, EvalAltResult, FuncRegistration};
+use rhai::{Dynamic, EvalAltResult, FuncRegistration, NativeCallContext};
 use strum::VariantArray;
 
 use crate::defs::{
@@ -8,6 +8,7 @@ use crate::defs::{
     param_def::{
         IntRange, ParamKind, ParamKindName, take_duration_arguments, take_options, take_range,
     },
+    regex::with_evaluation_budget,
     take::take_string,
 };
 
@@ -29,9 +30,12 @@ pub(super) fn register(module: &mut rhai::Module) {
                 register_parser(module, &helper, ParamKind::Duration(Default::default()));
                 FuncRegistration::new(&helper).set_into_module(
                     module,
-                    |value: Dynamic, arguments: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                    |ctx: NativeCallContext,
+                     value: Dynamic,
+                     arguments: Dynamic|
+                     -> Result<Dynamic, Box<EvalAltResult>> {
                         let bounds = take_duration_arguments("arguments", arguments)?;
-                        parse(&ParamKind::Duration(bounds), value)
+                        parse(&ctx, &ParamKind::Duration(bounds), value)
                     },
                 );
             }
@@ -45,9 +49,12 @@ pub(super) fn register(module: &mut rhai::Module) {
                 );
                 FuncRegistration::new(&helper).set_into_module(
                     module,
-                    |value: Dynamic, options: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                    |ctx: NativeCallContext,
+                     value: Dynamic,
+                     options: Dynamic|
+                     -> Result<Dynamic, Box<EvalAltResult>> {
                         let options = take_options("options", options)?;
-                        parse(&ParamKind::Choice { options }, value)
+                        parse(&ctx, &ParamKind::Choice { options }, value)
                     },
                 );
             }
@@ -57,10 +64,13 @@ pub(super) fn register(module: &mut rhai::Module) {
                 register_parser(module, &helper, kind);
                 FuncRegistration::new(&helper).set_into_module(
                     module,
-                    move |value: Dynamic, family: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                    move |ctx: NativeCallContext,
+                          value: Dynamic,
+                          family: Dynamic|
+                          -> Result<Dynamic, Box<EvalAltResult>> {
                         let family = take_family("family", family)?;
                         let kind = ParamKind::of_family(name, family).expect("an IP kind");
-                        parse(&kind, value)
+                        parse(&ctx, &kind, value)
                     },
                 );
             }
@@ -74,10 +84,16 @@ pub(super) fn register(module: &mut rhai::Module) {
 }
 
 fn register_parser(module: &mut rhai::Module, helper: &str, kind: ParamKind) {
-    FuncRegistration::new(helper).set_into_module(
-        module,
-        move |value: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> { parse(&kind, value) },
-    );
+    // `std::parse_regex` counts toward the evaluation's compiled size limit,
+    // so no call is folded.
+    FuncRegistration::new(helper)
+        .with_volatility(kind == ParamKind::Regex)
+        .set_into_module(
+            module,
+            move |ctx: NativeCallContext, value: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                parse(&ctx, &kind, value)
+            },
+        );
 }
 
 /// Register the parser of a kind taking an optional `range`, with and without
@@ -90,16 +106,24 @@ fn register_ranged_parser(
     register_parser(module, helper, kind(None));
     FuncRegistration::new(helper).set_into_module(
         module,
-        move |value: Dynamic, range: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+        move |ctx: NativeCallContext,
+              value: Dynamic,
+              range: Dynamic|
+              -> Result<Dynamic, Box<EvalAltResult>> {
             let range = take_range("range", range)?;
-            parse(&kind(Some(range)), value)
+            parse(&ctx, &kind(Some(range)), value)
         },
     );
 }
 
-fn parse(kind: &ParamKind, value: Dynamic) -> Result<Dynamic, Box<EvalAltResult>> {
+// spec: REX#compiled-size
+fn parse(
+    ctx: &NativeCallContext,
+    kind: &ParamKind,
+    value: Dynamic,
+) -> Result<Dynamic, Box<EvalAltResult>> {
     let value = take_string("value", value)?;
-    Ok(kind.parse(&value)?.into_dynamic())
+    Ok(with_evaluation_budget(ctx, |budget| kind.parse(&value, budget))??.into_dynamic())
 }
 
 /// The name of the helper that parses the kind `name`.

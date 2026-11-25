@@ -11,6 +11,7 @@ use crate::defs::{
     duration::Duration,
     ip::{IpAddress, IpRange, IpSubnet},
     param_def::ParsedValue,
+    regex::{self, Budget},
     version::{SemVer, Version},
 };
 
@@ -49,6 +50,8 @@ pub enum ParsedType {
     IpRange,
     /// A `Duration`, held as its text form.
     Duration,
+    /// A `Regex`, held as its pattern.
+    Regex,
 }
 
 impl ParamMap {
@@ -127,6 +130,10 @@ impl ParamMap {
                     .expect("a purl's components are strings, arrays, maps and a Version"),
                 Some(ParsedType::Purl),
             ),
+            ParsedValue::Regex(regex) => (
+                Value::String(regex.pattern().to_owned()),
+                Some(ParsedType::Regex),
+            ),
         };
         self.insert(key.clone(), value);
         if let Some(ty) = ty {
@@ -168,6 +175,10 @@ fn restore(key: &str, ty: ParsedType, value: &Value) -> Result<Dynamic, String> 
         ParsedType::IpSubnet => restore_text(key, value, IpSubnet::parse),
         ParsedType::IpRange => restore_text(key, value, IpRange::parse),
         ParsedType::Duration => restore_text(key, value, Duration::parse),
+        // spec: OPS#persistence
+        ParsedType::Regex => restore_text(key, value, |pattern| {
+            regex::compile(pattern, &mut Budget::unlimited())
+        }),
         ParsedType::Purl => {
             let Value::Object(components) = value else {
                 return Err(format!(

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use rhai::{Engine, Scope};
+use rhai::{AST, ASTNode, Engine, EvalAltResult, Expr, OptimizationLevel, Scope};
 
 use crate::runtime::barrier::{runtime, shell};
 
@@ -110,6 +110,7 @@ pub mod param_def;
 pub mod pod;
 pub mod purl;
 pub mod quantity;
+pub mod regex;
 pub mod resource;
 pub mod service;
 pub mod stdlib;
@@ -122,6 +123,7 @@ pub mod volume;
 // spec: BSL#evaluation
 pub fn register(engine: &mut Engine) {
     engine.build_type::<app::App>();
+    engine.build_type::<regex::Regex>();
     engine.build_type::<param::Param>();
     engine.build_type::<file::File>();
     engine.build_type::<file::Directory>();
@@ -206,6 +208,52 @@ pub fn register(engine: &mut Engine) {
 const NO_SLEEP: &str = "`sleep` is not available: evaluation cannot pause";
 const NO_TO_JSON: &str = "`to_json` is not available: use `std::encode_json`";
 
+/// Compile `source` for an engine [`crate::setup_language`] built, then
+/// optimise it as Rhai would.
+// spec: REX#compiling-a-pattern
+/// Refuses a script that calls `std::regex` or `std::parse_regex` with a
+/// string literal that helper would throw for, whether or not the call
+/// would run. The check reads the script before optimisation, which would
+/// carry a `const` into a call's argument as though it were written there.
+pub fn compile(engine: &Engine, source: &str) -> Result<AST, Box<EvalAltResult>> {
+    let ast = engine.compile(source)?;
+    let limit = regex::engine_limit(engine)?;
+    let mut refused = None;
+    ast.walk(&mut |path: &[ASTNode]| {
+        let Some(ASTNode::Expr(Expr::FnCall(call, pos))) = path.last() else {
+            return true;
+        };
+        let in_std = matches!(&*call.namespace.path, [module] if module.name == "std");
+        let (true, [Expr::StringConstant(pattern, _)]) = (in_std, &*call.args) else {
+            return true;
+        };
+        let mut budget = regex::Budget::fresh(limit);
+        let result = match call.name.as_str() {
+            "regex" => regex::compile(pattern, &mut budget)
+                .map(drop)
+                .map_err(|e| format!("`pattern`: {e}")),
+            "parse_regex" => param_def::ParamKind::Regex
+                .parse(pattern, &mut budget)
+                .map(drop),
+            _ => return true,
+        };
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                refused = Some(EvalAltResult::ErrorRuntime(
+                    format!("std::{}: {e}", call.name).into(),
+                    *pos,
+                ));
+                false
+            }
+        }
+    });
+    match refused {
+        Some(e) => Err(e.into()),
+        None => Ok(engine.optimize_ast(&Scope::new(), ast, OptimizationLevel::Simple)),
+    }
+}
+
 // spec: BSL#evaluation
 // spec: BSL#enums
 /// Check a definition once its script has evaluated in full: resolve what the
@@ -213,14 +261,14 @@ const NO_TO_JSON: &str = "`to_json` is not available: use `std::encode_json`";
 /// to, which no single call could check because a later call can change what
 /// an earlier one depends on.
 // spec: BSL#evaluation
-pub fn finish_evaluation(app: &app::App) -> Result<(), String> {
+pub fn finish_evaluation(app: &app::App, limits: &crate::ScriptLimits) -> Result<(), String> {
     gate::resolve_exclusive_selections(app)?;
     let def = app.def.load();
     ingress::check_redirect_terminations(&def)?;
     ingress::check_claim_conflicts(&def)?;
     container::check_images_declared(&def)?;
     service::check_route_balances(&def)?;
-    param::check_params(&def)?;
+    param::check_params(&def, limits.max_regex_compiled_size)?;
     gate::check_gates(&def)
 }
 

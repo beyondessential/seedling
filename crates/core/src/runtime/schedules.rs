@@ -315,7 +315,9 @@ fn validate_empty_invocation(
     let Some(schema) = schema else {
         return Ok(ParamMap::default());
     };
-    crate::runtime::action_params::apply_schema(schema, serde_json::Map::new())
+    // With no params supplied only defaults are parsed, and each was accepted
+    // under the compiled size limit when the script declared it.
+    crate::runtime::action_params::apply_schema(schema, serde_json::Map::new(), 0)
         .map_err(|e| e.to_string())
 }
 

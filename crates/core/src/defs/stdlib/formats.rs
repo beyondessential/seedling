@@ -449,4 +449,8 @@ fn within_limits(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests evaluate snippets of BSL directly, not definitions"
+)]
 mod tests;

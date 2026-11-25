@@ -47,7 +47,7 @@ fn invoke_action(
     params: rhai::Map,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     let (engine, mut scope, _) = setup(&crate::ScriptLimits::default());
-    let ast = engine.compile(source).expect("script must compile");
+    let ast = crate::defs::compile(&engine, source).expect("script must compile");
     engine
         .run_ast_with_scope(&mut scope, &ast)
         .expect("top-level script must succeed");
@@ -72,8 +72,7 @@ fn invoke_action(
     let result = defs::app::with_action_call_table(captured.actions.clone(), Some(outer), || {
         let _guard = ActionClosureGuard::new(action_def_arc, String::new(), HashMap::new())
             .with_active_rt(rt);
-        let call_ast = engine
-            .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
+        let call_ast = crate::defs::compile(&engine, "__bsl_closure.call(__bsl_rt, __bsl_param)")
             .expect("call ast must compile");
         // The script's functions only: its statements already ran, as in replay.
         let merged = ast.clone_functions_only().merge(&call_ast);
@@ -402,7 +401,7 @@ fn run_outer_in_replay_context(
     );
 
     let (engine, mut scope, _) = setup(&crate::ScriptLimits::default());
-    let ast = engine.compile(source).expect("script must compile");
+    let ast = crate::defs::compile(&engine, source).expect("script must compile");
     engine
         .run_ast_with_scope(&mut scope, &ast)
         .expect("top-level script must succeed");
@@ -427,9 +426,9 @@ fn run_outer_in_replay_context(
                     &crate::runtime::seeds::Seed::for_tests(),
                     &crate::runtime::redact::Scope::empty(),
                 );
-            let call_ast = engine
-                .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
-                .expect("call ast must compile");
+            let call_ast =
+                crate::defs::compile(&engine, "__bsl_closure.call(__bsl_rt, __bsl_param)")
+                    .expect("call ast must compile");
             // The script's functions only: its statements already ran, as in replay.
             let merged = ast.clone_functions_only().merge(&call_ast);
             engine
@@ -566,6 +565,29 @@ fn an_invoked_closure_receives_parser_results() {
         rhai::Map::new(),
     )
     .expect("the invoked closure sees parser results");
+}
+
+// spec: ACN#action-invocation
+#[test]
+fn a_regex_passes_on_to_an_invoked_action_as_its_pattern() {
+    invoke_action(
+        r#"
+            app.on_action("inner", |rt, p| {
+                if type_of(p.pattern) != "Regex" { throw `pattern is ${type_of(p.pattern)}`; }
+                if !p.pattern.is_match("xab") { throw "pattern does not match"; }
+                if p.text != "a(b)?" { throw `text is ${p.text}`; }
+            }, #{
+                params: #{ pattern: #{ kind: "regex" }, text: #{ kind: "text" } },
+            });
+            app.on_action("outer", |rt, _p| {
+                let r = std::regex("a(b)?");
+                app.action("inner").invoke(#{ pattern: r, text: r });
+            });
+        "#,
+        "outer",
+        rhai::Map::new(),
+    )
+    .expect("a Regex is passed on as its pattern");
 }
 
 // spec: ACN#param-schemas

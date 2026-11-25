@@ -21,7 +21,10 @@ use std::collections::BTreeMap;
 use seedling_protocol::names::{ParamName, SiteVolumeName};
 
 use crate::{
-    defs::param_def::{ParamDef, ParamKind, ParsedValue, SuppliedValue},
+    defs::{
+        param_def::{ParamDef, ParamKind, ParsedValue, SuppliedValue},
+        regex::Budget,
+    },
     runtime::param_map::ParamMap,
 };
 
@@ -104,6 +107,7 @@ pub fn reject_reserved<'a>(
 pub fn apply_schema(
     schema: &BTreeMap<ParamName, ParamDef>,
     mut params: serde_json::Map<String, serde_json::Value>,
+    regex_limit: usize,
 ) -> Result<ParamMap, ParamValidationError> {
     let mut supplied = BTreeMap::new();
     for (name, def) in schema {
@@ -125,7 +129,7 @@ pub fn apply_schema(
         supplied.insert(key.to_owned(), value);
     }
 
-    let parsed = run_requirements(schema, &supplied)?;
+    let parsed = run_requirements(schema, &supplied, regex_limit)?;
     for name in schema.keys() {
         params.remove(name.as_str());
     }
@@ -216,6 +220,7 @@ pub trait VolumeLookup {
 pub fn run_requirements(
     schema: &BTreeMap<ParamName, ParamDef>,
     supplied: &BTreeMap<String, SuppliedValue>,
+    regex_limit: usize,
 ) -> Result<BTreeMap<String, ParsedValue>, ParamValidationError> {
     let mut parsed = BTreeMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -236,7 +241,10 @@ pub fn run_requirements(
         };
 
         // spec: ACN#kind-parsers
-        match req_def.kind.parse_supplied(&value) {
+        match req_def
+            .kind
+            .parse_supplied(&value, &mut Budget::fresh(regex_limit))
+        {
             Ok(value) => {
                 parsed.insert(field_str.to_owned(), value);
             }
@@ -258,7 +266,7 @@ mod tests {
     use seedling_protocol::names::ParamName;
     use serde_json::json;
 
-    use super::{ParamValidationError, VolumeLookup, apply_schema, validate_volume_params};
+    use super::{ParamValidationError, VolumeLookup, validate_volume_params};
     use crate::{
         defs::param_def::{IntRange, ParamDef, ParamKind, SuppliedValue},
         runtime::param_map::ParamMap,
@@ -291,6 +299,18 @@ mod tests {
 
     fn schema(name: &str, def: ParamDef) -> BTreeMap<ParamName, ParamDef> {
         BTreeMap::from([(ParamName::new(name).expect("param name"), def)])
+    }
+
+    /// Apply `schema` under the default limits.
+    fn apply_schema(
+        schema: &BTreeMap<ParamName, ParamDef>,
+        params: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<ParamMap, ParamValidationError> {
+        super::apply_schema(
+            schema,
+            params,
+            crate::ScriptLimits::default().max_regex_compiled_size,
+        )
     }
 
     fn supplied(
@@ -505,6 +525,24 @@ mod tests {
     }
 
     // spec: ACN#param-schemas
+    // spec: OPS#persistence
+    #[test]
+    fn a_regex_param_survives_persistence_as_a_regex() {
+        let map = apply_schema(
+            &schema("pattern", of_kind(ParamKind::Regex)),
+            supplied("pattern", json!("a(b)?")),
+        )
+        .expect("a valid pattern");
+        let persisted: ParamMap =
+            serde_json::from_str(&serde_json::to_string(&map).unwrap()).unwrap();
+        let restored = persisted.to_rhai().expect("restores");
+        let regex = restored["pattern"]
+            .clone()
+            .try_cast::<crate::defs::regex::Regex>()
+            .expect("restored as a Regex");
+        assert_eq!(regex.pattern(), "a(b)?");
+    }
+
     // spec: ACN#kind-parsers
     #[test]
     fn an_empty_param_is_absent_rather_than_refused_by_its_kind() {
@@ -521,6 +559,7 @@ mod tests {
     // spec: URL#hostnames
     // spec: URL#components
     // spec: URL#url-origins
+    // spec: REX#compiling-a-pattern
     #[test]
     fn a_version_purl_or_url_param_is_checked_by_its_kind() {
         for (kind, refused, accepted, delivered) in [
@@ -561,6 +600,7 @@ mod tests {
                 "Example.org",
                 json!("example.org"),
             ),
+            (ParamKind::Regex, "a(b", "a(b)?", json!("a(b)?")),
         ] {
             let err = apply_schema(
                 &schema("target", of_kind(kind.clone())),

@@ -108,6 +108,7 @@ impl AppSeed {
 thread_local! {
     static DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PASSWORD_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static REGEX_COMPILED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static APP_SEED: RefCell<Option<AppSeed>> = const { RefCell::new(None) };
     static OPERATION_SEED: RefCell<Option<Seed>> = const { RefCell::new(None) };
     static DERIVED: RefCell<Option<SensitiveValues>> = const { RefCell::new(None) };
@@ -149,6 +150,7 @@ pub struct AppSeedFrame {
     previous_withholding: Option<Withholding>,
     previous_derivations: usize,
     previous_password_hashes: usize,
+    previous_regex_compiled: usize,
 }
 
 impl AppSeedFrame {
@@ -159,6 +161,7 @@ impl AppSeedFrame {
             previous_withholding: WITHHOLDING.with(|w| w.replace(Some(Withholding::default()))),
             previous_derivations: DERIVATIONS.with(|c| c.replace(0)),
             previous_password_hashes: PASSWORD_HASHES.with(|c| c.replace(0)),
+            previous_regex_compiled: REGEX_COMPILED.with(|c| c.replace(0)),
         }
     }
 
@@ -208,6 +211,7 @@ impl Drop for AppSeedFrame {
         WITHHOLDING.with(|w| *w.borrow_mut() = self.previous_withholding.take());
         DERIVATIONS.with(|c| c.set(self.previous_derivations));
         PASSWORD_HASHES.with(|c| c.set(self.previous_password_hashes));
+        REGEX_COMPILED.with(|c| c.set(self.previous_regex_compiled));
     }
 }
 
@@ -219,6 +223,7 @@ pub struct OperationSeedFrame {
     previous_scope: Option<Scope>,
     previous_derivations: usize,
     previous_password_hashes: usize,
+    previous_regex_compiled: usize,
 }
 
 impl OperationSeedFrame {
@@ -228,6 +233,7 @@ impl OperationSeedFrame {
             previous_scope: OPERATION_SCOPE.with(|s| s.replace(Some(scope.clone()))),
             previous_derivations: DERIVATIONS.with(|c| c.replace(0)),
             previous_password_hashes: PASSWORD_HASHES.with(|c| c.replace(0)),
+            previous_regex_compiled: REGEX_COMPILED.with(|c| c.replace(0)),
         }
     }
 }
@@ -238,6 +244,7 @@ impl Drop for OperationSeedFrame {
         OPERATION_SCOPE.with(|s| *s.borrow_mut() = self.previous_scope.take());
         DERIVATIONS.with(|c| c.set(self.previous_derivations));
         PASSWORD_HASHES.with(|c| c.set(self.previous_password_hashes));
+        REGEX_COMPILED.with(|c| c.set(self.previous_regex_compiled));
     }
 }
 
@@ -266,6 +273,18 @@ pub fn count_derivation(limit: usize) -> bool {
 /// [`count_derivation`] counts derived values.
 pub fn count_password_hash(limit: usize) -> bool {
     count(&PASSWORD_HASHES, limit)
+}
+
+// spec: LIM#limits
+/// The bytes of compiled pattern the current frame has counted.
+pub fn regex_compiled() -> usize {
+    REGEX_COMPILED.with(std::cell::Cell::get)
+}
+
+// spec: LIM#limits
+/// Set the bytes of compiled pattern the current frame has counted.
+pub fn set_regex_compiled(bytes: usize) {
+    REGEX_COMPILED.with(|c| c.set(bytes));
 }
 
 /// The seed installed for the static and validator contexts.

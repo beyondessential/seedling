@@ -76,7 +76,7 @@ fn loaded(
         d
     });
     defs::app::set_appdef_holder(&app.def);
-    let ast = engine.compile(source).expect("the definition compiles");
+    let ast = crate::defs::compile(&engine, source).expect("the definition compiles");
     engine
         .run_ast_with_scope(&mut scope, &ast)
         .expect("the definition runs");

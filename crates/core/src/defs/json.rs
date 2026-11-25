@@ -6,6 +6,7 @@ use serde_json::Value;
 use super::{
     duration::Duration,
     ip::{IpAddress, IpRange, IpSubnet},
+    regex::Regex,
     version::{SemVer, Version},
 };
 
@@ -41,8 +42,9 @@ pub fn to_map(map: &serde_json::Map<String, Value>) -> rhai::Map {
 }
 
 /// Convert a BSL value to JSON, reading the unit value as `null`, taking a
-/// `Version`, `SemVer` or `Duration` as its text, and an `IpAddress`,
-/// `IpSubnet` or `IpRange` as its canonical text.
+/// `Version`, `SemVer` or `Duration` as its text, an `IpAddress`,
+/// `IpSubnet` or `IpRange` as its canonical text, and a `Regex` as its
+/// pattern.
 pub fn from_dynamic(v: Dynamic) -> Result<Value, String> {
     if v.is_unit() {
         Ok(Value::Null)
@@ -80,6 +82,9 @@ pub fn from_dynamic(v: Dynamic) -> Result<Value, String> {
     } else if let Some(duration) = v.clone().try_cast::<Duration>() {
         // spec: ACN#action-invocation
         Ok(Value::String(duration.to_string()))
+    } else if let Some(regex) = v.clone().try_cast::<Regex>() {
+        // spec: ACN#action-invocation
+        Ok(Value::String(regex.pattern().to_owned()))
     } else if v.is_array() {
         v.cast::<rhai::Array>()
             .into_iter()

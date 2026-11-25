@@ -379,6 +379,18 @@ fn action_param_kind_purl_accepted() {
     assert_eq!(param.kind, crate::defs::param_def::ParamKind::Purl);
 }
 
+// spec: ACN#param-schemas
+#[test]
+fn a_malformed_regex_default_value_is_refused() {
+    let err = run_test_script_err(
+        r#"app.on_action("act", |rt, _p| {}, #{ params: #{ pat: #{ kind: "regex", default_value: "(" } } });"#,
+    );
+    assert!(
+        err.to_string().contains("not a valid regular expression"),
+        "{err}"
+    );
+}
+
 // spec: PARAM#schema
 // spec: ACN#param-kinds
 #[test]
@@ -389,6 +401,7 @@ fn param_schema_kind_url() {
         ("url", ParamKind::Url),
         ("url-origin", ParamKind::UrlOrigin),
         ("hostname", ParamKind::Hostname),
+        ("regex", ParamKind::Regex),
     ] {
         let app = run_test_script_app(&format!(
             r#"

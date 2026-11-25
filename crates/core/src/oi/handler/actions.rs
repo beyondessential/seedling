@@ -115,10 +115,16 @@ fn validate_volume_params(
 
 // spec: ACI#invoking-an-action
 fn apply_action_param_schema(
+    state: &OiState,
     action_params_schema: &BTreeMap<ParamName, ParamDef>,
     params: serde_json::Map<String, serde_json::Value>,
 ) -> Result<ParamMap, OiError> {
-    action_params::apply_schema(action_params_schema, params).map_err(validation_error_to_oi)
+    action_params::apply_schema(
+        action_params_schema,
+        params,
+        state.script_limits.max_regex_compiled_size,
+    )
+    .map_err(validation_error_to_oi)
 }
 
 /// The refusal of a request the scheduler's admission rejected.
@@ -191,7 +197,7 @@ pub(crate) fn invoke_action(
             .ok_or_else(|| OiError::not_found(format!("action not found: {action_name}")))?;
 
         // spec: ACI#invoking-an-action
-        let action_params = apply_action_param_schema(&action_def.params, supplied_params)?;
+        let action_params = apply_action_param_schema(state, &action_def.params, supplied_params)?;
         // spec: ACN#volume-params
         validate_volume_params(state, &action_def.params, &action_params)?;
 
