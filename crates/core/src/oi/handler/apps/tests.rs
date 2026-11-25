@@ -1690,6 +1690,11 @@ fn an_env_value_containing_a_derived_value_is_null() {
         web.env("RAW_HEX", std::encode_hex(raw));
         web.env("DIGEST", std::encode_hex(std::digest_sha256("plain")));
         web.env("PLAIN", "visible");
+        let odd = std::random_string("odd", 24, "' ");
+        web.env("SHELL", "sh -c " + std::quote_shell(["--pw", odd]));
+        web.env("PCT", std::encode_percent(odd));
+        web.env("RAW_PCT", std::encode_percent(raw));
+        web.env("QUOTED", std::quote_shell("plain"));
     "#;
     oi.call("/apps/create", json!({ "app": "demo", "script": script }))
         .unwrap();
@@ -1714,6 +1719,14 @@ fn an_env_value_containing_a_derived_value_is_null() {
         "computed from nothing withheld: {env}"
     );
     assert_eq!(env["PLAIN"], json!("visible"));
+    assert_eq!(
+        env["SHELL"],
+        json!(null),
+        "a quoted array holding a derived value: {env}"
+    );
+    assert_eq!(env["PCT"], json!(null), "a percent-encoded string: {env}");
+    assert_eq!(env["RAW_PCT"], json!(null), "a percent-encoded Blob: {env}");
+    assert_eq!(env["QUOTED"], json!("plain"));
 }
 
 // spec: APPS#redacted-values

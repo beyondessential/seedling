@@ -3,20 +3,16 @@
 
 use base64::{Engine as _, engine::general_purpose};
 use hmac::{Hmac, KeyInit, Mac};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode, percent_encode};
 use rhai::{Dynamic, EvalAltResult, FuncRegistration, NativeCallContext};
 use sha2::{Digest, Sha256, Sha512};
 
 use super::{
-    BLOB, STRING, blob_forms,
+    BLOB, HelperResult, STRING, blob_result,
     bytes::{ByteArg, take_byte_arg},
-    helper_limits, too_large, within,
+    max_blob, max_string, text_result, unary, within,
 };
-use crate::{
-    defs::take::take_string,
-    runtime::{barrier::runtime::is_in_action_closure, seeds},
-};
-
-type HelperResult = Result<Dynamic, Box<EvalAltResult>>;
+use crate::defs::take::take_string;
 
 pub(super) fn register(module: &mut rhai::Module) {
     // spec: ENC#encodings
@@ -86,6 +82,25 @@ pub(super) fn register(module: &mut rhai::Module) {
             .map_err(|e| -> Box<EvalAltResult> { format!("`data` is not UTF-8: {e}").into() })?;
         text_result(ctx, &[&data], text)
     });
+    // spec: ENC#encodings
+    unary(module, "encode_percent", |ctx, data| {
+        let data = take_byte_arg("data", data)?;
+        let encoded = percent_encode(&data.bytes, UNRESERVED_KEPT);
+        within(encoded.clone().map(str::len).sum(), max_string(ctx), STRING)?;
+        text_result(ctx, &[&data], encoded.to_string())
+    });
+    // spec: ENC#encodings
+    unary(module, "decode_percent", |ctx, text| {
+        let text = take_text(text)?;
+        if let Some(at) = malformed_escape(&text.bytes) {
+            return Err(not_encoded(
+                "percent-encoded",
+                format!("`%` at position {at} is not followed by two hexadecimal digits"),
+            ));
+        }
+        let bytes = percent_decode(&text.bytes).collect();
+        blob_result(ctx, &[&text], bytes)
+    });
 
     // spec: ENC#digests
     unary(module, "digest_sha256", |ctx, data| {
@@ -145,15 +160,6 @@ pub(super) fn register(module: &mut rhai::Module) {
     });
 }
 
-fn unary(
-    module: &mut rhai::Module,
-    name: &str,
-    f: fn(&NativeCallContext, Dynamic) -> HelperResult,
-) {
-    FuncRegistration::new(name)
-        .set_into_module(module, move |ctx: NativeCallContext, a: Dynamic| f(&ctx, a));
-}
-
 fn binary(
     module: &mut rhai::Module,
     name: &str,
@@ -187,6 +193,24 @@ fn hex_error(e: hex::FromHexError) -> String {
     }
 }
 
+// spec: ENC#encodings
+/// Every byte but the unreserved characters is percent-encoded.
+pub(super) const UNRESERVED_KEPT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+// spec: ENC#encodings
+/// The position of the first `%` not followed by two hexadecimal digits,
+/// which the percent-encoding decoder would otherwise pass through as itself.
+fn malformed_escape(text: &[u8]) -> Option<usize> {
+    text.iter().enumerate().find_map(|(i, &b)| {
+        let escape = text.get(i + 1..i + 3);
+        (b == b'%' && !escape.is_some_and(|e| e.iter().all(u8::is_ascii_hexdigit))).then_some(i)
+    })
+}
+
 fn base64_error(e: base64::DecodeError) -> String {
     match e {
         base64::DecodeError::InvalidByte(offset, _) => {
@@ -198,62 +222,6 @@ fn base64_error(e: base64::DecodeError) -> String {
         }
         base64::DecodeError::InvalidPadding => "invalid padding".into(),
     }
-}
-
-fn max_string(ctx: &NativeCallContext) -> usize {
-    ctx.engine().max_string_size()
-}
-
-// spec: LIM#limits
-/// The engine counts a Blob's bytes against its array limit.
-fn max_blob(ctx: &NativeCallContext) -> usize {
-    ctx.engine().max_array_size()
-}
-
-// spec: ENC#results
-fn text_result(ctx: &NativeCallContext, args: &[&ByteArg], text: String) -> HelperResult {
-    within(text.len(), max_string(ctx), STRING)?;
-    settle(ctx, args, || vec![text.as_bytes().to_vec()])?;
-    Ok(text.into())
-}
-
-// spec: ENC#results
-fn blob_result(ctx: &NativeCallContext, args: &[&ByteArg], bytes: Vec<u8>) -> HelperResult {
-    within(bytes.len(), max_blob(ctx), BLOB)?;
-    settle(ctx, args, || blob_forms(&bytes))?;
-    Ok(Dynamic::from_blob(bytes))
-}
-
-// spec: SEC#redaction
-/// Withhold a result when any of its arguments contains a withheld value.
-/// Results computed in an action closure are the operation's own.
-fn settle(
-    ctx: &NativeCallContext,
-    args: &[&ByteArg],
-    forms: impl FnOnce() -> Vec<Vec<u8>>,
-) -> Result<(), Box<EvalAltResult>> {
-    let held: Vec<&[u8]> = args.iter().filter_map(|a| a.withholdable()).collect();
-    if is_in_action_closure() {
-        // spec: SEC#matching
-        let sensitive = seeds::operation_scope().map(|scope| scope.values());
-        if !sensitive.is_some_and(|s| held.iter().any(|a| s.found_in_bytes(a))) {
-            return Ok(());
-        }
-        // spec: LIM#limits
-        if !seeds::count_derivation(helper_limits(ctx)?.derived_values) {
-            return Err(too_large("Number of derived values"));
-        }
-        seeds::record_operation_derived(forms());
-        return Ok(());
-    }
-    let Some(dependence) = seeds::dependence(&held) else {
-        return Ok(());
-    };
-    // spec: LIM#limits
-    if !seeds::withhold(dependence, forms(), helper_limits(ctx)?.derived_values) {
-        return Err(too_large("Number of derived values"));
-    }
-    Ok(())
 }
 
 // spec: ENC#name-based-uuids
