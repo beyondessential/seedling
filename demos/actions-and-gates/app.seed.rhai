@@ -39,7 +39,8 @@ let greeting = app.param("greeting")
     .description("Greeting rendered into the page");
 
 let tools = "docker.io/library/alpine:3.24.4";
-let initialiser = "docker.io/library/busybox:1.38.0-musl";
+// The busybox image carries httpd, which Alpine's busybox leaves out.
+let busybox = "docker.io/library/busybox:1.38.0-musl";
 
 // ── Resources ────────────────────────────────────────────────────────────────
 
@@ -52,7 +53,7 @@ web_svc.ingress(hostname.value(), 443)
     .redirect();
 
 let web = app.deployment("web")
-    .image(tools)
+    .image(busybox)
     .command(["httpd", "-f", "-p", "8080", "-h", "/www"])
     .mount("/www", site)
     .mount("/store", store)
@@ -95,7 +96,7 @@ let migrate = app.gate("migrate")
     .run(|rt, last| {
         let to = format.parsed();
         if last == () {
-            in_store.call(rt, initialiser,
+            in_store.call(rt, busybox,
                 `echo "first entry" > /store/data.txt && echo ${to} > /store/FORMAT`);
             return;
         }
@@ -217,7 +218,7 @@ app.on_action("count", |rt, _p| {
 // and ready_eventually() are allowed on what these return.
 app.on_action("warm", |rt, _p| {
     rt.warm_certs(app).ready("5m");
-    rt.warm_images(app.job().image(initialiser)).ready_eventually();
+    rt.warm_images(app.job().image(busybox)).ready_eventually();
 }, #{ description: "Provision certificates and pull images ahead of time" });
 
 // A `volume` param asks for a site volume, bound for this operation only and
