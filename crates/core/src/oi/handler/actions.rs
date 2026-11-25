@@ -14,6 +14,7 @@ use crate::{
     runtime::{
         AppPhase,
         action_params::{self, ParamValidationError, VolumeLookup},
+        operations::admission::{Admission, admit_and_spawn},
         param_map::ParamMap,
         scheduler::{CancelOutcome, RejectReason},
     },
@@ -211,8 +212,8 @@ pub(crate) fn invoke_action(
     // lock, so an uninstall could have landed in between. The scheduler reads
     // the phase under its own lock and refuses an app being torn down, so the
     // decision is made where every admission passes rather than here.
-    let admission = lifecycle::admit_and_spawn(
-        state,
+    let admission = admit_and_spawn(
+        &state.engine,
         app_name,
         target,
         action_params,
@@ -222,16 +223,16 @@ pub(crate) fn invoke_action(
         Some(Arc::clone(&ctx.events.actor)),
     );
     match admission {
-        lifecycle::Admission::Started(operation_id) => {
+        Admission::Started(operation_id) => {
             tracing::info!(app = %app_name, action = %action_name, schedule = "accepted", "invoke_action");
             Ok(json!({ "schedule": "accepted", "operation_id": operation_id.0 }))
         }
-        lifecycle::Admission::Queued(operation_id) => {
+        Admission::Queued(operation_id) => {
             tracing::info!(app = %app_name, action = %action_name, schedule = "queued", "invoke_action");
             Ok(json!({ "schedule": "queued", "operation_id": operation_id.0 }))
         }
-        lifecycle::Admission::CannotPersist(e) => Err(e),
-        lifecycle::Admission::Rejected(reason) => Err(rejection_error(app_name, reason)),
+        Admission::CannotPersist(e) => Err(e),
+        Admission::Rejected(reason) => Err(rejection_error(app_name, reason)),
     }
 }
 

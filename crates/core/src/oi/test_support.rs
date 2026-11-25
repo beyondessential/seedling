@@ -18,6 +18,7 @@ use crate::oi::state::OiState;
 use crate::runtime::apps::AppRegistry;
 use crate::runtime::db::DbHandle;
 use crate::runtime::definition::fetch::testing::FakeRegistry;
+use crate::runtime::operations::Engine;
 use crate::runtime::scheduler::Scheduler;
 use crate::runtime::secrets::Cipher;
 use crate::runtime::tls::issuance::Coordinator;
@@ -118,32 +119,46 @@ impl TestOi {
             session: None,
         });
 
-        let state = Arc::new(OiState {
+        let engine = Arc::new(Engine {
             registry: Arc::new(RwLock::new(AppRegistry::new())),
+            db: db.clone(),
+            db_path: data_dir.path().join("seedling.db"),
+            scheduler: Arc::new(Mutex::new(Scheduler::new())),
+            tick_notify: Arc::new(tokio::sync::Notify::new()),
+            container_runtime: container_runtime.unwrap_or_else(|| Arc::clone(&driver.container)),
+            driver,
+            event_tx: event_tx.clone(),
+            script_limits: ScriptLimits::default(),
+            cipher: Arc::clone(&cipher),
+            gate_runtime: Arc::new(crate::runtime::gates::GateRuntime::new()),
+        });
+        let state = Arc::new(OiState {
+            registry: Arc::clone(&engine.registry),
             spki_fingerprint: OnceLock::new(),
             start_time: Instant::now(),
             started_at: jiff::Timestamp::now(),
-            db: db.clone(),
-            scheduler: Arc::new(Mutex::new(Scheduler::new())),
-            tick_notify: Arc::new(tokio::sync::Notify::new()),
-            db_path: data_dir.path().join("seedling.db"),
+            db: engine.db.clone(),
+            scheduler: Arc::clone(&engine.scheduler),
+            tick_notify: Arc::clone(&engine.tick_notify),
+            db_path: engine.db_path.clone(),
             trusted_keys: crate::oi::auth::new_trusted_keys(),
             shells: crate::oi::shells::ShellRegistry::new(),
             forwards: crate::oi::forwards::ForwardRegistry::new(),
             canopy: Arc::new(crate::oi::canopy::CanopyState::new()),
-            container_runtime: container_runtime.unwrap_or_else(|| Arc::clone(&driver.container)),
-            driver,
+            container_runtime: Arc::clone(&engine.container_runtime),
+            driver: Arc::clone(&engine.driver),
             node_prefix: "fd5e:ed11:9000::/48".parse().expect("valid /48"),
-            event_tx: event_tx.clone(),
-            script_limits: ScriptLimits::default(),
+            event_tx: engine.event_tx.clone(),
+            script_limits: engine.script_limits.clone(),
             dns_servers: Vec::new(),
-            cipher: Arc::clone(&cipher),
+            cipher: Arc::clone(&engine.cipher),
             tls_coordinator: Coordinator::new(db, cipher),
             caddy_data_path: tokio::sync::OnceCell::new(),
             tailscale_provider,
             site_resolver: None,
             definition_registry: Arc::clone(&registry) as _,
-            gate_runtime: Arc::new(crate::runtime::gates::GateRuntime::new()),
+            gate_runtime: Arc::clone(&engine.gate_runtime),
+            engine,
         });
 
         // As the daemon does once its state exists: without it the coordinator
@@ -406,7 +421,7 @@ mod tests {
                 .unwrap()
         });
         let first = fire(&oi);
-        crate::oi::handler::actions::lifecycle::persist_queued_fire(&oi.state, &first, now);
+        crate::runtime::operations::admission::persist_queued_fire(&oi.state.engine, &first, now);
         assert_eq!(last_fired(&oi), "2026-04-21T17:05:00Z");
         assert_eq!(oi.state.scheduler.lock().queue_iter().count(), 0);
 
@@ -424,7 +439,7 @@ mod tests {
                 .unwrap()
         });
         let second = fire(&oi);
-        crate::oi::handler::actions::lifecycle::persist_queued_fire(&oi.state, &second, now);
+        crate::runtime::operations::admission::persist_queued_fire(&oi.state.engine, &second, now);
         assert_eq!(last_fired(&oi), now.to_string());
         let _ = ScheduleResult::Queued;
     }
@@ -477,7 +492,7 @@ mod tests {
                 .unwrap();
         }
 
-        crate::oi::handler::actions::lifecycle::restore_queue(&oi.state, vec![ghost, real]);
+        crate::runtime::operations::admission::restore_queue(&oi.state.engine, vec![ghost, real]);
 
         let queue: Vec<String> = oi
             .state

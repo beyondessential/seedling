@@ -646,11 +646,11 @@ pub(super) async fn run_app_shell(
     // spec: ACN#volume-params
     // A binding that cannot be made fails the session without running the
     // closure.
-    let crate::oi::handler::actions::lifecycle::BoundParams {
+    let crate::runtime::operations::BoundParams {
         params: validated_params,
         bindings: operation_volume_bindings,
-    } = match crate::oi::handler::actions::lifecycle::bind_volume_params(
-        state,
+    } = match crate::runtime::operations::bind_volume_params(
+        &state.engine,
         schema,
         validated_params,
         &operation_id.0,

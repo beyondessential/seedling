@@ -335,7 +335,7 @@ fn a_volume_param_that_cannot_be_bound_fails_the_dispatch_rather_than_being_skip
     params.insert("data".into(), serde_json::json!("vanished"));
 
     let err = super::bind_volume_params(
-        &oi.state,
+        &oi.state.engine,
         &schema,
         crate::runtime::param_map::ParamMap::from_values(params),
         "op-1",
@@ -346,7 +346,7 @@ fn a_volume_param_that_cannot_be_bound_fails_the_dispatch_rather_than_being_skip
 
     // A param that was not supplied binds nothing and is not an error.
     let none = super::bind_volume_params(
-        &oi.state,
+        &oi.state.engine,
         &schema,
         crate::runtime::param_map::ParamMap::default(),
         "op-1",
@@ -358,7 +358,7 @@ fn a_volume_param_that_cannot_be_bound_fails_the_dispatch_rather_than_being_skip
     let mut params = serde_json::Map::new();
     params.insert("data".into(), serde_json::json!(""));
     let empty = super::bind_volume_params(
-        &oi.state,
+        &oi.state.engine,
         &schema,
         crate::runtime::param_map::ParamMap::from_values(params),
         "op-1",
@@ -417,7 +417,7 @@ fn a_replayed_operation_binds_its_volumes_under_their_persisted_names() {
     assert!(matches!(admitted, ScheduleResult::Accepted));
     oi.block_on(async {
         super::spawn_accepted_operation(
-            Arc::clone(&oi.state),
+            Arc::clone(&oi.state.engine),
             app,
             action,
             operation_id,

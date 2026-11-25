@@ -24,15 +24,15 @@ use super::{
 };
 use crate::{
     defs::{app::AppDef, resource::ResourceId},
-    oi::{
-        handler::actions::lifecycle::{Admission, admit_and_spawn},
-        state::OiState,
-    },
     runtime::{
         AppPhase,
         db::Db,
         faults::{self, FaultKey, FaultMeta, FaultScope},
         history::clear_queued_operation,
+        operations::{
+            Engine,
+            admission::{Admission, admit_and_spawn},
+        },
         secrets::{Cipher, KeyDigest},
         stopped::{self, StoppedSet},
     },
@@ -48,7 +48,7 @@ struct Tracked {
     phase: Arc<Mutex<AppPhase>>,
 }
 
-fn tracked(state: &OiState, name: Option<&AppName>) -> Vec<Tracked> {
+fn tracked(state: &Engine, name: Option<&AppName>) -> Vec<Tracked> {
     let reg = state.registry.read();
     reg.names()
         .into_iter()
@@ -76,7 +76,7 @@ struct Synced {
 /// The gate half of one iteration, for every installed app.
 // spec: GRUN#initiating-runs
 // spec: GRUN#checks
-pub async fn drive(state: &Arc<OiState>) {
+pub async fn drive(state: &Arc<Engine>) {
     for app in tracked(state, None) {
         drive_app(state, &app).await;
     }
@@ -84,7 +84,7 @@ pub async fn drive(state: &Arc<OiState>) {
 
 /// Bring the gate records, holds, faults and setup record of `app` up to date,
 /// as they are after a run ends.
-pub async fn sync_app(state: &Arc<OiState>, app: &AppName) {
+pub async fn sync_app(state: &Arc<Engine>, app: &AppName) {
     for app in tracked(state, Some(app)) {
         sync(state, &app).await;
     }
@@ -92,7 +92,7 @@ pub async fn sync_app(state: &Arc<OiState>, app: &AppName) {
 
 /// Clear the hold of `gate` if the gate is satisfied for its current key.
 // spec: RCN#gate-holds
-pub async fn release_hold_if_satisfied(state: &Arc<OiState>, app: &AppName, gate: &GateName) {
+pub async fn release_hold_if_satisfied(state: &Arc<Engine>, app: &AppName, gate: &GateName) {
     for app in tracked(state, Some(app)) {
         let (name, gate, def, cipher, error, remembered) = (
             app.name.clone(),
@@ -113,7 +113,7 @@ pub async fn release_hold_if_satisfied(state: &Arc<OiState>, app: &AppName, gate
     }
 }
 
-async fn sync(state: &Arc<OiState>, app: &Tracked) -> Synced {
+async fn sync(state: &Arc<Engine>, app: &Tracked) -> Synced {
     let (name, def, cipher, error, remembered) = (
         app.name.clone(),
         Arc::clone(&app.def),
@@ -354,7 +354,7 @@ fn keep_what_cannot_be_told(
     }
 }
 
-async fn drive_app(state: &Arc<OiState>, app: &Tracked) {
+async fn drive_app(state: &Arc<Engine>, app: &Tracked) {
     let synced = sync(state, app).await;
     let active = state.scheduler.lock().active().cloned();
     let running = |gate: &GateName| {
@@ -385,7 +385,7 @@ async fn drive_app(state: &Arc<OiState>, app: &Tracked) {
 /// that could not be written, are written as soon as they can be.
 // spec: GRUN#checks
 // spec: GRUN#retries
-async fn settle_unrecorded(state: &Arc<OiState>, app: &Tracked) {
+async fn settle_unrecorded(state: &Arc<Engine>, app: &Tracked) {
     let remembered = state.gate_runtime.remembered(&app.name);
     for (gate, failed) in &remembered.failed {
         if let Err(e) = write_failed_runs(state, &app.name, gate, failed) {
@@ -407,7 +407,7 @@ async fn settle_unrecorded(state: &Arc<OiState>, app: &Tracked) {
 /// holding them once they are.
 // spec: GRUN#retries
 pub(super) fn write_failed_runs(
-    state: &OiState,
+    state: &Engine,
     app: &AppName,
     gate: &GateName,
     failed: &FailedRuns,
@@ -422,7 +422,7 @@ pub(super) fn write_failed_runs(
 
 /// Withdraw the queued runs of gates the definition no longer declares.
 // spec: GRUN#gates-no-longer-declared
-async fn withdraw_undeclared(state: &Arc<OiState>, app: &Tracked) {
+async fn withdraw_undeclared(state: &Arc<Engine>, app: &Tracked) {
     if app.definition_error.is_some() {
         return;
     }
@@ -457,7 +457,7 @@ async fn withdraw_undeclared(state: &Arc<OiState>, app: &Tracked) {
 /// Run the checks that are due.
 // spec: GRUN#checks
 async fn start_checks(
-    state: &Arc<OiState>,
+    state: &Arc<Engine>,
     app: &Tracked,
     gates: &AppGates,
     world: &World,
@@ -544,7 +544,7 @@ async fn start_checks(
 /// Record how a check that no run is waiting on came out.
 // spec: GRUN#checks
 async fn apply_check_outcome(
-    state: &Arc<OiState>,
+    state: &Arc<Engine>,
     app: &AppName,
     gate: &GateName,
     digest: KeyDigest,
@@ -639,7 +639,7 @@ fn record_unavailable_check(
 /// A request the concurrency rules do not accept is not a failure of the
 /// gate: nothing is recorded, and the next iteration asks again.
 // spec: GRUN#initiating-runs
-async fn initiate_runs(state: &Arc<OiState>, app: &Tracked, gates: &AppGates, world: &World) {
+async fn initiate_runs(state: &Arc<Engine>, app: &Tracked, gates: &AppGates, world: &World) {
     if state.scheduler.lock().blocker_for(&app.name).is_some() {
         return;
     }

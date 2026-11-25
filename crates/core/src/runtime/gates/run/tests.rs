@@ -125,7 +125,7 @@ fn run_at(oi: &TestOi, name: &str, cancelled: bool, generation: u64) -> Vec<Stri
     let mut events = oi.state.event_tx.subscribe();
     let mut input = gate_input(oi, name, cancelled);
     input.op_ctx.operation_generation = generation;
-    oi.block_on(run_gate(&oi.state, input));
+    oi.block_on(run_gate(&oi.state.engine, input));
     kinds_of(&mut events)
 }
 
@@ -524,7 +524,7 @@ fn a_run_whose_failure_cannot_be_written_still_waits_out_its_delay_and_files_gat
             .execute_batch("DROP TRIGGER refuse_failure; DROP TRIGGER refuse_first_failure;")
             .unwrap();
     });
-    oi.block_on(drive::drive(&oi.state));
+    oi.block_on(drive::drive(&oi.state.engine));
     let written = record(&oi, "migrate");
     assert!(
         written.last_failure_at.is_some(),
@@ -578,7 +578,7 @@ fn a_run_pulls_the_images_of_its_body_its_check_and_its_dependants_and_no_others
     let input = gate_input(&oi, "migrate", false);
     let def = input.app.def.load_full();
     let run = Run {
-        state: &oi.state,
+        state: &oi.state.engine,
         app_name: app_name(),
         gate: gate("migrate"),
         op_ctx: input.op_ctx.clone(),
@@ -759,7 +759,7 @@ fn probe_job(oi: &TestOi) -> Resource {
 /// Wait for the check's instance to be started, and report the host's
 /// observations of it as `observed` says.
 async fn feed_check(
-    state: &Arc<OiState>,
+    state: &Arc<Engine>,
     observed: impl Fn(&Db, &ResourceInstance) + Send + 'static,
 ) {
     let until = Instant::now() + Duration::from_secs(60);
@@ -801,7 +801,7 @@ fn check_with(
     observed: impl Fn(&Db, &ResourceInstance) + Send + 'static,
 ) -> CheckOutcome {
     let job = probe_job(oi);
-    let state = Arc::clone(&oi.state);
+    let state = Arc::clone(&oi.state.engine);
     oi.block_on(async move {
         let runner = tokio::spawn({
             let state = Arc::clone(&state);
@@ -846,7 +846,7 @@ fn a_running_check_is_not_a_shell_session() {
     let oi = TestOi::new();
     installed(&oi, CHECKED);
     let job = probe_job(&oi);
-    let state = Arc::clone(&oi.state);
+    let state = Arc::clone(&oi.state.engine);
     oi.block_on(async move {
         let runner = tokio::spawn({
             let state = Arc::clone(&state);
@@ -898,7 +898,7 @@ fn a_check_whose_job_cannot_be_recorded_could_not_be_run() {
             .unwrap();
     });
     let outcome = oi.block_on(run_check(
-        &oi.state,
+        &oi.state.engine,
         &app_name(),
         &gate("ready"),
         probe_job(&oi),
@@ -1017,7 +1017,7 @@ fn run_ready(
     observed: impl Fn(&Db, &ResourceInstance) + Send + 'static,
 ) -> Vec<String> {
     let mut events = oi.state.event_tx.subscribe();
-    let state = Arc::clone(&oi.state);
+    let state = Arc::clone(&oi.state.engine);
     let input = gate_input(oi, "ready", false);
     oi.block_on(async move {
         let feeder = tokio::spawn({
@@ -1112,7 +1112,7 @@ fn a_run_does_not_wait_for_a_resource_a_change_removed_from_its_hold() {
     });
 
     let input = gate_input(&oi, "migrate", false);
-    let state = Arc::clone(&oi.state);
+    let state = Arc::clone(&oi.state.engine);
     let ended = oi.block_on(async move {
         let run = tokio::spawn({
             let state = Arc::clone(&state);

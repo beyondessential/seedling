@@ -505,7 +505,7 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 }
 
 fn drive_once(oi: &TestOi) {
-    oi.block_on(drive(&oi.state));
+    oi.block_on(drive(&oi.state.engine));
 }
 
 // spec: GRUN#initiating-runs
@@ -729,7 +729,7 @@ fn a_queued_run_of_a_gate_the_definition_no_longer_declares_is_withdrawn() {
         .unwrap()
         .operation_id
         .clone();
-    crate::oi::handler::actions::lifecycle::persist_queued(&oi.state, &id).unwrap();
+    crate::runtime::operations::admission::persist_queued(&oi.state.engine, &id).unwrap();
     let persisted = |oi: &TestOi, gate: &'static str| -> i64 {
         oi.state.db.call(move |db| {
             db.conn
@@ -1186,7 +1186,7 @@ fn a_run_cancels_the_check_in_flight_so_its_failure_cannot_land_after_the_runs_s
             db_path: oi.state.db_path.clone(),
         }
     };
-    let state = Arc::clone(&oi.state);
+    let state = Arc::clone(&oi.state.engine);
     oi.block_on(async move {
         let run = tokio::spawn({
             let state = Arc::clone(&state);
