@@ -40,7 +40,7 @@ pub struct RedirectDef {
 pub(crate) fn check_hostname(hostname: &str) -> Result<(), String> {
     if hostname.is_empty() || hostname.len() > 253 {
         return Err(format!(
-            "hostname must be 1–253 characters, got {}",
+            "hostname must be 1-253 characters, got {}",
             hostname.len()
         ));
     }
@@ -52,7 +52,7 @@ pub(crate) fn check_hostname(hostname: &str) -> Result<(), String> {
     for label in hostname.split('.') {
         if label.is_empty() || label.len() > 63 {
             return Err(format!(
-                "each hostname label must be 1–63 characters, got '{}' ({})",
+                "each hostname label must be 1-63 characters, got '{}' ({})",
                 label,
                 label.len()
             ));
