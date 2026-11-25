@@ -897,6 +897,29 @@ fn each_string_decoded_from_a_secret_is_withheld() {
     assert!(!found, "only strings are withheld, not {pin}");
 }
 
+// spec: SEC#withheld-values
+// spec: FMT#refusal
+#[test]
+fn a_refusal_naming_a_secret_key_is_masked() {
+    let (_, err) = evaluate_bundle(
+        crate::runtime::definition::Bundle::from_stored_script(
+            r#"
+            let config = #{};
+            config[app.param("token").secret(true).value()] = ();
+            std::encode_toml(config);
+            "#,
+        ),
+        &[("token", "s3cret")],
+        &Default::default(),
+    );
+    let err = err.expect("TOML has no null").to_string();
+    assert!(
+        err.contains(r#"`value["<redacted>"]` cannot be encoded"#),
+        "{err}"
+    );
+    assert!(!err.contains("s3cret"), "{err}");
+}
+
 // spec: LIM#limits
 // spec: SEC#redaction
 #[test]
