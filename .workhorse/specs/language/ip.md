@@ -119,6 +119,7 @@ For two `IpAddress` values of different families, `==` MUST return `false` and `
 | `to_range()` | the `IpRange` from the subnet's first address to its last |
 
 Two `IpSubnet` values MUST be equal through `==` and `!=` when they have the same family, address and prefix length.
+`<`, `<=`, `>` and `>=` between two `IpSubnet` values MUST raise a script error.
 
 ## Range values
 
@@ -131,6 +132,10 @@ Two `IpSubnet` values MUST be equal through `==` and `!=` when they have the sam
 | `overlaps(other)` | whether at least one address of `other` is in the range |
 
 Two `IpRange` values MUST be equal through `==` and `!=` when they have the same family, first address and last address.
+`<`, `<=`, `>` and `>=` between two `IpRange` values MUST raise a script error.
+
+> [!NOTE]
+> Subnets and ranges have no order an operator would expect, so a script ordering them compares their first addresses, or whichever part its rule turns on.
 
 ## Containment and overlap
 
