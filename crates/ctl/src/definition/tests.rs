@@ -239,3 +239,31 @@ async fn a_source_breaking_the_bundle_rules_is_refused_before_it_is_sent() {
     let e = args.resolve().await.unwrap_err();
     assert!(e.contains("seedling"), "{e}");
 }
+
+// spec: CLI#definition-sources
+#[tokio::test]
+async fn the_bundle_demos_carry_the_files_they_share() {
+    let demos = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demos");
+    let helper = std::fs::read(demos.join("shared/static-site.rhai")).unwrap();
+    let page = std::fs::read(demos.join("shared/www/shared.html")).unwrap();
+    for name in ["bundle-tour", "bundle-share"] {
+        let args = DefinitionArgs {
+            source: Some(demos.join(name).to_str().unwrap().to_owned()),
+            reference: None,
+        };
+        let Some(Definition::Bundle { bundle, origin }) = args.resolve().await.unwrap() else {
+            panic!("{name} resolves to a bundle");
+        };
+        assert_eq!(origin, None);
+        assert_eq!(
+            bundle.file("lib/static-site.rhai").unwrap()[..],
+            helper[..],
+            "{name}"
+        );
+        assert_eq!(
+            bundle.file("shared/shared.html").unwrap()[..],
+            page[..],
+            "{name}"
+        );
+    }
+}
