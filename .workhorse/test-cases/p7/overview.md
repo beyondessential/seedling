@@ -7,7 +7,7 @@
 - [x] A Version is written as its text (verifies spec: FMT#values-each-format-holds)
 - [x] A refused value names its position and the reason, for each format (verifies spec: FMT#refusal)
 - [x] TOML and env encoders refuse an argument that is not a map (verifies spec: FMT#helpers)
-- [x] 128 levels of nesting encode; 129 throw (verifies spec: FMT#helpers)
+- [x] 64 levels of nesting encode and decode in every format; 65 throw (verifies spec: FMT#helpers)
 - [x] YAML is block style, two-space indent, `null` for unit, `-.inf` for negative infinity (verifies spec: FMT#yaml)
 - [x] YAML quotes the 1.1 words, numeric-looking strings, indicator-led strings and strings with edge whitespace, and each round-trips (verifies spec: FMT#yaml)
 - [x] YAML quotes map keys by the same rules (verifies spec: FMT#yaml)

@@ -135,22 +135,30 @@ fn toml_and_env_take_only_a_map() {
 
 // spec: FMT#helpers
 #[test]
-fn nesting_deeper_than_128_levels_throws() {
-    let nested = |levels: usize| format!("{}1{}", "[".repeat(levels), "]".repeat(levels));
+fn nesting_deeper_than_64_levels_throws() {
     // A literal that deep is beyond the engine's own expression depth.
     let encode = |levels: usize| {
         eval(&format!(
             "let v = 1; for i in 0..{levels} {{ v = [v]; }} std::encode_json(v)"
         ))
     };
-    let _ = encode(128).unwrap();
-    let err = encode(129).expect_err("129 levels").to_string();
-    assert!(err.contains("more than 128 levels deep"), "{err}");
+    let _ = encode(64).unwrap();
+    let err = encode(65).expect_err("65 levels").to_string();
+    assert!(err.contains("more than 64 levels deep"), "{err}");
 
-    let yaml = |levels: usize| lit(&nested(levels));
-    let _ = eval(&format!("std::decode_yaml({})", yaml(128))).unwrap();
-    let err = throws(&format!("std::decode_yaml({})", yaml(129)));
-    assert!(err.contains("more than 128 levels deep"), "{err}");
+    let nested = |levels: usize| format!("{}1{}", "[".repeat(levels), "]".repeat(levels));
+    for (helper, doc) in [
+        ("decode_json", &nested as &dyn Fn(usize) -> String),
+        ("decode_yaml", &nested),
+        ("decode_toml", &|levels| {
+            format!("a = {}", nested(levels - 1))
+        }),
+    ] {
+        let _ = eval(&format!("std::{helper}({})", lit(&doc(64))))
+            .unwrap_or_else(|e| panic!("{helper}: {e}"));
+        let err = throws(&format!("std::{helper}({})", lit(&doc(65))));
+        assert!(err.contains("more than 64 levels deep"), "{helper}: {err}");
+    }
 }
 
 // spec: FMT#yaml

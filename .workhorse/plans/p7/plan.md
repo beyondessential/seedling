@@ -19,7 +19,7 @@ Add each with `cargo add` at implementation time so the pinned version is the cu
 ## Steps
 
 - [x] `cargo add saphyr` (and winnow, if not already a dependency of the crate holding the std module).
-- [x] Shared value walk: position tracking for refusal errors, the 128-deep nesting limit, `Version`/`SemVer` as text, Blob and other opaque types refused.
+- [x] Shared value walk: position tracking for refusal errors, the 64-deep nesting limit, `Version`/`SemVer` as text, Blob and other opaque types refused.
 - [x] JSON encode and decode on `serde_json`, with integers outside the signed 64-bit range refused rather than read as floats (unlike `defs/json.rs::to_dynamic`).
 - [x] YAML encode and decode on `saphyr`: core schema only, one document, alias budget of 100 000, non-string keys refused; tests pinning the quoting cases in the spec.
 - [x] TOML encode and decode on `toml`, checking the encoder's output parses as TOML 1.0.0 (no 1.1-only syntax).

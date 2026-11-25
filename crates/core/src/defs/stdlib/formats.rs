@@ -25,7 +25,7 @@ type HelperResult = Result<Dynamic, Box<EvalAltResult>>;
 // spec: FMT#helpers
 /// The most levels of arrays and maps a value may nest, counting the
 /// outermost array or map as the first.
-const MAX_DEPTH: usize = 128;
+const MAX_DEPTH: usize = 64;
 
 pub(super) fn register(module: &mut rhai::Module) {
     // spec: FMT#helpers
