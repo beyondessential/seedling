@@ -9,17 +9,17 @@ fn write(root: &Path, rel: &str, contents: &[u8]) {
 // spec: CLI#definition-sources
 #[test]
 fn github_folder_urls_split_into_every_ref_and_path() {
-    let url =
-        GithubUrl::parse("https://github.com/org/repo/tree/release/2.12/apps/tamanu").unwrap();
+    let url = GithubUrl::parse("https://github.com/org/repo/tree/release/2.12/demos/hello-world")
+        .unwrap();
     assert_eq!((url.owner.as_str(), url.repo.as_str()), ("org", "repo"));
     let splits: Vec<_> = url.splits().collect();
     assert_eq!(
         splits[0],
-        ("release".to_owned(), "2.12/apps/tamanu".to_owned())
+        ("release".to_owned(), "2.12/demos/hello-world".to_owned())
     );
     assert_eq!(
         splits[1],
-        ("release/2.12".to_owned(), "apps/tamanu".to_owned())
+        ("release/2.12".to_owned(), "demos/hello-world".to_owned())
     );
     assert!(GithubUrl::parse("https://github.com/org/repo").is_none());
     assert!(GithubUrl::parse("./local/folder").is_none());
