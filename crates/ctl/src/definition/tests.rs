@@ -47,7 +47,7 @@ fn folders_skip_vcs_metadata_and_seedignored_paths() {
     }
     write(root, "pages/.git", b"gitdir: elsewhere");
     write(root, ".seedignore", b"notes/\npages/draft.html\n");
-    let files = read_folder(root).unwrap();
+    let files = read_folder(root, &mut Budget::full()).unwrap();
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         vec![".seedignore", "app.seed.rhai", "pages/500.html"]
@@ -60,11 +60,11 @@ fn a_symlink_is_reported_and_nothing_is_read() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "app.seed.rhai", b"app;");
     std::os::unix::fs::symlink("/etc/passwd", dir.path().join("evil")).unwrap();
-    let err = read_folder(dir.path()).unwrap_err();
+    let err = read_folder(dir.path(), &mut Budget::full()).unwrap_err();
     assert!(err.contains("evil"), "{err}");
     // An ignored symlink is simply left out.
     write(dir.path(), ".seedignore", b"evil\n");
-    read_folder(dir.path()).unwrap();
+    read_folder(dir.path(), &mut Budget::full()).unwrap();
 }
 
 // spec: CLI#definition-sources
@@ -209,7 +209,7 @@ fn export_reproduces_the_bundle_into_a_new_folder_only() {
         std::fs::read(target.join("pages/logo.png")).unwrap(),
         [0x89, 0x50, 0x00, 0xff]
     );
-    let files = read_folder(&target).unwrap();
+    let files = read_folder(&target, &mut Budget::full()).unwrap();
     assert_eq!(files.len(), 2);
 
     let err = export(&bundle, &target).unwrap_err();
@@ -638,7 +638,7 @@ fn a_source_larger_than_any_bundle_is_refused_as_it_is_read() {
         write(dir.path(), &format!("many/{i}"), b"");
     }
     let e = assembled(&dir).unwrap_err();
-    assert!(e.contains("more than the 4096 files"), "{e}");
+    assert!(e.contains("past the 4096 files"), "{e}");
 
     let dir = repo(".git", "big.bin", "../big.bin");
     let big = vec![0u8; seedling_bundle::BUNDLE_SIZE_LIMIT + 1];
@@ -658,4 +658,48 @@ fn an_archive_entry_named_as_a_link_is_not_written() {
     let e = github::extract_repository(&data, dir.path()).unwrap_err();
     assert!(e.contains("at or beneath apps/shared"), "{e}");
     assert!(!dir.path().join("apps/shared").exists());
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn the_folder_and_its_sources_share_one_budget() {
+    let half = vec![0u8; seedling_bundle::BUNDLE_SIZE_LIMIT / 2 + 1];
+    let dir = repo(".git", "big.bin", "../big.bin");
+    write(dir.path(), "apps/big.bin", &half);
+    write(dir.path(), "apps/def/also-big.bin", &half);
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("size limit"), "{e}");
+
+    // A copy matching its source is counted once, not twice.
+    let dir = repo(".git", "big.bin", "../big.bin");
+    write(dir.path(), "apps/big.bin", &half);
+    write(dir.path(), "apps/def/big.bin", &half);
+    assert_eq!(assembled(&dir).unwrap()["big.bin"], half);
+}
+
+// spec: CLI#definition-sources
+#[test]
+fn a_lone_file_larger_than_any_bundle_is_refused_as_it_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "big.seed.rhai",
+        &vec![b' '; seedling_bundle::BUNDLE_SIZE_LIMIT + 1],
+    );
+    let e = read_lone_file(&dir.path().join("big.seed.rhai")).unwrap_err();
+    assert!(e.contains("size limit"), "{e}");
+}
+
+// spec: CLI#definition-sources
+#[tokio::test]
+async fn a_source_breaking_the_bundle_rules_is_refused_before_it_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "app.seed.rhai", b"app;");
+    write(dir.path(), "seedling.toml", b"seedling = 13");
+    let args = DefinitionArgs {
+        source: Some(dir.path().to_str().unwrap().to_owned()),
+        reference: None,
+    };
+    let e = args.resolve().await.unwrap_err();
+    assert!(e.contains("seedling"), "{e}");
 }

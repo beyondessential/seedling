@@ -106,22 +106,30 @@ impl DefinitionArgs {
         let Some(source) = &self.source else {
             return Ok(None);
         };
-        if let Some(url) = GithubUrl::parse(source) {
-            return github::download(&url).await.map(Some);
-        }
-        let path = PathBuf::from(source);
-        let meta = std::fs::metadata(&path).map_err(|e| format!("cannot read {source}: {e}"))?;
-        if meta.is_dir() {
-            Ok(Some(Definition::Bundle {
-                files: read_assembled_folder(&path)?,
-                origin: None,
-            }))
+        let definition = if let Some(url) = GithubUrl::parse(source) {
+            github::download(&url).await?
         } else {
-            Ok(Some(Definition::Bundle {
-                files: read_lone_file(&path)?,
+            let path = PathBuf::from(source);
+            let meta =
+                std::fs::metadata(&path).map_err(|e| format!("cannot read {source}: {e}"))?;
+            let files = if meta.is_dir() {
+                read_assembled_folder(&path)?
+            } else {
+                read_lone_file(&path)?
+            };
+            Definition::Bundle {
+                files,
                 origin: None,
-            }))
+            }
+        };
+        // The bundle rules, as the server applies them, over what was read
+        // and assembled: a bundle the server would refuse is refused here,
+        // before it is encoded and sent.
+        if let Definition::Bundle { files, .. } = &definition {
+            Bundle::from_files(files.iter().map(|(p, c)| (p.clone(), c.clone())))
+                .map_err(|e| e.to_string())?;
         }
+        Ok(Some(definition))
     }
 }
 
@@ -129,7 +137,8 @@ impl DefinitionArgs {
 /// repository it sits in.
 // spec: CLI#include-assembly
 pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let mut files = read_folder(path)?;
+    let mut budget = Budget::full();
+    let mut files = read_folder(path, &mut budget)?;
     let folder = path
         .canonicalize()
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -145,6 +154,7 @@ pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<
         &boundary,
         bounds,
         &Unwritten::default(),
+        &mut budget,
     )?;
     Ok(files)
 }
@@ -164,8 +174,7 @@ pub(super) fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, S
             path.display()
         ));
     }
-    let contents =
-        std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let contents = read_bounded(path, &mut Budget::full())?;
     let metadata = toml::Table::from_iter([(
         "script".to_owned(),
         toml::Value::Array(vec![toml::Value::String(name.to_owned())]),
@@ -265,7 +274,10 @@ fn is_vcs_metadata(entry: &ignore::DirEntry) -> bool {
 /// metadata and what `.seedignore` excludes. Anything else that is not left
 /// out is an error, so nothing is sent.
 // spec: CLI#definition-folders
-pub(super) fn read_folder(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+pub(super) fn read_folder(
+    root: &Path,
+    budget: &mut Budget,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
     let walker = ignore::WalkBuilder::new(root)
         .standard_filters(false)
         .hidden(false)
@@ -274,7 +286,6 @@ pub(super) fn read_folder(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Stri
         .filter_entry(|e| !is_vcs_metadata(e))
         .build();
     let mut files = BTreeMap::new();
-    let mut size = 0usize;
     for entry in walker {
         let entry = entry.map_err(|e| format!("cannot read {}: {e}", root.display()))?;
         let path = entry.path();
@@ -297,38 +308,75 @@ pub(super) fn read_folder(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Stri
             .to_str()
             .ok_or_else(|| format!("{} is not a UTF-8 path", path.display()))?
             .to_owned();
-        // Bounded as it is read, so that a folder far larger than any bundle,
-        // such as a whole repository named by mistake, is refused before it
-        // is held in memory.
-        if files.len() >= BUNDLE_FILE_LIMIT {
-            return Err(format!(
-                "{} holds more than the {BUNDLE_FILE_LIMIT} files a definition may",
-                root.display()
-            ));
-        }
-        size = size.saturating_add(rel.len());
-        let contents = read_bounded(path, BUNDLE_SIZE_LIMIT.saturating_sub(size))?;
-        size = size.saturating_add(contents.len());
+        budget.take_file(path, rel.len())?;
+        let contents = read_bounded(path, budget)?;
         files.insert(rel, contents);
     }
     Ok(files)
 }
 
-/// Read a file, refusing it once it passes `remaining` bytes of what a
-/// definition may hold.
-pub(super) fn read_bounded(path: &Path, remaining: usize) -> Result<Vec<u8>, String> {
+/// What is left of the bundle limits while a definition is read, shared by
+/// the folder and every source it includes.
+///
+/// Reading stops once a definition could no longer make a bundle a server
+/// holds, so a folder far larger than any bundle, such as a whole repository
+/// named by mistake, is refused before it is held in memory. The count is a
+/// bound, not the rule: the bundle rules judge the assembled files.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Budget {
+    files: usize,
+    bytes: usize,
+}
+
+impl Budget {
+    pub fn full() -> Self {
+        Self {
+            files: BUNDLE_FILE_LIMIT,
+            bytes: BUNDLE_SIZE_LIMIT,
+        }
+    }
+
+    /// Take one file, with a path `path_len` bytes long, from the budget.
+    pub fn take_file(&mut self, path: &Path, path_len: usize) -> Result<(), String> {
+        self.files = self.files.checked_sub(1).ok_or_else(|| {
+            format!(
+                "{} takes the definition past the {BUNDLE_FILE_LIMIT} files it may hold",
+                path.display()
+            )
+        })?;
+        self.take_bytes(path, path_len)
+    }
+
+    fn take_bytes(&mut self, path: &Path, len: usize) -> Result<(), String> {
+        self.bytes = self.bytes.checked_sub(len).ok_or_else(|| {
+            format!(
+                "{} takes the definition past its {BUNDLE_SIZE_LIMIT}-byte size limit",
+                path.display()
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Return files already taken, as when files read from a source turn
+    /// out to be the ones a folder already holds.
+    pub fn give_back<'a>(&mut self, files: impl Iterator<Item = (&'a String, &'a Vec<u8>)>) {
+        for (path, contents) in files {
+            self.files += 1;
+            self.bytes += path.len() + contents.len();
+        }
+    }
+}
+
+/// Read a file, taking its contents from `budget`, and refusing it as soon as
+/// it passes what is left.
+pub(super) fn read_bounded(path: &Path, budget: &mut Budget) -> Result<Vec<u8>, String> {
     let file =
         std::fs::File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let mut contents = Vec::new();
-    file.take(remaining as u64 + 1)
+    file.take(budget.bytes as u64 + 1)
         .read_to_end(&mut contents)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    if contents.len() > remaining {
-        return Err(format!(
-            "{} takes the definition past its {BUNDLE_SIZE_LIMIT}-byte size limit",
-            path.display()
-        ));
-    }
+    budget.take_bytes(path, contents.len())?;
     Ok(contents)
 }
 
@@ -376,7 +424,7 @@ impl GithubUrl {
 mod github {
     use std::io::Read;
 
-    use super::{Bounds, Definition, GithubUrl, Unwritten, assemble, read_folder};
+    use super::{Bounds, Budget, Definition, GithubUrl, Unwritten, assemble, read_folder};
 
     fn client() -> Result<reqwest::Client, String> {
         reqwest::Client::builder()
@@ -480,8 +528,16 @@ mod github {
         if !path.is_dir() {
             return Ok(Default::default());
         }
-        let mut files = read_folder(&path)?;
-        assemble(&mut files, &path, root, Bounds::Archive, unwritten)?;
+        let mut budget = Budget::full();
+        let mut files = read_folder(&path, &mut budget)?;
+        assemble(
+            &mut files,
+            &path,
+            root,
+            Bounds::Archive,
+            unwritten,
+            &mut budget,
+        )?;
         Ok(files)
     }
 

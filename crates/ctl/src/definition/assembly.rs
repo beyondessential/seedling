@@ -8,9 +8,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use seedling_bundle::{BUNDLE_SIZE_LIMIT, METADATA_FILE, included, normalise_path};
+use seedling_bundle::{METADATA_FILE, included, normalise_path};
 
-use super::{VCS_METADATA_DIRS, read_bounded, read_folder};
+use super::{Budget, VCS_METADATA_DIRS, read_bounded, read_folder};
 
 /// The archive entries that were neither files nor directories, and so were
 /// never written out, by `/`-separated path from the include boundary.
@@ -106,6 +106,7 @@ pub(super) fn assemble(
     boundary: &Path,
     bounds: Bounds<'_>,
     unwritten: &Unwritten,
+    budget: &mut Budget,
 ) -> Result<(), String> {
     let Some(metadata) = files.get(METADATA_FILE) else {
         return Ok(());
@@ -115,16 +116,22 @@ pub(super) fn assemble(
     for (key, value) in &table {
         let at = |msg: String| format!("include {key:?} from {value:?}: {msg}");
         let source = source_path(&within, value);
+        let has_copy = at_or_beneath(files, key).next().is_some();
+        // A source matching the folder's copy adds nothing to the bundle, so
+        // the copy's share of the budget is lent to reading it, and the
+        // budget is as it was wherever the copy is what the bundle keeps.
+        let before = *budget;
+        budget.give_back(at_or_beneath(files, key));
         let yielded = match &source {
-            Some(path) => read_source(boundary, path, unwritten).map_err(at)?,
+            Some(path) => read_source(boundary, path, unwritten, budget).map_err(at)?,
             None => None,
         };
-        let has_copy = at_or_beneath(files, key).next().is_some();
         let Some(yielded) = yielded else {
             // spec: CLI#include-assembly
             // An exported bundle carries its included files, and its
             // sources may well not exist wherever it was exported to.
             if has_copy {
+                *budget = before;
                 continue;
             }
             return Err(at(match source {
@@ -145,7 +152,9 @@ pub(super) fn assemble(
             .collect();
         if !has_copy {
             files.extend(placed);
-        } else if !at_or_beneath(files, key).eq(placed.iter()) {
+        } else if at_or_beneath(files, key).eq(placed.iter()) {
+            *budget = before;
+        } else {
             return Err(at(
                 "the folder already holds different files there; remove them or bring them in line"
                     .to_owned(),
@@ -217,6 +226,7 @@ fn read_source(
     boundary: &Path,
     path: &str,
     unwritten: &Unwritten,
+    budget: &mut Budget,
 ) -> Result<Option<BTreeMap<String, Vec<u8>>>, String> {
     // A recorded entry is missing on disk, so it is checked before the walk
     // could take it for a source that names nothing.
@@ -249,7 +259,8 @@ fn read_source(
         .symlink_metadata()
         .map_err(|e| format!("cannot read {}: {e}", at.display()))?;
     if meta.is_file() {
-        let contents = read_bounded(&at, BUNDLE_SIZE_LIMIT)?;
+        budget.take_file(&at, 0)?;
+        let contents = read_bounded(&at, budget)?;
         return Ok(Some(BTreeMap::from([(String::new(), contents)])));
     }
     if !meta.is_dir() {
@@ -258,7 +269,7 @@ fn read_source(
     if let Some(special) = unwritten.within(path) {
         return Err(format!("{special} is not a regular file or directory"));
     }
-    let found = read_folder(&at)?;
+    let found = read_folder(&at, budget)?;
     if found.is_empty() {
         return Err(format!("{path} holds no files"));
     }
