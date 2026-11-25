@@ -306,7 +306,7 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
             rt.start(app.job().image("docker.io/library/debian:bookworm-slim")
                 .mount("/app/bin", bin)
                 .command(["true"])
-            ).terminated(0).ensure_success();
+            ).terminated("1s").ensure_success();
         });
     "#,
     );
@@ -359,8 +359,9 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
     oracle.set(instance.clone(), LifecycleState::Unscheduled);
     oracle.set_exit_code(instance, 0);
 
-    // Pass 2: deadline=0 has trivially elapsed since pass 1 committed the
+    // Pass 2: the one-second deadline has elapsed since pass 1 committed the
     // unsatisfied barrier, but the oracle says reached. Must complete.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
     let r = run_operation(
         OperationContext {
             engine: &engine,
@@ -395,32 +396,27 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
 
 // spec: SUSP#deadlines
 // spec: RT#barriers
-// `ready(0)` means "use the default deadline", not "fail immediately".
-// This used to assert the opposite: zero mapped to `Some(0)`, which the
-// `elapsed >= d` check tripped on the very next pass, so a script asking for
-// the documented default got a deadline failure about two seconds later.
+// A zero deadline is refused: the form without a deadline selects the
+// default, so a zero can only be a mistake or a computed value gone wrong.
 #[test]
-fn barrier_deadline_zero_uses_the_state_default() {
+fn barrier_deadline_zero_is_refused() {
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         app.on_action("start", |rt, _param| {
-            rt.start(app.deployment("web")).ready(0);
+            rt.start(app.deployment("web")).ready("0s");
         });
     "#,
     );
 
     let oracle = Arc::new(TestWorldOracle::new());
     let log = InMemoryActionLog::new();
-    let op = OperationId::new();
     let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
-
-    // Pass 1: not ready → suspend
     let r = run_operation(
         OperationContext {
             engine: &engine,
             script_ast: &ast,
-            operation_id: op.clone(),
+            operation_id: OperationId::new(),
             app: &app,
             subject: Subject::Action("start"),
             log: &log,
@@ -442,39 +438,12 @@ fn barrier_deadline_zero_uses_the_state_default() {
         },
         &mut scope,
     );
-    assert!(matches!(r, OperationResult::Suspended(_)));
-
-    // Pass 2: deadline 0 resolved to the 30s default, so still waiting
-    let r = run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: op,
-            app: &app,
-            subject: Subject::Action("start"),
-            log: &log,
-            world: Arc::clone(&oracle),
-            registry: Arc::clone(&reg),
-            active_progress: None,
-            tick_notify: None,
-            params: crate::runtime::param_map::ParamMap::default(),
-            db: None,
-            cipher: None,
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
-            exclusions: Default::default(),
-            operation_seed: crate::runtime::seeds::Seed::for_tests(),
-            sensitive: crate::runtime::redact::Scope::empty(),
-        },
-        &mut scope,
-    );
-    assert!(
-        matches!(r, OperationResult::Suspended(_)),
-        "a zero deadline takes the state default, so this is still waiting: {r:?}",
-    );
+    match r {
+        OperationResult::Failed(err) => {
+            assert!(err.to_string().contains("`deadline`"), "{err}");
+        }
+        other => panic!("a zero deadline must fail the closure, got {other:?}"),
+    }
 }
 
 // spec: SUSP#replay
@@ -1075,7 +1044,7 @@ fn rt_stop_deadline_is_enforced() {
         r#"
         let old = app.deployment("old").image("docker.io/library/nginx:latest");
         app.on_action("start", |rt, _param| {
-            rt.stop(app.deployment("old"), 1);
+            rt.stop(app.deployment("old"), "1s");
         });
     "#,
     );
@@ -1250,9 +1219,9 @@ fn rt_stop_deadline_start_is_read_from_the_calls_own_record() {
         let runner = app.job("runner").image("docker.io/library/busybox:latest");
         app.on_action("start", |rt, _param| {
             try {
-                rt.stop(app.job("runner"), 1);
+                rt.stop(app.job("runner"), "1s");
             } catch (e) {}
-            rt.stop(app.job("runner"), 1);
+            rt.stop(app.job("runner"), "1s");
         });
     "#,
     );
@@ -1923,7 +1892,7 @@ fn the_second_barrier_on_one_started_still_times_out() {
         app.on_action("start", |rt, _param| {
             let started = rt.start(app.deployment("web"));
             started.running();
-            started.ready(1);
+            started.ready("1s");
         });
     "#,
     );
@@ -2117,7 +2086,7 @@ fn a_barrier_on_a_narrowed_group_still_times_out() {
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
         let optional = app.deployment("optional").image("docker.io/library/nginx:latest");
         app.on_action("start", |rt, _param| {
-            rt.start(app).except(app.deployment("optional")).ready(1);
+            rt.start(app).except(app.deployment("optional")).ready("1s");
         });
     "#,
     );
@@ -2359,8 +2328,8 @@ fn default_stop_deadline_of(declarations: &str, stopped: &str) -> Option<u64> {
 #[test]
 fn rt_stops_default_deadline_follows_the_longest_stop_timeout() {
     let declarations = r#"
-        let slow = app.deployment("slow").image("docker.io/library/postgres:17").stop_timeout(120);
-        let quick = app.deployment("quick").image("docker.io/library/nginx:1").stop_timeout(5);
+        let slow = app.deployment("slow").image("docker.io/library/postgres:17").stop_timeout("120s");
+        let quick = app.deployment("quick").image("docker.io/library/nginx:1").stop_timeout("5s");
         let unset = app.deployment("unset").image("docker.io/library/nginx:1");
         let svc = app.service("public");
     "#;

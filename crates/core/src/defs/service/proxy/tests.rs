@@ -226,11 +226,11 @@ fn compress_rejects_bad_values() {
 
 // spec: HTTP#balancing
 #[test]
-fn balance_fields_parse_ints_and_floats() {
+fn balance_fields_parse_durations() {
     let m = map(vec![
         ("policy", Dynamic::from("least_conn".to_string())),
-        ("try_duration", Dynamic::from(10_i64)),
-        ("interval", Dynamic::from(0.5_f64)),
+        ("try_duration", Dynamic::from("10s")),
+        ("interval", Dynamic::from("500ms")),
     ]);
     let parsed = parse_balance(m).expect("valid");
     assert_eq!(parsed.policy, Some(LbPolicy::LeastConn));
@@ -244,11 +244,15 @@ fn balance_rejects_bad_values() {
     let bad_policy = map(vec![("policy", Dynamic::from("sticky".to_string()))]);
     assert!(parse_balance(bad_policy).is_err());
 
-    let negative = map(vec![("try_duration", Dynamic::from(-1_i64))]);
+    let negative = map(vec![("try_duration", Dynamic::from("-1s"))]);
     assert!(parse_balance(negative).is_err());
 
+    let number = map(vec![("try_duration", Dynamic::from(5_i64))]);
+    let err = parse_balance(number).expect_err("a number is not a duration");
+    assert!(err.to_string().contains("`balance.try_duration`"), "{err}");
+
     // Zero interval with the try duration left at its non-zero default.
-    let spin = map(vec![("interval", Dynamic::from(0_i64))]);
+    let spin = map(vec![("interval", Dynamic::from("0s"))]);
     assert!(parse_balance(spin).is_err());
 
     let unknown_field = map(vec![("policy_name", Dynamic::from("first".to_string()))]);
@@ -259,8 +263,8 @@ fn balance_rejects_bad_values() {
 #[test]
 fn balance_allows_zero_interval_when_retrying_is_off() {
     let m = map(vec![
-        ("try_duration", Dynamic::from(0_i64)),
-        ("interval", Dynamic::from(0_i64)),
+        ("try_duration", Dynamic::from("0s")),
+        ("interval", Dynamic::from("0s")),
     ]);
     assert!(parse_balance(m).is_ok());
 }
@@ -342,10 +346,10 @@ fn rate_limit_does_not_disturb_compression_or_balancing() {
 
 // spec: HTTP#rate-limiting
 #[test]
-fn rate_limit_parses_ints_and_floats() {
+fn rate_limit_parses_durations() {
     let m = map(vec![
         ("max_events", Dynamic::from(10_i64)),
-        ("window", Dynamic::from(1_i64)),
+        ("window", Dynamic::from("1s")),
     ]);
     let parsed = parse_rate_limit(m).expect("valid");
     assert_eq!(parsed.max_events, 10);
@@ -353,12 +357,19 @@ fn rate_limit_parses_ints_and_floats() {
 
     let fractional = map(vec![
         ("max_events", Dynamic::from(5_i64)),
-        ("window", Dynamic::from(0.5_f64)),
+        ("window", Dynamic::from("500ms")),
     ]);
     assert_eq!(
         parse_rate_limit(fractional).expect("valid").window_secs,
         0.5
     );
+
+    let number = map(vec![
+        ("max_events", Dynamic::from(5_i64)),
+        ("window", Dynamic::from(1_i64)),
+    ]);
+    let err = parse_rate_limit(number).expect_err("a number is not a duration");
+    assert!(err.to_string().contains("`rate_limit.window`"), "{err}");
 }
 
 // spec: HTTP#rate-limiting
@@ -367,7 +378,7 @@ fn rate_limit_requires_both_fields() {
     let no_window = map(vec![("max_events", Dynamic::from(10_i64))]);
     assert!(parse_rate_limit(no_window).is_err());
 
-    let no_max = map(vec![("window", Dynamic::from(1_i64))]);
+    let no_max = map(vec![("window", Dynamic::from("1s"))]);
     assert!(parse_rate_limit(no_max).is_err());
 
     assert!(parse_rate_limit(map(vec![])).is_err());
@@ -378,37 +389,37 @@ fn rate_limit_requires_both_fields() {
 fn rate_limit_rejects_bad_values() {
     let zero_events = map(vec![
         ("max_events", Dynamic::from(0_i64)),
-        ("window", Dynamic::from(1_i64)),
+        ("window", Dynamic::from("1s")),
     ]);
     assert!(parse_rate_limit(zero_events).is_err());
 
     let negative_events = map(vec![
         ("max_events", Dynamic::from(-1_i64)),
-        ("window", Dynamic::from(1_i64)),
+        ("window", Dynamic::from("1s")),
     ]);
     assert!(parse_rate_limit(negative_events).is_err());
 
     let zero_window = map(vec![
         ("max_events", Dynamic::from(10_i64)),
-        ("window", Dynamic::from(0_i64)),
+        ("window", Dynamic::from("0s")),
     ]);
     assert!(parse_rate_limit(zero_window).is_err());
 
     let negative_window = map(vec![
         ("max_events", Dynamic::from(10_i64)),
-        ("window", Dynamic::from(-1.0_f64)),
+        ("window", Dynamic::from("-1s")),
     ]);
     assert!(parse_rate_limit(negative_window).is_err());
 
-    let infinite_window = map(vec![
+    let number_window = map(vec![
         ("max_events", Dynamic::from(10_i64)),
-        ("window", Dynamic::from(f64::INFINITY)),
+        ("window", Dynamic::from(1_i64)),
     ]);
-    assert!(parse_rate_limit(infinite_window).is_err());
+    assert!(parse_rate_limit(number_window).is_err());
 
     let unknown_field = map(vec![
         ("max_events", Dynamic::from(10_i64)),
-        ("window", Dynamic::from(1_i64)),
+        ("window", Dynamic::from("1s")),
         ("per", Dynamic::from("ip".to_string())),
     ]);
     assert!(parse_rate_limit(unknown_field).is_err());
@@ -419,21 +430,21 @@ fn rate_limit_rejects_bad_values() {
 fn rate_limit_rejects_out_of_range_values() {
     let too_many = map(vec![
         ("max_events", Dynamic::from(MAX_MAX_EVENTS as i64 + 1)),
-        ("window", Dynamic::from(1_i64)),
+        ("window", Dynamic::from("1s")),
     ]);
     assert!(parse_rate_limit(too_many).is_err());
 
     // Below the floor: not a rate limit any app could mean.
     let vanishing = map(vec![
         ("max_events", Dynamic::from(10_i64)),
-        ("window", Dynamic::from(0.000_000_000_1_f64)),
+        ("window", Dynamic::from("999us")),
     ]);
     assert!(parse_rate_limit(vanishing).is_err());
 
     // Above the ceiling.
     let geological = map(vec![
         ("max_events", Dynamic::from(10_i64)),
-        ("window", Dynamic::from(1e12_f64)),
+        ("window", Dynamic::from("1h 1ns")),
     ]);
     assert!(parse_rate_limit(geological).is_err());
 }
@@ -443,13 +454,13 @@ fn rate_limit_rejects_out_of_range_values() {
 fn rate_limit_accepts_the_bounds_themselves() {
     let at_bounds = map(vec![
         ("max_events", Dynamic::from(MAX_MAX_EVENTS as i64)),
-        ("window", Dynamic::from(MAX_WINDOW_SECS)),
+        ("window", Dynamic::from(MAX_WINDOW)),
     ]);
     assert!(parse_rate_limit(at_bounds).is_ok());
 
     let at_floor = map(vec![
         ("max_events", Dynamic::from(1_i64)),
-        ("window", Dynamic::from(MIN_WINDOW_SECS)),
+        ("window", Dynamic::from(MIN_WINDOW)),
     ]);
     assert!(parse_rate_limit(at_floor).is_ok());
 }
@@ -459,7 +470,7 @@ fn rate_limit_accepts_the_bounds_themselves() {
 fn rate_limit_names_a_misspelled_key_rather_than_the_field_it_displaced() {
     let typo = map(vec![
         ("max_event", Dynamic::from(10_i64)),
-        ("window", Dynamic::from(1_i64)),
+        ("window", Dynamic::from("1s")),
     ]);
     let err = parse_rate_limit(typo).expect_err("a misspelled key must throw");
     let msg = err.to_string();

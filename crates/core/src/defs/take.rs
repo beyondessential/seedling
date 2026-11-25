@@ -21,6 +21,8 @@ use std::ops::RangeInclusive;
 
 use rhai::{Dynamic, EvalAltResult, FnPtr};
 
+use super::duration::Duration;
+
 // spec: BSL#arguments — every helper below converts or throws; none
 // coerces, defaults, or drops. Per-builder rules keep their own annotations
 // at the call sites.
@@ -39,21 +41,49 @@ pub fn take_bool(what: &str, value: Dynamic) -> Result<bool, Box<EvalAltResult>>
     })
 }
 
-/// Convert an integer or a finite floating-point number to a `f64`, or throw
-/// naming `what` and the actual type.
-pub fn take_number(what: &str, value: Dynamic) -> Result<f64, Box<EvalAltResult>> {
+/// Convert a `Duration`, or a string the duration parser accepts, to a
+/// `Duration`, or throw naming `what`. A number is refused: it would leave the
+/// unit to be guessed.
+// spec: DUR#duration-arguments
+pub fn take_duration(what: &str, value: Dynamic) -> Result<Duration, Box<EvalAltResult>> {
+    let type_name = value.type_name();
     // take: dispatch
-    if let Ok(n) = value.as_int() {
-        return Ok(n as f64);
+    if let Some(duration) = value.clone().try_cast::<Duration>() {
+        return Ok(duration);
     }
     // take: dispatch
-    if let Ok(f) = value.as_float() {
-        if f.is_finite() {
-            return Ok(f);
+    if let Ok(text) = value.into_string() {
+        return Duration::parse(&text).map_err(|e| format!("`{what}`: {e}").into());
+    }
+    Err(format!(
+        "`{what}` must be a Duration or a duration string such as \"30s\", got {type_name}"
+    )
+    .into())
+}
+
+/// Convert as [`take_duration`] does, then require a whole number of seconds
+/// no shorter than `min` and, where one is given, no longer than `max`, giving
+/// that number.
+// spec: DUR#duration-arguments
+pub fn take_whole_secs(
+    what: &str,
+    value: Dynamic,
+    min: Duration,
+    max: Option<Duration>,
+) -> Result<u64, Box<EvalAltResult>> {
+    let duration = take_duration(what, value)?;
+    let Some(secs) = duration.whole_secs() else {
+        return Err(format!("`{what}` must be a whole number of seconds, got {duration}").into());
+    };
+    match max {
+        Some(max) if duration < min || duration > max => {
+            Err(format!("`{what}` must be from {min} to {max}, got {duration}").into())
         }
-        return Err(format!("`{what}` must be a finite number, got {f}").into());
+        None if duration < min => {
+            Err(format!("`{what}` must be at least {min}, got {duration}").into())
+        }
+        _ => Ok(secs),
     }
-    Err(format!("`{what}` must be a number, got {}", value.type_name()).into())
 }
 
 /// Convert to a map, or throw naming `what` and the actual type.
@@ -215,21 +245,54 @@ mod tests {
         );
     }
 
+    // spec: DUR#duration-arguments
     #[test]
-    fn take_number_takes_integers_and_finite_floats_only() {
-        assert_eq!(take_number("interval", Dynamic::from(3_i64)).unwrap(), 3.0);
+    fn take_duration_takes_a_duration_or_its_text_only() {
+        let parsed = Duration::parse("90s").unwrap();
         assert_eq!(
-            take_number("interval", Dynamic::from(0.5_f64)).unwrap(),
-            0.5
+            take_duration("interval", Dynamic::from(parsed)).unwrap(),
+            parsed
+        );
+        assert_eq!(
+            take_duration("interval", Dynamic::from("1m 30s")).unwrap(),
+            parsed
         );
         for bad in [
-            Dynamic::from(f64::NAN),
-            Dynamic::from(f64::INFINITY),
-            Dynamic::from("3".to_owned()),
+            Dynamic::from(90_i64),
+            Dynamic::from(1.5_f64),
+            Dynamic::from("90"),
         ] {
-            let message = take_number("interval", bad).unwrap_err().to_string();
+            let message = take_duration("interval", bad).unwrap_err().to_string();
             assert!(message.contains("`interval`"), "{message}");
         }
+    }
+
+    // spec: DUR#duration-arguments
+    #[test]
+    fn take_whole_secs_refuses_a_fraction_and_holds_to_its_range() {
+        let (one, ten) = (Duration::from_secs(1), Some(Duration::from_secs(600)));
+        assert_eq!(
+            take_whole_secs("deadline", Dynamic::from("2m"), one, ten).unwrap(),
+            120
+        );
+        let fraction = take_whole_secs("deadline", Dynamic::from("1500ms"), one, ten).unwrap_err();
+        assert!(
+            fraction.to_string().contains("whole number of seconds"),
+            "{fraction}"
+        );
+        let short = take_whole_secs("deadline", Dynamic::from("0s"), one, ten).unwrap_err();
+        assert!(short.to_string().contains("from 1s to 10m"), "{short}");
+        let long = take_whole_secs("deadline", Dynamic::from("11m"), one, ten).unwrap_err();
+        assert!(long.to_string().contains("from 1s to 10m"), "{long}");
+        let open = take_whole_secs("deadline", Dynamic::from("0s"), one, None).unwrap_err();
+        assert!(
+            open.to_string().contains("must be at least 1s, got 0s"),
+            "{open}"
+        );
+        assert_eq!(
+            take_whole_secs("deadline", Dynamic::from("106751d"), one, None).unwrap(),
+            106_751 * 86_400
+        );
     }
 
     #[test]

@@ -246,6 +246,7 @@ fn a_template_preview_reports_each_param_range_and_options() {
     let body = r#"
         app.param("port").kind(#{ name: "integer", range: 1..=65535 }).required(false);
         app.param("tier").kind(#{ name: "choice", options: ["small", "large"] }).required(false);
+        app.param("ttl").kind(#{ name: "duration", min: "1s", max: "1h", precision: "ms" }).required(false);
         app.volume("data");
     "#;
     let preview = oi
@@ -264,6 +265,9 @@ fn a_template_preview_reports_each_param_range_and_options() {
     assert_eq!(param("port")["options"], json!(null));
     assert_eq!(param("tier")["options"], json!(["small", "large"]));
     assert_eq!(param("tier")["range"], json!(null));
+    assert_eq!(param("ttl")["range"], json!({ "min": "1s", "max": "1h" }));
+    assert_eq!(param("ttl")["precision"], "ms");
+    assert_eq!(param("tier")["precision"], json!(null));
 }
 
 // spec: TPL#preview

@@ -199,7 +199,7 @@ fn http_service_accepts_compress_and_balance() {
         let web = app.service("web").http(80)
             .compress(#{ minimum_length: 1024 })
             .balance(#{ policy: "least_conn" });
-        web.route("/api").balance(#{ try_duration: 10 });
+        web.route("/api").balance(#{ try_duration: "10s" });
         web.route("/v1").compress(false);
     "#,
     );
@@ -259,7 +259,7 @@ fn balance_rejects_unknown_policy() {
 // spec: HTTP#balancing
 #[test]
 fn balance_rejects_spinning_interval() {
-    let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ interval: 0 });"#);
+    let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ interval: "0s" });"#);
 }
 
 fn evaluate(script: &str) -> Option<crate::runtime::apps::ScriptError> {
@@ -277,15 +277,15 @@ fn evaluate(script: &str) -> Option<crate::runtime::apps::ScriptError> {
 fn a_route_resolving_to_a_spinning_balance_fails_evaluation_naming_the_route() {
     for script in [
         r#"let web = app.service("web").http(80)
-            .balance(#{ try_duration: 0, interval: 0 });
-        web.route("/api").balance(#{ try_duration: 10 });"#,
+            .balance(#{ try_duration: "0s", interval: "0s" });
+        web.route("/api").balance(#{ try_duration: "10s" });"#,
         r#"let web = app.service("web").http(80);
-        web.route("/api").balance(#{ interval: 0, try_duration: 0 });
-        web.balance(#{ interval: 0, try_duration: 0 });
-        web.route("/api").balance(#{ try_duration: 3 });"#,
+        web.route("/api").balance(#{ interval: "0s", try_duration: "0s" });
+        web.balance(#{ interval: "0s", try_duration: "0s" });
+        web.route("/api").balance(#{ try_duration: "3s" });"#,
         r#"let web = app.external_service("web").http(80)
-            .balance(#{ try_duration: 0, interval: 0 });
-        web.route("/v1").balance(#{ try_duration: 10 });"#,
+            .balance(#{ try_duration: "0s", interval: "0s" });
+        web.route("/v1").balance(#{ try_duration: "10s" });"#,
     ] {
         let err = evaluate(script).expect("the definition fails to evaluate");
         assert!(err.0.contains("route `/"), "names the route: {err}");
@@ -298,12 +298,12 @@ fn a_route_resolving_to_a_spinning_balance_fails_evaluation_naming_the_route() {
 fn a_route_resolving_to_a_balance_that_does_not_spin_evaluates() {
     for script in [
         r#"let web = app.service("web").http(80)
-            .balance(#{ try_duration: 0, interval: 0 });
-        web.route("/api").balance(#{ try_duration: 10, interval: 1 });"#,
+            .balance(#{ try_duration: "0s", interval: "0s" });
+        web.route("/api").balance(#{ try_duration: "10s", interval: "1s" });"#,
         r#"let web = app.service("web").http(80)
-            .balance(#{ try_duration: 0, interval: 0 });
+            .balance(#{ try_duration: "0s", interval: "0s" });
         web.route("/api").compress(false);"#,
-        r#"app.service("web").http(80).balance(#{ try_duration: 7 });"#,
+        r#"app.service("web").http(80).balance(#{ try_duration: "7s" });"#,
     ] {
         assert!(evaluate(script).is_none(), "{script}");
     }
@@ -319,7 +319,7 @@ fn service_summary_reports_resolved_routes() {
             .compress(#{ minimum_length: 1024 })
             .balance(#{ policy: "least_conn" });
         web.route("/");
-        web.route("/api").balance(#{ try_duration: 10 });
+        web.route("/api").balance(#{ try_duration: "10s" });
         web.route("/v1").compress(false);
     "#,
     );
@@ -404,8 +404,8 @@ fn http_service_and_routes_accept_rate_limit() {
     let app = run_test_script_app(
         r#"
         let web = app.service("web").http(80)
-            .rate_limit(#{ max_events: 1000, window: 1 });
-        web.route("/api/login").rate_limit(#{ max_events: 10, window: 1 });
+            .rate_limit(#{ max_events: 1000, window: "1s" });
+        web.route("/api/login").rate_limit(#{ max_events: 10, window: "1s" });
         web.route("/health").rate_limit(false);
         web.route("/v1");
     "#,
@@ -463,12 +463,12 @@ fn rate_limit_is_off_unless_declared() {
 #[test]
 fn rate_limit_rejects_incomplete_and_invalid_declarations() {
     let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(#{ max_events: 10 });"#);
-    let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(#{ window: 1 });"#);
+    let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(#{ window: "1s" });"#);
     let _ = run_test_script_err(
-        r#"app.service("web").http(80).rate_limit(#{ max_events: 0, window: 1 });"#,
+        r#"app.service("web").http(80).rate_limit(#{ max_events: 0, window: "1s" });"#,
     );
     let _ = run_test_script_err(
-        r#"app.service("web").http(80).rate_limit(#{ max_events: 10, window: 0 });"#,
+        r#"app.service("web").http(80).rate_limit(#{ max_events: 10, window: "0s" });"#,
     );
     // A limit has no default, so there is nothing for `true` to turn on.
     let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(true);"#);
@@ -481,9 +481,9 @@ fn service_summary_reports_resolved_rate_limits() {
     let app = run_test_script_app(
         r#"
         let web = app.service("web").http(80)
-            .rate_limit(#{ max_events: 1000, window: 1 });
+            .rate_limit(#{ max_events: 1000, window: "1s" });
         web.route("/api");
-        web.route("/api/login").rate_limit(#{ max_events: 10, window: 60 });
+        web.route("/api/login").rate_limit(#{ max_events: 10, window: "60s" });
         web.route("/health").rate_limit(false);
     "#,
     );
@@ -529,7 +529,7 @@ fn a_route_no_pod_binds_reports_that_it_is_not_served() {
         app.deployment("api").http(3000, web.route("/api"));
         // Declared with a limit, but bound by nothing: requests to /api/login
         // are served by the /api route under its settings, not this one.
-        web.route("/api/login").rate_limit(#{ max_events: 10, window: 1 });
+        web.route("/api/login").rate_limit(#{ max_events: 10, window: "1s" });
     "#,
     );
     let def = app.def.load();
@@ -960,7 +960,7 @@ fn a_setting_a_redirect_leaves_nothing_to_act_on_is_refused_either_way_round() {
         "compress(true)",
         "compress(#{ minimum_length: 1024 })",
         "balance(#{ policy: \"least_conn\" })",
-        "rate_limit(#{ max_events: 10, window: 1 })",
+        "rate_limit(#{ max_events: 10, window: \"1s\" })",
         "rate_limit(false)",
     ] {
         let after = run_test_script_err(&format!(
@@ -992,7 +992,7 @@ fn a_service_wide_setting_is_ignored_on_a_redirect_route_rather_than_refused() {
         r#"
         let web = app.service("web").http(80)
             .compress(true)
-            .rate_limit(#{ max_events: 10, window: 1 })
+            .rate_limit(#{ max_events: 10, window: "1s" })
             .headers(#{ request: #{ replace: #{ "Host": "internal" } } });
         web.route("/v1/login").redirect("/api/login", 308);
     "#,
@@ -1052,7 +1052,7 @@ fn a_redirect_route_reports_its_target_and_carries_no_settings() {
     let app = run_test_script_app(
         r#"
         let web = app.service("web").http(80)
-            .rate_limit(#{ max_events: 10, window: 1 });
+            .rate_limit(#{ max_events: 10, window: "1s" });
         web.route("/v1/login").redirect("/api/login", 308);
         app.deployment("api").image("ghcr.io/example/api:1").http(8080, web.route("/"));
     "#,

@@ -11,9 +11,10 @@ use super::{
     app::{App, AppDef, capture_gate, ensure_not_in_action_closure, ensure_not_validating},
     collection::{Collection, Member, col},
     deployment::Deployment,
+    duration::Duration as ScriptDuration,
     job::Job,
     resource::{Resource, ResourceId, ResourceKind},
-    take::{reject_unknown_keys, take_closure, take_number},
+    take::{reject_unknown_keys, take_closure, take_whole_secs},
 };
 use crate::runtime::secrets::{Cipher, Error as SecretsError, KeyDigest};
 
@@ -460,18 +461,8 @@ impl CustomType for Gate {
                         .get("interval")
                         .cloned()
                         .map(|v| {
-                            let seconds = take_number("interval", v)?;
-                            if seconds < 1.0 {
-                                return Err(format!(
-                                    "`interval` must be at least 1 second, got {seconds}"
-                                )
-                                .into());
-                            }
-                            Duration::try_from_secs_f64(seconds).map_err(
-                                |e| -> Box<EvalAltResult> {
-                                    format!("`interval` is out of range: {e}").into()
-                                },
-                            )
+                            take_whole_secs("interval", v, ScriptDuration::from_secs(1), None)
+                                .map(Duration::from_secs)
                         })
                         .transpose()?;
                     this.set_check(&job, interval)

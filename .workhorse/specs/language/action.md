@@ -66,10 +66,11 @@ A `name` naming no declared action MUST throw.
 The runtime MUST call the invoked closure with the caller's runtime handle.
 How the invoked closure shares the caller's operation is specified by [action composition](../runtime/operations.md#action-composition).
 
-Every value in `params` MUST be a unit, a boolean, an integer, a finite floating-point number, a string, a `Version`, a `SemVer`, an `IpAddress`, an `IpSubnet`, an `IpRange`, or an array or map of such values.
+Every value in `params` MUST be a unit, a boolean, an integer, a finite floating-point number, a string, a `Version`, a `SemVer`, an `IpAddress`, an `IpSubnet`, an `IpRange`, a `Duration`, or an array or map of such values.
 Any other value MUST make `invoke` throw.
 A `Version` or `SemVer` MUST be taken as its [text](version.md#text-of-a-version).
 An `IpAddress`, `IpSubnet` or `IpRange` MUST be taken as its [canonical form](ip.md#text-of-a-value).
+A `Duration` MUST be taken as its [text](duration.md#text-of-a-duration).
 
 > [!NOTE]
 > A closure can pass the param map it received to `invoke` unchanged.
@@ -105,14 +106,14 @@ A param schema is an object map from param name to a param definition, which is 
 | --- | --- | --- | --- |
 | `kind` | string or map | `"text"` | how the value is presented and validated, as a [kind](#kind-arguments) |
 | `required` | boolean | `true` | whether the param needs a value |
-| `default_value` | string, boolean or integer | none | the value taken when none is supplied |
+| `default_value` | string, boolean, integer or `Duration` | none | the value taken when none is supplied |
 | `description` | string | none | free-form text telling operators the value's meaning or purpose |
 | `secret` | boolean | by kind | whether the value is sensitive |
 
 Declaring a param schema MUST throw if any param name is not a valid name, any definition is not a map, a definition carries any other key, a key's value is not of the type in the table, `kind` is not a valid [kind](#kind-arguments), or a non-empty `default_value` is one its kind's [parser](#kind-parsers) rejects.
 An empty `default_value` MUST be treated as no `default_value`.
-Declaring a param schema MUST throw if a `default_value` is a boolean and the kind is not `boolean`, or is an integer and the kind is neither `integer` nor `quantity`.
-A boolean or integer `default_value` MUST be taken as its [canonical form](#kind-parsers).
+Declaring a param schema MUST throw if a `default_value` is a boolean and the kind is not `boolean`, is an integer and the kind is neither `integer` nor `quantity`, or is a `Duration` and the kind is not `duration`.
+A boolean, integer or `Duration` `default_value` MUST be taken as its [canonical form](#kind-parsers).
 
 `secret` defaults to `true` for the `password` and `weak-password` kinds and to `false` for every other kind.
 Declaring a param schema MUST throw if a param whose kind is `boolean` or `choice` has `secret` set to `true`, as such a param cannot be [secret](parameter.md#secret-parameters).
@@ -155,6 +156,7 @@ A presentation layer MUST NOT let an operator submit a required param empty.
 | `integer` | `range`, optional | a whole number, within `range` where one is given | the value as an integer |
 | `quantity` | `range`, optional | a [quantity](#quantities), within `range` where one is given | its amount as an integer |
 | `choice` | `options`, required | one of `options` | the value |
+| `duration` | `min`, `max` and `precision`, optional | a length of time, as [duration syntax](duration.md#duration-syntax) specifies | a `Duration` |
 | `volume` | none | the name of a site volume, as [volume params](#volume-params) specify | the value |
 
 ### Kind arguments
@@ -174,10 +176,12 @@ The `family` of an `ip-address`, `ip-subnet` or `ip-range` kind is valid only as
 
 A `choice` kind's `options` is valid only if it is a non-empty array of non-empty strings, no two of which are equal, each of which `std::parse_text` accepts.
 
+A `duration` kind's arguments are valid as [duration bounds](duration.md#bounds) specify.
+
 ### Kind parsers
 
 Every kind MUST have a parser, the [helper](std.md#helper) `std::parse_<kind>`, where `<kind>` is the kind's name with each `-` written as `_`.
-A parser takes the value as its first argument, followed by the kind's argument where the kind has one, returns the parser result the kind table gives, and raises a script error for a value the kind does not accept.
+A parser takes the value as its first argument, followed by the kind's argument where the kind has one, or by a map of the arguments given where the kind has several, returns the parser result the kind table gives, and raises a script error for a value the kind does not accept.
 `std::parse_integer` and `std::parse_quantity` MUST each accept being called with or without `range`.
 `std::parse_choice` MUST throw when called without `options`.
 A parser MUST throw when given an argument that a kind map carrying it would make invalid.
@@ -207,7 +211,7 @@ It SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/use
 `std::parse_integer` MUST accept exactly the decimal forms of signed 64-bit integers within `range`, or of any signed 64-bit integer where it is given no `range`.
 The decimal form of an integer is its digits with no leading zero, preceded by `-` where the integer is negative, with zero written `0`.
 
-The canonical form of a boolean is `true` or `false`, and the canonical form of an integer is its decimal form.
+The canonical form of a boolean is `true` or `false`, the canonical form of an integer is its decimal form, and the canonical form of a `Duration` is its [text form](duration.md#text-of-a-duration).
 Where `std::parse_integer` rejects an integer for falling outside `range`, its error SHOULD state the range.
 
 `std::parse_choice` MUST accept exactly the strings equal to one of `options`, compared case-sensitively.
@@ -246,9 +250,10 @@ Where it rejects a value that would be a quantity but for its suffix, its error 
 
 ### Presentation of kinds
 
-A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname`, `ip-address`, `ip-subnet` or `ip-range` param, and a multi-line input for a `multiline` param.
+A presentation layer SHOULD offer a single-line input for a `text`, `version`, `version-semver`, `purl`, `url`, `url-origin`, `hostname`, `ip-address`, `ip-subnet`, `ip-range` or `duration` param, and a multi-line input for a `multiline` param.
 A presentation layer SHOULD offer a toggle for a `boolean` param, a numeric input limited to `range` for an `integer` param, and a selection among `options`, in the order the script declared them, for a `choice` param.
 A presentation layer SHOULD offer a single-line input for a `quantity` param, and SHOULD show the amount the value resolves to while it is entered.
+A presentation layer SHOULD show the bounds a `duration` param's kind declares beside its input.
 A presentation layer MUST let an operator leave a param that is not required without a value, whatever its kind.
 A presentation layer MAY warn about an `email` value that is valid but unlikely to be meant, such as `" "@example.org`.
 A presentation layer SHOULD indicate the strength of a `weak-password` value as it is entered, and MUST NOT refuse a `weak-password` value for its strength.

@@ -10,10 +10,11 @@ use strum::VariantArray;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use super::{
+    duration::{Duration, DurationBounds, Precision},
     ip::{Family, IpAddress, IpRange, IpSubnet, check_family, take_family},
     purl::{Purl, QualifierValue},
     quantity::{format_quantity, parse_quantity},
-    take::{reject_unknown_keys, take_map, take_string, take_string_array},
+    take::{reject_unknown_keys, take_duration, take_map, take_string, take_string_array},
     url::{Url, UrlOrigin, parse_hostname},
     version::{SemVer, Version},
 };
@@ -93,6 +94,7 @@ pub enum ParamKindName {
     IpAddress,
     IpSubnet,
     IpRange,
+    Duration,
     Volume,
 }
 
@@ -118,6 +120,7 @@ impl ParamKindName {
             Self::IpAddress => "ip-address",
             Self::IpSubnet => "ip-subnet",
             Self::IpRange => "ip-range",
+            Self::Duration => "duration",
             Self::Volume => "volume",
         }
     }
@@ -129,6 +132,7 @@ impl ParamKindName {
             Self::Integer | Self::Quantity => &["range"],
             Self::Choice => &["options"],
             Self::IpAddress | Self::IpSubnet | Self::IpRange => &["family"],
+            Self::Duration => &DURATION_ARGUMENTS,
             _ => &[],
         }
     }
@@ -199,6 +203,7 @@ pub enum ParamKind {
     IpRange {
         family: Option<Family>,
     },
+    Duration(DurationBounds),
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
@@ -228,6 +233,7 @@ impl ParamKind {
             Self::IpAddress { .. } => ParamKindName::IpAddress,
             Self::IpSubnet { .. } => ParamKindName::IpSubnet,
             Self::IpRange { .. } => ParamKindName::IpRange,
+            Self::Duration(_) => ParamKindName::Duration,
             Self::Volume => ParamKindName::Volume,
         }
     }
@@ -368,6 +374,12 @@ impl ParamKind {
                 check_family(*family, range.family(), "range")?;
                 return Ok(ParsedValue::IpRange(range));
             }
+            // spec: DUR#bounds
+            Self::Duration(bounds) => {
+                let duration = Duration::parse(value)?;
+                bounds.check(duration)?;
+                return Ok(ParsedValue::Duration(duration));
+            }
             // spec: ACN#kind-parsers
             Self::Volume => {
                 SiteVolumeName::new(value).map_err(|e| e.to_string())?;
@@ -376,18 +388,20 @@ impl ParamKind {
         Ok(ParsedValue::Value(value.to_owned()))
     }
 
-    /// Check that a supplied boolean or integer is for the kind that takes
-    /// one; a string is for every kind.
+    /// Check that a supplied boolean, integer or `Duration` is for the kind
+    /// that takes one; a string is for every kind.
     // spec: ACN#param-schemas
     pub fn check_type(&self, value: &SuppliedValue) -> Result<(), String> {
         let given = match (self, value) {
             (_, SuppliedValue::Text(_))
             | (Self::Boolean, SuppliedValue::Bool(_))
-            | (Self::Integer { .. } | Self::Quantity { .. }, SuppliedValue::Int(_)) => {
+            | (Self::Integer { .. } | Self::Quantity { .. }, SuppliedValue::Int(_))
+            | (Self::Duration(_), SuppliedValue::Duration(_)) => {
                 return Ok(());
             }
             (_, SuppliedValue::Bool(_)) => "a boolean",
             (_, SuppliedValue::Int(_)) => "an integer",
+            (_, SuppliedValue::Duration(_)) => "a Duration",
         };
         Err(format!(
             "{given} is given for a param of kind {}",
@@ -445,12 +459,14 @@ pub fn take_kind(what: &str, value: Dynamic) -> Result<ParamKind, Box<EvalAltRes
         .get("family")
         .map(|family| take_family(&format!("{what}.family"), family.clone()))
         .transpose()?;
+    let bounds = take_duration_bounds(what, &map)?;
     Ok(kind_with(
         name,
         KindArguments {
             range,
             options,
             family,
+            bounds,
         },
     ))
 }
@@ -461,6 +477,7 @@ struct KindArguments {
     range: Option<IntRange>,
     options: Option<Vec<String>>,
     family: Option<Family>,
+    bounds: DurationBounds,
 }
 
 /// The kind `name` stands for given `arguments`, of which it reads only its
@@ -470,6 +487,7 @@ fn kind_with(name: ParamKindName, arguments: KindArguments) -> ParamKind {
         range,
         options,
         family,
+        bounds,
     } = arguments;
     match name {
         ParamKindName::Text => ParamKind::Text,
@@ -493,6 +511,7 @@ fn kind_with(name: ParamKindName, arguments: KindArguments) -> ParamKind {
         ParamKindName::IpAddress => ParamKind::IpAddress { family },
         ParamKindName::IpSubnet => ParamKind::IpSubnet { family },
         ParamKindName::IpRange => ParamKind::IpRange { family },
+        ParamKindName::Duration => ParamKind::Duration(bounds),
         ParamKindName::Volume => ParamKind::Volume,
     }
 }
@@ -515,6 +534,51 @@ pub fn take_range(what: &str, value: Dynamic) -> Result<IntRange, Box<EvalAltRes
         return Err(format!("`{what}` must be an integer range, got {type_name}").into());
     };
     range.ok_or_else(|| format!("`{what}` holds no integer").into())
+}
+
+/// The arguments a `duration` kind takes.
+// spec: DUR#bounds
+const DURATION_ARGUMENTS: [&str; 3] = ["min", "max", "precision"];
+
+/// Read a `duration` kind's `min`, `max` and `precision` from `map`, which
+/// may hold other keys the caller has checked.
+// spec: DUR#bounds
+pub fn take_duration_bounds(
+    what: &str,
+    map: &rhai::Map,
+) -> Result<DurationBounds, Box<EvalAltResult>> {
+    let bound = |key: &str| {
+        map.get(key)
+            .map(|value| take_duration(&format!("{what}.{key}"), value.clone()))
+            .transpose()
+    };
+    let min = bound("min")?;
+    let max = bound("max")?;
+    let precision = map
+        .get("precision")
+        .map(|value| {
+            let key = format!("{what}.precision");
+            let designator = take_string(&key, value.clone())?;
+            Precision::from_designator(&designator).ok_or_else(|| -> Box<EvalAltResult> {
+                format!(
+                    "`{key}` must be one of the designators d, h, m, s, ms, us and ns, got {designator:?}"
+                )
+                .into()
+            })
+        })
+        .transpose()?;
+    DurationBounds::new(min, max, precision).map_err(|e| format!("`{what}`: {e}").into())
+}
+
+/// Read a `duration` parser's map of arguments.
+// spec: DUR#bounds
+pub fn take_duration_arguments(
+    what: &str,
+    value: Dynamic,
+) -> Result<DurationBounds, Box<EvalAltResult>> {
+    let map = take_map(what, value)?;
+    reject_unknown_keys(what, &map, &DURATION_ARGUMENTS)?;
+    take_duration_bounds(what, &map)
 }
 
 /// Read a `choice` kind's `options`.
@@ -613,6 +677,9 @@ pub enum SuppliedValue {
     Text(String),
     Bool(bool),
     Int(i64),
+    /// Only a script supplies one, as a default; a client supplies a duration
+    /// as its text.
+    Duration(Duration),
 }
 
 impl SuppliedValue {
@@ -624,6 +691,7 @@ impl SuppliedValue {
             Self::Text(text) => text.clone(),
             Self::Bool(b) => b.to_string(),
             Self::Int(n) => n.to_string(),
+            Self::Duration(duration) => duration.to_string(),
         }
     }
 
@@ -645,7 +713,8 @@ impl SuppliedValue {
         }
     }
 
-    /// Read a value a script gives: a string, a boolean or an integer.
+    /// Read a value a script gives: a string, a boolean, an integer or a
+    /// `Duration`.
     pub fn take(what: &str, value: Dynamic) -> Result<Self, Box<EvalAltResult>> {
         // take: dispatch
         if let Ok(b) = value.as_bool() {
@@ -655,9 +724,16 @@ impl SuppliedValue {
         if let Ok(n) = value.as_int() {
             return Ok(Self::Int(n));
         }
+        // take: dispatch
+        if let Some(duration) = value.clone().try_cast::<Duration>() {
+            return Ok(Self::Duration(duration));
+        }
         let type_name = value.type_name();
         value.into_string().map(Self::Text).map_err(|_| {
-            format!("`{what}` must be a string, a boolean or an integer, got {type_name}").into()
+            format!(
+                "`{what}` must be a string, a boolean, an integer or a Duration, got {type_name}"
+            )
+            .into()
         })
     }
 }
@@ -705,6 +781,7 @@ pub enum ParsedValue {
     IpAddress(IpAddress),
     IpSubnet(IpSubnet),
     IpRange(IpRange),
+    Duration(Duration),
 }
 
 impl ParsedValue {
@@ -729,6 +806,7 @@ impl ParsedValue {
             Self::IpAddress(addr) => Dynamic::from(addr),
             Self::IpSubnet(subnet) => Dynamic::from(subnet),
             Self::IpRange(range) => Dynamic::from(range),
+            Self::Duration(duration) => Dynamic::from(duration),
         }
     }
 }

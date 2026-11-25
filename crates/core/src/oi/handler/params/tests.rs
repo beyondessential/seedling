@@ -1282,6 +1282,7 @@ const TYPED_SCRIPT: &str = r#"
     app.param("tier").kind(#{ name: "choice", options: ["small", "large"] }).required(false);
     app.param("memory").kind(#{ name: "quantity", range: 1..=1073741824 }).required(false);
     app.param("greeting").required(false);
+    app.param("ttl").kind(#{ name: "duration", min: "1m", precision: "s" }).required(false);
     app.deployment("web").image("docker.io/library/nginx:1.29");
 "#;
 
@@ -1363,6 +1364,16 @@ fn a_value_the_kind_rejects_or_a_native_value_of_the_wrong_kind_fails_validation
         (
             json!({ "enabled": 1 }),
             "enabled: an integer is given for a param of kind boolean",
+        ),
+        (json!({ "ttl": "30s" }), "ttl: must be at least 1m"),
+        (
+            json!({ "ttl": "90500ms" }),
+            "ttl: must be a whole number of seconds",
+        ),
+        (json!({ "ttl": "90" }), "ttl: \"90\" is not a duration"),
+        (
+            json!({ "ttl": 90 }),
+            "ttl: an integer is given for a param of kind duration",
         ),
         (
             json!({ "unknown": 1 }),

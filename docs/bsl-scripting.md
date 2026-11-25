@@ -130,7 +130,7 @@ app.deployment("worker")
     .writable_rootfs()                // opt out of read-only root
     .cap_add("NET_BIND_SERVICE")
     .stop_signal("SIGINT")            // signal sent on stop (default SIGTERM)
-    .stop_timeout(30)                 // seconds before SIGKILL (default 90)
+    .stop_timeout("30s")              // before SIGKILL, in whole seconds (default 90s)
     .mount("/data", vol)              // bind volume into container
     .mount(svc.port(5432))            // bind service port into network namespace
     .http(8080, http_svc.route("/"))  // expose pod port to HTTP route
@@ -145,12 +145,12 @@ app.deployment("worker")
     .healthcheck(#{                   // see "Healthchecks" below — Deployment only
         kind: "command",
         cmd: ["curl", "-fsS", "http://localhost:8080/healthz"],
-        interval: 10,
+        interval: "10s",
     });
 
 app.job("migrate")
     .image("ghcr.io/example/app:v1.2.3")
-    .deadline(300);                   // seconds; no deadline = runs indefinitely
+    .deadline("5m");                  // whole seconds; no deadline = runs indefinitely
 ```
 
 ### Volume
@@ -171,6 +171,7 @@ let version = app.param("version")
     .kind("text")           // text (one line) | multiline | email | password | weak-password | random
                             // | boolean | integer | quantity | choice | version | version-semver | purl
                             // | url | url-origin | hostname | ip-address | ip-subnet | ip-range
+                            // | duration
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
     .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
@@ -187,7 +188,7 @@ version.validate(|value, all| {
 });
 ```
 
-A kind that takes arguments is given as a kind map, a `name` and the kind's arguments. `integer` and `quantity` take an optional `range`, and `choice` takes its `options`, which it requires:
+A kind that takes arguments is given as a kind map, a `name` and the kind's arguments. `integer` and `quantity` take an optional `range`, `choice` takes its `options`, which it requires, and `duration` takes an optional `min`, `max` and `precision` (see [Durations](#durations)):
 
 ```rhai
 let port = app.param("port")
@@ -196,6 +197,9 @@ let port = app.param("port")
 let tier = app.param("tier")
     .kind(#{ name: "choice", options: ["small", "large"] })
     .default_value("small");
+let grace = app.param("grace")
+    .kind(#{ name: "duration", min: "1s", max: "1h", precision: "s" })
+    .default_value("90s");                         // or a Duration, stored as its text
 let canary = app.param("canary").kind("boolean").required(false);
 let cache = app.param("cache-memory")
     .kind(#{ name: "quantity", range: 64 * 1024 * 1024..=AVAILABLE_MEMORY })
@@ -209,7 +213,7 @@ canary.is_set() && canary.parsed()  // a boolean, without comparing against "tru
 
 A range with no start, such as `..10`, starts at 0, so give the start of a range that takes negative values. `default_value("")` removes a default. A default the kind refuses fails the evaluation once the script has finished, since `kind` and `default_value` can be called in either order. A `boolean` or `choice` parameter cannot be secret, since the definition lists every value it can take; the same goes for action and shell params.
 
-Every set value is first checked against its kind, by the kind's [parser](#parsing-a-kind): `text` and every kind but `multiline` hold a single line with no control characters, `email` needs an address, `password` a strong one, `boolean` exactly `true` or `false`, `integer` a whole number in plain decimal form within its range, `quantity` a [quantity](#quantities) within its range, and `choice` one of its options, matched case-sensitively. A value its kind refuses is rejected with the parser's reason, and while any value is refused no validator runs. An empty stored value is checked like any other; unset a parameter to clear it.
+Every set value is first checked against its kind, by the kind's [parser](#parsing-a-kind): `text` and every kind but `multiline` hold a single line with no control characters, `email` needs an address, `password` a strong one, `boolean` exactly `true` or `false`, `integer` a whole number in plain decimal form within its range, `quantity` a [quantity](#quantities) within its range, `choice` one of its options, matched case-sensitively, and `duration` a [duration](#durations) within its bounds. A value its kind refuses is rejected with the parser's reason, and while any value is refused no validator runs. An empty stored value is checked like any other; unset a parameter to clear it.
 
 Operator interfaces offer a toggle for a `boolean` parameter, a number input for an `integer` one, a text input showing the resolved amount for a `quantity` one, and a selection for a `choice` one. Clients setting parameters through `/apps/params/set` may send a JSON boolean for a `boolean` parameter and a JSON integer for an `integer` or `quantity` one; it is stored as its text.
 
@@ -222,7 +226,7 @@ app.gate("schema")
     .key(version.value())                // the step reruns whenever this value changes
     .exclusive(app.select(#{ names: ["api", "worker"] }))  // held stopped while the step runs
     .after(db)                           // start order, as for a Deployment or Job
-    .check(check_job, #{ interval: 300 }) // optional: a Job that proves the step still holds
+    .check(check_job, #{ interval: "5m" }) // optional: a Job that proves the step still holds
     .run(|rt, last| {                    // the body; takes up to two parameters
         rt.start(app.job().image(image.call()).command(["migrate"]))
             .terminated()
@@ -247,7 +251,7 @@ rt.warm_images(resources)       // pre-pull container images without starting th
 rt.write(volume, path, contents)         // write a file (string or File) into a volume at action time
 rt.exec(target, argv, options?)          // run argv inside a running container, returns Executed
 
-// Started methods — all block until state is reached (deadline in seconds):
+// Started methods — all block until state is reached (deadline a duration in whole seconds, not zero):
 started.scheduled(deadline?)
 started.running(deadline?)
 started.ready(deadline?)
@@ -405,7 +409,7 @@ app.on_shell("check", |rt, shell, _param| {
 });
 ```
 
-A closure's `param` map holds each declared param that has a value as its kind's [parser result](#parsing-a-kind): an `email` param is a map of `local` and `domain`, a `boolean` a boolean, an `integer` or `quantity` an integer and a `version` a `Version`. A declared param left without a value is absent, so test it with `"name" in param`. Params a schema does not declare arrive as they were given. Operators and clients may send a JSON boolean for a `boolean` param and a JSON integer for an `integer` or `quantity` param, as well as its text.
+A closure's `param` map holds each declared param that has a value as its kind's [parser result](#parsing-a-kind): an `email` param is a map of `local` and `domain`, a `boolean` a boolean, an `integer` or `quantity` an integer, a `version` a `Version` and a `duration` a `Duration`. A declared param left without a value is absent, so test it with `"name" in param`. Params a schema does not declare arrive as they were given. Operators and clients may send a JSON boolean for a `boolean` param and a JSON integer for an `integer` or `quantity` param, as well as its text.
 
 ## Standard helpers
 
@@ -421,7 +425,7 @@ Calling a helper that does not exist throws, like any unknown function. Which he
 
 ### Parsing a kind
 
-Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_quantity`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname`, `std::parse_ip_address`, `std::parse_ip_subnet`, `std::parse_ip_range` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, `std::parse_quantity(v)` or `std::parse_quantity(v, 1..)`, `std::parse_choice(v, ["small", "large"])`, and `std::parse_ip_subnet(v)` or `std::parse_ip_subnet(v, 4)`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
+Every parameter kind has a parser, `std::parse_<kind>` with any `-` written as `_`: `std::parse_text`, `std::parse_multiline`, `std::parse_email`, `std::parse_password`, `std::parse_weak_password`, `std::parse_random`, `std::parse_boolean`, `std::parse_integer`, `std::parse_quantity`, `std::parse_choice`, `std::parse_version`, `std::parse_version_semver`, `std::parse_purl`, `std::parse_url`, `std::parse_url_origin`, `std::parse_hostname`, `std::parse_ip_address`, `std::parse_ip_subnet`, `std::parse_ip_range`, `std::parse_duration` and `std::parse_volume`. A kind's argument follows the value: `std::parse_integer(v)` or `std::parse_integer(v, 1..=65535)`, `std::parse_quantity(v)` or `std::parse_quantity(v, 1..)`, `std::parse_choice(v, ["small", "large"])`, and `std::parse_ip_subnet(v)` or `std::parse_ip_subnet(v, 4)`. A kind with several arguments takes them as a map, as in `std::parse_duration(v, #{ max: "1h" })`. The parser is exactly the check the runtime applies to a value of that kind, for action and shell params and for stored parameters alike, so calling it applies the same rule:
 
 ```rhai
 let contact = std::parse_email("ops@example.org");
@@ -431,7 +435,7 @@ contact.domain  // "example.org"
 app.param("fallback-contact").validate(|v, all| { std::parse_email(v); });
 ```
 
-`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean, and `std::parse_integer` and `std::parse_quantity` an integer. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, `std::parse_hostname` the hostname in its ASCII form, and the three IP parsers an address, subnet or range, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
+`std::parse_email` returns the parts of the address, split at its first `@`. `std::parse_boolean` returns a boolean, and `std::parse_integer` and `std::parse_quantity` an integer. `std::parse_version` and `std::parse_version_semver` return a version, `std::parse_purl` the components of a Package URL, `std::parse_url` and `std::parse_url_origin` the components of a URL, `std::parse_hostname` the hostname in its ASCII form, the three IP parsers an address, subnet or range, and `std::parse_duration` a `Duration`, all described below. Every other parser returns the value unchanged. `std::parse_volume` checks a site volume's name only; whether the volume exists is checked when the action runs.
 
 ### Quantities
 
@@ -549,6 +553,29 @@ app.param("pool").kind(#{ name: "ip-range", family: 4 }).validate(|v, all| {
         throw "the address pool lies outside the allowed subnet";
     }
 });
+```
+
+### Durations
+
+The `duration` kind takes a length of time in [jiff's friendly format](https://docs.rs/jiff/0.2/jiff/fmt/friendly/index.html#grammar), in compact or spelled-out form: `90s`, `1h30m`, `1h 30m`, `1 hour, 30 minutes` and `01:30:00` are all accepted. Units run from nanoseconds to weeks, a day counting as 24 hours and a week as 7 days. Only the last unit may carry a fraction, from hours down, as in `1.5h`. A sign, an `ago`, a month or year unit, and a length beyond about 292 years are refused; write about a month as `30d`.
+
+`std::parse_duration` returns a `Duration`. A `duration` kind's optional `min` and `max` bound it, and `precision`, one of `d`, `h`, `m`, `s`, `ms`, `us` and `ns`, requires a whole number of that unit. Give `precision: "s"` to a parameter that feeds an option taking whole seconds, so a fraction is refused when the operator enters it rather than when the definition evaluates.
+
+A `Duration` converts to a string from days down, as `std::parse_duration("90m").to_string()` gives `1h 30m` and `2w` gives `14d`; zero is `0s`. Durations compare with `<`, `<=`, `>`, `>=`, `==` and `!=`, but comparing one with a string or a number throws. A `Duration` passed to `invoke` is taken as its text. `+` and `-` combine two durations, and `*` and `/` take an integer, dividing toward zero; a negative result, an overflow or a division by zero throws. `as_seconds()` and `as_millis()` return an integer and throw unless the duration is a whole number of that unit, and `as_seconds_f()` and `as_millis_f()` return a floating-point number:
+
+```rhai
+let d = std::parse_duration("1m 30s");
+d.as_seconds()                                          // 90
+d * 2 > std::parse_duration("3m")                       // false: they are equal
+std::parse_duration("1500ms").as_seconds_f()            // 1.5
+std::parse_duration("2h", #{ max: "1h" })               // throws: must be at most 1h
+```
+
+Every option that takes a length of time, such as `stop_timeout`, `deadline`, a healthcheck's or a gate check's `interval`, or a barrier deadline, takes a `Duration` or a string `std::parse_duration` accepts. A number is refused, so write `"30s"`, not `30`. An option documented in whole seconds also refuses a fraction of a second:
+
+```rhai
+app.deployment("db").stop_timeout("2m");
+app.deployment("api").stop_timeout(grace.parsed() * 2);
 ```
 
 ### Derived random values
@@ -671,7 +698,7 @@ let api = app.deployment("api").image(app_image.call()).after(db);
 let schema_check = app.job("schema-check")
     .image(app_image.call())
     .command(["migrate", "--check"])
-    .deadline(60);
+    .deadline("1m");
 
 app.gate("schema")
     .key(version.value())
@@ -693,7 +720,7 @@ app.gate("schema")
 
 - **`.key(value)`** sets the value that decides whether the gate is satisfied. The gate runs again whenever its key differs from the key of its last success. A key is a unit, boolean, integer, finite float, string, or an array or map of those, and two keys are the same when they are the same JSON value (map members compared in any order, and an integer never equal to a float). A gate with no `key` has the unit as its key, so it runs once and again only when its check fails.
 - **`.run(|rt, last| ...)`** sets the body, taking up to two parameters. It may be set once. A gate without a body goes straight to its check.
-- **`.check(job)` or `.check(job, #{ interval: seconds })`** sets a named Job with a `deadline` as the gate's check. A check passes when the Job's instance exits 0; a failure, or the deadline, makes the gate unsatisfied until a run succeeds. The runtime runs the check after each run, before it starts a dependant workload that has no running instance, and every `interval` seconds if one is given (at least 1), whatever the gate's state, while no run of it is in progress; the interval counts from the last check, across restarts of the daemon. A check is how a gate notices a change made outside Seedling, such as a database restored from an older backup. A Job can be the check of only one gate, and the runtime starts it for nothing else. A gate with a check and no body waits on a condition alone, such as an external database becoming reachable.
+- **`.check(job)` or `.check(job, #{ interval: duration })`** sets a named Job with a `deadline` as the gate's check. A check passes when the Job's instance exits 0; a failure, or the deadline, makes the gate unsatisfied until a run succeeds. The runtime runs the check after each run, before it starts a dependant workload that has no running instance, and every `interval` if one is given (whole seconds, at least 1s), whatever the gate's state, while no run of it is in progress; the interval counts from the last check, across restarts of the daemon. A check is how a gate notices a change made outside Seedling, such as a database restored from an older backup. A Job can be the check of only one gate, and the runtime starts it for nothing else. A gate with a check and no body waits on a condition alone, such as an external database becoming reachable.
 - **`.exclusive(selection)`** names the Deployments and Jobs the runtime stops before the body runs, and keeps stopped until the gate is satisfied. A selection holding a dynamic resource throws.
 - **`.after(target)`** orders the gate after a gate, a named Deployment, a named Job, or an array of these. `after` is also a method of Deployments and Jobs. The runtime starts no instance of a dependant workload, and runs no dependant gate, until each target is ready: a gate is ready when satisfied, a Deployment when one instance is Ready, a Job when its latest instance exited 0. A running instance is never stopped because a target is not ready. The evaluation fails where `after` calls form a cycle, and where a gate's exclusive selection holds one of its own targets or the Job of its check.
 
@@ -736,10 +763,10 @@ app.deployment("api")
     .healthcheck(#{
         kind: "command",
         cmd: ["curl", "-fsS", "http://localhost:8080/healthz"],
-        interval: 10,         // seconds between checks, at least 1 (default 30)
-        timeout: 3,           // seconds before a check is considered failed, at least 1 (default 30)
+        interval: "10s",      // between checks, whole seconds, at least 1s (default 30s)
+        timeout: "3s",        // before a check is considered failed, whole seconds, at least 1s (default 30s)
         retries: 3,           // consecutive failures before transitioning to unhealthy (default 3)
-        start_period: 15,     // seconds of grace after start before failures count (default 0)
+        start_period: "15s",  // grace after start before failures count, whole seconds (default 0s)
         on_failure: "replace",// "replace" (default) or "monitor"
     });
 ```
@@ -771,10 +798,10 @@ By default seedling stops a container with `SIGTERM` and waits up to 90 seconds 
 app.deployment("postgres")
     .image("postgres:18")
     .stop_signal("SIGINT")    // postgres maps SIGINT → fast shutdown
-    .stop_timeout(30);        // hard kill after 30s
+    .stop_timeout("30s");     // hard kill after 30s
 ```
 
-`stop_signal` accepts canonical (`"SIGTERM"`) or bare (`"TERM"`) forms; unknown signal names are a script-evaluation error. `stop_timeout` is in whole seconds and must be positive. The defaults match systemd's `TimeoutStopSec`.
+`stop_signal` accepts canonical (`"SIGTERM"`) or bare (`"TERM"`) forms; unknown signal names are a script-evaluation error. `stop_timeout` is a [duration](#durations) in whole seconds, at least 1s. The defaults match systemd's `TimeoutStopSec`.
 
 A common pairing: PostgreSQL with `SIGINT` (fast shutdown) — the default `SIGTERM` triggers smart shutdown which waits for clients to disconnect and frequently exceeds the stop deadline.
 

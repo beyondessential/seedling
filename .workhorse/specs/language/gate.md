@@ -97,8 +97,8 @@ How and when the runtime runs a gate is specified by [gate runs](../runtime/gate
 Calling `check` again MUST replace the check it set before.
 `job` MUST be a named [Job](job.md) of the app with a [deadline](job.md#deadline), and anything else MUST make `check` throw.
 
-The `options` map MAY carry `interval`, a number of seconds.
-An `options` map carrying any other key, or an `interval` below 1, MUST throw.
+The `options` map MAY carry `interval`, a [duration in whole seconds](duration.md#duration-arguments).
+An `options` map carrying any other key, or an `interval` below 1 second, MUST throw.
 
 A check passes when an instance of its Job runs to completion and exits with status 0.
 It fails when the instance exits with any other status, or is stopped at its [deadline](job.md#deadline).

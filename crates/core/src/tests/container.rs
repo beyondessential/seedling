@@ -898,7 +898,7 @@ fn container_stop_timeout_sets_value() {
         r#"
         app.deployment("web")
             .image("docker.io/library/nginx:latest")
-            .stop_timeout(60);
+            .stop_timeout("60s");
     "#,
     );
     with_container(&app, "web", |c| {
@@ -910,7 +910,7 @@ fn container_stop_timeout_sets_value() {
 #[test]
 fn container_stop_timeout_rejects_zero() {
     let _ = run_test_script_err(
-        r#"app.deployment("web").image("docker.io/library/nginx:latest").stop_timeout(0);"#,
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").stop_timeout("0s");"#,
     );
 }
 
@@ -939,7 +939,7 @@ fn stop_timeout_rejects_values_beyond_u32() {
         r#"
         app.deployment("web")
             .image("docker.io/library/nginx:1.29")
-            .stop_timeout(4294967297);
+            .stop_timeout("4294967297s");
     "#,
     );
     assert!(err.to_string().contains("`stop_timeout`"), "{err}");

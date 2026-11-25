@@ -5,7 +5,9 @@ use strum::VariantArray;
 
 use crate::defs::{
     ip::take_family,
-    param_def::{IntRange, ParamKind, ParamKindName, take_options, take_range},
+    param_def::{
+        IntRange, ParamKind, ParamKindName, take_duration_arguments, take_options, take_range,
+    },
     take::take_string,
 };
 
@@ -21,6 +23,17 @@ pub(super) fn register(module: &mut rhai::Module) {
             // spec: ACN#kind-parsers
             ParamKindName::Quantity => {
                 register_ranged_parser(module, &helper, |range| ParamKind::Quantity { range });
+            }
+            // spec: DUR#bounds
+            ParamKindName::Duration => {
+                register_parser(module, &helper, ParamKind::Duration(Default::default()));
+                FuncRegistration::new(&helper).set_into_module(
+                    module,
+                    |value: Dynamic, arguments: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                        let bounds = take_duration_arguments("arguments", arguments)?;
+                        parse(&ParamKind::Duration(bounds), value)
+                    },
+                );
             }
             // spec: ACN#kind-parsers
             ParamKindName::Choice => {

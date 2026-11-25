@@ -59,7 +59,7 @@ The `Started` it returns MUST still hold every resource of the selection, other 
 
 ### Stopping resources
 
-`rt.stop(selection)` and `rt.stop(selection, deadline: number)` MUST remove every resource of the selection from the app's desired state, then wait until all of them have reached Terminated, and return no value.
+`rt.stop(selection)` and `rt.stop(selection, deadline: duration)` MUST remove every resource of the selection from the app's desired state, then wait until all of them have reached Terminated, and return no value.
 `deadline` is read as for [barriers](#barriers), with the default given there for `rt.stop`.
 If the deadline passes first, `rt.stop` MUST throw.
 While it waits, the action closure is suspended as [suspension](../runtime/suspension.md#rtstop) specifies.
@@ -208,12 +208,12 @@ A `Started` returned by a Collection method MUST keep the barriers of the `Start
 The runtime sets the value of each default deadline.
 A short default deadline MUST be on the order of tens of seconds.
 A long default deadline MUST be on the order of hours.
-Every default deadline MUST be a positive number of seconds.
+Every default deadline MUST be a positive whole number of seconds.
 
 The default deadline of `rt.stop` is 30 seconds more than the longest [stop timeout](container.md#stopping) among the containers of the resources it stops, or 30 seconds where it stops no container.
 
-`deadline` is an integer number of seconds.
-A positive `deadline` MUST be used as given, zero MUST select the default, and a negative `deadline` MUST make the barrier throw.
+`deadline` is a [duration in whole seconds](duration.md#duration-arguments).
+A `deadline` MUST be used as given, and a zero `deadline` MUST make the barrier throw.
 
 A barrier on a `Started` holding no instances MUST return at once.
 A barrier whose condition holds MUST return, even if its deadline has passed.

@@ -33,6 +33,7 @@ mod container;
 mod definitions;
 mod deployment;
 mod description;
+mod duration;
 mod exec;
 mod gate;
 mod ingress;

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::defs::{
+    duration::Duration,
     ip::{IpAddress, IpRange, IpSubnet},
     param_def::ParsedValue,
     version::{SemVer, Version},
@@ -46,6 +47,8 @@ pub enum ParsedType {
     IpSubnet,
     /// An `IpRange`, held as its canonical text.
     IpRange,
+    /// A `Duration`, held as its text form.
+    Duration,
 }
 
 impl ParamMap {
@@ -113,6 +116,7 @@ impl ParamMap {
             }
             ParsedValue::IpSubnet(v) => (Value::String(v.to_string()), Some(ParsedType::IpSubnet)),
             ParsedValue::IpRange(v) => (Value::String(v.to_string()), Some(ParsedType::IpRange)),
+            ParsedValue::Duration(d) => (Value::String(d.to_string()), Some(ParsedType::Duration)),
             url @ (ParsedValue::Url(_) | ParsedValue::UrlOrigin(_)) => (
                 crate::defs::json::from_dynamic(url.into_dynamic())
                     .expect("a URL's components are strings and an integer"),
@@ -163,6 +167,7 @@ fn restore(key: &str, ty: ParsedType, value: &Value) -> Result<Dynamic, String> 
         ParsedType::IpAddress => restore_text(key, value, IpAddress::parse),
         ParsedType::IpSubnet => restore_text(key, value, IpSubnet::parse),
         ParsedType::IpRange => restore_text(key, value, IpRange::parse),
+        ParsedType::Duration => restore_text(key, value, Duration::parse),
         ParsedType::Purl => {
             let Value::Object(components) = value else {
                 return Err(format!(

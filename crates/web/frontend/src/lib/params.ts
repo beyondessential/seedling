@@ -1,11 +1,11 @@
-import type { IntRange, ParamSchema } from "./types";
+import type { DurationRange, IntRange, ParamSchema } from "./types";
 import { isStrongPassword, passwordScore } from "./passwordStrength";
 import { formatQuantity, parseQuantity } from "./quantity";
 
 export type ParamEntries = [string, ParamSchema][];
 
 /** The parts of a param's schema a text input's helper line reads. */
-export type TextParamSchema = Pick<ParamSchema, "kind" | "range"> & {
+export type TextParamSchema = Pick<ParamSchema, "kind" | "range" | "precision"> & {
   description?: string | null;
 };
 
@@ -45,10 +45,10 @@ export function paramsBlocker(
     if (def.kind === "password" && !isStrongPassword(value)) {
       return `${key} is too weak`;
     }
-    if (def.kind === "integer" && integerProblem(value, def.range) !== null) {
+    if (def.kind === "integer" && integerProblem(value, intRange(def)) !== null) {
       return `${key} is not a valid value`;
     }
-    if (def.kind === "quantity" && quantityProblem(value, def.range) !== null) {
+    if (def.kind === "quantity" && quantityProblem(value, intRange(def)) !== null) {
       return `${key} is not a valid value`;
     }
   }
@@ -59,6 +59,58 @@ export function paramFieldType(kind: string, secret?: boolean): string {
   if (secret || kind === "password" || kind === "weak-password") return "password";
   if (kind === "email") return "email";
   return "text";
+}
+
+/** The parts of a schema that say which values its kind accepts. */
+interface KindBounds {
+  kind: string;
+  range?: IntRange | DurationRange | null;
+  precision?: string | null;
+}
+
+/** An `integer` or `quantity` kind's range, or null for any other kind or none. */
+export function intRange(def: KindBounds): IntRange | null {
+  return def.kind === "integer" || def.kind === "quantity"
+    ? ((def.range as IntRange | null | undefined) ?? null)
+    : null;
+}
+
+const PRECISION_UNITS: Record<string, string> = {
+  d: "days",
+  h: "hours",
+  m: "minutes",
+  s: "seconds",
+  ms: "milliseconds",
+  us: "microseconds",
+  ns: "nanoseconds",
+};
+
+/** The bounds a `duration` kind declares, as helper text, or null for any
+ *  other kind or one with no bounds. */
+// spec: ACN#presentation-of-kinds
+export function durationBounds(def: KindBounds): string | null {
+  if (def.kind !== "duration") return null;
+  const range = (def.range as DurationRange | null | undefined) ?? null;
+  const min = range?.min ?? null;
+  const max = range?.max ?? null;
+  const parts: string[] = [];
+  if (min !== null && max !== null) parts.push(`${min} to ${max}`);
+  else if (min !== null) parts.push(`At least ${min}`);
+  else if (max !== null) parts.push(`At most ${max}`);
+  if (def.precision) {
+    const unit = PRECISION_UNITS[def.precision] ?? def.precision;
+    parts.push(parts.length > 0 ? `whole ${unit}` : `Whole ${unit}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+/** A param's description, after its duration bounds where it has any. */
+export function describeParam(
+  def: KindBounds & { description?: string | null },
+): string | undefined {
+  const bounds = durationBounds(def);
+  if (bounds !== null && def.description) return `${bounds}. ${def.description}`;
+  return bounds ?? (def.description || undefined);
 }
 
 /** Why `value` is not an `integer` value within `range`, or null when it is
@@ -100,7 +152,7 @@ export function quantityProblem(value: string, range?: IntRange | null): string 
 // spec: ACN#presentation-of-kinds
 export function paramValueRejected(def: TextParamSchema, value: string): boolean {
   if (def.kind === "password") return value.length > 0 && !isStrongPassword(value);
-  if (def.kind === "quantity") return quantityProblem(value, def.range) !== null;
+  if (def.kind === "quantity") return quantityProblem(value, intRange(def)) !== null;
   return false;
 }
 
@@ -108,8 +160,8 @@ export function paramValueRejected(def: TextParamSchema, value: string): boolean
  *  a `weak-password` value's strength, or else the description. */
 // spec: ACN#presentation-of-kinds
 export function paramHelperText(def: TextParamSchema, value: string): string | undefined {
-  const description = def.description || undefined;
-  if (def.kind === "quantity") return quantityProblem(value, def.range) ?? description;
+  const description = describeParam(def);
+  if (def.kind === "quantity") return quantityProblem(value, intRange(def)) ?? description;
   if (def.kind === "password" && value.length > 0) {
     return isStrongPassword(value) ? description : "Password is too weak";
   }

@@ -194,8 +194,8 @@ On a route, it overrides that value for the route.
 | field | type | default | meaning |
 | --- | --- | --- | --- |
 | `policy` | string | `"round_robin"` | how a backend is chosen |
-| `try_duration` | number of seconds | 5 | how long the proxy may spend finding a usable backend for one request or connection |
-| `interval` | number of seconds | 0.25 | the pause between successive attempts to find one |
+| `try_duration` | duration | 5 seconds | how long the proxy may spend finding a usable backend for one request or connection |
+| `interval` | duration | 250 milliseconds | the pause between successive attempts to find one |
 
 | `policy` | backend chosen |
 | --- | --- |
@@ -206,7 +206,7 @@ On a route, it overrides that value for the route.
 
 Every field is OPTIONAL.
 A `policy` not in the table above MUST throw.
-`try_duration` and `interval` MUST be finite and non-negative, and MAY be written as integers or as floating-point numbers.
+`try_duration` and `interval` MUST be read as [duration arguments](duration.md#duration-arguments) specify.
 A `config` naming an `interval` of zero MUST throw unless the same `config` names a `try_duration` of zero.
 A `config` with any other key MUST throw.
 
@@ -230,11 +230,11 @@ A script declares per-client request rate limiting with `rate_limit(config: map)
 | field | type | range | meaning |
 | --- | --- | --- | --- |
 | `max_events` | integer | 1 to 1000 | the number of requests one client may make within each window |
-| `window` | number of seconds | 0.001 to 3600 | the length of the sliding window |
+| `window` | duration | 1 millisecond to 1 hour | the length of the sliding window |
 
 Both fields are REQUIRED.
-A missing field, a field outside its range, a non-finite `window`, and any other key MUST each throw.
-`window` MAY be written as an integer or as a floating-point number.
+`window` MUST be read as [duration arguments](duration.md#duration-arguments) specify.
+A missing field, a field outside its range, and any other key MUST each throw.
 
 > [!NOTE]
 > The ranges bound plausibility, not tuning.

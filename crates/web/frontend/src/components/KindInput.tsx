@@ -9,15 +9,15 @@ import {
   ToggleButton,
   ToggleButtonGroup,
 } from "@mui/material";
-import { integerProblem } from "../lib/params";
-import type { IntRange } from "../lib/types";
+import { intRange, integerProblem } from "../lib/params";
+import type { DurationRange, IntRange } from "../lib/types";
 
 /** The parts of a param's schema its kind's input reads. */
 export interface KindSchema {
   kind: string;
   required: boolean;
   description?: string | null;
-  range?: IntRange | null;
+  range?: IntRange | DurationRange | null;
   options?: string[] | null;
 }
 
@@ -103,13 +103,13 @@ export function KindInput({
       autoFocus={autoFocus}
       required={def.required}
       onChange={(e) => onChange(e.target.value)}
-      helperText={integerProblem(value, def.range) ?? description}
-      error={integerProblem(value, def.range) !== null}
+      helperText={integerProblem(value, intRange(def)) ?? description}
+      error={integerProblem(value, intRange(def)) !== null}
       slotProps={{
         htmlInput: {
           step: 1,
-          min: def.range?.min ?? undefined,
-          max: def.range?.max ?? undefined,
+          min: intRange(def)?.min ?? undefined,
+          max: intRange(def)?.max ?? undefined,
           style: { fontFamily: "monospace" },
         },
       }}

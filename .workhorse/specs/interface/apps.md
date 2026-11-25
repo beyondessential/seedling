@@ -306,9 +306,10 @@ Each entry of `params` has these members.
 | --- | --- | --- |
 | `name` | string | the parameter's name |
 | `kind` | string | the name of its [kind](../language/action.md#param-kinds) |
-| `range` | object or null | for an `integer` or `quantity` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values or `null` as the rule below gives, and `null` otherwise |
+| `range` | object or null | for an `integer` or `quantity` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values or `null` as the rule below gives; for a `duration` kind given a `min` or a `max`, `{ "min": <string or null>, "max": <string or null> }`, each bound in its [text form](../language/duration.md#text-of-a-duration) or `null` where the kind gives none; and `null` otherwise |
 | `options` | array of strings or null | for a `choice` kind, its options in the order the script declared them, and `null` otherwise |
 | `family` | integer or null | for an `ip-address`, `ip-subnet` or `ip-range` kind given a `family`, `4` or `6`, and `null` otherwise |
+| `precision` | string or null | for a `duration` kind given a `precision`, its designator, and `null` otherwise |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
 | `default_value` | string or null | its default value, or `null` where it is secret |
@@ -316,7 +317,7 @@ Each entry of `params` has these members.
 | `is_set` | boolean | whether it has a stored value |
 | `value` | string or null | its stored value, or `null` where it is unset, secret or withheld |
 
-In `range`, `min` MUST be `null` where the range starts at the smallest signed 64-bit integer, and `max` MUST be `null` where it ends at the largest, whether that end is inclusive or exclusive.
+In an `integer` or `quantity` kind's `range`, `min` MUST be `null` where the range starts at the smallest signed 64-bit integer, and `max` MUST be `null` where it ends at the largest, whether that end is inclusive or exclusive.
 
 > [!NOTE]
 > Many JSON clients hold numbers as double-precision floats, which represent integers exactly only up to 2^53 in magnitude, so a bound beyond that may be read imprecisely.
@@ -338,7 +339,7 @@ Each entry of `actions` has these members.
 | `name` | string | the action's name |
 | `description` | string or null | its description |
 | `kind` | string | `action` or `shell` |
-| `params` | object | for each parameter its schema declares, `{ "kind", "range", "options", "family", "required", "description", "default_value", "secret" }` as in `params` above |
+| `params` | object | for each parameter its schema declares, `{ "kind", "range", "options", "family", "precision", "required", "description", "default_value", "secret" }` as in `params` above |
 | `schedules` | array | one `{ "cronexpr", "last_fired_at", "next_fire_at" }` for each [schedule](../language/action.md#scheduled-actions) attached to the action |
 
 Shells have no schedules.

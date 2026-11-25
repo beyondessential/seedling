@@ -342,7 +342,7 @@ fi
 echo "copying $src -> /config/default.reference.json5"
 install -m 0640 "$src" /config/default.reference.json5
 `])
-    ).terminated(120).ensure_success();
+    ).terminated("120s").ensure_success();
 };
 
 let render_config = |rt| {
@@ -364,7 +364,7 @@ let render_config = |rt| {
             "install -m 0640 /staging/production.json5 /config/production.json5 && " +
             "install -m 0640 /staging/local.json5 /config/local.json5"
         ])
-    ).terminated(60).ensure_success();
+    ).terminated("60s").ensure_success();
 };
 
 // Idempotent provisioning: create or refresh the database, the facility role,
@@ -405,7 +405,7 @@ END $$;
             "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/setup.sql && " +
             "psql -d postgres -v ON_ERROR_STOP=1 -f /staging/createdb.sql"
         ])
-    ).terminated(120).ensure_success();
+    ).terminated("120s").ensure_success();
 };
 
 let migrate_db = |rt| {
@@ -447,7 +447,7 @@ let database_check = app.job("database-check")
     .command(["sh", "-c",
         `psql -d postgres -tA -c "SELECT 1 FROM pg_database WHERE datname = '${sql_ident.call(db_name.value())}'" | grep -qx 1`
     ])
-    .deadline(30);
+    .deadline("30s");
 
 // The server waits on a database the operator's postgres fulfils, so this gate
 // runs until it is reachable and holds the migration back until then.
@@ -518,7 +518,7 @@ app.on_action("warm-images", |rt, param| {
     rt.warm_images([
         app.job().image(`ghcr.io/beyondessential/tamanu-facility:${target}`),
         app.job().image(`ghcr.io/beyondessential/tamanu-frontend:${target}`),
-    ]).ready(600);
+    ]).ready("600s");
 }, #{
     description: "Pre-pull the facility and frontend images for a target version",
     params: #{

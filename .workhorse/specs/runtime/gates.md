@@ -117,7 +117,7 @@ The runtime MUST check a gate that declares a check:
 
 - before it starts an instance of a dependant workload while no instance of that workload is running, where the gate's record holds a valid success for its current key;
 - after the gate's body returns in a run;
-- every `interval` seconds while the app is installed and no run of the gate is in progress, where the check declares an interval.
+- every `interval` while the app is installed and no run of the gate is in progress, where the check declares an interval.
 
 The runtime MUST count each interval from when a check of the gate last ran to an outcome, as the gate's record holds it, whether or not the runtime has restarted since.
 

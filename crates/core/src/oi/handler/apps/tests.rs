@@ -2814,6 +2814,9 @@ fn a_description_reports_each_param_range_and_options() {
         app.param("tier").kind(#{ name: "choice", options: ["small", "large", "medium"] })
             .required(false);
         app.param("flag").kind("boolean").default_value(true);
+        app.param("ttl").kind(#{ name: "duration", min: "90s", precision: "s" }).required(false);
+        app.param("wait").kind(#{ name: "duration", max: "1d" }).required(false);
+        app.param("any").kind("duration").default_value(std::parse_duration("2w"));
         app.on_action("scale", |rt, p| {}, #{ params: #{
             open: #{ kind: #{ name: "integer", range: 1..=10 } },
             size: #{ kind: #{ name: "choice", options: ["b", "a"] } },
@@ -2853,6 +2856,16 @@ fn a_description_reports_each_param_range_and_options() {
     );
     assert_eq!(param("tier")["range"], json!(null));
     assert_eq!(param("port")["options"], json!(null));
+    assert_eq!(
+        param("ttl")["range"],
+        json!({ "min": "1m 30s", "max": null })
+    );
+    assert_eq!(param("ttl")["precision"], "s");
+    assert_eq!(param("wait")["range"], json!({ "min": null, "max": "1d" }));
+    assert_eq!(param("wait")["precision"], json!(null));
+    assert_eq!(param("any")["range"], json!(null));
+    assert_eq!(param("any")["default_value"], "14d");
+    assert_eq!(param("port")["precision"], json!(null));
 
     let scale = desc["actions"]
         .as_array()

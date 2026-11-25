@@ -1124,8 +1124,8 @@ fn the_job_of_a_gates_check_is_never_in_the_steady_desired_state() {
     let def = gated_def(
         r#"
         app.deployment("api").image("docker.io/library/nginx:1");
-        let probe = app.job("probe").image("docker.io/library/tools:1").deadline(5);
-        app.job("other").image("docker.io/library/tools:1").deadline(5);
+        let probe = app.job("probe").image("docker.io/library/tools:1").deadline("5s");
+        app.job("other").image("docker.io/library/tools:1").deadline("5s");
         app.gate("ready").key(1).check(probe);
         "#,
     );

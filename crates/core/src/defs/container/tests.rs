@@ -1,6 +1,7 @@
 use rhai::{Dynamic, Map};
 
 use super::{HealthcheckKind, HealthcheckOnFailure, parse_healthcheck};
+use crate::defs::duration::Duration;
 
 fn map_with(entries: &[(&str, Dynamic)]) -> Map {
     let mut m = Map::new();
@@ -56,10 +57,10 @@ fn parse_explicit_timings_and_on_failure_monitor() {
     let m = map_with(&[
         ("kind", Dynamic::from("command")),
         ("cmd", Dynamic::from(cmd)),
-        ("interval", Dynamic::from(5_i64)),
-        ("timeout", Dynamic::from(2_i64)),
+        ("interval", Dynamic::from("5s")),
+        ("timeout", Dynamic::from("2s")),
         ("retries", Dynamic::from(4_i64)),
-        ("start_period", Dynamic::from(60_i64)),
+        ("start_period", Dynamic::from("1m")),
         ("on_failure", Dynamic::from("monitor")),
     ]);
     let hc = parse_healthcheck(m).expect("parse");
@@ -169,10 +170,41 @@ fn parse_negative_interval_is_rejected() {
     let m = map_with(&[
         ("kind", Dynamic::from("command")),
         ("cmd", Dynamic::from(cmd)),
-        ("interval", Dynamic::from(-1_i64)),
+        ("interval", Dynamic::from("-1s")),
     ]);
     let err = parse_healthcheck(m).expect_err("negative interval");
-    assert!(err.to_string().contains("at least 1"), "{err}");
+    assert!(err.to_string().contains("no sign"), "{err}");
+}
+
+// spec: DEP#health-checks
+// spec: DUR#duration-arguments
+#[test]
+fn a_timing_is_a_duration_in_whole_seconds() {
+    let cmd: rhai::Array = vec![Dynamic::from("/bin/ok".to_string())];
+    for (value, expected) in [
+        (Dynamic::from(5_i64), "duration"),
+        (Dynamic::from("2500ms"), "whole number of seconds"),
+    ] {
+        let m = map_with(&[
+            ("kind", Dynamic::from("command")),
+            ("cmd", Dynamic::from(cmd.clone())),
+            ("timeout", value),
+        ]);
+        let err = parse_healthcheck(m).expect_err("refused");
+        assert!(err.to_string().contains(expected), "{err}");
+        assert!(err.to_string().contains("`healthcheck.timeout`"), "{err}");
+    }
+    for value in [
+        Dynamic::from("1m 30s"),
+        Dynamic::from(Duration::from_secs(90)),
+    ] {
+        let m = map_with(&[
+            ("kind", Dynamic::from("command")),
+            ("cmd", Dynamic::from(cmd.clone())),
+            ("timeout", value),
+        ]);
+        assert_eq!(parse_healthcheck(m).expect("taken").timeout_secs, 90);
+    }
 }
 
 // spec: DEP#check-timing
@@ -183,7 +215,7 @@ fn a_zero_interval_or_timeout_is_rejected_and_a_zero_start_period_is_not() {
         let m = map_with(&[
             ("kind", Dynamic::from("command")),
             ("cmd", Dynamic::from(cmd.clone())),
-            (key, Dynamic::from(0_i64)),
+            (key, Dynamic::from("0s")),
         ]);
         let err = parse_healthcheck(m).expect_err(key);
         assert!(err.to_string().contains(key), "{key}: {err}");
@@ -191,7 +223,7 @@ fn a_zero_interval_or_timeout_is_rejected_and_a_zero_start_period_is_not() {
     let m = map_with(&[
         ("kind", Dynamic::from("command")),
         ("cmd", Dynamic::from(cmd)),
-        ("start_period", Dynamic::from(0_i64)),
+        ("start_period", Dynamic::from("0s")),
     ]);
     assert_eq!(
         parse_healthcheck(m)

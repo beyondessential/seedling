@@ -261,14 +261,14 @@ app.deployment("postgres")
     // recover from. Pair with stop_timeout so the kill window is wide
     // enough for the fast-shutdown checkpoint to complete on a busy cluster.
     .stop_signal("SIGINT")
-    .stop_timeout(120)
+    .stop_timeout("120s")
     .healthcheck(#{
         kind: "command",
         cmd: ["pg_isready", "-h", "/var/run/postgresql", "-U", "postgres"],
-        interval: 10,
-        timeout: 5,
+        interval: "10s",
+        timeout: "5s",
         retries: 3,
-        start_period: 30,
+        start_period: "30s",
         on_failure: "monitor",
     })
     .tcp(5432, pg_svc);
@@ -307,7 +307,7 @@ let render_config = |rt| {
             `install -m 0640 -o ${postgres_uid} -g ${postgres_uid} /staging/pg_hba.conf /config/pg_hba.conf && ` +
             `chown ${postgres_uid}:${postgres_uid} /socket && chmod 3775 /socket`
         ])
-    ).terminated(60).ensure_success();
+    ).terminated("60s").ensure_success();
 };
 
 // Fetch the bestool-psql release archive from GitHub and deposit the
@@ -348,7 +348,7 @@ tar --zstd -xf bp.tar.zst
 install -m 0755 bestool-psql /app/bin/bin/bestool-psql
 install -m 0755 bestool-psql-audit /app/bin/bin/bestool-psql-audit
 `])
-    ).terminated(600).ensure_success();
+    ).terminated("600s").ensure_success();
 };
 
 // Initdb the data directory for the given major version if it doesn't yet
@@ -398,7 +398,7 @@ if [ ! -f /data/pg${major}/PG_VERSION ]; then
     --pwfile=/pw/pwfile
 fi
     `])
-    ).terminated(900).ensure_success();
+    ).terminated("900s").ensure_success();
 
     // The pwfile is written by seedling as root with mode 0640 (volume.write
     // has no way to specify per-file ownership/mode yet), so postgres can't
@@ -431,7 +431,7 @@ let data_check = app.job("data-check")
     .writable_rootfs()
     .mount("/data", data)
     .command(["test", "-f", `/data/pg${pg_major.call()}/PG_VERSION`])
-    .deadline(60);
+    .deadline("60s");
 
 // First run: initdb the cluster for the configured major.
 // Later runs: pg_upgrade from the major of the last success through each
@@ -444,7 +444,7 @@ let data_check = app.job("data-check")
 let major_gate = app.gate("major")
     .key(pg_major.call())
     .exclusive(pg_server)
-    .check(data_check, #{ interval: 600 })
+    .check(data_check, #{ interval: "600s" })
     .run(|rt, last| {
         let new_major = pg_major.call();
 
@@ -490,7 +490,7 @@ setpriv --reuid=${postgres_uid} --regid=${postgres_uid} --clear-groups \
   --old-datadir=/data/pg${cur} \
   --new-datadir=/data/pg${next}
 `])
-            ).terminated(7200).ensure_success();
+            ).terminated("7200s").ensure_success();
 
             cur = next;
         }
@@ -524,7 +524,7 @@ let password_gate = app.gate("password")
             .env("PGHOST", "/var/run/postgresql")
             .env("PGUSER", "postgres")
             .command(["psql", "-d", "postgres", "-f", "/staging/alter.sql"])
-        ).terminated(60).ensure_success();
+        ).terminated("60s").ensure_success();
     });
 
 // Post-upgrade analyze is highly recommended after a major bump. The first
@@ -579,7 +579,7 @@ app.on_action("status", |rt, _param| {
         .mount("/var/run/postgresql", socket)
         .env("PGHOST", "/var/run/postgresql")
         .command(["pg_isready", "-U", "postgres"])
-    ).terminated(30).ensure_success();
+    ).terminated("30s").ensure_success();
 }, #{ description: "Run pg_isready against the local instance" });
 
 app.on_action("vacuum", |rt, _param| {
@@ -668,7 +668,7 @@ app.on_action("create-database", |rt, param| {
         .env("PGHOST", "/var/run/postgresql")
         .env("PGUSER", "postgres")
         .command(["createdb", "--owner", owner, dbname])
-    ).terminated(60).ensure_success();
+    ).terminated("60s").ensure_success();
 }, #{
     description: "Create a new database with the given name and optional owner",
     params: #{
