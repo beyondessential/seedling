@@ -18,11 +18,17 @@ The string length [limit](../runtime/engine-limits.md#limits) MUST apply to ever
 
 ## Shell words
 
-The std module MUST offer `std::quote_shell(text: string)`, which returns a string that the shell reads as one word whose value is `text`, in any position a word takes in a simple command.
+The std module MUST offer `std::quote_shell(words)`, where `words` is a string or an array of strings.
+Given a string, `std::quote_shell` MUST return the string quoted, which the shell reads as one word whose value is that string, in any position a word takes in a simple command.
+Given an array, it MUST return each element quoted, in order, joined by single spaces, which the shell reads as one word per element.
+An array element that is not a string MUST raise a script error, as the [argument rules](overview.md#arguments) require.
 
-`std::quote_shell` MUST return `text` unchanged when it is not empty and every character of it is an ASCII letter, an ASCII digit, or one of `_`, `-`, `.`, `/`, `:`, `,`, `+`, `@` and `%`.
-Otherwise it MUST return `text` enclosed in single quotes, with each single quote within it written as `'\''`.
-`std::quote_shell` MUST throw when `text` holds a NUL character.
+A string quoted MUST be the string unchanged when it is not empty and every character of it is an ASCII letter, an ASCII digit, or one of `_`, `-`, `.`, `/`, `:`, `,`, `+`, `@` and `%`.
+Otherwise it MUST be the string enclosed in single quotes, with each single quote within it written as `'\''`.
+`std::quote_shell` MUST throw when a string it quotes holds a NUL character.
+
+> [!NOTE]
+> An empty array gives an empty string, which the shell reads as no word at all, while an empty string gives `''`, which it reads as one empty word.
 
 > [!NOTE]
 > The characters left unquoted are those the shell gives no meaning in any position of a word, so a plain value such as a path or a version reads in a command as it would have been typed.

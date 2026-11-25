@@ -112,7 +112,7 @@ It MUST NOT return a value recorded in the generation history if the parameter i
 A Blob derived value MUST be withheld in each text encoding of it that BSL offers a script.
 
 The runtime MUST withhold the result of a helper that [digests and encodings](../language/encoding.md) or [quoting](../language/quoting.md) specify as a derived value when any of its arguments contains a withheld value.
-An argument contains a withheld value when the string, or the bytes of the Blob, includes that value in any form in which the runtime withholds it.
+An argument contains a withheld value when the string, the bytes of the Blob, or any string in the array includes that value in any form in which the runtime withholds it.
 No argument contains a withheld value that is empty.
 A [`File`](../language/bundle.md#bundle-files) or [`Directory`](../language/bundle.md#bundle-files) argument contains no withheld value.
 Each result withheld this way MUST count toward the derived values [limit](engine-limits.md#limits).
