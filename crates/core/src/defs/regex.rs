@@ -24,7 +24,7 @@ use winnow::{
 
 use crate::{
     defs::{
-        stdlib::{ARRAY, STRING, helper_limits, max_string, within},
+        stdlib::{ARRAY, HelperLimits, STRING, helper_limits, max_string, within},
         take::{take_closure, take_string},
     },
     runtime::seeds,
@@ -94,8 +94,13 @@ pub struct Budget {
 }
 
 impl Budget {
+    /// The whole of the compiled size limit `limits` hold.
+    pub fn of(limits: &HelperLimits) -> Self {
+        Self::fresh(limits.regex_compiled_size)
+    }
+
     /// The whole of `limit`, 0 being no limit.
-    pub fn fresh(limit: usize) -> Self {
+    fn fresh(limit: usize) -> Self {
         Self {
             remaining: (limit != 0).then_some(limit),
         }
@@ -133,12 +138,12 @@ pub fn with_evaluation_budget<R>(
     Ok(result)
 }
 
-/// The compiled size limit of an engine [`crate::setup_language`] built.
-pub fn engine_limit(engine: &rhai::Engine) -> Result<usize, String> {
+/// The helper limits of an engine [`crate::setup_language`] built.
+pub fn engine_limits(engine: &rhai::Engine) -> Result<HelperLimits, String> {
     engine
         .default_tag()
-        .read_lock::<crate::defs::stdlib::HelperLimits>()
-        .map(|limits| limits.regex_compiled_size)
+        .read_lock::<HelperLimits>()
+        .map(|limits| *limits)
         .ok_or_else(|| "this engine carries no limits for its helpers".to_owned())
 }
 

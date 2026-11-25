@@ -80,8 +80,8 @@ pub fn call_action(
 
     // spec: OPS#sub-action-parameters
     // spec: HIST#action-calls
-    let regex_limit = crate::defs::stdlib::helper_limits(ctx)?.regex_compiled_size;
-    let call_params = resolve_call_params(&rt, action_name, params, regex_limit)?;
+    let limits = crate::defs::stdlib::helper_limits(ctx)?;
+    let call_params = resolve_call_params(&rt, action_name, params, &limits)?;
 
     let _frame = SubActionFrame::enter(action_name.clone());
 
@@ -101,7 +101,7 @@ fn validate_call_params(
     rt: &RuntimeInstance,
     schema: Option<&Schema>,
     params: Map,
-    regex_limit: usize,
+    limits: &crate::defs::stdlib::HelperLimits,
 ) -> Result<ParamMap, Box<EvalAltResult>> {
     let json_params = crate::defs::json::from_map(params)
         .map_err(|e| -> Box<EvalAltResult> { format!("Action.invoke: param {e}").into() })?;
@@ -111,8 +111,8 @@ fn validate_call_params(
         return Ok(ParamMap::from_values(json_params));
     };
 
-    let params = action_params::apply_schema(schema, json_params, regex_limit)
-        .map_err(validation_to_eval)?;
+    let params =
+        action_params::apply_schema(schema, json_params, limits).map_err(validation_to_eval)?;
     action_params::validate_volume_params(schema, &params, &RtVolumeLookup(rt))
         .map_err(validation_to_eval)?;
     Ok(params)
@@ -159,14 +159,14 @@ fn resolve_call_params(
     rt: &RuntimeInstance,
     action_name: &ActionName,
     params: Map,
-    regex_limit: usize,
+    limits: &crate::defs::stdlib::HelperLimits,
 ) -> Result<ParamMap, Box<EvalAltResult>> {
     let schema = action_schema(rt, action_name)?;
     let Some(ctx) = rt.ctx.as_ref() else {
         // Stub / language-only context — nothing to record and nothing to
         // recover. Tests that exercise the call surface without a real
         // runtime context still execute the closure inline.
-        return validate_call_params(rt, schema.as_ref(), params, regex_limit);
+        return validate_call_params(rt, schema.as_ref(), params, limits);
     };
 
     // spec: OPS#sub-action-parameters
@@ -189,7 +189,7 @@ fn resolve_call_params(
         }
     }
 
-    let validated = validate_call_params(rt, schema.as_ref(), params, regex_limit)?;
+    let validated = validate_call_params(rt, schema.as_ref(), params, limits)?;
     hold_secret_params(schema.as_ref(), validated.values());
 
     let SplitParams {

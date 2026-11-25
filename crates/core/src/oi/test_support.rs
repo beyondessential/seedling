@@ -396,7 +396,7 @@ mod tests {
                         db,
                         &mut sched.lock(),
                         now,
-                        crate::ScriptLimits::default().max_regex_compiled_size,
+                        &crate::ScriptLimits::default().helpers(),
                         &|_| Some((1, Arc::clone(&phase), Default::default())),
                     )
                 }

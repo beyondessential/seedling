@@ -1010,11 +1010,7 @@ fn run_seeded_definition(
     let (Some(proposed), Some(mut validators)) = (validate, validators) else {
         return (app, Ok(Vec::new()));
     };
-    let parsed = match check_kinds(
-        &app.def.load().params,
-        proposed,
-        limits.max_regex_compiled_size,
-    ) {
+    let parsed = match check_kinds(&app.def.load().params, proposed, &limits.helpers()) {
         Ok(parsed) => parsed,
         // spec: PARAM#kind-checks
         // No validator runs while any kind rejects its value.
@@ -1052,16 +1048,14 @@ pub fn canonical_values(values: &BTreeMap<String, SuppliedValue>) -> BTreeMap<St
 fn check_kinds(
     declared: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
     proposed: &BTreeMap<String, SuppliedValue>,
-    regex_limit: usize,
+    limits: &crate::defs::stdlib::HelperLimits,
 ) -> Result<BTreeMap<String, ParsedValue>, Vec<Rejection>> {
     let mut parsed = BTreeMap::new();
     let mut rejections = Vec::new();
     for (name, value) in proposed {
         // An unset parameter is not checked; an empty stored value is.
         let result = match declared.get(name.as_str()) {
-            Some(def) => def
-                .kind
-                .parse_supplied(value, &mut Budget::fresh(regex_limit)),
+            Some(def) => def.kind.parse_supplied(value, &mut Budget::of(limits)),
             None if matches!(value, SuppliedValue::Text(_)) => continue,
             None => Err(
                 "a boolean or integer is given for a parameter the definition does not \

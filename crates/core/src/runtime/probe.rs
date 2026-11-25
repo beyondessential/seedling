@@ -420,7 +420,7 @@ fn resolve_params(
     supplied: Option<&serde_json::Map<String, serde_json::Value>>,
     stored: &BTreeMap<String, String>,
 ) -> Result<ParamMap, String> {
-    let regex_limit = crate::defs::regex::engine_limit(engine)?;
+    let limits = crate::defs::regex::engine_limits(engine)?;
     let has_value = |v: &&serde_json::Value| v.as_str() != Some("");
     let mut params = serde_json::Map::new();
     for name in schema.keys() {
@@ -439,7 +439,7 @@ fn resolve_params(
             params.insert(key.to_owned(), value);
         }
     }
-    apply_schema(schema, params, regex_limit).map_err(|e| e.to_string())
+    apply_schema(schema, params, &limits).map_err(|e| e.to_string())
 }
 
 /// How many parameters the closure `pointer` declares, or `None` where the

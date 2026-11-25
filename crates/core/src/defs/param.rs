@@ -19,11 +19,14 @@ pub struct Param {
 
 /// Check each parameter's default and secret flag against its kind, which the
 /// script may have declared before or after either.
-pub(super) fn check_params(def: &super::app::AppDef, regex_limit: usize) -> Result<(), String> {
+pub(super) fn check_params(
+    def: &super::app::AppDef,
+    limits: &super::stdlib::HelperLimits,
+) -> Result<(), String> {
     for (name, param) in &def.params {
         // spec: PARAM#kind-checks
         param
-            .check_default(&mut Budget::fresh(regex_limit))
+            .check_default(&mut Budget::of(limits))
             .map_err(|e| format!("the default of parameter '{name}' is rejected: {e}"))?;
         // spec: PARAM#secret-parameters
         param
@@ -86,7 +89,7 @@ impl CustomType for Param {
                     .unwrap_or_default();
                 // A value the runtime already checked is not the script's own
                 // call to a parser, so it counts toward no limit.
-                let mut budget = Budget::fresh(helper_limits(&ctx)?.regex_compiled_size);
+                let mut budget = Budget::of(&helper_limits(&ctx)?);
                 let parsed =
                     kind.parse(&value, &mut budget)
                         .map_err(|e| -> Box<EvalAltResult> {

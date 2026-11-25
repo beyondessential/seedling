@@ -50,6 +50,17 @@ impl Default for ScriptLimits {
     }
 }
 
+impl ScriptLimits {
+    /// The limits the `std` helpers and the kind parsers hold values to.
+    pub fn helpers(&self) -> defs::stdlib::HelperLimits {
+        defs::stdlib::HelperLimits {
+            derived_values: self.max_derived_values,
+            password_hashes: self.max_password_hashes,
+            regex_compiled_size: self.max_regex_compiled_size,
+        }
+    }
+}
+
 /// An engine for evaluating a script, and the scope and app it evaluates
 /// into; fails where the scope cannot be built, as [`defs::scope`] does.
 pub fn setup_language(
@@ -64,11 +75,7 @@ pub fn setup_language(
     engine.set_max_string_size(limits.max_string_size);
     engine.set_max_array_size(limits.max_array_size);
     engine.set_max_map_size(limits.max_map_size);
-    engine.set_default_tag(rhai::Dynamic::from(defs::stdlib::HelperLimits {
-        derived_values: limits.max_derived_values,
-        password_hashes: limits.max_password_hashes,
-        regex_compiled_size: limits.max_regex_compiled_size,
-    }));
+    engine.set_default_tag(rhai::Dynamic::from(limits.helpers()));
     // spec: REX#compiling-a-pattern
     // Optimisation would carry a `const` into a call's argument, which the
     // literal-pattern check must not take for a literal, so `defs::compile`

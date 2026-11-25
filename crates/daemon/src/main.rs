@@ -1020,14 +1020,14 @@ async fn main() {
                             .collect()
                     };
                     let sched_arc = Arc::clone(&schedule_scheduler);
-                    let regex_limit = oi_state_for_sched.script_limits.max_regex_compiled_size;
+                    let helper_limits = oi_state_for_sched.script_limits.helpers();
                     let accepted_fires = schedule_db.call(move |db| {
                         let mut sched = sched_arc.lock();
                         let fired = seedling_core::runtime::schedules::check_due_schedules(
                             db,
                             &mut sched,
                             now,
-                            regex_limit,
+                            &helper_limits,
                             &|app_name| app_generations.get(app_name).cloned(),
                         );
                         drop(sched);

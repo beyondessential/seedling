@@ -24,6 +24,7 @@ use crate::{
     defs::{
         param_def::{ParamDef, ParamKind, ParsedValue, SuppliedValue},
         regex::Budget,
+        stdlib::HelperLimits,
     },
     runtime::param_map::ParamMap,
 };
@@ -107,7 +108,7 @@ pub fn reject_reserved<'a>(
 pub fn apply_schema(
     schema: &BTreeMap<ParamName, ParamDef>,
     mut params: serde_json::Map<String, serde_json::Value>,
-    regex_limit: usize,
+    limits: &HelperLimits,
 ) -> Result<ParamMap, ParamValidationError> {
     let mut supplied = BTreeMap::new();
     for (name, def) in schema {
@@ -129,7 +130,7 @@ pub fn apply_schema(
         supplied.insert(key.to_owned(), value);
     }
 
-    let parsed = run_requirements(schema, &supplied, regex_limit)?;
+    let parsed = run_requirements(schema, &supplied, limits)?;
     for name in schema.keys() {
         params.remove(name.as_str());
     }
@@ -220,7 +221,7 @@ pub trait VolumeLookup {
 pub fn run_requirements(
     schema: &BTreeMap<ParamName, ParamDef>,
     supplied: &BTreeMap<String, SuppliedValue>,
-    regex_limit: usize,
+    limits: &HelperLimits,
 ) -> Result<BTreeMap<String, ParsedValue>, ParamValidationError> {
     let mut parsed = BTreeMap::new();
     let mut errors: Vec<String> = Vec::new();
@@ -241,10 +242,7 @@ pub fn run_requirements(
         };
 
         // spec: ACN#kind-parsers
-        match req_def
-            .kind
-            .parse_supplied(&value, &mut Budget::fresh(regex_limit))
-        {
+        match req_def.kind.parse_supplied(&value, &mut Budget::of(limits)) {
             Ok(value) => {
                 parsed.insert(field_str.to_owned(), value);
             }
@@ -306,11 +304,7 @@ mod tests {
         schema: &BTreeMap<ParamName, ParamDef>,
         params: serde_json::Map<String, serde_json::Value>,
     ) -> Result<ParamMap, ParamValidationError> {
-        super::apply_schema(
-            schema,
-            params,
-            crate::ScriptLimits::default().max_regex_compiled_size,
-        )
+        super::apply_schema(schema, params, &crate::ScriptLimits::default().helpers())
     }
 
     fn supplied(

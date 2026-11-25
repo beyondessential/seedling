@@ -113,10 +113,9 @@ pub(super) fn parse_action_params(
     options: &Map,
 ) -> Result<BTreeMap<ParamName, super::super::param_def::ParamDef>, Box<rhai::EvalAltResult>> {
     match options.get("params").cloned() {
-        Some(params) => super::param::parse_param_defs(
-            &take_map("params", params)?,
-            helper_limits(ctx)?.regex_compiled_size,
-        ),
+        Some(params) => {
+            super::param::parse_param_defs(&take_map("params", params)?, &helper_limits(ctx)?)
+        }
         None => Ok(BTreeMap::new()),
     }
 }

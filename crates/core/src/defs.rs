@@ -226,7 +226,7 @@ pub fn compile(engine: &Engine, source: &str) -> Result<AST, Box<EvalAltResult>>
         reason = "the one place a script is compiled"
     )]
     let ast = engine.compile(source)?;
-    let limit = regex::engine_limit(engine)?;
+    let limits = regex::engine_limits(engine)?;
     let mut refused = None;
     ast.walk(&mut |path: &[ASTNode]| {
         let Some(ASTNode::Expr(Expr::FnCall(call, pos))) = path.last() else {
@@ -236,7 +236,7 @@ pub fn compile(engine: &Engine, source: &str) -> Result<AST, Box<EvalAltResult>>
         let (true, [Expr::StringConstant(pattern, _)]) = (in_std, &*call.args) else {
             return true;
         };
-        let mut budget = regex::Budget::fresh(limit);
+        let mut budget = regex::Budget::of(&limits);
         let result = match call.name.as_str() {
             "regex" => regex::compile(pattern, &mut budget)
                 .map(drop)
@@ -277,7 +277,7 @@ pub fn finish_evaluation(app: &app::App, limits: &crate::ScriptLimits) -> Result
     ingress::check_claim_conflicts(&def)?;
     container::check_images_declared(&def)?;
     service::check_route_balances(&def)?;
-    param::check_params(&def, limits.max_regex_compiled_size)?;
+    param::check_params(&def, &limits.helpers())?;
     gate::check_gates(&def)
 }
 

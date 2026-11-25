@@ -50,7 +50,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 // spec: ACN#volume-params
 pub(super) fn parse_param_defs(
     map: &Map,
-    regex_limit: usize,
+    limits: &super::super::stdlib::HelperLimits,
 ) -> Result<BTreeMap<ParamName, ParamDef>, Box<EvalAltResult>> {
     let mut reqs = BTreeMap::new();
     for (key, value) in map {
@@ -107,7 +107,7 @@ pub(super) fn parse_param_defs(
             secret,
         };
         // spec: ACN#param-schemas
-        def.check_default(&mut Budget::fresh(regex_limit))
+        def.check_default(&mut Budget::of(limits))
             .map_err(|e| -> Box<EvalAltResult> {
                 format!("param `{key}` default_value: {e}").into()
             })?;

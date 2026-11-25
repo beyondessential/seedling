@@ -424,7 +424,7 @@ pub(super) fn validate_shell_params(
     let params = crate::runtime::action_params::apply_schema(
         schema,
         submitted,
-        state.script_limits.max_regex_compiled_size,
+        &state.script_limits.helpers(),
     )
     .map_err(crate::oi::handler::actions::validation_error_to_oi)?;
     crate::runtime::action_params::validate_volume_params(
