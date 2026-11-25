@@ -83,7 +83,7 @@ The runtime MUST NOT run any [validator](#validators) while any parameter that w
 > Validators then always see every set parameter as its kind's parser result, so none mistakes a rejected value for an unset one.
 
 Once a script's evaluation has run to completion, the runtime MUST check each declared default against its parameter's kind, and MUST fail the evaluation if the kind rejects one, naming the parameter and giving the parser's error.
-The runtime MUST likewise fail the evaluation where a default was given as a boolean and the kind is not `boolean`, or as an integer and the kind is not `integer`.
+The runtime MUST likewise fail the evaluation where a default was given as a boolean and the kind is not `boolean`, or as an integer and the kind is neither `integer` nor `quantity`.
 
 > [!NOTE]
 > `kind` and `default_value` may be called in either order, so the pair can be checked only once the script has finished declaring them.

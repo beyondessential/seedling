@@ -47,7 +47,7 @@ The server MUST give every operation an `operation_id` that no other operation o
 
 ### Action parameters
 
-Each value the server validates against a declared parameter MUST be a JSON string, except that a `boolean` parameter MAY take a JSON boolean and an `integer` parameter MAY take a JSON integer, each taken as its [param schema](../language/action.md#param-schemas) specifies.
+Each value the server validates against a declared parameter MUST be a JSON string, except that a `boolean` parameter MAY take a JSON boolean and an `integer` or `quantity` parameter MAY take a JSON integer, each taken as its [param schema](../language/action.md#param-schemas) specifies.
 A JSON integer is a JSON number written with no fraction and no exponent.
 A JSON integer outside the signed 64-bit range MUST fail validation.
 The server MUST validate each value against the parameter's declared [kind](../language/action.md#param-schemas).

@@ -220,7 +220,7 @@ A `container` object has these members.
 | `env` | object | each environment variable's name and value, or `null` for a [redacted](#redacted-values) value |
 | `volume_mounts` | object | for each mount path, `{ "kind": "volume", "name": <string or null> }` or `{ "kind": "external_volume", "name": <string> }` |
 | `on_exit` | string | `"default"`, `"restart"`, `"terminate"` or `"restart_on_failure"` |
-| `memory` | string or null | the memory limit |
+| `memory` | integer or null | the memory limit, in bytes |
 | `cpus` | number or null | the CPU limit |
 | `extra_caps` | array of strings | added capabilities |
 | `writable_rootfs` | boolean | whether the root filesystem is writable |
@@ -306,7 +306,7 @@ Each entry of `params` has these members.
 | --- | --- | --- |
 | `name` | string | the parameter's name |
 | `kind` | string | the name of its [kind](../language/action.md#param-kinds) |
-| `range` | object or null | for an `integer` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values or `null` as the rule below gives, and `null` otherwise |
+| `range` | object or null | for an `integer` or `quantity` kind given a `range`, `{ "min": <integer or null>, "max": <integer or null> }`, its least and greatest accepted values or `null` as the rule below gives, and `null` otherwise |
 | `options` | array of strings or null | for a `choice` kind, its options in the order the script declared them, and `null` otherwise |
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
