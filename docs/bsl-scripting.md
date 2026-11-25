@@ -912,7 +912,7 @@ Common signals: `SIGHUP` (reload config — postgres, nginx), `SIGUSR1` (log rot
 
 ## Writing files at action time: `rt.write`
 
-Static `Volume.write(...)` declares files that the runtime materialises into the volume every time it is provisioned. `rt.write(volume, path, contents)` is its action-time sibling: a one-shot write performed during the action, useful for seeding parameter-derived configuration, dropping a marker file, or staging input for a follow-up command:
+Static `Volume.write(...)` declares files that the runtime writes into the volume when it creates it: once for a named volume, whose existing contents are never overwritten, and each time a tmpfs volume's directory is created. `rt.write(volume, path, contents)` is its action-time sibling: a one-shot write performed during the action, useful for seeding parameter-derived configuration, dropping a marker file, or staging input for a follow-up command:
 
 ```rhai
 let cfg = app.volume("config");
@@ -929,7 +929,7 @@ Behaviour:
 - The call throws for an `ExternalVolume` that resolves to nothing, for one whose binding or mapping is read-only, and for a `Volume` declared read-only.
 - Path validation matches static `Volume.write`: absolute, no `..`, must not be the volume root.
 - The call is at-most-once across replays.
-- Unlike static `Volume.write`, contents are NOT reapplied on container restart — `rt.write` is point-in-time. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.
+- Unlike static `Volume.write`, which lands when the volume is created, `rt.write` lands once, when it is called. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.
 - Calling `rt.write` outside an action closure is a script error.
 
 ## Reporting to Canopy: `app.canopy_type`
