@@ -107,6 +107,26 @@ fn a_literal_too_large_for_the_whole_limit_fails_evaluation() {
 
 // spec: REX#compiled-size
 #[test]
+fn a_refusal_with_much_of_the_limit_left_still_uses_it_all() {
+    let limits = crate::ScriptLimits {
+        max_regex_compiled_size: 1_000_000,
+        ..crate::ScriptLimits::default()
+    };
+    let source = r#"
+        let p = "\\w{1000}";
+        try { std::regex(p); } catch {}
+        let small = true;
+        try { std::regex("a"); } catch { small = false; }
+        small
+    "#;
+    assert!(
+        !eval_with(&limits, source).unwrap().as_bool().unwrap(),
+        "a tiny pattern is refused after an enormous one"
+    );
+}
+
+// spec: REX#compiled-size
+#[test]
 fn compiling_counts_toward_the_evaluation_and_a_refusal_uses_the_rest() {
     let limits = crate::ScriptLimits {
         max_regex_compiled_size: 400_000,
@@ -304,8 +324,10 @@ fn a_replacement_string_expands_group_references() {
 fn a_malformed_replacement_string_throws_even_without_a_match() {
     for replacement in [
         r#""$""#,
+        r#""100$""#,
         r#""a$ b""#,
         r#""${1""#,
+        r#""${oops""#,
         r#""$2""#,
         r#""$1a""#,
         r#""${nope}""#,
