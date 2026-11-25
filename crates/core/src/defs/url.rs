@@ -83,13 +83,12 @@ impl Url {
 impl UrlOrigin {
     pub fn parse(text: &str) -> Result<Self, String> {
         let parsed = parse(text)?;
-        let url = Url::from_parsed(&parsed)?;
 
         // spec: URL#url-origins
-        if !matches!(url.scheme.as_str(), "http" | "https") {
+        let scheme = parsed.scheme();
+        if !matches!(scheme, "http" | "https") {
             return Err(format!(
-                "a URL origin's scheme is http or https, not {}",
-                url.scheme
+                "a URL origin's scheme is http or https, not {scheme}"
             ));
         }
         // spec: URL#url-origins
@@ -101,13 +100,14 @@ impl UrlOrigin {
             return Err("a URL origin has no query or fragment".to_owned());
         }
         // spec: URL#url-origins
-        if url.path != "/" {
+        if parsed.path() != "/" {
             return Err(format!(
                 "a URL origin has no path beyond `/`, not {:?}",
-                url.path
+                parsed.path()
             ));
         }
 
+        let url = Url::from_parsed(&parsed)?;
         let (Some(host), Some(port)) = (url.host, url.port) else {
             return Err("a URL origin names a host".to_owned());
         };

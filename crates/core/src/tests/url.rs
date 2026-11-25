@@ -252,3 +252,16 @@ fn a_url_origin_naming_more_than_an_origin_is_refused() {
         refusal("parse_url_origin", value);
     }
 }
+
+// spec: URL#url-origins
+#[test]
+fn a_url_origin_is_refused_for_its_shape_before_its_parts() {
+    for (value, reason) in [
+        ("https://u:%FF@example.org/", "`@`"),
+        ("https://u%0A@example.org/", "`@`"),
+        ("ftp://example.org:0/", "http or https"),
+    ] {
+        let refused = refusal("parse_url_origin", value);
+        assert!(refused.contains(reason), "{value}: {refused}");
+    }
+}
