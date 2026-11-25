@@ -307,7 +307,7 @@ async fn main() {
         )
     });
 
-    // spec: ACTU#btrfs-check
+    // spec: ACTU#snapshotting-check
     let use_btrfs = match seedling_core::system::volume_store::is_btrfs(&data_dir) {
         Ok(true) => {
             tracing::info!("data directory is on BTRFS; using subvolumes for named volumes");

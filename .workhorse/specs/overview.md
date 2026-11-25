@@ -107,6 +107,8 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html) | control groups on Linux, under [LINUX](platform/linux.md) |
 | [proc(5)](https://man7.org/linux/man-pages/man5/proc.5.html) | OOM score adjustment on Linux, under [LINUX](platform/linux.md) |
 | [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/) | per-user state on Linux, under [LINUX](platform/linux.md) |
+| [BTRFS](https://btrfs.readthedocs.io/) | the snapshotting volume store on Linux, under [LINUX](platform/linux.md) |
+| [nftables](https://wiki.nftables.org/) | the packet filter on Linux, under [LINUX](platform/linux.md) |
 
 ## Terminology
 

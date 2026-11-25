@@ -1966,11 +1966,11 @@ impl Reconciler {
                     Some(Err(e)) => {
                         error!(error = %e, "rules: apply_rules failed");
                         self.file_system_fault(
-                            "nftables_failed",
+                            "packet_filter_failed",
                             &format!("apply_rules failed: {e}"),
                         );
                     }
-                    Some(Ok(())) => self.clear_system_fault("nftables_failed"),
+                    Some(Ok(())) => self.clear_system_fault("packet_filter_failed"),
                     None => {}
                 }
                 match proxy_res {

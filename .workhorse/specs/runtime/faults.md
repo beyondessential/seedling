@@ -198,7 +198,7 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running, or the resolver is stopped because no app is installed | condition |
 | `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | for a failed bring-up, an iteration finds the proxy healthy; for a rejected upgrade, an upgrade succeeds; in either case, the proxy is stopped because no app is installed | condition |
 | `routes_failed` | applying the host's routes fails | the routes are next applied | condition |
-| `nftables_failed` | applying the host's packet-filtering rules fails | the rules are next applied | condition |
+| `packet_filter_failed` | applying the host's packet-filtering rules fails | the rules are next applied | condition |
 | `proxy_failed` | applying the proxy configuration fails | a proxy configuration is next applied | condition |
 | `tailscale_unreachable` | the Tailscale discovery provider has failed 5 consecutive polls | a poll succeeds | condition |
 | `reconciler_panic` | an iteration of the reconciliation loop panics | an operator clears it | event |
@@ -208,7 +208,7 @@ The runtime MUST file `app_priorities_unreadable` and `scaling_decisions_unreada
 > [!NOTE]
 > The runtime holds back the affected apps while either fault is active, as [unreadable priorities](priority.md#unreadable-priorities) and [unreadable scale](autonomous.md#unreadable-scale) specify.
 
-A withheld apply MUST neither file nor clear `routes_failed`, `nftables_failed` or `proxy_failed`.
+A withheld apply MUST neither file nor clear `routes_failed`, `packet_filter_failed` or `proxy_failed`.
 A `container_runtime_unavailable` fault MUST name the unavailable backend and state that no workloads will be actuated until it is reachable.
 A `resolver_failed` or `caddy_failed` fault MUST name the failure.
 

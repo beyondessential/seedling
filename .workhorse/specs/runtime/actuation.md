@@ -94,7 +94,7 @@ The runtime MUST mask a value a breadcrumb records that contains one, such as an
 ## Volume storage
 
 The runtime MUST store each named non-tmpfs volume as a directory in the data directory and bind-mount it into the containers that use it.
-When the data directory is on a BTRFS filesystem, the runtime MUST create each named non-tmpfs volume as a BTRFS subvolume.
+When the data directory is on the host's snapshotting volume store, the runtime MUST create each named non-tmpfs volume as a snapshottable volume of that store.
 The container runtime MAY manage anonymous non-tmpfs volumes.
 
 The runtime MUST store each tmpfs volume, named or anonymous, as a directory in the [tmpfs location](#tmpfs-location), and bind-mount it into the containers that use it.
@@ -179,8 +179,8 @@ Storage whose own path is a symbolic link is not owned by the runtime.
 The runtime MUST refuse to create, hold or delete such a path, with an error naming it.
 The runtime MUST NOT act on the target of such a link, and MUST NOT report a deletion that removed only the link.
 
-## BTRFS check
+## Snapshotting check
 
-When it starts, the runtime MUST determine whether the data directory is on a BTRFS filesystem.
-If it is not and the daemon was started without the `--without-btrfs` flag, the runtime MUST exit with an error that names the `--without-btrfs` flag.
-If the filesystem type cannot be determined, the runtime MUST exit with an error.
+When it starts, the runtime MUST determine whether the data directory is on the host's snapshotting volume store.
+If it is not and the daemon was started without the platform's opt-out from snapshotting, the runtime MUST exit with an error that names that opt-out.
+If this cannot be determined, the runtime MUST exit with an error.

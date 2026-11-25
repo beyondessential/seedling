@@ -561,7 +561,7 @@ async fn is_btrfs_subvolume(path: &Path) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-// spec: ACTU#btrfs-check
+// spec: ACTU#snapshotting-check
 pub fn is_btrfs(path: &Path) -> std::io::Result<bool> {
     const BTRFS_SUPER_MAGIC: u64 = 0x9123683E;
     let stat = rustix::fs::statfs(path).map_err(std::io::Error::from)?;
