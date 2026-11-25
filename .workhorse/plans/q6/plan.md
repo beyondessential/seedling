@@ -15,7 +15,7 @@ Each demo exists to show and exercise a slice of BSL and the runtime.
 - **bundle-tour**: every bundle feature: several script files in a `script` order, sidecar files read with `app.file` and `app.dir` and written into a volume, the metadata table read with `app.metadata()`, a `seedling` version requirement, and files pulled in from `demos/shared/` through `include`.
 - **bundle-share**: a small second demo including the same files from `demos/shared/` (a helper script and a static page), so `include` is shown actually shared between bundles.
 
-- **params-tour**: every parameter kind, secret params, required params and defaults, validators, `on_change`.
+- **params-tour**: every parameter kind, secret params, required params and defaults, validators.
 - **workloads-tour**: deployment scale, update and termination strategies, health checks (HTTP and command) with timing and failure response, priority, container options (command and args, env, resource limits, privileges, working directory, stop signal and timeout), sizing from host constants, a job with instances and a deadline, every volume kind (storage options, declared file writes, an external volume).
 - **language-tour**: the Seedling stdlib helpers no other demo already uses naturally: encoding, structured formats, regex, URL, IP, purl, version parsers, durations, quoting, random, collections.
 
