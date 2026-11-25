@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::defs::{
+    ip::{IpAddress, IpRange, IpSubnet},
     param_def::ParsedValue,
     version::{SemVer, Version},
 };
@@ -39,6 +40,12 @@ pub enum ParsedType {
     /// A purl's components, whose `version`, where it has one, is a
     /// `Version` held as its text.
     Purl,
+    /// An `IpAddress`, held as its canonical text.
+    IpAddress,
+    /// An `IpSubnet`, held as its canonical text.
+    IpSubnet,
+    /// An `IpRange`, held as its canonical text.
+    IpRange,
 }
 
 impl ParamMap {
@@ -101,6 +108,11 @@ impl ParamMap {
             ParsedValue::Int(n) => (Value::from(n), None),
             ParsedValue::Version(v) => (Value::String(v.to_string()), Some(ParsedType::Version)),
             ParsedValue::SemVer(v) => (Value::String(v.to_string()), Some(ParsedType::SemVer)),
+            ParsedValue::IpAddress(v) => {
+                (Value::String(v.to_string()), Some(ParsedType::IpAddress))
+            }
+            ParsedValue::IpSubnet(v) => (Value::String(v.to_string()), Some(ParsedType::IpSubnet)),
+            ParsedValue::IpRange(v) => (Value::String(v.to_string()), Some(ParsedType::IpRange)),
             url @ (ParsedValue::Url(_) | ParsedValue::UrlOrigin(_)) => (
                 crate::defs::json::from_dynamic(url.into_dynamic())
                     .expect("a URL's components are strings and an integer"),
@@ -148,6 +160,9 @@ fn restore(key: &str, ty: ParsedType, value: &Value) -> Result<Dynamic, String> 
     match ty {
         ParsedType::Version => restore_text(key, value, Version::parse),
         ParsedType::SemVer => restore_text(key, value, SemVer::parse),
+        ParsedType::IpAddress => restore_text(key, value, IpAddress::parse),
+        ParsedType::IpSubnet => restore_text(key, value, IpSubnet::parse),
+        ParsedType::IpRange => restore_text(key, value, IpRange::parse),
         ParsedType::Purl => {
             let Value::Object(components) = value else {
                 return Err(format!(

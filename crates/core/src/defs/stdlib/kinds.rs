@@ -4,6 +4,7 @@ use rhai::{Dynamic, EvalAltResult, FuncRegistration};
 use strum::VariantArray;
 
 use crate::defs::{
+    ip::take_family,
     param_def::{IntRange, ParamKind, ParamKindName, take_options, take_range},
     take::take_string,
 };
@@ -34,6 +35,19 @@ pub(super) fn register(module: &mut rhai::Module) {
                     |value: Dynamic, options: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
                         let options = take_options("options", options)?;
                         parse(&ParamKind::Choice { options }, value)
+                    },
+                );
+            }
+            // spec: IP#family-argument
+            ParamKindName::IpAddress | ParamKindName::IpSubnet | ParamKindName::IpRange => {
+                let kind = ParamKind::without_arguments(name).expect("family is optional");
+                register_parser(module, &helper, kind);
+                FuncRegistration::new(&helper).set_into_module(
+                    module,
+                    move |value: Dynamic, family: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+                        let family = take_family("family", family)?;
+                        let kind = ParamKind::of_family(name, family).expect("an IP kind");
+                        parse(&kind, value)
                     },
                 );
             }
