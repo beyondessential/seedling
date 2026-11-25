@@ -21,6 +21,8 @@ use std::ops::RangeInclusive;
 
 use rhai::{Dynamic, EvalAltResult, FnPtr};
 
+use super::duration::Duration;
+
 // spec: BSL#arguments — every helper below converts or throws; none
 // coerces, defaults, or drops. Per-builder rules keep their own annotations
 // at the call sites.
@@ -37,6 +39,49 @@ pub fn take_bool(what: &str, value: Dynamic) -> Result<bool, Box<EvalAltResult>>
     value.as_bool().map_err(|t| -> Box<EvalAltResult> {
         format!("`{what}` must be a boolean, got {t}").into()
     })
+}
+
+/// Convert a `Duration`, or a string the duration parser accepts, to a
+/// `Duration`, or throw naming `what`. A number is refused: it would leave the
+/// unit to be guessed.
+// spec: DUR#duration-arguments
+pub fn take_duration(what: &str, value: Dynamic) -> Result<Duration, Box<EvalAltResult>> {
+    let type_name = value.type_name();
+    // take: dispatch
+    if let Some(duration) = value.clone().try_cast::<Duration>() {
+        return Ok(duration);
+    }
+    // take: dispatch
+    if let Ok(text) = value.into_string() {
+        return Duration::parse(&text).map_err(|e| format!("`{what}`: {e}").into());
+    }
+    Err(format!(
+        "`{what}` must be a Duration or a duration string such as \"30s\", got {type_name}"
+    )
+    .into())
+}
+
+/// Convert as [`take_duration`] does, then require a whole number of seconds
+/// within `range`, giving that number.
+// spec: DUR#duration-arguments
+pub fn take_whole_secs(
+    what: &str,
+    value: Dynamic,
+    range: RangeInclusive<u64>,
+) -> Result<u64, Box<EvalAltResult>> {
+    let duration = take_duration(what, value)?;
+    let Some(secs) = duration.whole_secs() else {
+        return Err(format!("`{what}` must be a whole number of seconds, got {duration}").into());
+    };
+    if !range.contains(&secs) {
+        return Err(format!(
+            "`{what}` must be from {} to {}, got {duration}",
+            Duration::from_secs(*range.start()),
+            Duration::from_secs(*range.end())
+        )
+        .into());
+    }
+    Ok(secs)
 }
 
 /// Convert an integer or a finite floating-point number to a `f64`, or throw

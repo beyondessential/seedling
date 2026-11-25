@@ -96,6 +96,7 @@ pub mod collection;
 pub mod compare;
 pub mod container;
 pub mod deployment;
+pub mod duration;
 pub mod enums;
 pub mod export;
 pub mod file;
@@ -148,6 +149,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<ip::IpAddress>();
     engine.build_type::<ip::IpSubnet>();
     engine.build_type::<ip::IpRange>();
+    engine.build_type::<duration::Duration>();
 
     // spec: COL#coercion
     engine.register_fn("col", collection::col);
