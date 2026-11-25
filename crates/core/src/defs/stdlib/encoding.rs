@@ -85,12 +85,9 @@ pub(super) fn register(module: &mut rhai::Module) {
     // spec: ENC#encodings
     unary(module, "encode_percent", |ctx, data| {
         let data = take_byte_arg("data", data)?;
-        within(data.bytes.len().saturating_mul(3), max_string(ctx), STRING)?;
-        text_result(
-            ctx,
-            &[&data],
-            percent_encode(&data.bytes, UNRESERVED_KEPT).to_string(),
-        )
+        let encoded = percent_encode(&data.bytes, UNRESERVED_KEPT);
+        within(encoded.clone().map(str::len).sum(), max_string(ctx), STRING)?;
+        text_result(ctx, &[&data], encoded.to_string())
     });
     // spec: ENC#encodings
     unary(module, "decode_percent", |ctx, text| {

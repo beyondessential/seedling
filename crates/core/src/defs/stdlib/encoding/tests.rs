@@ -306,8 +306,20 @@ fn a_result_beyond_the_engine_limits_fails() {
         matches!(*err, EvalAltResult::ErrorDataTooLarge(..)),
         "{err}"
     );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"std::encode_percent("  ab")"#)
+            .unwrap(),
+        "%20%20ab"
+    );
+    assert_eq!(
+        engine
+            .eval::<String>(r#"std::encode_percent("abcdefghi")"#)
+            .unwrap(),
+        "abcdefghi"
+    );
     let err = engine
-        .eval::<Dynamic>(r#"std::encode_percent("  ab")"#)
+        .eval::<Dynamic>(r#"std::encode_percent("   ab")"#)
         .unwrap_err();
     assert!(
         matches!(*err, EvalAltResult::ErrorDataTooLarge(..)),
