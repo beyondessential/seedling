@@ -46,7 +46,7 @@ Add `ip-address`, `ip-subnet` and `ip-range` kinds with their parse functions, f
 
 Add `boolean`, `integer` and `choice` kinds with their parse functions, so a script stops comparing parameter values against `"true"` and operator interfaces can offer a toggle, a number field and a dropdown. An integer's range and a choice's options are arguments of the kind, which the schema API takes today as a bare string, so this card changes that API.
 
-## Structured output encoders
+## Structured output encoders · P7
 
 Add encoders producing JSON from any value (not only a map, as Rhai's `to_json` is), YAML, TOML, INI and env-file text, for writing configuration files into volumes. To settle: key ordering, how a value the format cannot hold (such as a nested map in INI) is refused, and whether decoders come with them.
 
