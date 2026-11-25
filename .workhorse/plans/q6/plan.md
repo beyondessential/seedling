@@ -22,7 +22,7 @@ Each demo exists to show and exercise a slice of BSL and the runtime.
 Placed into the demos above as well:
 
 - **hello-world** also sets `canopy_type` and `app.description`, nothing more.
-- **protocol-tour** also: an ingress for a site ingress to attach to, and a deliberate conflicting claim between two ingresses so `ingress_conflict` can be seen.
+- **protocol-tour** also: an ingress for a site ingress to attach to. Installing it twice under different app names with the same hostname shows `ingress_conflict`.
 - **paired apps** also: an external service, and a service mount across apps.
 - **actions-and-gates** also covers the whole runtime handle: starting, stopping and querying resources, deployment restart, certificate and image warming, signals, command execution, volume writes, and waiting on started, barriers, termination and executed.
 
@@ -64,3 +64,11 @@ The Tamanu name-quoting and missing-hostname tests test those definitions alone,
 
 - [x] Delete the stale copy of the "Seedling in production" PRD from this branch; the live one is on its project branch.
 - [ ] README's "Apps" section points at the demos.
+- [ ] `docs/dev-vm.md`: the "Bringing up the postgres app" walkthrough becomes a walkthrough of actions-and-gates (external volume attach, params, install, gate runs).
+- [ ] `docs/deploying.md` and `docs/bsl-scripting.md`: example app names become demo names; postgres snippets stay where postgres is the reason for the advice (e.g. SIGINT as fast shutdown).
+
+No spec changes: the demos are repo content, not product behaviour.
+
+## Explicitly rejected
+
+- Loading the demos as host templates, or any tooling that ships them to a host. It would present them as ready-to-deploy apps, the confusion this card removes.
