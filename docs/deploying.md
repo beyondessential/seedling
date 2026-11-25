@@ -134,7 +134,7 @@ the daemon from an OCI registry. Either way the daemon records where it came
 from, shown by `seedling-ctl apps show` and in generation history.
 
 ```bash
-seedling-ctl apps create tamanu ./tamanu.seed.rhai          # a lone script
+seedling-ctl apps create tamanu ./tamanu.seed.rhai          # a lone script, kept under its own name
 seedling-ctl apps create tamanu ./deploy/seedling/           # a folder, pushed as a bundle
 seedling-ctl apps create tamanu \
     https://github.com/<org>/<repo>/tree/<branch-or-tag>/deploy/seedling  # downloaded by ctl
@@ -146,6 +146,14 @@ excludes (gitignore syntax). A GitHub URL is resolved to a commit and
 downloaded by `seedling-ctl` itself (set `GITHUB_TOKEN` for private
 repositories), so the host needs no GitHub access; the URL and commit are
 recorded as the reported origin.
+
+A folder can include files from elsewhere in its repository with an
+`[include]` table in its `seedling.toml` (see [BSL
+scripting](bsl-scripting.md#sharing-files-between-definitions)).
+`seedling-ctl` copies them in when it reads the folder, from a clone or from
+the same commit of a GitHub URL, and never from outside the repository. A
+folder written by `apps export` already holds its included files, and pushes
+again as it stands.
 
 Replace a definition and change parameters in the same generation, so an
 upgrade runs under the definition written for it. Repeat `--set name=value`
@@ -204,14 +212,19 @@ A definition artefact is an OCI manifest with artifact type
 `application/vnd.bes.seedling.definition.v1` and one layer of media type
 `application/vnd.bes.seedling.definition.v1.tar+gzip`: a gzipped tar whose
 root is the bundle root. If the bundle's `seedling.toml` declares a Seedling
-version requirement, put the same string in the manifest annotation
-`vnd.bes.seedling.versions`. With [ORAS](https://oras.land):
+version requirement, the manifest carries the same string in the annotation
+`vnd.bes.seedling.versions`.
+
+`seedling-ctl definitions pack` writes the layer from a script, a folder or a
+GitHub URL, read and assembled as a push would be. It refuses a bundle the
+host would refuse, writes the same bytes for the same bundle, and prints the
+annotation to give the manifest, if any. With [ORAS](https://oras.land):
 
 ```bash
-tar -czf definition.tar.gz -C deploy/seedling .
+annotation=$(seedling-ctl definitions pack deploy/seedling definition.tar.gz)
 oras push ghcr.io/<org>/tamanu-definition:2.12.0 \
     --artifact-type application/vnd.bes.seedling.definition.v1 \
-    --annotation "vnd.bes.seedling.versions=>=0.13" \
+    ${annotation:+--annotation "$annotation"} \
     definition.tar.gz:application/vnd.bes.seedling.definition.v1.tar+gzip
 ```
 
