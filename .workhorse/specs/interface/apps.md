@@ -317,7 +317,7 @@ Each entry of `params` has these members.
 | `is_set` | boolean | whether it has a stored value |
 | `value` | string or null | its stored value, or `null` where it is unset, secret or withheld |
 
-In an `integer` kind's `range`, `min` MUST be `null` where the range starts at the smallest signed 64-bit integer, and `max` MUST be `null` where it ends at the largest, whether that end is inclusive or exclusive.
+In an `integer` or `quantity` kind's `range`, `min` MUST be `null` where the range starts at the smallest signed 64-bit integer, and `max` MUST be `null` where it ends at the largest, whether that end is inclusive or exclusive.
 
 > [!NOTE]
 > Many JSON clients hold numbers as double-precision floats, which represent integers exactly only up to 2^53 in magnitude, so a bound beyond that may be read imprecisely.
