@@ -57,7 +57,7 @@ describe("ParamFields", () => {
   });
 
   // spec: ACN#presentation-of-kinds
-  it("offers a single-line text input for a version, purl, url, hostname or IP param", () => {
+  it("offers a single-line text input for a version, purl, url, hostname, IP or duration param", () => {
     for (const kind of [
       "version",
       "version-semver",
@@ -68,12 +68,22 @@ describe("ParamFields", () => {
       "ip-address",
       "ip-subnet",
       "ip-range",
+      "duration",
     ]) {
       const { unmount } = renderWithSession(<Form entries={[["tag", def({ kind })]] as ParamEntries} />);
       const input = screen.getByLabelText(/tag/, { selector: "input" }) as HTMLInputElement;
       expect(input.type).toBe("text");
       unmount();
     }
+  });
+
+  // spec: ACN#presentation-of-kinds
+  it("shows a duration param's bounds beside its description", () => {
+    const entries = [
+      ["timeout", def({ kind: "duration", range: { min: "1s", max: "1h" }, precision: "s", description: "Per request" })],
+    ] as ParamEntries;
+    renderWithSession(<Form entries={entries} />);
+    expect(screen.getByText("1s to 1h, whole seconds. Per request")).toBeTruthy();
   });
 
   // spec: ACN#volume-params

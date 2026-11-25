@@ -76,7 +76,7 @@ import {
   logsUrlForTarget,
   parseFaultTargets,
 } from "../lib/faultTargets";
-import { generateRandomHex, initialParamValues, integerProblem, paramFieldType, paramHelperText, paramsBlocker, paramValueRejected, quantityProblem, type ParamEntries } from "../lib/params";
+import { generateRandomHex, initialParamValues, intRange, integerProblem, paramFieldType, paramHelperText, paramsBlocker, paramValueRejected, quantityProblem, type ParamEntries } from "../lib/params";
 import { formatQuantity } from "../lib/quantity";
 import {
   appPriorityColor,
@@ -1126,8 +1126,8 @@ function ParamsSection({
   const unstageable = (p: AppParam) =>
     blankSecret(p) ||
     (hasKindInput(p.kind) &&
-      (draft === "" || (p.kind === "integer" && integerProblem(draft, p.range) !== null))) ||
-    (p.kind === "quantity" && (draft === "" || quantityProblem(draft, p.range) !== null));
+      (draft === "" || (p.kind === "integer" && integerProblem(draft, intRange(p)) !== null))) ||
+    (p.kind === "quantity" && (draft === "" || quantityProblem(draft, intRange(p)) !== null));
 
   const editActions = (p: AppParam) => (
     <>

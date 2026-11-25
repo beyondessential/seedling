@@ -184,6 +184,14 @@ fn param_schema_json(schema: &ParamDef) -> serde_json::Map<String, Value> {
         ParamKind::Integer { range: Some(range) } | ParamKind::Quantity { range: Some(range) } => {
             json!({ "min": range.min(), "max": range.max() })
         }
+        ParamKind::Duration(bounds) if bounds.min.is_some() || bounds.max.is_some() => json!({
+            "min": bounds.min.map(|min| min.to_string()),
+            "max": bounds.max.map(|max| max.to_string()),
+        }),
+        _ => Value::Null,
+    };
+    let precision = match &schema.kind {
+        ParamKind::Duration(bounds) => json!(bounds.precision.map(|unit| unit.designator())),
         _ => Value::Null,
     };
     let options = match &schema.kind {
@@ -195,6 +203,7 @@ fn param_schema_json(schema: &ParamDef) -> serde_json::Map<String, Value> {
         "range": range,
         "options": options,
         "family": schema.kind.family().map(Family::number),
+        "precision": precision,
         "required": schema.required,
         "description": schema.description,
         // spec: APPS#parameters

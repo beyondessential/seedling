@@ -237,15 +237,23 @@ export interface IntRange {
   max: number | null;
 }
 
+/** A `duration` kind's shortest and longest values in their text form, null
+ *  where unbounded. */
+export interface DurationRange {
+  min: string | null;
+  max: string | null;
+}
+
 export interface AppParam {
   name: string;
   value: string | null;
   is_set: boolean;
   secret: boolean;
   kind: string;
-  range: IntRange | null;
+  range: IntRange | DurationRange | null;
   options: string[] | null;
   family: 4 | 6 | null;
+  precision: string | null;
   required: boolean;
   description: string | null;
   default_value: string | null;
@@ -309,9 +317,10 @@ export interface CurrentOperation {
 
 export interface ParamSchema {
   kind: string;
-  range: IntRange | null;
+  range: IntRange | DurationRange | null;
   options: string[] | null;
   family: 4 | 6 | null;
+  precision: string | null;
   required: boolean;
   description: string;
   default_value: string | null;

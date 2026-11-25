@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  durationBounds,
   generateRandomHex,
   initialParamValues,
   integerProblem,
@@ -100,5 +101,19 @@ describe("quantityProblem", () => {
     expect(paramsBlocker(entries, { size: "1Ki" })).toBeNull();
     expect(paramsBlocker(entries, { size: "2Ki" })).not.toBeNull();
     expect(paramsBlocker(entries, { size: "1m" })).not.toBeNull();
+  });
+});
+
+describe("durationBounds", () => {
+  // spec: ACN#presentation-of-kinds
+  it("describes each combination of a duration kind's bounds", () => {
+    const bounds = (over: Record<string, unknown>) =>
+      durationBounds({ kind: "duration", range: null, precision: null, ...over });
+    expect(bounds({})).toBeNull();
+    expect(bounds({ range: { min: "1s", max: null } })).toBe("At least 1s");
+    expect(bounds({ range: { min: null, max: "1d" } })).toBe("At most 1d");
+    expect(bounds({ precision: "ms" })).toBe("Whole milliseconds");
+    expect(bounds({ range: { min: "1s", max: "1d" }, precision: "s" })).toBe("1s to 1d, whole seconds");
+    expect(durationBounds({ kind: "integer", range: { min: 1, max: 2 } })).toBeNull();
   });
 });
