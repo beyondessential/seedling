@@ -191,11 +191,14 @@ If a path in the bundle is absolute, or has an empty or `..` segment, the CLI MU
 `definitions pack <source> <file>` MUST write the bundle that `source` yields, read and assembled as a definition source sent as `bundle` is, to `file` as the layer of a [definition artefact](definitions.md#fetching): a gzip-compressed tar archive whose root is the bundle root, holding only regular files and the directories containing them.
 `source` MUST be a path to a file, a path to a folder, or a GitHub URL, as [definition sources](#definition-sources) give them.
 If `file` exists, the CLI MUST report an error and write nothing.
+The CLI MUST apply every [bundle rule](definitions.md#bundle-rules) to the bundle, and MUST report an error naming the offending path or field and write nothing when one is broken.
+Once it has written `file`, the CLI MUST report the bundle's declared [Seedling version requirement](../language/bundle.md#seedling-version-requirement), where it declares one, as the text to give the `vnd.bes.seedling.versions` annotation.
 Packing the same bundle twice with the same CLI MUST write the same bytes.
 
 > [!NOTE]
 > A packed bundle is pushed to a registry with a general-purpose OCI tool, so the CLI holds no registry credentials of its own.
 > Writing the same bytes for the same bundle gives an unchanged definition the same digest when it is published again.
+> A host refuses a fetched bundle whose annotation differs from its declared requirement, so reporting the requirement lets it be carried to the push unchanged.
 
 ## Registry tags
 
