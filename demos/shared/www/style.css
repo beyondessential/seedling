@@ -1,0 +1,38 @@
+body {
+  margin: 0;
+  background: #f5f1e6;
+  color: #1f2a1f;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+
+main {
+  max-width: 46rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+h1, h2 {
+  color: #2e7d32;
+}
+
+code, pre {
+  font-family: ui-monospace, monospace;
+  background: #ebe5d3;
+  padding: 0 0.2em;
+}
+
+pre {
+  padding: 0.5rem;
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+th, td {
+  border: 1px solid #cfc6ad;
+  padding: 0.2rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}

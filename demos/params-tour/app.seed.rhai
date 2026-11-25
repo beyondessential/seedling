@@ -10,7 +10,9 @@
 // default is in effect, its value() and its parsed() result. Secret values are
 // shown only as set or default. Change a value with
 // `seedling-ctl apps params set params-tour name=value` and reload the page:
-// the deployment is restarted with the new page. Not a production definition.
+// the deployment is restarted with the new page. A value its kind or a
+// validator refuses, such as a `pool` outside the `subnet`, is refused with
+// the reason and nothing changes. Not a production definition.
 
 app.description("Demo: one parameter of every kind, its default, its parsed value and its validators, rendered into a web page");
 app.canopy_type("seedling-demo");
@@ -32,10 +34,10 @@ let notes = app.param("notes")
     .default_value("Every line of this text is kept.\nSet it with a value holding line breaks.")
     .description("Text that may span several lines");
 
-// Implied secret: a password parameter is secret without saying so. Its value
-// reaches the workload but is withheld from `seedling-ctl apps show`. A real
-// definition would not default a password; this one does only so that the
-// demo installs with a single required parameter.
+// Implied secret: a password parameter is secret without saying so. An
+// operator's value reaches the workload but is withheld wherever the app is
+// described. A real definition would not default a password; this one does
+// only so that the demo installs with a single required parameter.
 let admin_password = app.param("admin-password")
     .kind("password")
     .default_value("Tussock-kea-harbour-48-lantern")

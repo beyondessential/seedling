@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A page from the pages folder</title>
+<link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+<main>
+<h1>A page from the pages folder</h1>
+<p>
+This page is <code>pages/guide.html</code> in the bundle.
+The script writes the whole <code>pages</code> folder into the root of the
+site volume with <code>write_dir("/", app.dir("pages"))</code>, so it is
+served at <code>/guide.html</code>, byte for byte as the bundle holds it.
+</p>
+<p>
+Its neighbour <code>pages/draft.html</code> is in the repository but matches
+the demo's <code>.seedignore</code>, so it never reached the bundle and
+<a href="/draft.html">/draft.html</a> is not found.
+</p>
+<p><a href="/">Back to the start</a></p>
+</main>
+</body>
+</html>

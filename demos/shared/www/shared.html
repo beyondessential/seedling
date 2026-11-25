@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A shared page</title>
+<link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+<main>
+<h1>A shared page</h1>
+<p>
+This page and its stylesheet live once in the repository, in
+<code>demos/shared/www/</code>.
+The <code>bundle-tour</code> and <code>bundle-share</code> demos each name that
+folder in the <code>[include]</code> table of their <code>seedling.toml</code>,
+so <code>seedling-ctl</code> copies it into each bundle when it reads the
+demo's folder.
+The host only ever sees a self-contained bundle, and both demos serve these
+same bytes.
+</p>
+<p>
+The helper that builds the web server, <code>demos/shared/static-site.rhai</code>,
+is shared the same way, as the first of each demo's script files.
+</p>
+<p><a href="/">Back to the start</a></p>
+</main>
+</body>
+</html>
