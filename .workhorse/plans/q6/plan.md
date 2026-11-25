@@ -13,10 +13,17 @@ Each demo exists to show and exercise a slice of BSL and the runtime.
 - **actions-and-gates**: gates with keys and start ordering, a gate re-running when its key moves, actions with a param schema, a shell, a scheduled action, a job.
 - **paired apps** (provider and consumer): an exported service and an exported volume consumed by a second app.
 
+## Layout
+
+- `apps/` goes; demos live under `demos/<name>/`, each a definition bundle: `seedling.toml` plus `app.seed.rhai`, and sidecar files where the demo uses them.
+- Each demo's header comment and `app.description` say it is a demo and what it shows.
+- The paired apps are two bundles, `demos/paired-provider/` and `demos/paired-consumer/`.
+
 ## Demos as test fixtures
 
 The demos replace the current definitions as the fixtures in `crates/core/src/tests/definitions.rs`, so they keep evaluating as the language changes.
 Every demo gets at least an evaluation test.
+Fixtures load as bundles rather than `include_str!` of one script, so a demo's sidecar files and metadata are part of what is tested.
 
 The gate tests carry over to actions-and-gates, which must exercise what they assert today:
 
