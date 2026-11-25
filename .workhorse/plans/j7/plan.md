@@ -50,4 +50,4 @@ Specs: Durations (DUR), with the kind rows in Actions (ACN) and Parameters (PARA
 - [x] Option tests: a string, a `Duration`, a number (refused), a fraction of a second on each whole-seconds option (refused), and a zero `rt` deadline (refused)
 - [x] `appdef_json` and templates tests for the `range` and `precision` members; a frontend test for the duration helper text
 - [x] `docs/bsl-scripting.md`: the duration kind and its arguments, `Duration` methods, and every option example moved to strings
-- [ ] `// spec: DUR#...` citations on the new code; run `cargo clippy`, `cargo fmt`, `etc/ci/check-spec-style.sh`, `etc/ci/check-spec-citations.sh` and `etc/ci/check-defs-coercion.sh`
+- [x] `// spec: DUR#...` citations on the new code; run `cargo clippy`, `cargo fmt`, `etc/ci/check-spec-style.sh`, `etc/ci/check-spec-citations.sh` and `etc/ci/check-defs-coercion.sh`

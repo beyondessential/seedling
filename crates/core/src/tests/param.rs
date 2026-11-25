@@ -930,8 +930,14 @@ fn a_duration_kind_takes_min_max_and_precision() {
         })
     );
     for (kind, reason) in [
-        (r#"#{ name: "duration", min: "1h", max: "1m" }"#, "longer than"),
-        (r#"#{ name: "duration", min: 1 }"#, ".min` must be a Duration"),
+        (
+            r#"#{ name: "duration", min: "1h", max: "1m" }"#,
+            "longer than",
+        ),
+        (
+            r#"#{ name: "duration", min: 1 }"#,
+            ".min` must be a Duration",
+        ),
         (r#"#{ name: "duration", precision: "sec" }"#, "designators"),
         (r#"#{ name: "duration", range: 1..2 }"#, "unknown key"),
         (
@@ -1033,7 +1039,10 @@ fn default_value_takes_a_duration_as_its_text_form() {
         &[],
     )
     .expect("a Duration default on a text param");
-    assert!(err.contains("a Duration is given for a param of kind text"), "{err}");
+    assert!(
+        err.contains("a Duration is given for a param of kind text"),
+        "{err}"
+    );
 }
 
 // spec: PARAM#schema

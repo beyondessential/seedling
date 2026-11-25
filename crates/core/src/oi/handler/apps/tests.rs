@@ -2856,7 +2856,10 @@ fn a_description_reports_each_param_range_and_options() {
     );
     assert_eq!(param("tier")["range"], json!(null));
     assert_eq!(param("port")["options"], json!(null));
-    assert_eq!(param("ttl")["range"], json!({ "min": "1m 30s", "max": null }));
+    assert_eq!(
+        param("ttl")["range"],
+        json!({ "min": "1m 30s", "max": null })
+    );
     assert_eq!(param("ttl")["precision"], "s");
     assert_eq!(param("wait")["range"], json!({ "min": null, "max": "1d" }));
     assert_eq!(param("wait")["precision"], json!(null));

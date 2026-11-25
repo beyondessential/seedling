@@ -64,7 +64,10 @@ fn duration_accepts_compact_spelled_out_and_clock_forms() {
 fn duration_counts_a_day_as_24_hours_and_a_week_as_7_days() {
     assert_eq!(int(&format!("{}.as_seconds()", d("1d"))), 86_400);
     assert_eq!(int(&format!("{}.as_seconds()", d("2w 1d"))), 15 * 86_400);
-    assert_eq!(int(&format!("{}.as_seconds()", d("1 day, 02:00:00"))), 93_600);
+    assert_eq!(
+        int(&format!("{}.as_seconds()", d("1 day, 02:00:00"))),
+        93_600
+    );
 }
 
 // spec: DUR#duration-syntax
@@ -105,7 +108,13 @@ fn duration_refuses_control_characters() {
 // spec: DUR#duration
 #[test]
 fn duration_refuses_a_length_past_the_longest() {
-    assert_eq!(text(&format!("{}.to_string()", d("106751d 23h 47m 16s 854ms 775us 807ns"))), "106751d 23h 47m 16s 854ms 775us 807ns");
+    assert_eq!(
+        text(&format!(
+            "{}.to_string()",
+            d("106751d 23h 47m 16s 854ms 775us 807ns")
+        )),
+        "106751d 23h 47m 16s 854ms 775us 807ns"
+    );
     let reason = refusal(&d("106752d"));
     assert!(reason.contains("longest duration"), "{reason}");
 }
@@ -122,9 +131,17 @@ fn duration_text_runs_from_days_down_and_round_trips() {
         ("1.000001s", "1s 1us"),
         ("36h", "1d 12h"),
     ] {
-        assert_eq!(text(&format!("{}.to_string()", d(value))), expected, "{value}");
+        assert_eq!(
+            text(&format!("{}.to_string()", d(value))),
+            expected,
+            "{value}"
+        );
         assert!(
-            truth(&format!("std::parse_duration({}.to_string()) == {}", d(value), d(value))),
+            truth(&format!(
+                "std::parse_duration({}.to_string()) == {}",
+                d(value),
+                d(value)
+            )),
             "{value} round trips"
         );
     }
@@ -162,7 +179,10 @@ fn durations_compare_by_length() {
 fn comparing_a_duration_with_another_type_throws() {
     for other in [r#""90s""#, "90", "std::parse_version(\"1.0\")"] {
         let reason = refusal(&format!("{} == {other}", d("90s")));
-        assert!(reason.contains("compares only with a Duration"), "{other}: {reason}");
+        assert!(
+            reason.contains("compares only with a Duration"),
+            "{other}: {reason}"
+        );
         let reason = refusal(&format!("{other} < {}", d("90s")));
         assert!(reason.contains("cannot compare"), "{other}: {reason}");
     }
@@ -171,8 +191,14 @@ fn comparing_a_duration_with_another_type_throws() {
 // spec: DUR#arithmetic-on-durations
 #[test]
 fn durations_add_subtract_multiply_and_divide() {
-    assert_eq!(text(&format!("({} + {}).to_string()", d("1h"), d("30m"))), "1h 30m");
-    assert_eq!(text(&format!("({} - {}).to_string()", d("1h"), d("30m"))), "30m");
+    assert_eq!(
+        text(&format!("({} + {}).to_string()", d("1h"), d("30m"))),
+        "1h 30m"
+    );
+    assert_eq!(
+        text(&format!("({} - {}).to_string()", d("1h"), d("30m"))),
+        "30m"
+    );
     assert_eq!(text(&format!("({} * 3).to_string()", d("20m"))), "1h");
     assert_eq!(text(&format!("(3 * {}).to_string()", d("20m"))), "1h");
     assert_eq!(text(&format!("({} / 4).to_string()", d("1h"))), "15m");
@@ -188,7 +214,10 @@ fn arithmetic_throws_rather_than_go_negative_overflow_or_divide_by_zero() {
         (format!("{} / -1", d("1s")), "negative"),
         (format!("{} / 0", d("1s")), "by zero"),
         (format!("{} * 2", d("100000d")), "longest duration"),
-        (format!("{} + {}", d("100000d"), d("100000d")), "longest duration"),
+        (
+            format!("{} + {}", d("100000d"), d("100000d")),
+            "longest duration",
+        ),
     ] {
         let reason = refusal(&expression);
         assert!(reason.contains(expected), "{expression}: {reason}");
@@ -199,7 +228,9 @@ fn arithmetic_throws_rather_than_go_negative_overflow_or_divide_by_zero() {
 #[test]
 fn the_parser_takes_bounds_and_states_the_one_a_value_breaks() {
     assert_eq!(
-        int(r#"std::parse_duration("90s", #{ min: "1s", max: std::parse_duration("1h"), precision: "s" }).as_seconds()"#),
+        int(
+            r#"std::parse_duration("90s", #{ min: "1s", max: std::parse_duration("1h"), precision: "s" }).as_seconds()"#
+        ),
         90
     );
     for (value, expected) in [
@@ -219,7 +250,10 @@ fn the_parser_takes_bounds_and_states_the_one_a_value_breaks() {
 fn the_parser_refuses_arguments_no_duration_satisfies() {
     for (arguments, expected) in [
         (r#"#{ min: "2s", max: "1s" }"#, "longer than"),
-        (r#"#{ min: "1500ms", max: "1900ms", precision: "s" }"#, "whole number of seconds"),
+        (
+            r#"#{ min: "1500ms", max: "1900ms", precision: "s" }"#,
+            "whole number of seconds",
+        ),
         (r#"#{ precision: "w" }"#, "designators"),
         (r#"#{ min: 1 }"#, "`arguments.min`"),
         (r#"#{ step: "1s" }"#, "step"),

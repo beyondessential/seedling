@@ -193,7 +193,10 @@ fn a_timing_is_a_duration_in_whole_seconds() {
         let err = parse_healthcheck(m).expect_err("refused");
         assert!(err.to_string().contains(expected), "{err}");
     }
-    for value in [Dynamic::from("1m 30s"), Dynamic::from(Duration::from_secs(90))] {
+    for value in [
+        Dynamic::from("1m 30s"),
+        Dynamic::from(Duration::from_secs(90)),
+    ] {
         let m = map_with(&[
             ("kind", Dynamic::from("command")),
             ("cmd", Dynamic::from(cmd.clone())),
