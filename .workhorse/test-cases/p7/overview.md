@@ -12,7 +12,7 @@
 - [x] YAML is block style, two-space indent, `null` for unit, `-.inf` for negative infinity (verifies spec: FMT#yaml)
 - [x] YAML quotes the 1.1 words, numeric-looking strings, indicator-led strings and strings with edge whitespace, and each round-trips (verifies spec: FMT#yaml)
 - [x] YAML quotes map keys by the same rules (verifies spec: FMT#yaml)
-- [x] YAML escapes C1 controls and U+FFFE/U+FFFF (verifies spec: FMT#yaml)
+- [x] YAML escapes DEL, C1 controls, the line and paragraph separators and U+FFFE/U+FFFF (verifies spec: FMT#yaml)
 - [x] TOML writes key/value lines before tables, arrays of maps as `[[array]]`, an empty array and mixed arrays inline (verifies spec: FMT#toml)
 - [x] TOML strings escape only what TOML 1.0 requires, with no 1.1-only escapes (verifies spec: FMT#toml)
 - [x] TOML output decodes back to the value it was written from (verifies spec: FMT#toml)

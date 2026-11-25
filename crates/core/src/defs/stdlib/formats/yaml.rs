@@ -83,11 +83,15 @@ fn string(s: &str) -> Yaml<'static> {
     Yaml::Representation(quoted.into(), ScalarStyle::DoubleQuoted, None)
 }
 
-/// Outside YAML's printable set, and passed through by the emitter: C1
-/// controls and the two noncharacters at the end of the BMP. The emitter
+/// Passed through by the emitter, but outside YAML's printable set (C1
+/// controls and the two noncharacters at the end of the BMP) or a line break
+/// to a YAML 1.1 reader (the line and paragraph separators). The emitter
 /// escapes the C0 controls and DEL itself.
 fn unprintable(c: char) -> bool {
-    matches!(c, '\u{80}'..='\u{9f}' | '\u{fffe}' | '\u{ffff}')
+    matches!(
+        c,
+        '\u{80}'..='\u{9f}' | '\u{2028}' | '\u{2029}' | '\u{fffe}' | '\u{ffff}'
+    )
 }
 
 // spec: FMT#yaml-documents
