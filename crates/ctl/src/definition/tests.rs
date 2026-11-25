@@ -321,6 +321,29 @@ fn a_github_include_through_a_link_or_beneath_one_is_refused() {
     let e = github::extract_repository(&beneath, dir.path()).unwrap_err();
     assert!(e.contains("beneath apps/shared"), "{e}");
     assert!(!dir.path().join("apps/shared").exists());
+
+    // The same archive with the link last is refused the same way, before
+    // anything is written.
+    let link_last = tarball(|b| {
+        tar_file(b, "o-r-abc/apps/shared/passwd", b"x");
+        tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let e = github::extract_repository(&link_last, dir.path()).unwrap_err();
+    assert!(e.contains("beneath apps/shared"), "{e}");
+    assert!(!dir.path().join("apps/shared").exists());
+}
+
+// spec: CLI#definition-sources
+#[test]
+fn a_github_folder_beneath_a_link_is_refused() {
+    let data = tarball(|b| {
+        tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps", "elsewhere");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let unwritten = github::extract_repository(&data, dir.path()).unwrap();
+    let e = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap_err();
+    assert!(e.contains("apps is not a regular file"), "{e}");
 }
 
 /// A repository holding a definition folder `def` that includes `key` from

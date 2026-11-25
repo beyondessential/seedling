@@ -418,10 +418,12 @@ mod github {
         unwritten: &Unwritten,
     ) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
         let beneath = format!("{folder}/");
-        if let Some(special) = unwritten
-            .iter()
-            .find(|u| folder.is_empty() || *u == folder || u.starts_with(&beneath))
-        {
+        if let Some(special) = unwritten.iter().find(|u| {
+            folder.is_empty()
+                || *u == folder
+                || u.starts_with(&beneath)
+                || folder.starts_with(&format!("{u}/"))
+        }) {
             return Err(format!(
                 "{special} is not a regular file; definitions may only hold files and folders"
             ));
@@ -440,48 +442,51 @@ mod github {
     ///
     /// An entry that is neither a file nor a directory is recorded rather
     /// than written: a symlink written out would let a later entry be written
-    /// through it, and it only matters if the definition reads it.
+    /// through it, and it only matters if the definition reads it. They are
+    /// all recorded before anything is written, so an entry beneath one is
+    /// refused whichever comes first in the archive.
     // spec: CLI#definition-sources
     pub(super) fn extract_repository(
         tarball: &[u8],
         dest: &std::path::Path,
     ) -> Result<Unwritten, String> {
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tarball));
         let bad = |e: std::io::Error| format!("the downloaded archive is unreadable: {e}");
+        let archive = || tar::Archive::new(flate2::read::GzDecoder::new(tarball));
+
         let mut unwritten = Unwritten::new();
+        for entry in archive().entries().map_err(bad)? {
+            let entry = entry.map_err(bad)?;
+            let Some(name) = entry_name(&entry.path().map_err(bad)?)? else {
+                continue;
+            };
+            if !matches!(
+                entry.header().entry_type(),
+                tar::EntryType::Directory
+                    | tar::EntryType::Regular
+                    | tar::EntryType::Continuous
+                    | tar::EntryType::XGlobalHeader
+                    | tar::EntryType::XHeader
+            ) {
+                unwritten.insert(name);
+            }
+        }
+
+        let mut archive = archive();
         for entry in archive.entries().map_err(bad)? {
             let mut entry = entry.map_err(bad)?;
-            let path = entry.path().map_err(bad)?.into_owned();
-            // Every entry is written beneath `dest`, so nothing but plain
-            // names may reach the join: an archive is not a trusted source
-            // of paths, whatever produced it. The prefix directory is checked
-            // too, so that a leading `..` is refused rather than dropped.
-            if path
-                .components()
-                .any(|c| !matches!(c, std::path::Component::Normal(_)))
-            {
-                return Err(format!(
-                    "the downloaded archive holds an entry outside the repository: {}",
-                    path.display()
-                ));
-            }
-            let mut components = path.components();
-            components.next();
-            let rel = components.as_path();
-            if rel.as_os_str().is_empty() {
+            let Some(name) = entry_name(&entry.path().map_err(bad)?)? else {
                 continue;
-            }
-            let name = rel.to_string_lossy().into_owned();
-            if let Some(special) = std::iter::successors(Some(name.as_str()), |p| {
-                p.rsplit_once('/').map(|(parent, _)| parent)
-            })
-            .find(|p| unwritten.contains(*p))
+            };
+            if let Some(special) =
+                std::iter::successors(name.rsplit_once('/'), |(parent, _)| parent.rsplit_once('/'))
+                    .map(|(parent, _)| parent)
+                    .find(|p| unwritten.contains(*p))
             {
                 return Err(format!(
                     "the downloaded archive holds {name} beneath {special}, which is not a directory"
                 ));
             }
-            let target = dest.join(rel);
+            let target = dest.join(&name);
             match entry.header().entry_type() {
                 tar::EntryType::Directory => {
                     std::fs::create_dir_all(&target).map_err(bad)?;
@@ -494,13 +499,40 @@ mod github {
                     entry.read_to_end(&mut contents).map_err(bad)?;
                     std::fs::write(&target, contents).map_err(bad)?;
                 }
-                tar::EntryType::XGlobalHeader | tar::EntryType::XHeader => {}
-                _ => {
-                    unwritten.insert(name);
-                }
+                _ => {}
             }
         }
         Ok(unwritten)
+    }
+
+    /// An archive entry's path within the repository, `/`-separated, or
+    /// `None` for GitHub's prefix directory itself.
+    fn entry_name(path: &std::path::Path) -> Result<Option<String>, String> {
+        // Every entry is written beneath the extraction root, so nothing but
+        // plain names may reach the join: an archive is not a trusted source
+        // of paths, whatever produced it. The prefix directory is checked
+        // too, so that a leading `..` is refused rather than dropped.
+        if path
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(format!(
+                "the downloaded archive holds an entry outside the repository: {}",
+                path.display()
+            ));
+        }
+        let mut components = path.components();
+        components.next();
+        let rel = components.as_path();
+        if rel.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        rel.to_str().map(|s| Some(s.to_owned())).ok_or_else(|| {
+            format!(
+                "the downloaded archive holds a non-UTF-8 path: {}",
+                rel.display()
+            )
+        })
     }
 }
 
