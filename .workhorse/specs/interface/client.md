@@ -233,15 +233,15 @@ When the CLI reports an error and checks nothing, because of an option it was gi
 
 | kind | reported when | the error names |
 | --- | --- | --- |
-| `source` | the source cannot be read or fetched | the cause |
-| `version` | the version requirement is not satisfied | the requirement and the CLI's version |
-| `bundle` | the bundle breaks a bundle rule | the offending path or field |
+| `source` | the source cannot be read or fetched, for a reason no other kind covers | the cause |
+| `version` | the version requirement is not satisfied, or no entry of a fetched image index is a candidate in artefact selection | the requirement and the CLI's version, or each entry's requirement and the CLI's version |
+| `bundle` | the bundle breaks a bundle rule, or a fetched bundle's version requirement differs from its annotations | the offending path or field |
 | `script` | evaluation fails | the script file and the line within it, as [script formation](../language/bundle.md#script-formation) specifies |
 | `validation` | a sample parameter value is rejected | the rejecting parameter and its reason, with one error for each such parameter |
 
 The location of an error is the file it lies in and, where it has one, the line within that file.
 A `script` error lies at the script file and line where it arose, not where a function that raised it was called.
-A `version` error, and a `bundle` error about a field of the [metadata file](../language/bundle.md#metadata-file), lie in the metadata file.
+A `version` error about the bundle's own requirement, and a `bundle` error about a field of the [metadata file](../language/bundle.md#metadata-file), lie in the metadata file.
 A `bundle` error about a path lies at that path, where it names a file in the bundle.
 For a file source, the file MUST be given as the path the source names.
 For a folder source, it MUST be given as the path the source names joined with the file's bundle path, and otherwise as the bundle path alone.
