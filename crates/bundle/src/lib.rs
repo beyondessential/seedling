@@ -588,7 +588,7 @@ fn append_entry(
 /// Neither relationship needs a scan of what has been accepted: every file
 /// beneath `path` sorts contiguously from the prefix `path/`, and every
 /// directory `path` sits under is one of its own ancestors.
-fn overlapping<'a>(out: &'a BTreeMap<String, Bytes>, path: &str) -> Option<&'a String> {
+fn overlapping<'a, V>(out: &'a BTreeMap<String, V>, path: &str) -> Option<&'a String> {
     let beneath = format!("{path}/");
     let from_beneath = (Bound::Included(beneath.as_str()), Bound::Unbounded);
     if let Some((key, _)) = out.range::<str, _>(from_beneath).next()
@@ -677,6 +677,7 @@ fn read_script(
             // Read, and checked, by `read_requirement`.
             "seedling" => {}
             "script" => names = script_list(value)?,
+            "include" => read_include(files, value)?,
             "metadata" => {
                 metadata.as_ref().map_err(Clone::clone)?;
             }
@@ -718,6 +719,56 @@ fn read_script(
         texts.push((path.as_str(), text));
     }
     Ok(Script::concatenate(texts))
+}
+
+/// Check the `include` table against the files the bundle holds. Its values
+/// are where a client assembled each file from, which only the client reads.
+// spec: BND#included-files
+fn read_include(files: &BTreeMap<String, Bytes>, value: toml::Value) -> Result<(), BundleError> {
+    let toml::Value::Table(table) = value else {
+        return Err(invalid(format!(
+            "{METADATA_FILE} field `include` must be a table of strings, got {}",
+            value.type_str()
+        )));
+    };
+    let mut keys: BTreeMap<String, ()> = BTreeMap::new();
+    for (key, source) in table {
+        let at =
+            |msg: String| invalid(format!("{METADATA_FILE} field `include` key {key:?} {msg}"));
+        match source {
+            toml::Value::String(s) if !s.is_empty() => {}
+            toml::Value::String(_) => return Err(at("has an empty source path".to_owned())),
+            other => return Err(at(format!("must be a string, got {}", other.type_str()))),
+        }
+        let path = normalise_path(&key).map_err(|e| at(format!("is invalid: {e}")))?;
+        if path.is_empty() {
+            return Err(at("names the bundle root".to_owned()));
+        }
+        if path == METADATA_FILE {
+            return Err(at(format!("names {METADATA_FILE}")));
+        }
+        if keys.contains_key(&path) {
+            return Err(at(format!("names {path:?}, as another key does")));
+        }
+        if let Some(other) = overlapping(&keys, &path) {
+            return Err(at(format!(
+                "overlaps the key {other:?}: one is inside the other"
+            )));
+        }
+        let beneath = format!("{path}/");
+        let present = files.contains_key(&path)
+            || files
+                .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
+                .next()
+                .is_some_and(|(k, _)| k.starts_with(&beneath));
+        if !present {
+            return Err(at(format!(
+                "names {path:?}, which holds no file in the bundle"
+            )));
+        }
+        keys.insert(path, ());
+    }
+    Ok(())
 }
 
 fn metadata_map(table: &toml::Table, at: &str) -> Result<Map<String, Value>, BundleError> {

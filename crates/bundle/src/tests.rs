@@ -468,3 +468,76 @@ fn a_packed_bundle_lists_each_directory_before_its_contents() {
     }
     assert!(seen.contains(&"pages/".to_owned()));
 }
+
+fn with_include(meta: &[u8]) -> Result<Bundle, BundleError> {
+    Bundle::from_files(files(&[
+        ("seedling.toml", meta),
+        ("app.seed.rhai", b""),
+        ("lib/db.seed.rhai", b""),
+        ("pages/error.html", b""),
+    ]))
+    .and_then(|b| b.script().cloned().map(|_| b))
+}
+
+// spec: BND#included-files
+#[test]
+fn included_files_and_directories_present_in_the_bundle_are_accepted() {
+    with_include(
+        b"script = [\"lib/db.seed.rhai\", \"app.seed.rhai\"]\n\
+          [include]\n\"lib/db.seed.rhai\" = \"../common/db.seed.rhai\"\n\"./pages/\" = \"../pages\"",
+    )
+    .unwrap();
+}
+
+// spec: BND#included-files
+// spec: DEFN#bundle-rules
+#[test]
+fn an_include_table_breaking_the_rules_is_refused_naming_the_key() {
+    let cases: &[(&[u8], &str)] = &[
+        (b"include = [\"lib\"]", "table of strings"),
+        (b"[include]\n\"lib\" = 1", "\"lib\" must be a string"),
+        (
+            b"[include]\n\"lib\" = \"\"",
+            "\"lib\" has an empty source path",
+        ),
+        (b"[include]\n\"../lib\" = \"x\"", "\"../lib\" is invalid"),
+        (b"[include]\n\"/lib\" = \"x\"", "\"/lib\" is invalid"),
+        (b"[include]\n\".\" = \"x\"", "\".\" names the bundle root"),
+        (
+            b"[include]\n\"seedling.toml\" = \"x\"",
+            "names seedling.toml",
+        ),
+        (
+            b"[include]\n\"lib\" = \"x\"\n\"./lib\" = \"y\"",
+            "as another key does",
+        ),
+        (
+            b"[include]\n\"lib\" = \"x\"\n\"lib/db.seed.rhai\" = \"y\"",
+            "overlaps the key \"lib\"",
+        ),
+        (
+            b"[include]\n\"missing.rhai\" = \"x\"",
+            "\"missing.rhai\" names",
+        ),
+        (b"[include]\n\"li\" = \"x\"", "\"li\" names"),
+    ];
+    for (meta, needle) in cases {
+        let m = invalid_message(with_include(meta));
+        assert!(m.contains(needle), "{needle}: {m}");
+    }
+}
+
+// spec: BND#included-files
+// spec: DEFN#seedling-version-support
+#[test]
+fn an_unsupported_bundle_with_a_malformed_include_is_reported_unsupported() {
+    let held = Bundle::from_files(files(&[
+        ("seedling.toml", b"seedling = \">=99\"\ninclude = 1"),
+        ("app.seed.rhai", b""),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        held.check_installable(&semver::Version::new(0, 12, 0)),
+        Err(BundleError::Unsupported { .. })
+    ));
+}
