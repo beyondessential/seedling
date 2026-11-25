@@ -268,6 +268,31 @@ fn a_template_preview_reports_each_param_range_and_options() {
 
 // spec: TPL#preview
 #[test]
+fn a_template_preview_reports_each_ip_param_family() {
+    let oi = TestOi::new();
+    let body = r#"
+        app.param("pool").kind(#{ name: "ip-range", family: 6 }).required(false);
+        app.param("proxy").kind("ip-address").required(false);
+        app.volume("data");
+    "#;
+    let preview = oi
+        .call("/templates/preview", json!({ "body": body }))
+        .unwrap();
+    let param = |name: &str| {
+        preview["params"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("{name} previewed"))
+            .clone()
+    };
+    assert_eq!(param("pool")["family"], json!(6));
+    assert_eq!(param("proxy")["family"], json!(null));
+}
+
+// spec: TPL#preview
+#[test]
 fn a_preview_withholds_what_holds_a_sensitive_value() {
     let oi = TestOi::new();
     let script = r#"
