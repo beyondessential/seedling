@@ -65,9 +65,12 @@ jobs:
       # build) and asserts Cargo.lock is in sync.
       - name: cargo test
         run: cargo test --workspace --all-targets --locked
+      - name: Check the example definitions
+        run: cargo build -p seedling-ctl --locked && etc/ci/check-definitions.sh
 
-  # seedling-core builds on every platform seedling-ctl ships for; the
-  # Linux-only crates are covered by the jobs above.
+  # seedling-core and seedling-ctl build on every platform seedling-ctl ships
+  # for, and its definition check runs there; the Linux-only crates are
+  # covered by the jobs above.
   portable:
     name: Portable core / ${{ matrix.os }}
     strategy:
@@ -87,7 +90,10 @@ jobs:
           shared-key: rust-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: cargo clippy
-        run: cargo clippy -p seedling-core --all-targets --locked -- -D warnings
+        run: cargo clippy -p seedling-core -p seedling-ctl --all-targets --locked -- -D warnings
+      - name: Check the example definitions
+        shell: bash
+        run: cargo build -p seedling-ctl --locked && etc/ci/check-definitions.sh
 
   rust-pass:
     name: Rust pass
