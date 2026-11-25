@@ -101,6 +101,9 @@ describe("AppDetail params", () => {
     fireEvent.change(input, { target: { value: "512m" } });
     expect(screen.getByText("m is milli; did you mean 512Mi?")).toBeTruthy();
     expect(iconButton("Stage this change").disabled).toBe(true);
+    fireEvent.change(input, { target: { value: "" } });
+    expect(iconButton("Stage this change").disabled).toBe(true);
+    expect(iconButton("Plan this change").disabled).toBe(true);
   });
 
   // spec: UI#operator-capabilities

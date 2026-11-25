@@ -1122,13 +1122,13 @@ function ParamsSection({
     setEditing(null);
   };
 
-  // A kind with an input of its own takes no empty value: unsetting is its
-  // own action.
+  // A kind with an input of its own, or a quantity, takes no empty value:
+  // unsetting is its own action.
   const unstageable = (p: AppParam) =>
     blankSecret(p) ||
     (hasKindInput(p.kind) &&
       (draft === "" || (p.kind === "integer" && integerProblem(draft, p.range) !== null))) ||
-    (p.kind === "quantity" && quantityProblem(draft, p.range) !== null);
+    (p.kind === "quantity" && (draft === "" || quantityProblem(draft, p.range) !== null));
 
   const editActions = (p: AppParam) => (
     <>
