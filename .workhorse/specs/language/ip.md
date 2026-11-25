@@ -162,4 +162,4 @@ The parser of a value's kind MUST accept its canonical form, and MUST return a v
 
 ## Mixing types
 
-Comparing an `IpAddress`, `IpSubnet` or `IpRange` with a value of any other type, including another of these three types, MUST raise a script error.
+`==`, `!=`, `<`, `<=`, `>` and `>=` between an `IpAddress`, `IpSubnet` or `IpRange` and a value of any other type, including another of these three types, MUST raise a script error.
