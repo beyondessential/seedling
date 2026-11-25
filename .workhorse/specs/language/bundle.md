@@ -61,7 +61,8 @@ Each key of the `include` table MUST be a valid bundle path, MUST NOT name the b
 Each value MUST be a non-empty string.
 Each key MUST name a file present in the bundle, or a directory beneath which the bundle holds at least one file.
 
-The runtime MUST NOT interpret the table's values.
+The runtime MUST NOT interpret the table's values, which a client resolves when it assembles the bundle, as the [reference client's include assembly](../interface/client.md#include-assembly) does.
+The server MUST refuse a definition whose `include` table breaks these rules with `bundle_invalid`, as [bundle rules](../interface/definitions.md#bundle-rules) specifies.
 An included file is otherwise a bundle file like any other, and is a script file when the `script` array names it.
 
 > [!NOTE]

@@ -155,7 +155,7 @@ Where the folder itself holds files at or beneath a key's bundle path, once `.se
 Otherwise, the CLI MUST report an error naming the key and send no request unless the folder's files there have the same paths and contents as the files the source yields.
 
 Where the folder holds no file at or beneath a key's bundle path, the CLI MUST report an error naming the key and send no request when the key's source is out of bounds or names nothing.
-An included file MUST be placed in the bundle whether or not a `.seedignore` pattern in the folder matches its bundle path.
+An [included file](../language/bundle.md#included-file) MUST be placed in the bundle whether or not a `.seedignore` pattern in the folder matches its bundle path.
 
 > [!NOTE]
 > Confining sources to the repository means a definition read from a GitHub URL and the same definition pushed from a clone of that repository assemble from the same files, and a badly written `include` cannot reach past the repository on either path.
