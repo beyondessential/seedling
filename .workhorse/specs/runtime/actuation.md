@@ -94,7 +94,10 @@ The runtime MUST mask a value a breadcrumb records that contains one, such as an
 ## Volume storage
 
 The runtime MUST store each named non-tmpfs volume as a directory in the data directory and bind-mount it into the containers that use it.
-When the data directory is on the host's snapshotting volume store, the runtime MUST create each named non-tmpfs volume as a snapshottable volume of that store.
+A host's snapshotting volume store, where it has one, is storage in which each volume can be snapshotted on its own, and a snapshot taken read-only or writable.
+A volume stored in it as such is a snapshottable volume.
+The data directory's backend is the snapshotting volume store when the data directory is on it, and plain directories otherwise.
+When the data directory is on the snapshotting volume store, the runtime MUST create each named non-tmpfs volume as a snapshottable volume.
 The container runtime MAY manage anonymous non-tmpfs volumes.
 
 The runtime MUST store each tmpfs volume, named or anonymous, as a directory in the [tmpfs location](#tmpfs-location), and bind-mount it into the containers that use it.
