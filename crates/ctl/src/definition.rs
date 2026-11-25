@@ -131,12 +131,13 @@ pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<
     let folder = path
         .canonicalize()
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    assemble(
-        &mut files,
-        &folder,
-        &boundary_of(&folder)?,
-        &Unwritten::new(),
-    )?;
+    let boundary = boundary_of(&folder)?;
+    let bounds = if boundary == folder {
+        "the definition folder, which is in no repository".to_owned()
+    } else {
+        format!("the repository at {}", boundary.display())
+    };
+    assemble(&mut files, &folder, &boundary, &bounds, &Unwritten::new())?;
     Ok(files)
 }
 
@@ -446,7 +447,7 @@ mod github {
             return Ok(Default::default());
         }
         let mut files = read_folder(&path)?;
-        assemble(&mut files, &path, root, unwritten)?;
+        assemble(&mut files, &path, root, "the repository", unwritten)?;
         Ok(files)
     }
 

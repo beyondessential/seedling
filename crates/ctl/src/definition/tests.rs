@@ -294,6 +294,18 @@ fn a_github_folder_includes_from_elsewhere_in_the_repository() {
     let unwritten = github::extract_repository(&data, dir.path()).unwrap();
     let files = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap();
     assert_eq!(files["lib/db.seed.rhai"], b"db;");
+
+    let escaping = tarball(|b| {
+        tar_file(
+            b,
+            "o-r-abc/apps/web/seedling.toml",
+            b"[include]\n\"lib\" = \"../../../db.seed.rhai\"",
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let unwritten = github::extract_repository(&escaping, dir.path()).unwrap();
+    let e = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap_err();
+    assert!(e.ends_with("lies outside the repository"), "{e}");
 }
 
 // spec: CLI#definition-sources
@@ -397,7 +409,7 @@ fn files_and_directories_are_included_from_the_repository() {
 fn without_a_repository_includes_stay_within_the_folder() {
     let dir = repo("", "lib/db.seed.rhai", "../common/db.seed.rhai");
     let e = assembled(&dir).unwrap_err();
-    assert!(e.contains("lies outside"), "{e}");
+    assert!(e.contains("lies outside the definition folder"), "{e}");
     assembled(&repo("", "copy.seed.rhai", "app.seed.rhai")).unwrap();
 }
 

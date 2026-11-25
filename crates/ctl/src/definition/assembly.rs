@@ -39,13 +39,14 @@ pub(super) fn boundary_of(folder: &Path) -> Result<PathBuf, String> {
 /// Place every file the folder's `include` table names into `files`, which
 /// holds what the folder itself yielded.
 ///
-/// `folder` lies within `boundary`; `unwritten` names what an archive held
-/// there that is not on disk.
+/// `folder` lies within `boundary`, which `bounds` names for the operator;
+/// `unwritten` names what an archive held there that is not on disk.
 // spec: CLI#include-assembly
 pub(super) fn assemble(
     files: &mut BTreeMap<String, Vec<u8>>,
     folder: &Path,
     boundary: &Path,
+    bounds: &str,
     unwritten: &Unwritten,
 ) -> Result<(), String> {
     let Some(metadata) = files.get(METADATA_FILE) else {
@@ -69,7 +70,7 @@ pub(super) fn assemble(
                 continue;
             }
             return Err(at(match source {
-                None => format!("lies outside {}", boundary.display()),
+                None => format!("lies outside {bounds}"),
                 Some(_) => "names nothing, and the folder holds no copy".to_owned(),
             }));
         };
