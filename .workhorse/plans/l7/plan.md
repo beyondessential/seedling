@@ -11,7 +11,7 @@ Adds the `ip-address`, `ip-subnet` and `ip-range` kinds, their parsers and the `
 - A range is held as a family and two addresses; containment and overlap reduce every value to an inclusive interval of `u128` in address order, so one comparison serves all nine pairings.
 - `kind_with` takes `range` and `options` positionally; with `family` on three kinds it takes a struct of the optional arguments instead.
 - The refusal of comparisons with any other type in `version.rs`'s `register_comparisons` moves to a shared helper both modules use, with the error text given by the caller.
-- Open: `ParamMap` keeps each typed parser result's type under `versions` (`VersionType`), and the action log payload under `"versions"`. The IP types make that name wrong. Rename the Rust type, field and serialised key together (an operation persisted under the old key before the upgrade replays its version params as text), or rename the Rust names and keep the serialised key `versions`. Waiting on a decision.
+- `ParamMap` keeps each typed parser result's type under `versions` (`VersionType`), and the action log payload under `"versions"`, which the IP types make wrong. The Rust type, field and serialised key are renamed together, to `ParsedType` and `types`. Seedling is unshipped, so an operation persisted under the old key before the upgrade replaying its version params as text is accepted.
 
 ## Specs
 
@@ -45,8 +45,8 @@ Adds the `ip-address`, `ip-subnet` and `ip-range` kinds, their parsers and the `
 
 ## Delivery, persistence and invoke
 
-- [ ] `runtime/param_map.rs`: the three types held as their canonical text, typed beside the map and restored by their parsers, named as the open note settles
-- [ ] `runtime/barrier/action_call.rs`: the payload key written and read on replay to match
+- [ ] `runtime/param_map.rs`: rename `VersionType` to `ParsedType` and `versions` to `types` (field, accessor, `with_versions`, serialised name), then add the three IP types, held as their canonical text and restored by their parsers
+- [ ] `runtime/barrier/action_call.rs`: write and read the payload key `"types"`, and update `tests/action_call.rs`'s assertion on it
 - [ ] `defs/json.rs` `from_dynamic`: the three types as their canonical text
 
 ## Wire and web
