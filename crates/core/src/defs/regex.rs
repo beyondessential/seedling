@@ -30,13 +30,21 @@ use crate::{
     runtime::seeds,
 };
 
-/// The most bytes of compiled patterns the cache holds, evicting the oldest
-/// to make room for a new one.
-const CACHE_CAPACITY: usize = 64 << 20;
+/// The most bytes the cached patterns may hold, evicting the least recently
+/// used to make room for a new one.
+const CACHE_CAPACITY: usize = 256 << 20;
 
 /// The DFA size the `regex` crate allows by default, which the engine builds
 /// beside the NFA where it fits.
 const DFA_SIZE_LIMIT: usize = 2 << 20;
+
+/// The lazy DFA cache size the `regex` crate allows by default, which a
+/// pattern grows into as it is searched, forward and in reverse.
+const HYBRID_CACHE_CAPACITY: usize = 2 << 20;
+
+/// What a cached pattern may come to hold beyond its compiled size once it
+/// has been searched: its forward and reverse lazy DFA caches at capacity.
+const SEARCH_ALLOWANCE: usize = 2 * HYBRID_CACHE_CAPACITY;
 
 /// A compiled regular expression.
 #[derive(Clone)]
@@ -143,27 +151,45 @@ static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Mutex::default);
 #[derive(Default)]
 struct Cache {
     patterns: HashMap<String, Arc<Compiled>>,
-    /// The cached patterns, oldest first.
+    /// The cached patterns, least recently used first.
     order: VecDeque<String>,
+    /// What the cached patterns may hold, each its [`Cache::resident`] size.
     size: usize,
 }
 
 impl Cache {
-    /// Hold `compiled`, evicting the oldest patterns until it fits. Another
-    /// evaluation may have cached the same pattern meanwhile, which is kept.
+    /// What `compiled` may hold while cached, once searched.
+    fn resident(compiled: &Compiled) -> usize {
+        compiled.size + SEARCH_ALLOWANCE
+    }
+
+    /// The cached `pattern`, marked as the most recently used.
+    fn get(&mut self, pattern: &str) -> Option<Arc<Compiled>> {
+        let compiled = self.patterns.get(pattern)?;
+        if let Some(at) = self.order.iter().position(|p| p == pattern) {
+            let used = self.order.remove(at).expect("the position is in range");
+            self.order.push_back(used);
+        }
+        Some(Arc::clone(compiled))
+    }
+
+    /// Hold `compiled`, evicting the least recently used patterns until it
+    /// fits; one that could never fit is not held. Another evaluation may
+    /// have cached the same pattern meanwhile, which is kept.
     fn insert(&mut self, compiled: &Arc<Compiled>) {
-        if self.patterns.contains_key(&compiled.pattern) {
+        let resident = Self::resident(compiled);
+        if resident > CACHE_CAPACITY || self.patterns.contains_key(&compiled.pattern) {
             return;
         }
-        while self.size + compiled.size > CACHE_CAPACITY {
+        while self.size + resident > CACHE_CAPACITY {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
             if let Some(evicted) = self.patterns.remove(&oldest) {
-                self.size -= evicted.size;
+                self.size -= Self::resident(&evicted);
             }
         }
-        self.size += compiled.size;
+        self.size += resident;
         self.order.push_back(compiled.pattern.clone());
         self.patterns
             .insert(compiled.pattern.clone(), Arc::clone(compiled));
@@ -179,9 +205,7 @@ pub fn compile(pattern: &str, budget: &mut Budget) -> Result<Regex, String> {
     let cached = CACHE
         .lock()
         .expect("the regex cache is never poisoned")
-        .patterns
-        .get(pattern)
-        .cloned();
+        .get(pattern);
     let compiled = match cached {
         Some(compiled) => compiled,
         None => {
@@ -207,7 +231,8 @@ pub fn compile(pattern: &str, budget: &mut Budget) -> Result<Regex, String> {
 fn build(pattern: &str, budget: &mut Budget) -> Result<Compiled, String> {
     let config = meta::Config::new()
         .nfa_size_limit(budget.remaining)
-        .dfa_size_limit(Some(DFA_SIZE_LIMIT));
+        .dfa_size_limit(Some(DFA_SIZE_LIMIT))
+        .hybrid_cache_capacity(HYBRID_CACHE_CAPACITY);
     let regex = meta::Builder::new()
         .configure(config)
         .build(pattern)
@@ -637,21 +662,33 @@ mod tests {
         })
     }
 
+    /// A compiled size making a pattern take a third of the cache.
+    const THIRD: usize = CACHE_CAPACITY / 3 - SEARCH_ALLOWANCE;
+
     #[test]
-    fn the_cache_evicts_the_oldest_patterns_to_make_room() {
+    fn the_cache_evicts_the_least_recently_used_patterns_to_make_room() {
         let mut cache = Cache::default();
-        let third = CACHE_CAPACITY / 3;
-        cache.insert(&compiled("a", third));
-        cache.insert(&compiled("b", third));
-        cache.insert(&compiled("c", third));
-        cache.insert(&compiled("d", third));
-        assert!(!cache.patterns.contains_key("a"));
+        cache.insert(&compiled("a", THIRD));
+        cache.insert(&compiled("b", THIRD));
+        cache.insert(&compiled("c", THIRD));
+        cache.get("a").expect("cached");
+        cache.insert(&compiled("d", THIRD));
+        assert!(!cache.patterns.contains_key("b"));
         assert!(
-            ["b", "c", "d"]
+            ["a", "c", "d"]
                 .iter()
                 .all(|p| cache.patterns.contains_key(*p))
         );
-        assert_eq!(cache.size, 3 * third);
+        assert_eq!(cache.size, 3 * (THIRD + SEARCH_ALLOWANCE));
+    }
+
+    #[test]
+    fn a_pattern_larger_than_the_cache_is_not_held() {
+        let mut cache = Cache::default();
+        cache.insert(&compiled("a", 100));
+        cache.insert(&compiled("b", CACHE_CAPACITY));
+        assert!(!cache.patterns.contains_key("b"));
+        assert!(cache.patterns.contains_key("a"));
     }
 
     #[test]
@@ -659,7 +696,7 @@ mod tests {
         let mut cache = Cache::default();
         cache.insert(&compiled("a", 100));
         cache.insert(&compiled("a", 100));
-        assert_eq!(cache.size, 100);
+        assert_eq!(cache.size, 100 + SEARCH_ALLOWANCE);
         assert_eq!(cache.order.len(), 1);
     }
 }
