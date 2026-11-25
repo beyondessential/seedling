@@ -2,7 +2,7 @@
 //! a bundle travels in.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt,
     io::{Read, Write},
     ops::Bound,
@@ -367,17 +367,8 @@ impl Bundle {
             .map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
         let mut files = Vec::new();
         let mut total = 0usize;
-        let mut seen = 0usize;
+        let mut others = 0usize;
         for entry in entries {
-            // Headers cost nothing to decompress and little to hold, so the
-            // byte cap alone would let a small blob expand into millions of
-            // entries; the count is capped as the entries are read.
-            seen += 1;
-            if seen > BUNDLE_FILE_LIMIT {
-                return Err(invalid(format!(
-                    "bundle archive holds more than the {BUNDLE_FILE_LIMIT}-file limit"
-                )));
-            }
             let mut entry =
                 entry.map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
             let path = entry
@@ -385,13 +376,31 @@ impl Bundle {
                 .map_err(|e| invalid(format!("bundle archive has an unreadable path: {e}")))?
                 .to_string_lossy()
                 .into_owned();
+            // Headers cost nothing to decompress and little to hold, so the
+            // byte cap alone would let a small blob expand into millions of
+            // entries; the count is capped as the entries are read. The file
+            // limit counts files, as the bundle rules do, and the entries
+            // that hold no file are capped as many again.
             match entry.header().entry_type() {
-                tar::EntryType::Regular | tar::EntryType::Continuous => {}
-                tar::EntryType::Directory => {
-                    normalise_path(&path).map_err(invalid)?;
+                tar::EntryType::Regular | tar::EntryType::Continuous => {
+                    if files.len() >= BUNDLE_FILE_LIMIT {
+                        return Err(invalid(format!(
+                            "bundle archive holds more than the {BUNDLE_FILE_LIMIT}-file limit"
+                        )));
+                    }
+                }
+                tar::EntryType::Directory | tar::EntryType::XGlobalHeader => {
+                    others += 1;
+                    if others > BUNDLE_FILE_LIMIT {
+                        return Err(invalid(format!(
+                            "bundle archive holds more than {BUNDLE_FILE_LIMIT} entries that are not files"
+                        )));
+                    }
+                    if entry.header().entry_type() == tar::EntryType::Directory {
+                        normalise_path(&path).map_err(invalid)?;
+                    }
                     continue;
                 }
-                tar::EntryType::XGlobalHeader => continue,
                 other => {
                     return Err(invalid(format!(
                         "{path:?} is not a regular file or directory ({other:?})"
@@ -418,26 +427,16 @@ impl Bundle {
     /// Encode the bundle as a definition artefact's layer, the form
     /// [`Self::from_tar_gz`] reads.
     ///
-    /// Every header field that could vary between runs is fixed and entries
-    /// go in path order, each directory before what it holds, so the same
-    /// bundle always gives the same bytes and so the same digest.
+    /// Every header field that could vary between runs is fixed and files go
+    /// in path order, so the same bundle always gives the same bytes and so
+    /// the same digest. Only files are written: a directory is implied by
+    /// what it holds, and an entry for it would spend the archive's
+    /// allowance of entries that hold no file.
     // spec: CLI#definition-packing
     pub fn to_tar_gz(&self) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
-        let mut dirs: BTreeSet<&str> = BTreeSet::new();
         for (path, contents) in &self.files {
-            let ancestors = path.match_indices('/').map(|(i, _)| &path[..i]);
-            for dir in ancestors {
-                if dirs.insert(dir) {
-                    append_entry(
-                        &mut builder,
-                        tar::EntryType::Directory,
-                        &format!("{dir}/"),
-                        &[],
-                    );
-                }
-            }
-            append_entry(&mut builder, tar::EntryType::Regular, path, contents);
+            append_file(&mut builder, path, contents);
         }
         let tar = builder
             .into_inner()
@@ -575,21 +574,12 @@ impl Bundle {
     }
 }
 
-/// Append one entry with every varying header field fixed.
-fn append_entry(
-    builder: &mut tar::Builder<Vec<u8>>,
-    kind: tar::EntryType,
-    path: &str,
-    contents: &[u8],
-) {
+/// Append one file with every varying header field fixed.
+fn append_file(builder: &mut tar::Builder<Vec<u8>>, path: &str, contents: &[u8]) {
     let mut header = tar::Header::new_gnu();
-    header.set_entry_type(kind);
+    header.set_entry_type(tar::EntryType::Regular);
     header.set_size(contents.len() as u64);
-    header.set_mode(if kind == tar::EntryType::Directory {
-        0o755
-    } else {
-        0o644
-    });
+    header.set_mode(0o644);
     header.set_mtime(0);
     header.set_uid(0);
     header.set_gid(0);

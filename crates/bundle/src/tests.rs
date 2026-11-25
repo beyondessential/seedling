@@ -448,25 +448,72 @@ fn packing_the_same_bundle_gives_the_same_bytes() {
 
 // spec: CLI#definition-packing
 #[test]
-fn a_packed_bundle_lists_each_directory_before_its_contents() {
+fn a_packed_bundle_holds_only_its_files_with_fixed_headers() {
     let data = Bundle::from_files(packable()).unwrap().to_tar_gz();
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(data.as_slice()));
     let mut seen: Vec<String> = Vec::new();
     for entry in archive.entries().unwrap() {
         let entry = entry.unwrap();
         let header = entry.header();
+        assert_eq!(header.entry_type(), tar::EntryType::Regular);
         assert_eq!(header.mtime().unwrap(), 0);
         assert_eq!(header.uid().unwrap(), 0);
-        let path = entry.path().unwrap().to_string_lossy().into_owned();
-        if let Some((parent, _)) = path.trim_end_matches('/').rsplit_once('/') {
-            assert!(
-                seen.iter().any(|p| p == &format!("{parent}/")),
-                "{path} comes before its directory {parent}/"
-            );
-        }
-        seen.push(path);
+        seen.push(entry.path().unwrap().to_string_lossy().into_owned());
     }
-    assert!(seen.contains(&"pages/".to_owned()));
+    let mut sorted = seen.clone();
+    sorted.sort();
+    assert_eq!(seen, sorted);
+    assert_eq!(seen.len(), packable().len());
+}
+
+// spec: CLI#definition-packing
+// spec: DEFN#bundle-rules
+#[test]
+fn a_full_bundle_in_folders_reads_back_from_its_packed_layer() {
+    let full: Vec<(String, Vec<u8>)> = (0..BUNDLE_FILE_LIMIT)
+        .map(|i| (format!("d{}/e{}/f{i}", i % 64, i % 7), Vec::new()))
+        .collect();
+    let bundle = Bundle::from_files(full).unwrap();
+    assert_eq!(Bundle::from_tar_gz(&bundle.to_tar_gz()).unwrap(), bundle);
+}
+
+// spec: DEFN#bundle-rules
+#[test]
+fn an_archive_with_directory_entries_and_the_full_file_count_is_accepted() {
+    let data = tar_gz(|b| {
+        for d in 0..16 {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            b.append_data(&mut header, format!("d{d}/"), &[][..])
+                .unwrap();
+        }
+        for i in 0..BUNDLE_FILE_LIMIT {
+            add_file(b, &format!("d{}/f{i}", i % 16), b"");
+        }
+    });
+    assert_eq!(
+        Bundle::from_tar_gz(&data).unwrap().files().len(),
+        BUNDLE_FILE_LIMIT
+    );
+    let over = tar_gz(|b| {
+        for i in 0..=BUNDLE_FILE_LIMIT {
+            add_file(b, &format!("f{i}"), b"");
+        }
+    });
+    assert!(invalid_message(Bundle::from_tar_gz(&over)).contains("file limit"));
+    let hollow = tar_gz(|b| {
+        for d in 0..=BUNDLE_FILE_LIMIT {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            b.append_data(&mut header, format!("d{d}/"), &[][..])
+                .unwrap();
+        }
+    });
+    assert!(invalid_message(Bundle::from_tar_gz(&hollow)).contains("not files"));
 }
 
 fn with_include(meta: &[u8]) -> Result<Bundle, BundleError> {
