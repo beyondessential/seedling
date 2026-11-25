@@ -548,6 +548,11 @@ async fn packing_writes_nothing_for_a_broken_bundle_or_over_an_existing_file() {
         .unwrap_err();
     assert!(e.contains("missing.rhai"), "{e}");
     assert!(!out.exists());
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "nothing but the definition folder is left behind"
+    );
 
     write(dir.path(), "def/seedling.toml", b"");
     write(dir.path(), "out.tar.gz", b"keep");

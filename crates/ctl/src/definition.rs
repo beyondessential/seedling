@@ -211,13 +211,21 @@ pub(super) async fn pack(source: &str, out: &Path) -> Result<Option<String>, Str
     };
     let bundle = Bundle::from_files(files).map_err(|e| e.to_string())?;
     bundle.script().map_err(|e| e.to_string())?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(out)
-        .map_err(|e| format!("cannot create {}: {e}", out.display()))?;
-    file.write_all(&bundle.to_tar_gz())
+    // Written beside `out` and moved into place whole, so a failed write
+    // leaves nothing for the next attempt to refuse as already existing.
+    let dir = match out.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let mut staged = tempfile::NamedTempFile::new_in(dir)
+        .map_err(|e| format!("cannot create a file beside {}: {e}", out.display()))?;
+    staged
+        .write_all(&bundle.to_tar_gz())
+        .and_then(|()| staged.as_file().sync_all())
         .map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+    staged
+        .persist_noclobber(out)
+        .map_err(|e| format!("cannot create {}: {}", out.display(), e.error))?;
     Ok(bundle.seedling_versions().map(|r| r.to_string()))
 }
 
