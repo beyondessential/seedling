@@ -86,11 +86,7 @@ An encoder MUST write the entries of every map in ascending bytewise order of th
 ### Layout
 
 Each encoder MUST write one fixed layout, which no argument changes.
-An encoder SHOULD give the same text for the same value in every Seedling version.
 Every result that is not empty MUST end with a line feed.
-
-> [!NOTE]
-> Upgrading Seedling alone then does not change the files a definition declares, so a definition evaluated before and after an upgrade declares the same resource graph.
 
 ### JSON
 
@@ -119,10 +115,6 @@ It MUST write a string, map keys included, quoted when any of these holds of it:
 
 `encode_toml` MUST write a TOML 1.0.0 document.
 It MUST refuse unit at any depth.
-It MUST write a map within the argument as a table under a `[table]` header, and an array that holds at least one element, every one a map, as an array of tables under `[[array]]` headers.
-It MUST write any other array inline, with a map within it as an inline table.
-It MUST write a key bare when TOML allows it bare, and quoted otherwise.
-Within each table, it MUST write the entries written as key/value lines before the tables, each in [key order](#key-order).
 
 ### Env files
 
