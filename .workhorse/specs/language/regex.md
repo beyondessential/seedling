@@ -102,14 +102,14 @@ A replacement MUST be a string or a closure, and any other value MUST raise a sc
 A replacement string replaces each match with the string, after expanding its group references:
 
 - `$$` MUST expand to a single `$`.
-- `${ref}` MUST expand to the text the capture group `ref` captured, where `ref` is the group's number or its name.
+- `${ref}` MUST expand to the text the capture group `ref` captured, where `ref` is the group's name, or its number when `ref` is made only of decimal digits, number 0 being the whole match.
 - `$` followed by ASCII letters, ASCII digits and underscores MUST expand as `${ref}` does, with `ref` the longest such run.
 - A group that took no part in the match MUST expand to an empty string.
 
 `replace` and `replace_all` MUST throw when a replacement string holds a `$` that does not begin one of these forms, or refers to a group number or name the pattern does not have, whether or not the text holds a match.
 
 > [!NOTE]
-> `$1a` refers to a group named `1a`; `${1}a` is the first group followed by `a`.
+> `$1a` names a group `1a`, which no pattern can have since a group's name cannot begin with a digit, so it throws; `${1}a` is the first group followed by `a`.
 
 A replacement closure MUST be called once for each match, in the order found, with the captures of that match as its one argument, and the match MUST be replaced with the string it returns.
 A replacement closure that returns anything other than a string MUST raise a script error.
