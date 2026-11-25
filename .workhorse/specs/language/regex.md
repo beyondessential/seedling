@@ -24,3 +24,12 @@ The std module MUST offer `std::regex(pattern: string)`, which returns a `Regex`
 > [!NOTE]
 > Repetition is what makes a compiled pattern large: `\w{1000}{1000}` is short to write and enormous once compiled.
 > The text of a pattern is already bounded by the string length [limit](../runtime/engine-limits.md#limits).
+
+## Text examined
+
+Each search a method of a `Regex` runs MUST count every byte of the UTF-8 encoding of the text that the search reads toward the regex text examined [limit](../runtime/engine-limits.md#limits).
+A byte that several searches read MUST count once for each of them.
+
+> [!NOTE]
+> A single search reads each byte of its text a bounded number of times, but a method that finds every match runs one search after another, and a search can read to the end of the text before reporting a match near its start.
+> Counting what each search reads bounds that rescanning, which would otherwise take time growing with the square of the text's length, while an ordinary pass over a long text costs about its length once.
