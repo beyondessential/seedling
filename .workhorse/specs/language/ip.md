@@ -36,6 +36,7 @@ It MUST accept exactly the values below, and MUST reject every other value.
 
 - An IPv4 address, written as four decimal numbers from 0 to 255 separated by dots.
 - An IPv6 address in the IPv6 text form, with no enclosing brackets and no zone index, that is not an IPv4-mapped IPv6 address.
+  Where it ends in dotted decimal, each of the four parts MUST be a decimal number from 0 to 255.
 
 Hexadecimal digits in an IPv6 address MUST be accepted in either case.
 
