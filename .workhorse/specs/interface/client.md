@@ -242,10 +242,11 @@ It MUST print that error to standard error, and print nothing to standard output
 
 The location of an error is the file it lies in and, where it has one, the line within that file.
 A `script` error lies at the script file and line where it arose, not where a function that raised it was called.
-A `version` error about the bundle's own requirement, and a `bundle` error about a field of the [metadata file](../language/bundle.md#metadata-file), lie in the metadata file.
+A `version` error about the bundle's own requirement, a `bundle` error about a field of the [metadata file](../language/bundle.md#metadata-file), and a `source` error naming a key of its `include` table, lie in the metadata file.
 A `bundle` error about a path lies at that path, where it names a file in the bundle.
 For a file source, the file MUST be given as the path the source names.
-For a folder source, it MUST be given as the path the source names joined with the file's bundle path, and otherwise as the bundle path alone.
+For a folder source, it MUST be given as the path the CLI read the file from, which for a file the folder holds is the path the source names joined with the file's bundle path, and for an [included file](../language/bundle.md#included-file) read from its source is the source's file.
+For any other source, it MUST be given as the bundle path alone.
 
 Without `--json`, the CLI MUST print each error to standard error, beginning on a line of its own.
 An error with a location MUST begin with the file, then `:` and the line where it has one, then `: ` and the error's message.

@@ -8,6 +8,9 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 - [ ] Check a folder holding `seedling.toml` with a two-file `script` list: both files are evaluated in order, exits 0 (verifies spec: CLI#definition-checks)
 - [ ] Check a folder with a `.git` directory and a `.seedignore` excluding a scratch file that holds invalid UTF-8: the excluded paths play no part, exits 0 (verifies spec: CLI#definition-folders)
 - [ ] Check a folder holding a symlink not left out by `.seedignore`: error names the symlink, nothing is evaluated (verifies spec: CLI#definition-folders)
+- [ ] Check a folder whose `include` table copies a script from a sibling directory in the same repository: the included script is evaluated, exits 0 (verifies spec: CLI#include-assembly)
+- [ ] Check a folder whose `include` key names a source that does not exist and that the folder holds no copy of: `source` error at `seedling.toml` naming the key, nothing evaluated (verifies spec: CLI#include-assembly, CLI#check-results)
+- [ ] Check a file source named `seedling.toml`: `source` error, nothing evaluated, exits 1 (verifies spec: CLI#definition-sources)
 - [ ] Check a `https://github.com/<owner>/<repo>/tree/<ref>/<folder>` URL: the folder at that ref is downloaded and checked, error locations are bundle paths (verifies spec: CLI#definition-sources, CLI#check-results)
 - [ ] Check `--ref` naming a definition manifest on a local test registry: the bundle is fetched and checked, exits 0 (verifies spec: CLI#definition-checks)
 - [ ] Check `--ref` naming an image index with entries for `<0.1`, `>=0.1` and no annotation: the entry with the highest minimum the CLI's version satisfies is the one checked (verifies spec: CLI#definition-checks, DEFN#artefact-selection)
@@ -66,6 +69,7 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 
 - [ ] Folder source `seedling/central` with a script error at line 7 of `lib/db.rhai`: stderr line begins `seedling/central/lib/db.rhai:7: ` (verifies spec: CLI#check-results)
 - [ ] File source `apps/broken.seed.rhai` with a script error at line 3: stderr line begins `apps/broken.seed.rhai:3: ` (verifies spec: CLI#check-results)
+- [ ] Folder source `seedling/central` including `lib/common.rhai` from `../shared/common.rhai`, with a script error at line 5 of it: the error names the shared file it was read from and line 5, not `seedling/central/lib/common.rhai` (verifies spec: CLI#check-results)
 - [ ] An error thrown inside a function defined on line 20 and called on line 40: the location is line 20 (verifies spec: CLI#check-results)
 - [ ] A `validation` error and a `version` error from an index: printed without a location prefix (verifies spec: CLI#check-results)
 - [ ] `--json` on a passing bundle: stdout is exactly `{"errors":[]}` (whitespace aside), exits 0 (verifies spec: CLI#check-results)
