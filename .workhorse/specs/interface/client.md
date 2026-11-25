@@ -277,9 +277,7 @@ The CLI MUST report an error and check nothing when an argument to `--set` has n
 
 | constant | default |
 | --- | --- |
-| `AVAILABLE_THREADS` | the number of compute threads available to the CLI |
-| `AVAILABLE_MEMORY` | the amount of memory, in bytes, of the machine the CLI runs on |
-| `CPU_ARCHITECTURE` | the CPU architecture of the machine the CLI runs on |
+| `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `CPU_ARCHITECTURE` | the value the runtime would determine on the machine the CLI runs on, as [host constants](../language/constants.md#host-constants) specifies |
 | `HOST_HAS_IPV4`, `HOST_HAS_IPV6`, `NAT64_ACTIVE`, `HAS_SNAPSHOTS` | `false` |
 | `NODE_NAME` | the empty string |
 | `TIMEZONE` | `UTC` |
@@ -288,7 +286,7 @@ The CLI MUST report an error and check nothing when an argument to `--set` has n
 The CLI MUST read `value` as the constant's type: a decimal integer for an integer constant, `true` or `false` for a boolean constant, and the text as given for a string constant.
 
 The CLI MUST report an error and check nothing when `NAME` is not a host constant, when the same constant is set more than once, or when `value` is not of the constant's type or breaks the rules [host constants](../language/constants.md#host-constants) give for it.
-If the CLI cannot determine a default that no option sets, it MUST report an error naming the constant and check nothing.
+Where a default no option sets is undetermined, the CLI MUST treat it as the runtime does, so that an undetermined `AVAILABLE_MEMORY` fails the evaluation.
 
 > [!NOTE]
 > A definition that branches on the host is checked for each kind of host it will run on by running the check once per kind, such as with `--const CPU_ARCHITECTURE=aarch64`.
