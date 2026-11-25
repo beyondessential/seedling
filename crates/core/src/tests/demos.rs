@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use crate::defs::{
 };
 use crate::runtime::{
     EphemeralInstanceRegistry,
-    probe::{ProbeRequest, ProbeResponse, probe_app},
+    probe::{HandlerKind, ProbeRequest, ProbeResponse, probe_app},
 };
 
 /// The folder of shared files the demos include, which is not a demo.
@@ -101,6 +101,31 @@ fn loaded(
     (engine, ast, app)
 }
 
+/// Values for the action params a demo requires and gives no default, so a
+/// probe runs those actions' bodies rather than skipping them.
+fn required_action_params(
+    name: &str,
+) -> HashMap<String, HashMap<String, serde_json::Map<String, serde_json::Value>>> {
+    let actions: &[(&str, serde_json::Value)] = match name {
+        "actions-and-gates" => &[
+            ("note", serde_json::json!({ "text": "hello" })),
+            ("note-twice", serde_json::json!({ "text": "hello" })),
+            ("export", serde_json::json!({ "destination": "backups" })),
+        ],
+        _ => &[],
+    };
+    let by_name = actions
+        .iter()
+        .map(|(action, values)| {
+            let serde_json::Value::Object(values) = values else {
+                unreachable!("action params are an object")
+            };
+            ((*action).to_owned(), values.clone())
+        })
+        .collect();
+    HashMap::from([(HandlerKind::Action.as_str().to_owned(), by_name)])
+}
+
 fn probe(
     name: &str,
     now: &BTreeMap<String, String>,
@@ -117,8 +142,8 @@ fn probe(
         &app,
         registry,
         &ProbeRequest {
+            action_params: required_action_params(name),
             lenient,
-            ..Default::default()
         },
         &move |_| Ok(last.clone()),
     )
@@ -129,7 +154,7 @@ fn gate_probe<'r>(response: &'r ProbeResponse, name: &str) -> &'r BTreeSet<Strin
     &response
         .per_handler
         .iter()
-        .find(|h| h.name == name && h.kind == crate::runtime::probe::HandlerKind::Gate)
+        .find(|h| h.name == name && h.kind == HandlerKind::Gate)
         .unwrap_or_else(|| panic!("gate {name} has a body that is probed"))
         .images
 }
@@ -197,6 +222,7 @@ fn every_demo_action_and_gate_body_runs_under_a_probe() {
         let response = probe(&name, &install_params(&name), None, true);
         for handler in &response.per_handler {
             assert!(handler.error.is_none(), "{name}: {handler:?}");
+            assert!(handler.skipped_reason.is_none(), "{name}: {handler:?}");
         }
     }
 }

@@ -97,9 +97,16 @@ pub fn probe_gate_body(
     let captured = capture_closures(engine, script_ast, app)
         .map_err(|e| format!("script evaluation failed: {e}"))?;
     match captured.gates.get(gate) {
-        Some(Some(body)) => {
-            probe_gate_closure(engine, script_ast, app, &registry, gate, body.clone(), last)
-        }
+        Some(Some(body)) => probe_gate_closure(
+            engine,
+            script_ast,
+            app,
+            &registry,
+            &captured.actions,
+            gate,
+            body.clone(),
+            last,
+        ),
         Some(None) => Ok(HandlerProbe {
             name: gate.as_str().to_owned(),
             kind: HandlerKind::Gate,
@@ -112,11 +119,16 @@ pub fn probe_gate_body(
 }
 
 /// Probe the body `body` of gate `gate`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are what one gate body probe needs"
+)]
 fn probe_gate_closure(
     engine: &Engine,
     script_ast: &AST,
     app: &App,
     registry: &Arc<dyn InstanceRegistry>,
+    actions: &BTreeMap<ActionName, FnPtr>,
     gate: &GateName,
     body: FnPtr,
     last: Option<&App>,
@@ -127,6 +139,7 @@ fn probe_gate_closure(
         engine,
         app,
         registry,
+        actions,
         gate.as_str(),
         HandlerKind::Gate,
         body,
@@ -193,6 +206,7 @@ pub fn probe_app(
             engine,
             app,
             &registry,
+            &captured.actions,
             &name,
             kind,
             closure,
@@ -211,6 +225,7 @@ pub fn probe_app(
                 script_ast,
                 app,
                 &registry,
+                &captured.actions,
                 name,
                 body.clone(),
                 last.as_ref(),
@@ -246,6 +261,7 @@ fn probe_handler(
     engine: &Engine,
     app: &App,
     registry: &Arc<dyn InstanceRegistry>,
+    actions: &BTreeMap<ActionName, FnPtr>,
     handler_name: &str,
     kind: HandlerKind,
     closure: FnPtr,
@@ -290,7 +306,16 @@ fn probe_handler(
         HandlerKind::Shell => ProbeCall::Shell(param_map),
         HandlerKind::Action | HandlerKind::Gate => ProbeCall::Action(param_map),
     };
-    run_probe(engine, app, registry, handler_name, kind, closure, call)
+    run_probe(
+        engine,
+        app,
+        registry,
+        actions,
+        handler_name,
+        kind,
+        closure,
+        call,
+    )
 }
 
 /// How a closure is called under a probe.
@@ -304,11 +329,17 @@ enum ProbeCall {
     },
 }
 
-/// Call `closure` under probe mode and report the images it reached.
+/// Call `closure` under probe mode and report the images it reached,
+/// including those of any action it invokes from `actions`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are what one closure probe needs"
+)]
 fn run_probe(
     engine: &Engine,
     app: &App,
     registry: &Arc<dyn InstanceRegistry>,
+    actions: &BTreeMap<ActionName, FnPtr>,
     handler_name: &str,
     kind: HandlerKind,
     closure: FnPtr,
@@ -340,6 +371,7 @@ fn run_probe(
     let mut scope = Scope::new();
     // The script's top-level references `app`; recreate the variable.
     scope.push("app", app.clone());
+    let active_rt = rt.clone();
     scope.push("__bsl_rt", rt);
     scope.push("__bsl_closure", closure);
     let call_script = match call {
@@ -382,8 +414,13 @@ fn run_probe(
     };
     let probe_sensitive = crate::runtime::redact::Scope::new(app.sensitive());
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
-    let eval_result = {
+    // spec: IMG#image-discovery
+    // As a run does, the outer action's name seeds the call stack so a
+    // self-call is rejected as recursion; a gate's body seeds nothing.
+    let outer = (kind != HandlerKind::Gate).then(|| ActionName::new_unchecked(handler_name));
+    let eval_result = crate::defs::app::with_action_call_table(actions.clone(), outer, || {
         let _guard = ActionClosureGuard::new(action_def, op_id.0.clone(), HashMap::new())
+            .with_active_rt(active_rt)
             .with_operation_seed(&seed, &probe_sensitive);
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
@@ -394,7 +431,7 @@ fn run_probe(
                     .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
                     .err()
             })
-    };
+    });
 
     let gathered_images = images.lock().clone();
 
@@ -514,6 +551,41 @@ mod tests {
             preload.images
         );
         assert!(response.all_images.contains("ghcr.io/example/foo:1.2.3"));
+    }
+
+    // spec: IMG#image-discovery
+    #[test]
+    fn a_probed_handler_reports_the_images_of_the_actions_it_invokes() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            let pull = app.on_action("pull", |rt, _param| {
+                rt.warm_images(app.job().image("ghcr.io/example/invoked:1")).ready();
+            });
+            app.on_action("both", |rt, _param| {
+                pull.invoke(#{});
+                app.action("pull").invoke(#{});
+            });
+            app.gate("warm").key(1).run(|rt| { pull.invoke(#{}); });
+        "#,
+        );
+
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response =
+            probe(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+
+        for name in ["both", "warm"] {
+            let handler = response
+                .per_handler
+                .iter()
+                .find(|h| h.name == name)
+                .expect("the handler is probed");
+            assert!(handler.error.is_none(), "{handler:?}");
+            assert_eq!(
+                handler.images,
+                BTreeSet::from(["ghcr.io/example/invoked:1".to_owned()]),
+                "{name}"
+            );
+        }
     }
 
     const GATED: &str = r#"
