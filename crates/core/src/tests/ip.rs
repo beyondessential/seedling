@@ -543,10 +543,33 @@ fn comparing_with_another_type_raises() {
             }
         }
     }
-    assert_eq!(
-        refusal(&format!("{} == \"10.0.0.1\"", addr("10.0.0.1"))),
-        "cannot compare IpAddress == string: an IP value compares only with a value of its own type"
-    );
+    for (source, names) in [
+        (
+            format!("{} == \"10.0.0.1\"", addr("10.0.0.1")),
+            "IpAddress == string",
+        ),
+        (
+            format!("{} < {}", subnet("10.0.0.1"), range("10.0.0.1")),
+            "IpSubnet < IpRange",
+        ),
+        (
+            format!("{} != {}", a_version(), range("10.0.0.1")),
+            "Version != IpRange",
+        ),
+        (
+            format!(
+                "{} >= std::parse_version_semver(\"1.2.3\")",
+                addr("10.0.0.1")
+            ),
+            "IpAddress >= SemVer",
+        ),
+    ] {
+        let reason = refusal(&source);
+        assert!(
+            reason.starts_with(&format!("cannot compare {names}: ")),
+            "{source}: {reason}"
+        );
+    }
 }
 
 // spec: IP#text-of-a-value

@@ -8,7 +8,7 @@ use std::{
 };
 
 use ipnet::IpNet;
-use rhai::{CustomType, Dynamic, EvalAltResult, INT, TypeBuilder};
+use rhai::{CustomType, Dynamic, EvalAltResult, INT, NativeCallContext, TypeBuilder};
 
 use super::{
     compare::{refuse_mixed_comparisons, type_name},
@@ -92,7 +92,7 @@ pub fn check_family(expected: Option<Family>, actual: Family, what: &str) -> Res
 pub struct IpAddress(IpAddr);
 
 impl IpAddress {
-    pub(crate) const NAME: &str = "IpAddress";
+    const NAME: &str = "IpAddress";
 
     // spec: IP#addresses
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -196,7 +196,7 @@ impl CustomType for IpAddress {
 pub struct IpSubnet(IpNet);
 
 impl IpSubnet {
-    pub(crate) const NAME: &str = "IpSubnet";
+    const NAME: &str = "IpSubnet";
 
     // spec: IP#subnets
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -287,7 +287,7 @@ pub struct IpRange {
 }
 
 impl IpRange {
-    pub(crate) const NAME: &str = "IpRange";
+    const NAME: &str = "IpRange";
 
     // spec: IP#ranges
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -379,7 +379,11 @@ impl Interval {
 
     /// The interval of a script's `IpAddress`, `IpSubnet` or `IpRange`.
     // spec: IP#containment-and-overlap
-    fn take(what: &str, value: Dynamic) -> Result<Self, Box<EvalAltResult>> {
+    fn take(
+        ctx: &NativeCallContext,
+        what: &str,
+        value: Dynamic,
+    ) -> Result<Self, Box<EvalAltResult>> {
         // take: dispatch
         if let Some(addr) = value.clone().try_cast::<IpAddress>() {
             return Ok(Self::new(addr.0, addr.0));
@@ -394,7 +398,7 @@ impl Interval {
         }
         Err(format!(
             "`{what}` must be an IpAddress, IpSubnet or IpRange, got {}",
-            type_name(&value)
+            type_name(ctx, &value)
         )
         .into())
     }
@@ -434,14 +438,20 @@ where
     builder
         .with_fn(
             "contains",
-            move |this: &mut T, other: Dynamic| -> Result<bool, Box<EvalAltResult>> {
-                Ok(interval(*this).contains(Interval::take("other", other)?))
+            move |ctx: NativeCallContext,
+                  this: &mut T,
+                  other: Dynamic|
+                  -> Result<bool, Box<EvalAltResult>> {
+                Ok(interval(*this).contains(Interval::take(&ctx, "other", other)?))
             },
         )
         .with_fn(
             "overlaps",
-            move |this: &mut T, other: Dynamic| -> Result<bool, Box<EvalAltResult>> {
-                Ok(interval(*this).overlaps(Interval::take("other", other)?))
+            move |ctx: NativeCallContext,
+                  this: &mut T,
+                  other: Dynamic|
+                  -> Result<bool, Box<EvalAltResult>> {
+                Ok(interval(*this).overlaps(Interval::take(&ctx, "other", other)?))
             },
         );
 }

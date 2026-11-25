@@ -1,12 +1,7 @@
 //! Comparison operators shared by the BSL value types that compare only with
 //! a value of their own type.
 
-use rhai::{CustomType, Dynamic, EvalAltResult, TypeBuilder};
-
-use super::{
-    ip::{IpAddress, IpRange, IpSubnet},
-    version::{SemVer, Version},
-};
+use rhai::{CustomType, Dynamic, EvalAltResult, NativeCallContext, TypeBuilder};
 
 const OPERATORS: [&str; 6] = ["==", "!=", "<", "<=", ">", ">="];
 
@@ -27,14 +22,20 @@ pub(crate) fn refuse_mixed_comparisons<T>(
         builder
             .with_fn(
                 op,
-                move |_: &mut T, b: Dynamic| -> Result<bool, Box<EvalAltResult>> {
-                    Err(mixed(op, name, type_name(&b), rule))
+                move |ctx: NativeCallContext,
+                      _: &mut T,
+                      b: Dynamic|
+                      -> Result<bool, Box<EvalAltResult>> {
+                    Err(mixed(op, name, type_name(&ctx, &b), rule))
                 },
             )
             .with_fn(
                 op,
-                move |a: Dynamic, _: T| -> Result<bool, Box<EvalAltResult>> {
-                    Err(mixed(op, type_name(&a), name, rule))
+                move |ctx: NativeCallContext,
+                      a: Dynamic,
+                      _: T|
+                      -> Result<bool, Box<EvalAltResult>> {
+                    Err(mixed(op, type_name(&ctx, &a), name, rule))
                 },
             );
     }
@@ -44,19 +45,8 @@ fn mixed(op: &str, left: &str, right: &str, rule: &str) -> Box<EvalAltResult> {
     format!("cannot compare {left} {op} {right}: {rule}").into()
 }
 
-/// The name a script knows `value`'s type by.
-pub(crate) fn type_name(value: &Dynamic) -> &str {
-    if value.is::<Version>() {
-        Version::NAME
-    } else if value.is::<SemVer>() {
-        SemVer::NAME
-    } else if value.is::<IpAddress>() {
-        IpAddress::NAME
-    } else if value.is::<IpSubnet>() {
-        IpSubnet::NAME
-    } else if value.is::<IpRange>() {
-        IpRange::NAME
-    } else {
-        value.type_name()
-    }
+/// The name a script knows `value`'s type by: the name its type was
+/// registered with, or Rhai's own name for a built-in type.
+pub(crate) fn type_name<'a>(ctx: &'a NativeCallContext, value: &'a Dynamic) -> &'a str {
+    ctx.engine().map_type_name(value.type_name())
 }

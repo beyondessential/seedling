@@ -22,7 +22,7 @@ enum Segment {
 }
 
 impl Version {
-    pub(crate) const NAME: &str = "Version";
+    const NAME: &str = "Version";
 
     // spec: VER#generic-versions
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -164,7 +164,7 @@ pub struct SemVer {
 }
 
 impl SemVer {
-    pub(crate) const NAME: &str = "SemVer";
+    const NAME: &str = "SemVer";
 
     // spec: VER#semver-versions
     pub fn parse(text: &str) -> Result<Self, String> {
