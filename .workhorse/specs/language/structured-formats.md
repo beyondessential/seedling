@@ -113,7 +113,7 @@ It MUST write a string, map keys included, quoted when any of these holds of it:
 - it reads as an integer or a floating-point number, including in hexadecimal, octal or exponent form, or begins with `.`.
 
 > [!NOTE]
-> A YAML 1.1 reader reads plain `no`, `on` or `0755` as a boolean or a number, and such readers are still common, so quoting them keeps a file meaning the same to every reader at the cost of a few quotes.
+> A YAML 1.1 reader reads plain `no`, `on` or `0755` as a boolean or a number, and such readers are still common, so quoting the words and numbers such readers most often misread keeps a file meaning the same to them at the cost of a few quotes.
 
 ### TOML
 
