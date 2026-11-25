@@ -22,7 +22,7 @@ A bundle file that is not a script file.
 
 ### Included file
 
-A bundle file that a client copies into the bundle, when it assembles it, from a source path the metadata file names.
+A bundle file that a client copies into the bundle, when it assembles it, from a source path the metadata file names, either as that file or as a file beneath that directory.
 
 ## Bundle paths
 
@@ -43,7 +43,7 @@ The metadata file MUST be a [TOML](https://toml.io/en/) document holding only th
 | `seedling` | string | no | a [Seedling version requirement](#seedling-version-requirement) naming the Seedling versions the definition supports |
 | `script` | array of strings | no | the bundle paths of the script files, in concatenation order |
 | `metadata` | table | no | the [metadata table](#metadata-table), free-form values for the script to read |
-| `include` | table of strings | no | the [included files](#included-files), each key the file's bundle path and each value the path it is assembled from |
+| `include` | table of strings | no | the [included files](#included-files), each key the bundle path of a file or directory and each value the path it is assembled from |
 
 A definition whose metadata has no `seedling` field supports every Seedling version.
 If the metadata has no `script` field, the script files MUST be taken to be `["app.seed.rhai"]`.
@@ -57,9 +57,9 @@ When an app is registered with a definition or updated to one, the server MUST r
 
 ## Included files
 
-Each key of the `include` table MUST be a valid bundle path, MUST NOT name `seedling.toml`, and MUST NOT name the same file as another key once the keys are normalised.
+Each key of the `include` table MUST be a valid bundle path, MUST NOT name the bundle root or `seedling.toml`, and MUST NOT name the same path as another key, or a path beneath another key, once the keys are normalised.
 Each value MUST be a non-empty string.
-Each file the table names MUST be present in the bundle.
+Each key MUST name a file present in the bundle, or a directory beneath which the bundle holds at least one file.
 
 The runtime MUST NOT interpret the table's values.
 An included file is otherwise a bundle file like any other, and is a script file when the `script` array names it.
