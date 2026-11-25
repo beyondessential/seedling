@@ -2,7 +2,7 @@
 //! written, and read in the strict subset that shells, systemd and the
 //! common dotenv readers agree on.
 
-use std::{collections::HashSet, fmt::Write as _};
+use std::{borrow::Cow, collections::HashSet, fmt::Write as _};
 
 use rhai::EvalAltResult;
 use winnow::{
@@ -28,24 +28,24 @@ pub(super) fn encode(tree: &Tree) -> Result<String, Box<EvalAltResult>> {
     };
     let mut out = String::new();
     for (name, value) in entries {
-        let at = Position(vec![Step::Key(name.clone())]);
+        let at = || Position(vec![Step::Key(name.clone())]);
         if key.parse(name.as_str()).is_err() {
-            return Err(at.refused(
+            return Err(at().refused(
                 "an env file key is ASCII letters, digits and underscores, not beginning with a digit",
             ));
         }
         // spec: FMT#values-each-format-holds
-        let text = match value {
-            Tree::Bool(b) => b.to_string(),
-            Tree::Int(i) => i.to_string(),
-            Tree::Float(f) => float_text(*f),
-            Tree::Str(s) => s.clone(),
+        let text: Cow<'_, str> = match value {
+            Tree::Bool(b) => b.to_string().into(),
+            Tree::Int(i) => i.to_string().into(),
+            Tree::Float(f) => float_text(*f).into(),
+            Tree::Str(s) => s.as_str().into(),
             Tree::Unit | Tree::Array(_) | Tree::Map(_) => {
                 unreachable!("lowering refuses these for an env file")
             }
         };
         if text.contains(['\'', '\n', '\r', '\0']) {
-            return Err(at.refused(
+            return Err(at().refused(
                 "an env file value cannot hold a single quote, a line feed, a carriage return or NUL",
             ));
         }

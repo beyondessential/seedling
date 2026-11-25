@@ -267,9 +267,13 @@ impl Holds {
     ) -> Result<Tree, Box<EvalAltResult>> {
         let mut entries = Vec::with_capacity(map.len());
         for (key, value) in map {
-            at.0.push(Step::Key(key.to_string()));
-            entries.push((key.to_string(), self.lower_at(value, at, levels)?));
-            at.0.pop();
+            let key = key.to_string();
+            at.0.push(Step::Key(key));
+            let value = self.lower_at(value, at, levels)?;
+            let Some(Step::Key(key)) = at.0.pop() else {
+                unreachable!("lowering a value leaves its position as it found it")
+            };
+            entries.push((key, value));
         }
         entries.sort_by(|(a, _), (b, _)| a.as_bytes().cmp(b.as_bytes()));
         Ok(Tree::Map(entries))
