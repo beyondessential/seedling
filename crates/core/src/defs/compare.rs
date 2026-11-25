@@ -3,7 +3,10 @@
 
 use rhai::{CustomType, Dynamic, EvalAltResult, TypeBuilder};
 
-use super::version::{SemVer, Version};
+use super::{
+    ip::{IpAddress, IpRange, IpSubnet},
+    version::{SemVer, Version},
+};
 
 const OPERATORS: [&str; 6] = ["==", "!=", "<", "<=", ">", ">="];
 
@@ -47,6 +50,12 @@ pub(crate) fn type_name(value: &Dynamic) -> &str {
         Version::NAME
     } else if value.is::<SemVer>() {
         SemVer::NAME
+    } else if value.is::<IpAddress>() {
+        IpAddress::NAME
+    } else if value.is::<IpSubnet>() {
+        IpSubnet::NAME
+    } else if value.is::<IpRange>() {
+        IpRange::NAME
     } else {
         value.type_name()
     }

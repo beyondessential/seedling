@@ -575,16 +575,23 @@ impl SuppliedValue {
 // spec: ACN#kind-parsers
 fn parse_decimal(value: &str) -> Result<i64, String> {
     let digits = value.strip_prefix('-').unwrap_or(value);
-    let decimal = !digits.is_empty()
-        && digits.bytes().all(|b| b.is_ascii_digit())
-        && (digits == "0" || !digits.starts_with('0'))
-        && value != "-0";
+    let decimal = is_decimal_number(digits) && value != "-0";
     if !decimal {
         return Err("must be an integer in decimal form".to_owned());
     }
     value
         .parse()
         .map_err(|_| "must be an integer within the signed 64-bit range".to_owned())
+}
+
+/// Whether `digits` is a number in ASCII decimal digits with no leading
+/// zero, zero being written `0`.
+// spec: ACN#kind-parsers
+// spec: IP#decimal-number
+pub(crate) fn is_decimal_number(digits: &str) -> bool {
+    !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'))
 }
 
 /// What a kind's parser makes of a value it accepts.

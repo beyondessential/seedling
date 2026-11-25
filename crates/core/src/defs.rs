@@ -101,6 +101,7 @@ pub mod export;
 pub mod file;
 pub mod gate;
 pub mod ingress;
+pub mod ip;
 pub mod job;
 pub mod json;
 pub mod param;
@@ -144,6 +145,9 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<shell::ShellExit>();
     engine.build_type::<version::Version>();
     engine.build_type::<version::SemVer>();
+    engine.build_type::<ip::IpAddress>();
+    engine.build_type::<ip::IpSubnet>();
+    engine.build_type::<ip::IpRange>();
 
     // spec: COL#coercion
     engine.register_fn("col", collection::col);
