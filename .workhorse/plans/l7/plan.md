@@ -14,7 +14,7 @@ Adds the `ip-address`, `ip-subnet` and `ip-range` kinds, their parsers and the `
 - `ParamMap` keeps each typed parser result's type under `versions` (`VersionType`), and the action log payload under `"versions"`, which the IP types make wrong. The Rust type, field and serialised key are renamed together, to `ParsedType` and `types`. Seedling is unshipped, so an operation persisted under the old key before the upgrade replaying its version params as text is accepted.
 
 - An IP kind given `family` is built through `ParamKind::of_family`, so `kinds.rs` registers the two-argument parsers without naming each variant.
-- Open: a range's `start()` or `end()` can be an IPv4-mapped address (the end of `::/80`), whose canonical text `std::parse_ip_address` refuses, against the IP spec's rule that a value's kind parser accepts its canonical form. Waiting on a decision about how the spec settles it.
+- A range's `start()` or `end()` can be an IPv4-mapped address (the end of `::/80`), whose canonical text `std::parse_ip_address` refuses. The IP spec's round-trip rule is narrowed to values a parser returned, with a note on this case; no code change.
 
 ## Specs
 

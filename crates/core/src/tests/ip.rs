@@ -132,6 +132,18 @@ fn an_ipv4_mapped_address_is_refused() {
     }
 }
 
+// spec: IP#text-of-a-value
+#[test]
+fn a_mapped_range_end_is_not_an_ip_address_value() {
+    let end = format!("{}.end()", range("::/80"));
+    assert_eq!(
+        text(&format!("{end}.to_string()")),
+        "::ffff:255.255.255.255"
+    );
+    let reason = refusal(&format!("std::parse_ip_address({end}.to_string())"));
+    assert!(reason.contains("IPv4-mapped"), "{reason}");
+}
+
 // spec: IP#subnets
 // spec: IP#text-of-a-value
 #[test]

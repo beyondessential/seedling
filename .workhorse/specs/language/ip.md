@@ -154,11 +154,15 @@ An `IpAddress`, `IpSubnet` or `IpRange` MUST convert to a string in its canonica
 - a subnet as its first address, `/`, and its prefix length as a decimal number, whether or not the prefix length was written;
 - a range as its first address, `-`, and its last address, whether it was written as two addresses, a subnet or a single address.
 
-The parser of a value's kind MUST accept its canonical form, and MUST return a value equal to it.
+The parser of a value's kind MUST accept the canonical form of a value that parser returned, and MUST return a value equal to it.
 
 > [!NOTE]
 > These values are most often handed on to software with a parser of its own, such as a proxy's trusted addresses or a DHCP server's pool, which may not accept every spelling an operator can enter.
 > `10.0.0.0/30` taken as a range is written `10.0.0.0-10.0.0.3`.
+
+> [!NOTE]
+> A range's `start()` or `end()` may be an IPv4-mapped IPv6 address, such as the end of `::/80`, whose canonical text `std::parse_ip_address` refuses.
+> Handing such an address to a parameter of the `ip-address` kind fails, which is rare enough that keeping mapped addresses out of that kind is worth it.
 
 ## Mixing types
 
