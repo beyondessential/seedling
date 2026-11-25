@@ -52,6 +52,28 @@ impl Unwritten {
     }
 }
 
+/// What an include boundary is, for telling the operator a source lies
+/// outside it.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Bounds<'a> {
+    /// A repository on disk, at this path.
+    Repository(&'a Path),
+    /// The definition folder itself, which is in no repository.
+    Folder,
+    /// A repository downloaded as an archive.
+    Archive,
+}
+
+impl std::fmt::Display for Bounds<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Repository(at) => write!(f, "the repository at {}", at.display()),
+            Self::Folder => f.write_str("the definition folder, which is in no repository"),
+            Self::Archive => f.write_str("the repository"),
+        }
+    }
+}
+
 /// The include boundary of a folder on disk: the nearest directory at or
 /// above it holding a `.git` or `.jj` entry, or the folder itself.
 ///
@@ -75,14 +97,14 @@ pub(super) fn boundary_of(folder: &Path) -> Result<PathBuf, String> {
 /// Place every file the folder's `include` table names into `files`, which
 /// holds what the folder itself yielded.
 ///
-/// `folder` lies within `boundary`, which `bounds` names for the operator;
+/// `folder` lies within `boundary`, which `bounds` says what it is;
 /// `unwritten` names what an archive held there that is not on disk.
 // spec: CLI#include-assembly
 pub(super) fn assemble(
     files: &mut BTreeMap<String, Vec<u8>>,
     folder: &Path,
     boundary: &Path,
-    bounds: &str,
+    bounds: Bounds<'_>,
     unwritten: &Unwritten,
 ) -> Result<(), String> {
     let Some(metadata) = files.get(METADATA_FILE) else {

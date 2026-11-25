@@ -13,7 +13,7 @@ use seedling_bundle::{
 };
 use serde_json::{Map, Value, json};
 
-use assembly::{Unwritten, assemble, boundary_of};
+use assembly::{Bounds, Unwritten, assemble, boundary_of};
 
 mod assembly;
 
@@ -135,15 +135,15 @@ pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let boundary = boundary_of(&folder)?;
     let bounds = if boundary == folder {
-        "the definition folder, which is in no repository".to_owned()
+        Bounds::Folder
     } else {
-        format!("the repository at {}", boundary.display())
+        Bounds::Repository(&boundary)
     };
     assemble(
         &mut files,
         &folder,
         &boundary,
-        &bounds,
+        bounds,
         &Unwritten::default(),
     )?;
     Ok(files)
@@ -376,7 +376,7 @@ impl GithubUrl {
 mod github {
     use std::io::Read;
 
-    use super::{Definition, GithubUrl, Unwritten, assemble, read_folder};
+    use super::{Bounds, Definition, GithubUrl, Unwritten, assemble, read_folder};
 
     fn client() -> Result<reqwest::Client, String> {
         reqwest::Client::builder()
@@ -481,7 +481,7 @@ mod github {
             return Ok(Default::default());
         }
         let mut files = read_folder(&path)?;
-        assemble(&mut files, &path, root, "the repository", unwritten)?;
+        assemble(&mut files, &path, root, Bounds::Archive, unwritten)?;
         Ok(files)
     }
 
