@@ -139,7 +139,13 @@ pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<
     } else {
         format!("the repository at {}", boundary.display())
     };
-    assemble(&mut files, &folder, &boundary, &bounds, &Unwritten::new())?;
+    assemble(
+        &mut files,
+        &folder,
+        &boundary,
+        &bounds,
+        &Unwritten::default(),
+    )?;
     Ok(files)
 }
 
@@ -462,13 +468,10 @@ mod github {
         let folder = seedling_bundle::normalise_path(folder)
             .map_err(|e| format!("the URL's folder lies outside the repository: {e}"))?;
         let folder = folder.as_str();
-        let beneath = format!("{folder}/");
-        if let Some(special) = unwritten.iter().find(|u| {
-            folder.is_empty()
-                || *u == folder
-                || u.starts_with(&beneath)
-                || folder.starts_with(&format!("{u}/"))
-        }) {
+        if let Some(special) = unwritten
+            .reached_by(folder)
+            .or_else(|| unwritten.within(folder))
+        {
             return Err(format!(
                 "{special} is not a regular file; definitions may only hold files and folders"
             ));
@@ -498,7 +501,7 @@ mod github {
         let bad = |e: std::io::Error| format!("the downloaded archive is unreadable: {e}");
         let archive = || tar::Archive::new(flate2::read::GzDecoder::new(tarball));
 
-        let mut unwritten = Unwritten::new();
+        let mut unwritten = Unwritten::default();
         for entry in archive().entries().map_err(bad)? {
             let entry = entry.map_err(bad)?;
             let Some(name) = entry_name(&entry.path().map_err(bad)?)? else {
@@ -512,7 +515,7 @@ mod github {
                     | tar::EntryType::XGlobalHeader
                     | tar::EntryType::XHeader
             ) {
-                unwritten.insert(name);
+                unwritten.record(name);
             }
         }
 
@@ -522,17 +525,18 @@ mod github {
             let Some(name) = entry_name(&entry.path().map_err(bad)?)? else {
                 continue;
             };
-            if let Some(special) =
-                std::iter::successors(name.rsplit_once('/'), |(parent, _)| parent.rsplit_once('/'))
-                    .map(|(parent, _)| parent)
-                    .find(|p| unwritten.contains(*p))
-            {
+            let kind = entry.header().entry_type();
+            let written = matches!(
+                kind,
+                tar::EntryType::Directory | tar::EntryType::Regular | tar::EntryType::Continuous
+            );
+            if let Some(special) = unwritten.reached_by(&name).filter(|_| written) {
                 return Err(format!(
-                    "the downloaded archive holds {name} beneath {special}, which is not a directory"
+                    "the downloaded archive holds {name} at or beneath {special}, which is not a file or directory"
                 ));
             }
             let target = dest.join(&name);
-            match entry.header().entry_type() {
+            match kind {
                 tar::EntryType::Directory => {
                     std::fs::create_dir_all(&target).map_err(bad)?;
                 }

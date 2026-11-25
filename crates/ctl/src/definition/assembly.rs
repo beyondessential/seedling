@@ -12,9 +12,45 @@ use seedling_bundle::{BUNDLE_SIZE_LIMIT, METADATA_FILE, included, normalise_path
 
 use super::{VCS_METADATA_DIRS, read_bounded, read_folder};
 
-/// The `/`-separated paths, from the include boundary, of archive entries
-/// that were neither files nor directories and so were never written out.
-pub(super) type Unwritten = BTreeSet<String>;
+/// The archive entries that were neither files nor directories, and so were
+/// never written out, by `/`-separated path from the include boundary.
+///
+/// Nothing may be written or read at or beneath one of them: on disk the
+/// path is missing, but in the repository it is a link.
+#[derive(Debug, Default)]
+pub(super) struct Unwritten(BTreeSet<String>);
+
+impl Unwritten {
+    pub fn record(&mut self, path: String) {
+        self.0.insert(path);
+    }
+
+    /// The recorded entry `path` is, or passes through on its way down from
+    /// the boundary.
+    pub fn reached_by(&self, path: &str) -> Option<&str> {
+        std::iter::successors(Some(path), |p| p.rsplit_once('/').map(|(parent, _)| parent))
+            .find_map(|p| self.0.get(p))
+            .map(String::as_str)
+    }
+
+    /// A recorded entry at or beneath `path`, where the boundary itself is
+    /// the empty path.
+    pub fn within(&self, path: &str) -> Option<&str> {
+        if path.is_empty() {
+            return self.0.first().map(String::as_str);
+        }
+        let beneath = format!("{path}/");
+        self.0
+            .get(path)
+            .or_else(|| {
+                self.0
+                    .range::<str, _>((Bound::Included(beneath.as_str()), Bound::Unbounded))
+                    .next()
+                    .filter(|u| u.starts_with(&beneath))
+            })
+            .map(String::as_str)
+    }
+}
 
 /// The include boundary of a folder on disk: the nearest directory at or
 /// above it holding a `.git` or `.jj` entry, or the folder itself.
@@ -160,6 +196,11 @@ fn read_source(
     path: &str,
     unwritten: &Unwritten,
 ) -> Result<Option<BTreeMap<String, Vec<u8>>>, String> {
+    // A recorded entry is missing on disk, so it is checked before the walk
+    // could take it for a source that names nothing.
+    if let Some(special) = unwritten.reached_by(path) {
+        return Err(format!("{special} is not a regular file or directory"));
+    }
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut at = boundary.to_owned();
     let mut prefix = String::new();
@@ -169,9 +210,6 @@ fn read_source(
         }
         prefix.push_str(segment);
         at.push(segment);
-        if unwritten.contains(&prefix) {
-            return Err(format!("{prefix} is not a regular file or directory"));
-        }
         let meta = match at.symlink_metadata() {
             Ok(meta) => meta,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
@@ -195,11 +233,7 @@ fn read_source(
     if !meta.is_dir() {
         return Err(format!("{path} is not a regular file or directory"));
     }
-    let beneath = format!("{prefix}/");
-    if let Some(special) = unwritten
-        .iter()
-        .find(|u| prefix.is_empty() || u.starts_with(&beneath))
-    {
+    if let Some(special) = unwritten.within(path) {
         return Err(format!("{special} is not a regular file or directory"));
     }
     let found = read_folder(&at)?;

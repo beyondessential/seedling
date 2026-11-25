@@ -331,7 +331,7 @@ fn a_github_include_through_a_link_or_beneath_one_is_refused() {
     });
     let dir = tempfile::tempdir().unwrap();
     let e = github::extract_repository(&beneath, dir.path()).unwrap_err();
-    assert!(e.contains("beneath apps/shared"), "{e}");
+    assert!(e.contains("at or beneath apps/shared"), "{e}");
     assert!(!dir.path().join("apps/shared").exists());
 
     // The same archive with the link last is refused the same way, before
@@ -342,7 +342,7 @@ fn a_github_include_through_a_link_or_beneath_one_is_refused() {
     });
     let dir = tempfile::tempdir().unwrap();
     let e = github::extract_repository(&link_last, dir.path()).unwrap_err();
-    assert!(e.contains("beneath apps/shared"), "{e}");
+    assert!(e.contains("at or beneath apps/shared"), "{e}");
     assert!(!dir.path().join("apps/shared").exists());
 }
 
@@ -645,4 +645,17 @@ fn a_source_larger_than_any_bundle_is_refused_as_it_is_read() {
     write(dir.path(), "apps/big.bin", &big);
     let e = assembled(&dir).unwrap_err();
     assert!(e.contains("size limit"), "{e}");
+}
+
+// spec: CLI#definition-sources
+#[test]
+fn an_archive_entry_named_as_a_link_is_not_written() {
+    let data = tarball(|b| {
+        tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
+        tar_file(b, "o-r-abc/apps/shared", b"shadow");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let e = github::extract_repository(&data, dir.path()).unwrap_err();
+    assert!(e.contains("at or beneath apps/shared"), "{e}");
+    assert!(!dir.path().join("apps/shared").exists());
 }
