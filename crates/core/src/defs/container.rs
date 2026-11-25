@@ -147,28 +147,16 @@ pub fn image_registry(image: &str) -> Option<&str> {
 use super::{
     Freezable, Holder,
     enums::OnExit,
+    quantity::parse_quantity,
     resource::ResourceId,
     take::{reject_unknown_keys, take_int_in_range, take_map, take_string, take_string_array},
     volume::{ExternalVolume, Volume},
 };
 
-fn validate_memory_limit(limit: &str) -> Result<(), Box<EvalAltResult>> {
-    let (num, suffix) = if limit.ends_with(|c: char| c.is_ascii_alphabetic()) {
-        let (n, s) = limit.split_at(limit.len() - 1);
-        (n, s)
-    } else {
-        return Err("memory limit must end with a unit suffix (k, m, or g)".into());
-    };
-    if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) || num.starts_with('0') {
-        return Err(format!(
-            "memory limit must be a positive integer followed by k, m, or g: '{limit}'"
-        )
-        .into());
-    }
-    match suffix.to_ascii_lowercase().as_str() {
-        "k" | "m" | "g" => Ok(()),
-        _ => Err(format!("memory limit suffix must be k, m, or g, got '{suffix}'").into()),
-    }
+/// A memory limit of `bytes`, which must be at least one byte.
+// spec: CTR#resource-limits
+fn memory_limit(bytes: i64) -> Result<i64, Box<EvalAltResult>> {
+    take_int_in_range("memory", bytes, 1..=i64::MAX)
 }
 
 const ALLOWED_CAPS: &[&str] = &[
@@ -364,7 +352,8 @@ pub struct ContainerDef {
     pub env: Vec<EnvVar>,
     pub volume_mounts: BTreeMap<PathBuf, VolumeMount>,
     pub on_exit: Option<OnExit>,
-    pub memory: Option<String>,
+    /// The memory limit, in bytes.
+    pub memory: Option<i64>,
     pub cpus: Option<f64>,
     pub extra_caps: Vec<String>,
     pub writable_rootfs: bool,
@@ -609,8 +598,18 @@ impl ContainerDef {
             "memory",
             move |this: &mut T, limit: &str| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                validate_memory_limit(limit)?;
-                ext(this).lock().memory = Some(limit.to_ascii_lowercase());
+                let bytes =
+                    parse_quantity(limit).map_err(|e| format!("memory limit {limit:?}: {e}"))?;
+                ext(this).lock().memory = Some(memory_limit(bytes)?);
+                Ok(this.clone())
+            },
+        );
+        // spec: CTR#resource-limits
+        builder.with_fn(
+            "memory",
+            move |this: &mut T, bytes: i64| -> Result<T, Box<EvalAltResult>> {
+                this.ensure_unfrozen()?;
+                ext(this).lock().memory = Some(memory_limit(bytes)?);
                 Ok(this.clone())
             },
         );

@@ -680,44 +680,57 @@ fn with_container<R>(
 
 // spec: CTR#resource-limits
 #[test]
-fn container_memory_sets_limit() {
-    let app = run_test_script_app(
-        r#"
-        app.deployment("web")
-            .image("docker.io/library/nginx:latest")
-            .memory("512m");
-    "#,
-    );
-    with_container(&app, "web", |c| {
-        assert_eq!(c.memory.as_deref(), Some("512m"));
-    });
+fn container_memory_takes_a_quantity() {
+    for (limit, bytes) in [
+        (r#""512Mi""#, 512 << 20),
+        (r#""1.5G""#, 1_500_000_000),
+        (r#""1024""#, 1024),
+        ("536870912", 512 << 20),
+        ("AVAILABLE_MEMORY / AVAILABLE_MEMORY", 1),
+    ] {
+        let app = run_test_script_app(&format!(
+            r#"app.deployment("web").image("docker.io/library/nginx:latest").memory({limit});"#
+        ));
+        with_container(&app, "web", |c| {
+            assert_eq!(c.memory, Some(bytes), "{limit}");
+        });
+    }
 }
 
 // spec: CTR#resource-limits
 #[test]
-fn container_memory_case_insensitive_suffix() {
-    let app = run_test_script_app(
-        r#"app.deployment("web").image("docker.io/library/nginx:latest").memory("2G");"#,
+fn container_memory_suggests_the_suffix_likely_meant() {
+    let err = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:latest").memory("512m");"#,
     );
-    with_container(&app, "web", |c| {
-        assert_eq!(c.memory.as_deref(), Some("2g"));
-    });
-}
-
-// spec: CTR#resource-limits
-#[test]
-fn container_memory_rejects_missing_suffix() {
-    let _ = run_test_script_err(
-        r#"app.deployment("web").image("docker.io/library/nginx:latest").memory("1024");"#,
+    assert!(
+        err.to_string().contains("m is milli; did you mean 512Mi?"),
+        "{err}"
     );
 }
 
 // spec: CTR#resource-limits
 #[test]
-fn container_memory_rejects_unknown_suffix() {
-    let _ = run_test_script_err(
-        r#"app.deployment("web").image("docker.io/library/nginx:latest").memory("1t");"#,
-    );
+fn container_memory_rejects_a_limit_under_one_byte() {
+    for limit in [r#""0""#, r#""-1Ki""#, "0", "-5"] {
+        let err = run_test_script_err(&format!(
+            r#"app.deployment("web").image("docker.io/library/nginx:latest").memory({limit});"#
+        ));
+        assert!(
+            err.to_string().contains("`memory` must be between 1"),
+            "{limit}: {err}"
+        );
+    }
+}
+
+// spec: CTR#resource-limits
+#[test]
+fn container_memory_rejects_another_type() {
+    for limit in ["1.5", "true", r#"["1Gi"]"#] {
+        let _ = run_test_script_err(&format!(
+            r#"app.deployment("web").image("docker.io/library/nginx:latest").memory({limit});"#
+        ));
+    }
 }
 
 // spec: CTR#resource-limits

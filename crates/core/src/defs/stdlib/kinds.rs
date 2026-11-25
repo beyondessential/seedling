@@ -4,7 +4,7 @@ use rhai::{Dynamic, EvalAltResult, FuncRegistration};
 use strum::VariantArray;
 
 use crate::defs::{
-    param_def::{ParamKind, ParamKindName, take_options, take_range},
+    param_def::{IntRange, ParamKind, ParamKindName, take_options, take_range},
     take::take_string,
 };
 
@@ -15,14 +15,11 @@ pub(super) fn register(module: &mut rhai::Module) {
         match name {
             // spec: ACN#kind-parsers
             ParamKindName::Integer => {
-                register_parser(module, &helper, ParamKind::Integer { range: None });
-                FuncRegistration::new(&helper).set_into_module(
-                    module,
-                    |value: Dynamic, range: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
-                        let range = take_range("range", range)?;
-                        parse(&ParamKind::Integer { range: Some(range) }, value)
-                    },
-                );
+                register_ranged_parser(module, &helper, |range| ParamKind::Integer { range });
+            }
+            // spec: ACN#kind-parsers
+            ParamKindName::Quantity => {
+                register_ranged_parser(module, &helper, |range| ParamKind::Quantity { range });
             }
             // spec: ACN#kind-parsers
             ParamKindName::Choice => {
@@ -53,6 +50,23 @@ fn register_parser(module: &mut rhai::Module, helper: &str, kind: ParamKind) {
     FuncRegistration::new(helper).set_into_module(
         module,
         move |value: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> { parse(&kind, value) },
+    );
+}
+
+/// Register the parser of a kind taking an optional `range`, with and without
+/// it.
+fn register_ranged_parser(
+    module: &mut rhai::Module,
+    helper: &str,
+    kind: fn(Option<IntRange>) -> ParamKind,
+) {
+    register_parser(module, helper, kind(None));
+    FuncRegistration::new(helper).set_into_module(
+        module,
+        move |value: Dynamic, range: Dynamic| -> Result<Dynamic, Box<EvalAltResult>> {
+            let range = take_range("range", range)?;
+            parse(&kind(Some(range)), value)
+        },
     );
 }
 

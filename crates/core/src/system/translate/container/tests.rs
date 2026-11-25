@@ -203,7 +203,7 @@ fn podman_args_hardening_overrides() {
         health: None,
         hosts: vec![],
         dns_servers: vec![],
-        memory: Some("512m".to_string()),
+        memory: Some(512 << 20),
         cpus: Some(1.5),
         extra_caps: vec!["NET_RAW".to_string(), "NET_BIND_SERVICE".to_string()],
         writable_rootfs: true,
@@ -223,7 +223,7 @@ fn podman_args_hardening_overrides() {
     assert!(!args.iter().any(|a| a == "--tmpfs"));
     let pids_pos = args.iter().position(|a| a == "--pids-limit").unwrap();
     assert_eq!(args[pids_pos + 1], "1024");
-    assert!(args.contains(&"--memory=512m".to_string()));
+    assert!(args.contains(&"--memory=536870912".to_string()));
     assert!(args.contains(&"--cpus=1.5".to_string()));
     assert!(!args.iter().any(|a| a.starts_with("--workdir")));
 }
@@ -390,8 +390,8 @@ fn spec_hash_changes_when_env_changes() {
 fn spec_hash_changes_when_memory_or_cpus_change() {
     let mut a = bare_spec();
     let mut b = bare_spec();
-    a.memory = Some("256m".to_string());
-    b.memory = Some("512m".to_string());
+    a.memory = Some(256 << 20);
+    b.memory = Some(512 << 20);
     assert_ne!(spec_hash(&a), spec_hash(&b));
 
     let mut c = bare_spec();

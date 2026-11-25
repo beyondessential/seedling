@@ -361,6 +361,29 @@ mod tests {
         );
     }
 
+    // spec: ACN#param-schemas
+    // spec: ACI#action-parameters
+    #[test]
+    fn a_quantity_param_takes_a_json_integer_or_a_quantity() {
+        let size = schema(
+            "size",
+            of_kind(ParamKind::Quantity {
+                range: IntRange::new(1, 1 << 30, true),
+            }),
+        );
+        for (value, amount) in [(json!(1024), 1024), (json!("512Mi"), 512 << 20)] {
+            assert_eq!(
+                apply_schema(&size, supplied("size", value.clone()))
+                    .unwrap()
+                    .get("size"),
+                Some(&json!(amount)),
+                "{value}"
+            );
+        }
+        let err = apply_schema(&size, supplied("size", json!(0))).expect_err("out of range");
+        assert!(format!("{err:?}").contains("between 1 and 1Gi"), "{err:?}");
+    }
+
     // spec: ACI#action-parameters
     #[test]
     fn a_json_number_that_is_not_a_signed_64_bit_integer_is_refused() {

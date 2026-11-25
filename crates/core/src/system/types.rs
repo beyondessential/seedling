@@ -159,7 +159,8 @@ pub struct ContainerSpec {
     pub hosts: Vec<(String, IpAddr)>,
     /// DNS servers to inject into the container's /etc/resolv.conf.
     pub dns_servers: Vec<Ipv6Addr>,
-    pub memory: Option<String>,
+    /// The memory limit, in bytes.
+    pub memory: Option<i64>,
     pub cpus: Option<f64>,
     pub extra_caps: Vec<String>,
     pub writable_rootfs: bool,
