@@ -213,8 +213,13 @@ The CLI MUST check, in this order, and MUST stop at the first check that fails:
 4. that the [sample parameter values](#sample-parameter-values) pass [validation](params.md#validation).
 
 The CLI MUST evaluate the script as the server evaluates an app's definition on [update](apps.md#update), with the sample parameter values in place of the app's stored values and the [check's host constants](#check-host-constants) in place of the host's.
-It MUST evaluate within the [engine limits](../runtime/engine-limits.md) at the daemon's default settings.
 It MUST NOT run any gate, gate check or action closure.
+
+`definitions check` MUST accept each daemon option of the [engine limits](../runtime/engine-limits.md#limits), with the same name, default and meaning, and MUST evaluate within the limits so set.
+It MUST refuse a value the daemon would refuse to start with, report an error, and check nothing.
+
+> [!NOTE]
+> A definition written for hosts whose daemons set their own limits is checked with those limits given, so that the check is neither stricter nor looser than those hosts.
 
 When a check fails, the CLI MUST print an error to standard error and exit with a non-zero status:
 

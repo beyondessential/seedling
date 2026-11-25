@@ -8,9 +8,11 @@
 - The app seed is drawn fresh for each check, as a seed for any app is; derived values play no part in whether a definition is valid.
 - Host constants come from `SystemFacts`, with `--const` overrides applied over its defaults; `AVAILABLE_MEMORY`'s default needs a source on macOS and Windows, since `/proc/meminfo` exists only on Linux.
 
+- The engine-limit options are defined once, in the portable core, and used by both the daemon and `definitions check`, so their names and defaults cannot drift apart.
+
 ## Steps
 
 - [ ] `definitions check` in `seedling-ctl`: source reading shared with `apps create`, version requirement, bundle rules, evaluation, validation, exit status
-- [ ] `--set` and `--const` parsing and their errors
+- [ ] `--set`, `--const` and engine-limit options, and their errors
 - [ ] Seedling's own CI runs `definitions check` over every definition under `apps/`
 - [ ] Document the command in `docs/`
