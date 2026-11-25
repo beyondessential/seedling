@@ -735,7 +735,9 @@ fn a_plain_sub_action_param_holding_a_derived_value_is_protected_and_replays() {
 fn chained_invocations_nest_three_levels_deep() {
     invoke_action(
         r#"
-            app.on_action("inner", |rt, p| {});
+            app.on_action("inner", |rt, p| {
+                app.action("outer");
+            });
             app.on_action("middle", |rt, p| {
                 app.action("inner").invoke();
             });
