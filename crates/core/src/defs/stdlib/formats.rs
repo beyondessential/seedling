@@ -7,7 +7,7 @@ use rhai::{Dynamic, EvalAltResult, FuncRegistration, NativeCallContext};
 use serde::{Serialize, Serializer};
 
 use super::{
-    ARRAY, MAP, STRING,
+    ARRAY, MAP, STRING, Withheld,
     bytes::{ByteArg, held, take_byte_arg},
     max_string, settle, within,
 };
@@ -357,7 +357,7 @@ fn encoded(ctx: &NativeCallContext, tree: &Tree, text: String) -> HelperResult {
     let mut strings = BTreeSet::new();
     tree.strings(&mut strings);
     let held: Vec<&[u8]> = strings.iter().map(|s| s.as_bytes()).collect();
-    settle(ctx, &held, || vec![vec![text.as_bytes().to_vec()]])?;
+    settle(ctx, &held, || vec![Withheld::text(&text)])?;
     Ok(text.into())
 }
 
@@ -407,7 +407,7 @@ fn decoded(ctx: &NativeCallContext, text: &ByteArg, tree: Tree) -> HelperResult 
         strings
             .into_iter()
             .filter(|s| !s.is_empty())
-            .map(|s| vec![s.as_bytes().to_vec()])
+            .map(Withheld::text)
             .collect()
     })?;
     Ok(tree.into_dynamic())

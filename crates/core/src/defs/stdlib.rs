@@ -121,26 +121,43 @@ fn max_blob(ctx: &NativeCallContext) -> usize {
 // spec: QUOT#results
 fn text_result(ctx: &NativeCallContext, args: &[&ByteArg], text: String) -> HelperResult {
     within(text.len(), max_string(ctx), STRING)?;
-    settle(ctx, &held(args), || vec![vec![text.as_bytes().to_vec()]])?;
+    settle(ctx, &held(args), || vec![Withheld::text(&text)])?;
     Ok(text.into())
 }
 
 // spec: ENC#results
 fn blob_result(ctx: &NativeCallContext, args: &[&ByteArg], bytes: Vec<u8>) -> HelperResult {
     within(bytes.len(), max_blob(ctx), BLOB)?;
-    settle(ctx, &held(args), || vec![blob_forms(&bytes)])?;
+    settle(ctx, &held(args), || vec![Withheld::blob(&bytes)])?;
     Ok(Dynamic::from_blob(bytes))
 }
 
 // spec: SEC#redaction
-/// Withhold each of a helper's results, given as the text forms of each, when
-/// any of the bytes `held` of its arguments contains a withheld value. Each
-/// result counts toward the derived values limit on its own. Results computed
-/// in an action closure are the operation's own.
+/// One result of a helper as the runtime withholds it: each form of it that
+/// is withheld, as bytes.
+struct Withheld(Vec<Vec<u8>>);
+
+impl Withheld {
+    /// A string result, withheld as its text.
+    fn text(text: &str) -> Self {
+        Self(vec![text.as_bytes().to_vec()])
+    }
+
+    /// A Blob result, withheld in each of its [forms](blob_forms).
+    fn blob(bytes: &[u8]) -> Self {
+        Self(blob_forms(bytes))
+    }
+}
+
+// spec: SEC#redaction
+/// Withhold each of a helper's `results` when any of the bytes `held` of its
+/// arguments contains a withheld value. Each result counts toward the derived
+/// values limit on its own. Results computed in an action closure are the
+/// operation's own.
 fn settle(
     ctx: &NativeCallContext,
     held: &[&[u8]],
-    results: impl FnOnce() -> Vec<Vec<Vec<u8>>>,
+    results: impl FnOnce() -> Vec<Withheld>,
 ) -> Result<(), Box<EvalAltResult>> {
     if is_in_action_closure() {
         // spec: SEC#matching
@@ -149,7 +166,7 @@ fn settle(
             return Ok(());
         }
         let limit = helper_limits(ctx)?.derived_values;
-        for forms in results() {
+        for Withheld(forms) in results() {
             // spec: LIM#limits
             if !seeds::count_derivation(limit) {
                 return Err(too_large("Number of derived values"));
@@ -162,7 +179,7 @@ fn settle(
         return Ok(());
     };
     let limit = helper_limits(ctx)?.derived_values;
-    for forms in results() {
+    for Withheld(forms) in results() {
         // spec: LIM#limits
         if !seeds::withhold(dependence.clone(), forms, limit) {
             return Err(too_large("Number of derived values"));
