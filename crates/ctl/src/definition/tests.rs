@@ -8,6 +8,29 @@ fn write(root: &Path, rel: &str, contents: &[u8]) {
     std::fs::write(path, contents).unwrap();
 }
 
+fn tarball(build: impl FnOnce(&mut tar::Builder<Vec<u8>>)) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    build(&mut builder);
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(&builder.into_inner().unwrap()).unwrap();
+    gz.finish().unwrap()
+}
+
+fn tar_file(b: &mut tar::Builder<Vec<u8>>, path: &str, contents: &[u8]) {
+    let mut header = tar::Header::new_gnu();
+    header.set_size(contents.len() as u64);
+    header.set_mode(0o644);
+    header.set_entry_type(tar::EntryType::Regular);
+    b.append_data(&mut header, path, contents).unwrap();
+}
+
+fn tar_link(b: &mut tar::Builder<Vec<u8>>, kind: tar::EntryType, path: &str, target: &str) {
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(kind);
+    header.set_size(0);
+    b.append_link(&mut header, path, target).unwrap();
+}
+
 // spec: CLI#definition-folders
 #[test]
 fn folders_skip_vcs_metadata_and_seedignored_paths() {
@@ -66,26 +89,15 @@ fn github_folder_urls_split_into_every_ref_and_path() {
 // spec: CLI#definition-sources
 #[test]
 fn a_github_tarball_yields_the_named_folder() {
-    let mut builder = tar::Builder::new(Vec::new());
-    for (path, contents) in [
-        ("org-repo-abc123/README.md", &b"top"[..]),
-        ("org-repo-abc123/apps/web/app.seed.rhai", b"app;"),
-        ("org-repo-abc123/apps/web/pages/500.html", b"<p>"),
-        ("org-repo-abc123/apps/other/app.seed.rhai", b"no"),
-    ] {
-        let mut header = tar::Header::new_gnu();
-        header.set_size(contents.len() as u64);
-        header.set_mode(0o644);
-        header.set_entry_type(tar::EntryType::Regular);
-        builder.append_data(&mut header, path, contents).unwrap();
-    }
-    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    gz.write_all(&builder.into_inner().unwrap()).unwrap();
-    let tarball = gz.finish().unwrap();
-
+    let data = tarball(|b| {
+        tar_file(b, "org-repo-abc123/README.md", b"top");
+        tar_file(b, "org-repo-abc123/apps/web/app.seed.rhai", b"app;");
+        tar_file(b, "org-repo-abc123/apps/web/pages/500.html", b"<p>");
+        tar_file(b, "org-repo-abc123/apps/other/app.seed.rhai", b"no");
+    });
     let dir = tempfile::tempdir().unwrap();
-    github::extract_folder(&tarball, "apps/web", dir.path()).unwrap();
-    let files = read_folder(dir.path()).unwrap();
+    let unwritten = github::extract_repository(&data, dir.path()).unwrap();
+    let files = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap();
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         vec!["app.seed.rhai", "pages/500.html"]
@@ -210,27 +222,11 @@ fn export_reproduces_the_bundle_into_a_new_folder_only() {
 // spec: CLI#definition-sources
 // spec: CLI#definition-folders
 #[test]
-fn a_tarball_entry_may_not_escape_the_folder_or_be_a_link() {
-    fn tarball(build: impl FnOnce(&mut tar::Builder<Vec<u8>>)) -> Vec<u8> {
-        let mut builder = tar::Builder::new(Vec::new());
-        build(&mut builder);
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        gz.write_all(&builder.into_inner().unwrap()).unwrap();
-        gz.finish().unwrap()
-    }
-    fn file(b: &mut tar::Builder<Vec<u8>>, path: &str, contents: &[u8]) {
-        let mut header = tar::Header::new_gnu();
-        header.set_size(contents.len() as u64);
-        header.set_mode(0o644);
-        header.set_entry_type(tar::EntryType::Regular);
-        b.append_data(&mut header, path, contents).unwrap();
-    }
-
-    // A whole-repository URL leaves no folder prefix to filter on. The
-    // builder refuses to write `..`, so the name goes into the header raw,
-    // the way a hostile archive would carry it.
+fn a_tarball_entry_may_not_escape_the_repository_or_be_a_link_in_the_folder() {
+    // The builder refuses to write `..`, so the name goes into the header
+    // raw, the way a hostile archive would carry it.
     let escaping = tarball(|b| {
-        file(b, "org-repo-abc/app.seed.rhai", b"app;");
+        tar_file(b, "org-repo-abc/app.seed.rhai", b"app;");
         let mut header = tar::Header::new_gnu();
         header.set_size(5);
         header.set_mode(0o644);
@@ -241,26 +237,226 @@ fn a_tarball_entry_may_not_escape_the_folder_or_be_a_link() {
         b.append(&header, &b"owned"[..]).unwrap();
     });
     let dir = tempfile::tempdir().unwrap();
-    let e = github::extract_folder(&escaping, "", dir.path()).unwrap_err();
-    assert!(e.contains("outside the folder"), "{e}");
+    let e = github::extract_repository(&escaping, dir.path()).unwrap_err();
+    assert!(e.contains("outside the repository"), "{e}");
     assert!(!dir.path().parent().unwrap().join("escaped").exists());
 
     for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
         let linked = tarball(|b| {
-            file(b, "org-repo-abc/apps/web/app.seed.rhai", b"app;");
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(kind);
-            header.set_size(0);
-            b.append_link(
-                &mut header,
+            tar_file(b, "org-repo-abc/apps/web/app.seed.rhai", b"app;");
+            tar_link(
+                b,
+                kind,
                 "org-repo-abc/apps/web/stolen",
                 "../../../../etc/passwd",
-            )
-            .unwrap();
+            );
         });
         let dir = tempfile::tempdir().unwrap();
-        let e = github::extract_folder(&linked, "apps/web", dir.path()).unwrap_err();
+        let unwritten = github::extract_repository(&linked, dir.path()).unwrap();
+        assert!(!dir.path().join("apps/web/stolen").exists());
+        let e = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap_err();
         assert!(e.contains("not a regular file"), "{e}");
-        assert!(!dir.path().join("stolen").exists());
     }
+}
+
+// spec: CLI#definition-sources
+// spec: CLI#include-assembly
+#[test]
+fn a_github_folder_includes_from_elsewhere_in_the_repository() {
+    let data = tarball(|b| {
+        tar_file(
+            b,
+            "o-r-abc/apps/web/seedling.toml",
+            b"script = [\"lib/db.seed.rhai\", \"app.seed.rhai\"]\n[include]\n\"lib\" = \"../common\"",
+        );
+        tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
+        tar_file(b, "o-r-abc/apps/common/db.seed.rhai", b"db;");
+        tar_link(b, tar::EntryType::Symlink, "o-r-abc/docs/latest", "v2");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let unwritten = github::extract_repository(&data, dir.path()).unwrap();
+    let files = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap();
+    assert_eq!(files["lib/db.seed.rhai"], b"db;");
+}
+
+// spec: CLI#definition-sources
+// spec: CLI#include-assembly
+#[test]
+fn a_github_include_through_a_link_or_beneath_one_is_refused() {
+    let through = tarball(|b| {
+        tar_file(
+            b,
+            "o-r-abc/apps/web/seedling.toml",
+            b"[include]\n\"lib\" = \"../shared/db.seed.rhai\"",
+        );
+        tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let unwritten = github::extract_repository(&through, dir.path()).unwrap();
+    let e = github::read_repository_folder(dir.path(), "apps/web", &unwritten).unwrap_err();
+    assert!(e.contains("apps/shared is not a regular file"), "{e}");
+
+    let beneath = tarball(|b| {
+        tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
+        tar_file(b, "o-r-abc/apps/shared/passwd", b"x");
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let e = github::extract_repository(&beneath, dir.path()).unwrap_err();
+    assert!(e.contains("beneath apps/shared"), "{e}");
+    assert!(!dir.path().join("apps/shared").exists());
+}
+
+/// A repository holding a definition folder `def` that includes `key` from
+/// `source`, with a shared file and a shared directory beside it.
+fn repo(marker: &str, key: &str, source: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    if !marker.is_empty() {
+        write(root, &format!("{marker}/HEAD"), b"x");
+    }
+    write(
+        root,
+        "apps/def/seedling.toml",
+        toml::Table::from_iter([(
+            "include".to_owned(),
+            toml::Value::Table(toml::Table::from_iter([(
+                key.to_owned(),
+                toml::Value::String(source.to_owned()),
+            )])),
+        )])
+        .to_string()
+        .as_bytes(),
+    );
+    write(root, "apps/def/app.seed.rhai", b"app;");
+    write(root, "apps/common/db.seed.rhai", b"db;");
+    write(root, "apps/pages/500.html", b"<p>");
+    write(root, "apps/pages/img/logo.png", b"png");
+    dir
+}
+
+fn assembled(dir: &tempfile::TempDir) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    read_assembled_folder(&dir.path().join("apps/def"))
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn files_and_directories_are_included_from_the_repository() {
+    let files = assembled(&repo(".git", "lib/db.seed.rhai", "../common/db.seed.rhai")).unwrap();
+    assert_eq!(files["lib/db.seed.rhai"], b"db;");
+
+    let files = assembled(&repo(".jj", "errors", "../pages/")).unwrap();
+    assert_eq!(files["errors/500.html"], b"<p>");
+    assert_eq!(files["errors/img/logo.png"], b"png");
+
+    let files = assembled(&repo(".git", "copy.seed.rhai", "./app.seed.rhai")).unwrap();
+    assert_eq!(files["copy.seed.rhai"], b"app;");
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn without_a_repository_includes_stay_within_the_folder() {
+    let dir = repo("", "lib/db.seed.rhai", "../common/db.seed.rhai");
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("lies outside"), "{e}");
+    assembled(&repo("", "copy.seed.rhai", "app.seed.rhai")).unwrap();
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn an_out_of_bounds_source_is_never_read() {
+    for source in [
+        "../../../outside",
+        "/etc/hostname",
+        "../common/\0db.seed.rhai",
+        "../../.git/HEAD",
+    ] {
+        let dir = repo(".git", "lib/x", source);
+        let e = assembled(&dir).unwrap_err();
+        assert!(e.contains("lies outside"), "{source}: {e}");
+        // An exported bundle carries its own copy, which stands in for a
+        // source it cannot reach.
+        write(dir.path(), "apps/def/lib/x", b"kept");
+        assert_eq!(assembled(&dir).unwrap()["lib/x"], b"kept", "{source}");
+    }
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn a_symlink_below_the_boundary_is_refused_and_one_above_it_is_not() {
+    let dir = repo(".git", "lib/db.seed.rhai", "../linked/db.seed.rhai");
+    std::os::unix::fs::symlink(
+        dir.path().join("apps/common"),
+        dir.path().join("apps/linked"),
+    )
+    .unwrap();
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("apps/linked is a symlink"), "{e}");
+
+    let outer = tempfile::tempdir().unwrap();
+    let inner = repo(".git", "lib/db.seed.rhai", "../common/db.seed.rhai");
+    let via = outer.path().join("via");
+    std::os::unix::fs::symlink(inner.path(), &via).unwrap();
+    let files = read_assembled_folder(&via.join("apps/def")).unwrap();
+    assert_eq!(files["lib/db.seed.rhai"], b"db;");
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn a_directory_source_must_yield_files_and_no_metadata_file() {
+    let dir = repo(".git", "errors", "../empty");
+    std::fs::create_dir_all(dir.path().join("apps/empty")).unwrap();
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("holds no files"), "{e}");
+
+    let dir = repo(".git", "errors", "../pages");
+    write(dir.path(), "apps/pages/img/seedling.toml", b"");
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("img/seedling.toml"), "{e}");
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn a_copy_in_the_folder_must_match_its_source_and_stands_in_for_a_missing_one() {
+    let dir = repo(".git", "lib/db.seed.rhai", "../common/db.seed.rhai");
+    write(dir.path(), "apps/def/lib/db.seed.rhai", b"db;");
+    assembled(&dir).unwrap();
+
+    write(dir.path(), "apps/def/lib/db.seed.rhai", b"stale;");
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("different files"), "{e}");
+
+    std::fs::remove_file(dir.path().join("apps/common/db.seed.rhai")).unwrap();
+    assert_eq!(assembled(&dir).unwrap()["lib/db.seed.rhai"], b"stale;");
+
+    std::fs::remove_file(dir.path().join("apps/def/lib/db.seed.rhai")).unwrap();
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("names nothing"), "{e}");
+
+    let dir = repo(".git", "errors", "../pages");
+    write(dir.path(), "apps/def/errors/500.html", b"<p>");
+    let e = assembled(&dir).unwrap_err();
+    assert!(e.contains("different files"), "a partial copy differs: {e}");
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn an_included_path_is_placed_even_where_seedignore_matches_it() {
+    let dir = repo(".git", "lib/db.seed.rhai", "../common/db.seed.rhai");
+    write(dir.path(), "apps/def/.seedignore", b"lib/\n");
+    assert_eq!(assembled(&dir).unwrap()["lib/db.seed.rhai"], b"db;");
+}
+
+// spec: CLI#include-assembly
+// spec: CLI#definition-export
+#[test]
+fn an_exported_bundle_with_includes_pushes_again_unchanged() {
+    let files = assembled(&repo(".git", "errors", "../pages")).unwrap();
+    let wire: Map<String, Value> = files
+        .iter()
+        .map(|(p, c)| (p.clone(), json!(BASE64.encode(c))))
+        .collect();
+    let out = tempfile::tempdir().unwrap();
+    let target = out.path().join("exported");
+    export(&wire, &target).unwrap();
+    assert_eq!(read_assembled_folder(&target).unwrap(), files);
 }

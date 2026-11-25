@@ -10,6 +10,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use seedling_bundle::METADATA_FILE;
 use serde_json::{Map, Value, json};
 
+use assembly::{Unwritten, assemble, boundary_of};
+
+mod assembly;
+
 /// Where a definition comes from.
 // spec: CLI#definition-sources
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -106,7 +110,7 @@ impl DefinitionArgs {
         let meta = std::fs::metadata(&path).map_err(|e| format!("cannot read {source}: {e}"))?;
         if meta.is_dir() {
             Ok(Some(Definition::Bundle {
-                files: read_folder(&path)?,
+                files: read_assembled_folder(&path)?,
                 origin: None,
             }))
         } else {
@@ -116,6 +120,23 @@ impl DefinitionArgs {
             }))
         }
     }
+}
+
+/// Read a definition folder on disk and assemble what it includes from the
+/// repository it sits in.
+// spec: CLI#include-assembly
+pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let mut files = read_folder(path)?;
+    let folder = path
+        .canonicalize()
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    assemble(
+        &mut files,
+        &folder,
+        &boundary_of(&folder)?,
+        &Unwritten::new(),
+    )?;
+    Ok(files)
 }
 
 /// Read a lone file as a bundle holding it under its own name, with a
@@ -254,7 +275,7 @@ impl GithubUrl {
 mod github {
     use std::io::Read;
 
-    use super::{Definition, GithubUrl, read_folder};
+    use super::{Definition, GithubUrl, Unwritten, assemble, read_folder};
 
     fn client() -> Result<reqwest::Client, String> {
         reqwest::Client::builder()
@@ -321,8 +342,8 @@ mod github {
 
         let dir =
             tempfile::tempdir().map_err(|e| format!("cannot make a temporary folder: {e}"))?;
-        extract_folder(&bytes, &folder, dir.path())?;
-        let files = read_folder(dir.path())?;
+        let unwritten = extract_repository(&bytes, dir.path())?;
+        let files = read_repository_folder(dir.path(), &folder, &unwritten)?;
         if files.is_empty() {
             return Err(format!("{} holds no files", url.url));
         }
@@ -332,25 +353,53 @@ mod github {
         })
     }
 
-    /// Unpack the entries of a GitHub tarball beneath `folder` into `dest`.
-    /// GitHub prefixes every entry with one top-level directory, which is
-    /// dropped.
-    pub(super) fn extract_folder(
-        tarball: &[u8],
+    /// Read `folder` out of an extracted repository and assemble what it
+    /// includes from the rest of it.
+    // spec: CLI#definition-sources
+    // spec: CLI#include-assembly
+    pub(super) fn read_repository_folder(
+        root: &std::path::Path,
         folder: &str,
+        unwritten: &Unwritten,
+    ) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
+        let beneath = format!("{folder}/");
+        if let Some(special) = unwritten
+            .iter()
+            .find(|u| folder.is_empty() || *u == folder || u.starts_with(&beneath))
+        {
+            return Err(format!(
+                "{special} is not a regular file; definitions may only hold files and folders"
+            ));
+        }
+        let path = root.join(folder);
+        if !path.is_dir() {
+            return Ok(Default::default());
+        }
+        let mut files = read_folder(&path)?;
+        assemble(&mut files, &path, root, unwritten)?;
+        Ok(files)
+    }
+
+    /// Unpack a GitHub tarball into `dest`, dropping the one top-level
+    /// directory GitHub prefixes every entry with.
+    ///
+    /// An entry that is neither a file nor a directory is recorded rather
+    /// than written: a symlink written out would let a later entry be written
+    /// through it, and it only matters if the definition reads it.
+    // spec: CLI#definition-sources
+    pub(super) fn extract_repository(
+        tarball: &[u8],
         dest: &std::path::Path,
-    ) -> Result<(), String> {
+    ) -> Result<Unwritten, String> {
         let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tarball));
         let bad = |e: std::io::Error| format!("the downloaded archive is unreadable: {e}");
+        let mut unwritten = Unwritten::new();
         for entry in archive.entries().map_err(bad)? {
             let mut entry = entry.map_err(bad)?;
             let path = entry.path().map_err(bad)?.into_owned();
             let mut components = path.components();
             components.next();
-            let inner = components.as_path();
-            let Ok(rel) = inner.strip_prefix(folder) else {
-                continue;
-            };
+            let rel = components.as_path();
             if rel.as_os_str().is_empty() {
                 continue;
             }
@@ -362,8 +411,18 @@ mod github {
                 .any(|c| !matches!(c, std::path::Component::Normal(_)))
             {
                 return Err(format!(
-                    "the downloaded archive holds an entry outside the folder: {}",
+                    "the downloaded archive holds an entry outside the repository: {}",
                     rel.display()
+                ));
+            }
+            let name = rel.to_string_lossy().into_owned();
+            if let Some(special) = std::iter::successors(Some(name.as_str()), |p| {
+                p.rsplit_once('/').map(|(parent, _)| parent)
+            })
+            .find(|p| unwritten.contains(*p))
+            {
+                return Err(format!(
+                    "the downloaded archive holds {name} beneath {special}, which is not a directory"
                 ));
             }
             let target = dest.join(rel);
@@ -380,19 +439,12 @@ mod github {
                     std::fs::write(&target, contents).map_err(bad)?;
                 }
                 tar::EntryType::XGlobalHeader | tar::EntryType::XHeader => {}
-                // A symlink names its own target and a hardlink resolves one
-                // relative to where it lands, so neither is reproduced: the
-                // folder rules refuse them anyway, and this reports them
-                // without ever writing one.
-                other => {
-                    return Err(format!(
-                        "{} is not a regular file; definitions may only hold files and folders ({other:?})",
-                        rel.display()
-                    ));
+                _ => {
+                    unwritten.insert(name);
                 }
             }
         }
-        Ok(())
+        Ok(unwritten)
     }
 }
 
