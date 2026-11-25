@@ -18,6 +18,9 @@ use super::{
 
 const MIXED_RULE: &str = "an IP value compares only with a value of its own type";
 
+/// Whether an ordering satisfies a comparison operator.
+type OrderingTest = fn(Ordering) -> bool;
+
 /// Whether an address, subnet or range is of IPv4 or of IPv6.
 // spec: IP#family
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,7 +170,7 @@ impl CustomType for IpAddress {
         builder
             .with_fn("==", |a: &mut Self, b: Self| *a == b)
             .with_fn("!=", |a: &mut Self, b: Self| *a != b);
-        let orderings: [(&str, fn(Ordering) -> bool); 4] = [
+        let orderings: [(&str, OrderingTest); 4] = [
             ("<", Ordering::is_lt),
             ("<=", Ordering::is_le),
             (">", Ordering::is_gt),
