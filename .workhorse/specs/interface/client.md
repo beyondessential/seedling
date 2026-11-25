@@ -203,7 +203,11 @@ Packing the same bundle twice with the same CLI MUST write the same bytes.
 ## Definition checks
 
 `definitions check <source>` MUST check a definition without connecting to a server, using the evaluator of the Seedling version the CLI belongs to.
-The source MUST be a path to a file or a folder, read as [definition sources](#definition-sources) specifies for `apps create`.
+It MUST take its source in any form `apps create` takes, as [definition sources](#definition-sources) specifies, including `--ref <reference>` in place of the source.
+
+For `--ref`, the CLI MUST fetch the bundle itself, as [fetching](definitions.md#fetching) specifies for the server, with its own Seedling version as the running version in [artefact selection](definitions.md#artefact-selection).
+It MUST refuse a reference that the server would refuse before making any request to a registry.
+It MUST authenticate to a registry with the credentials the container engine of the user running it would use to pull images.
 
 The CLI MUST check, in this order, and MUST stop at the first check that fails:
 
@@ -221,8 +225,9 @@ It MUST refuse a value the daemon would refuse to start with, report an error, a
 > [!NOTE]
 > A definition written for hosts whose daemons set their own limits is checked with those limits given, so that the check is neither stricter nor looser than those hosts.
 
-When a check fails, the CLI MUST print an error to standard error and exit with a non-zero status:
+When the source cannot be read or fetched, or a check fails, the CLI MUST print an error to standard error and exit with a non-zero status:
 
+- for a source, naming the cause;
 - for the version requirement, naming the requirement and the CLI's version;
 - for a bundle rule, naming the offending path or field;
 - for a script error, naming the script file and the line within it, as [script formation](../language/bundle.md#script-formation) specifies;

@@ -9,10 +9,12 @@
 - Host constants come from `SystemFacts`, with `--const` overrides applied over its defaults; `AVAILABLE_MEMORY`'s default needs a source on macOS and Windows, since `/proc/meminfo` exists only on Linux.
 
 - The engine-limit options are defined once, in the portable core, and used by both the daemon and `definitions check`, so their names and defaults cannot drift apart.
+- `--ref` reuses `runtime/definition/fetch.rs` and `auth.rs` from the portable core, with the CLI's own version as the running version.
+  `auth_file_candidates` falls back to `/run/containers/<uid>/auth.json` through `rustix::process::getuid`, which needs a non-Unix path for Windows; `~/.docker/config.json` is the file that applies there and on macOS.
 
 ## Steps
 
-- [ ] `definitions check` in `seedling-ctl`: source reading shared with `apps create`, version requirement, bundle rules, evaluation, validation, exit status
+- [ ] `definitions check` in `seedling-ctl`: source reading shared with `apps create`, `--ref` fetched by the CLI, version requirement, bundle rules, evaluation, validation, exit status
 - [ ] `--set`, `--const` and engine-limit options, and their errors
 - [ ] Seedling's own CI runs `definitions check` over every definition under `apps/`
 - [ ] Document the command in `docs/`
