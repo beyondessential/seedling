@@ -2,9 +2,9 @@
 
 ## Automated
 
-- [ ] Each bundle under `demos/` loads as a bundle and evaluates with no params set (params-tour: with only its required param), with no error.
-- [ ] bundle-tour and bundle-share are assembled through the same include assembly the CLI uses, and both carry the files from `demos/shared/`.
-- [ ] ctl's `apps create` from a demo folder still assembles includes after the assembly moves.
+- [x] Each bundle under `demos/` loads as a bundle and evaluates with no params set (params-tour: with only its required param), with no error.
+- [x] bundle-tour and bundle-share are assembled through the same include assembly the CLI uses, and both carry the files from `demos/shared/`.
+- [x] ctl's `apps create` from a demo folder still assembles includes after the assembly moves.
 - [x] actions-and-gates: a gate exclusive with a deployment lists that deployment.
 - [x] actions-and-gates: a gate with a check job and an interval reports both.
 - [x] actions-and-gates: `after` ordering between gates, and deployments ordered after gates, match the definition.
@@ -12,7 +12,7 @@
 - [x] actions-and-gates: a gate body takes its first-run branch under a probe with no last success, and its later-run branch with one.
 - [x] actions-and-gates: a refused transition (the `format` param stepping down from its last success) fails the gate body.
 - [x] actions-and-gates: every action body runs under a probe.
-- [ ] Nothing in the repo still names `apps/`, `postgres.seed.rhai` or `tamanu-*.seed.rhai`.
+- [x] Nothing in the repo still names `apps/`, `postgres.seed.rhai` or `tamanu-*.seed.rhai`.
 
 ## On a dev VM
 

@@ -48,10 +48,10 @@ No demo image is built or published from this repo.
 
 ## Demos as test fixtures
 
-The demos replace the current definitions as the fixtures in `crates/core/src/tests/definitions.rs`, so they keep evaluating as the language changes.
+The demos replace the current definitions as the fixtures in `crates/core/src/tests/demos.rs`, so they keep evaluating as the language changes.
 Every demo gets at least an evaluation test.
 Fixtures load as bundles rather than `include_str!` of one script, so a demo's sidecar files and metadata are part of what is tested.
-Demos using `include` are assembled the way the CLI assembles them; the assembly in `crates/ctl/src/definition.rs` (`read_assembled_folder`) moves where both ctl and the core tests can call it, rather than being reimplemented for the tests.
+Demos using `include` are assembled the way the CLI assembles them; the assembly moves from `crates/ctl/src/definition.rs` into `seedling-bundle`, behind its `source` feature, where both ctl and the core tests call it, rather than being reimplemented for the tests.
 
 The gate tests carry over to actions-and-gates, which must exercise what they assert today:
 
@@ -68,9 +68,9 @@ The Tamanu name-quoting and missing-hostname tests test those definitions alone,
 ## Other changes
 
 - [x] Delete the stale copy of the "Seedling in production" PRD from this branch; the live one is on its project branch.
-- [ ] README's "Apps" section points at the demos.
-- [ ] `docs/dev-vm.md`: the "Bringing up the postgres app" walkthrough becomes a walkthrough of actions-and-gates (external volume attach, params, install, gate runs).
-- [ ] `docs/deploying.md` and `docs/bsl-scripting.md`: example app names become demo names; postgres snippets stay where postgres is the reason for the advice (e.g. SIGINT as fast shutdown).
+- [x] README's "Apps" section points at the demos.
+- [x] `docs/dev-vm.md`: the "Bringing up the postgres app" walkthrough becomes a walkthrough of actions-and-gates (external volume attach, params, install, gate runs).
+- [x] `docs/deploying.md` and `docs/bsl-scripting.md`: example app names become demo names; postgres snippets stay where postgres is the reason for the advice (e.g. SIGINT as fast shutdown).
 
 No spec changes: the demos are repo content, not product behaviour.
 
