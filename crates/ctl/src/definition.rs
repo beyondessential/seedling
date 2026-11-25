@@ -33,7 +33,7 @@ pub(super) struct DefinitionArgs {
 #[derive(Debug, PartialEq)]
 pub(super) enum Definition {
     Bundle {
-        files: BTreeMap<String, Vec<u8>>,
+        bundle: Box<Bundle>,
         origin: Option<(String, String)>,
     },
     Reference(String),
@@ -79,12 +79,8 @@ impl Definition {
     pub fn fields(&self, keys: DefinitionKeys) -> Map<String, Value> {
         let mut out = Map::new();
         match self {
-            Self::Bundle { files, origin } => {
-                let encoded: Map<String, Value> = files
-                    .iter()
-                    .map(|(p, c)| (p.clone(), json!(BASE64.encode(c))))
-                    .collect();
-                out.insert(keys.bundle.to_owned(), Value::Object(encoded));
+            Self::Bundle { bundle, origin } => {
+                out.insert(keys.bundle.to_owned(), Value::Object(bundle.to_wire()));
                 if let (Some((url, revision)), Some(key)) = (origin, keys.origin) {
                     out.insert(key.to_owned(), json!({ "url": url, "revision": revision }));
                 }
@@ -106,8 +102,9 @@ impl DefinitionArgs {
         let Some(source) = &self.source else {
             return Ok(None);
         };
-        let definition = if let Some(url) = GithubUrl::parse(source) {
-            github::download(&url).await?
+        let (files, origin) = if let Some(url) = GithubUrl::parse(source) {
+            let (files, origin) = github::download(&url).await?;
+            (files, Some(origin))
         } else {
             let path = PathBuf::from(source);
             let meta =
@@ -117,19 +114,17 @@ impl DefinitionArgs {
             } else {
                 read_lone_file(&path)?
             };
-            Definition::Bundle {
-                files,
-                origin: None,
-            }
+            (files, None)
         };
-        // The bundle rules, as the server applies them, over what was read
-        // and assembled: a bundle the server would refuse is refused here,
-        // before it is encoded and sent.
-        if let Definition::Bundle { files, .. } = &definition {
-            Bundle::from_files(files.iter().map(|(p, c)| (p.clone(), c.clone())))
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(Some(definition))
+        // Only the rules a server holds every stored definition to, as it
+        // applies them: the metadata fields and script files are judged by
+        // the Seedling a definition is installed on, since a template may be
+        // stored for a later Seedling whose metadata this CLI cannot read.
+        let bundle = Bundle::from_files(files).map_err(|e| e.to_string())?;
+        Ok(Some(Definition::Bundle {
+            bundle: Box::new(bundle),
+            origin,
+        }))
     }
 }
 
@@ -223,10 +218,9 @@ pub(super) async fn pack(source: &str, out: &Path) -> Result<Option<String>, Str
         source: Some(source.to_owned()),
         reference: None,
     };
-    let Some(Definition::Bundle { files, .. }) = args.resolve().await? else {
+    let Some(Definition::Bundle { bundle, .. }) = args.resolve().await? else {
         return Err(format!("{source} is not a definition source to pack"));
     };
-    let bundle = Bundle::from_files(files).map_err(|e| e.to_string())?;
     bundle.script().map_err(|e| e.to_string())?;
     // Written beside `out` and moved into place whole, so a failed write
     // leaves nothing for the next attempt to refuse as already existing.
@@ -431,8 +425,7 @@ mod github {
     use seedling_bundle::METADATA_FILE;
 
     use super::{
-        Bounds, Budget, Definition, GithubUrl, Unwritten, assemble, read_bounded, read_folder,
-        source_paths,
+        Bounds, Budget, GithubUrl, Unwritten, assemble, read_bounded, read_folder, source_paths,
     };
 
     fn client() -> Result<reqwest::Client, String> {
@@ -450,9 +443,17 @@ mod github {
     }
 
     /// Resolve the URL's ref to a commit, download that commit, and read the
-    /// folder out of it, recording the URL and commit as the origin.
+    /// folder out of it, with the URL and commit to record as its origin.
     // spec: CLI#definition-sources
-    pub(super) async fn download(url: &GithubUrl) -> Result<Definition, String> {
+    pub(super) async fn download(
+        url: &GithubUrl,
+    ) -> Result<
+        (
+            std::collections::BTreeMap<String, Vec<u8>>,
+            (String, String),
+        ),
+        String,
+    > {
         let client = client()?;
         let mut resolved = None;
         for (git_ref, folder) in url.splits() {
@@ -504,10 +505,7 @@ mod github {
         if files.is_empty() {
             return Err(format!("{} holds no files", url.url));
         }
-        Ok(Definition::Bundle {
-            files,
-            origin: Some((url.url.clone(), sha)),
-        })
+        Ok((files, (url.url.clone(), sha)))
     }
 
     /// Read the definition at `folder` out of a GitHub tarball, unpacking it

@@ -107,7 +107,9 @@ fn a_github_tarball_yields_the_named_folder() {
 #[test]
 fn a_pushed_bundle_carries_its_origin() {
     let def = Definition::Bundle {
-        files: BTreeMap::from([("app.seed.rhai".to_owned(), b"app;".to_vec())]),
+        bundle: Box::new(
+            Bundle::from_files([("app.seed.rhai".to_owned(), b"app;".to_vec())]).unwrap(),
+        ),
         origin: Some(("https://github.com/o/r/tree/main/x".into(), "abc".into())),
     };
     let fields = def.fields(DefinitionKeys::APP);
