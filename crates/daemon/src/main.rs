@@ -1020,7 +1020,7 @@ async fn main() {
                             // spec: OPS#concurrency
                             // A fire queued behind another app's operation is
                             // persisted like any queued request.
-                            seedling_core::oi::handler::actions::lifecycle::persist_queued_fire(
+                            seedling_core::runtime::operations::admission::persist_queued_fire(
                                 &oi_state_for_sched,
                                 &fire,
                                 now,
@@ -1028,12 +1028,12 @@ async fn main() {
                             continue;
                         }
                         if let Some(op_id) = fire.operation_id {
-                            seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
+                            seedling_core::runtime::operations::spawn_accepted_operation(
                                 Arc::clone(&oi_state_for_sched),
                                 fire.app,
                                 seedling_protocol::events::OperationTarget::Action(fire.action),
                                 op_id,
-                                seedling_core::oi::handler::actions::lifecycle::OperationParams::Requested(
+                                seedling_core::runtime::operations::OperationParams::Requested(
                                     fire.params,
                                 ),
                                 fire.generation,
@@ -1373,7 +1373,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
     }
 
     // spec: OPS#concurrency
-    seedling_core::oi::handler::actions::lifecycle::restore_queue(oi_state, state.queued);
+    seedling_core::runtime::operations::admission::restore_queue(oi_state, state.queued);
 }
 
 // spec: SUSP#abandoned-replay
@@ -1538,12 +1538,12 @@ fn start_replay(
         "replaying interrupted operation"
     );
 
-    seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
+    seedling_core::runtime::operations::spawn_accepted_operation(
         state,
         app_name,
         target,
         op.operation_id,
-        seedling_core::oi::handler::actions::lifecycle::OperationParams::Replayed {
+        seedling_core::runtime::operations::OperationParams::Replayed {
             params,
             bindings: volume_bindings,
         },

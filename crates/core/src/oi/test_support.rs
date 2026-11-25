@@ -406,7 +406,7 @@ mod tests {
                 .unwrap()
         });
         let first = fire(&oi);
-        crate::oi::handler::actions::lifecycle::persist_queued_fire(&oi.state, &first, now);
+        crate::runtime::operations::admission::persist_queued_fire(&oi.state, &first, now);
         assert_eq!(last_fired(&oi), "2026-04-21T17:05:00Z");
         assert_eq!(oi.state.scheduler.lock().queue_iter().count(), 0);
 
@@ -424,7 +424,7 @@ mod tests {
                 .unwrap()
         });
         let second = fire(&oi);
-        crate::oi::handler::actions::lifecycle::persist_queued_fire(&oi.state, &second, now);
+        crate::runtime::operations::admission::persist_queued_fire(&oi.state, &second, now);
         assert_eq!(last_fired(&oi), now.to_string());
         let _ = ScheduleResult::Queued;
     }
@@ -477,7 +477,7 @@ mod tests {
                 .unwrap();
         }
 
-        crate::oi::handler::actions::lifecycle::restore_queue(&oi.state, vec![ghost, real]);
+        crate::runtime::operations::admission::restore_queue(&oi.state, vec![ghost, real]);
 
         let queue: Vec<String> = oi
             .state

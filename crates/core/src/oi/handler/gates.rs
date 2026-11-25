@@ -11,10 +11,7 @@ use seedling_protocol::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{
-    HandlerResult,
-    actions::{self, lifecycle},
-};
+use super::{HandlerResult, actions};
 use crate::{
     defs::{
         app::AppDef,
@@ -28,6 +25,7 @@ use crate::{
             self, AppGates, GateState, GateView, Undetermined, Wait, World, held_resources, store,
             unready_targets,
         },
+        operations::admission::{Admission, admit_and_spawn},
         stopped::StoppedSet,
     },
 };
@@ -264,7 +262,7 @@ pub(crate) fn run_gate(
         ));
     }
 
-    let admission = lifecycle::admit_and_spawn(
+    let admission = admit_and_spawn(
         state,
         app_name,
         OperationTarget::Gate(gate_name.clone()),
@@ -275,10 +273,10 @@ pub(crate) fn run_gate(
         Some(Arc::clone(&ctx.events.actor)),
     );
     let (schedule, operation_id) = match admission {
-        lifecycle::Admission::Started(id) => ("accepted", id),
-        lifecycle::Admission::Queued(id) => ("queued", id),
-        lifecycle::Admission::CannotPersist(e) => return Err(e),
-        lifecycle::Admission::Rejected(reason) => {
+        Admission::Started(id) => ("accepted", id),
+        Admission::Queued(id) => ("queued", id),
+        Admission::CannotPersist(e) => return Err(e),
+        Admission::Rejected(reason) => {
             return Err(actions::rejection_error(app_name, reason));
         }
     };

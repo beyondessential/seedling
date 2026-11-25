@@ -729,7 +729,7 @@ fn a_queued_run_of_a_gate_the_definition_no_longer_declares_is_withdrawn() {
         .unwrap()
         .operation_id
         .clone();
-    crate::oi::handler::actions::lifecycle::persist_queued(&oi.state, &id).unwrap();
+    crate::runtime::operations::admission::persist_queued(&oi.state, &id).unwrap();
     let persisted = |oi: &TestOi, gate: &'static str| -> i64 {
         oi.state.db.call(move |db| {
             db.conn

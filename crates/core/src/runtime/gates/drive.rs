@@ -24,15 +24,13 @@ use super::{
 };
 use crate::{
     defs::{app::AppDef, resource::ResourceId},
-    oi::{
-        handler::actions::lifecycle::{Admission, admit_and_spawn},
-        state::OiState,
-    },
+    oi::state::OiState,
     runtime::{
         AppPhase,
         db::Db,
         faults::{self, FaultKey, FaultMeta, FaultScope},
         history::clear_queued_operation,
+        operations::admission::{Admission, admit_and_spawn},
         secrets::{Cipher, KeyDigest},
         stopped::{self, StoppedSet},
     },

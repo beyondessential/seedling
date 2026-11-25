@@ -322,7 +322,7 @@ pub struct ReplayContext {
 
 /// Synchronous side-effect handle the BSL `rt.signal` call uses to actually
 /// deliver a signal to a running container. Implemented in the operation
-/// loop (`oi/handler/actions/lifecycle.rs`) on top of the system actuator;
+/// loop (`runtime/operations/adapters.rs`) on top of the system actuator;
 /// stubbed out in language-only tests where no real runtime exists.
 // spec: RT#signal-delivery
 pub trait ContainerSignaler: Send + Sync {

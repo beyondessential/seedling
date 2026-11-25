@@ -28,13 +28,7 @@ use crate::{
         gate::GateDef,
         resource::{Resource, ResourceId, ResourceKind},
     },
-    oi::{
-        handler::actions::lifecycle::{
-            BoundParams, GateInput, OperationEnd, Persisted, app_at_generation, language_for,
-            run_operation_loop,
-        },
-        state::OiState,
-    },
+    oi::state::OiState,
     runtime::{
         apps::CheckId,
         autonomous_ops,
@@ -51,6 +45,10 @@ use crate::{
         },
         identity::ResourceInstance,
         lifecycle::LifecycleState,
+        operations::{
+            BoundParams, GateInput, OperationEnd, Persisted, adapters, app_at_generation,
+            clear_superseded_operation_faults, language_for, run_operation_loop,
+        },
         probe::probe_gate_body,
         registry::DbInstanceRegistry,
         secrets::KeyDigest,
@@ -541,9 +539,9 @@ impl Run<'_> {
             Arc::clone(&self.tick_notify),
             Arc::clone(&self.cancel),
         );
-        let signaler = crate::oi::handler::actions::lifecycle::make_container_signaler(&state);
-        let writer = crate::oi::handler::actions::lifecycle::make_volume_writer(&state);
-        let executor = crate::oi::handler::actions::lifecycle::make_executor(&state);
+        let signaler = adapters::make_container_signaler(&state);
+        let writer = adapters::make_volume_writer(&state);
+        let executor = adapters::make_executor(&state);
         let ran = tokio::task::spawn_blocking(move || {
             let db = match DbHandle::open(&db_path) {
                 Ok(db) => db,
@@ -622,9 +620,9 @@ impl Run<'_> {
                         // A gate run is a lifecycle operation, so its success
                         // supersedes an earlier operation's failure.
                         let a = app.clone();
-                        state.db.call(move |db| {
-                            crate::oi::handler::actions::lifecycle::clear_superseded_operation_faults(db, &a)
-                        });
+                        state
+                            .db
+                            .call(move |db| clear_superseded_operation_faults(db, &a));
                         if checked {
                             state.gate_runtime.clear_for_start(&app, &gate, key);
                         }
