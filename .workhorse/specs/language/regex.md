@@ -20,15 +20,11 @@ Applies to the [helper](std.md#helper) through which a [script](overview.md#scri
 
 The std module MUST offer `std::regex(pattern: string)`, which returns a `Regex` for `pattern` read in the regex syntax.
 `std::regex` MUST throw when `pattern` is not a regular expression in the regex syntax.
-`std::regex` MUST throw when `pattern`, once compiled, exceeds the size the runtime bounds a compiled pattern to.
-
-> [!NOTE]
-> Repetition is what makes a compiled pattern large: `\w{1000}{1000}` is short to write and enormous once compiled.
-> The text of a pattern is already bounded by the string length [limit](../runtime/engine-limits.md#limits).
+`std::regex` MUST throw when `pattern`, once compiled, exceeds what remains of the [compiled size](#compiled-size) limit.
 
 Beyond the [single-line rule](action.md#kind-parsers) every parser applies, `std::parse_regex(text)` MUST reject a value for which `std::regex` throws, and MUST return what `std::regex(text)` returns for any other value.
 
-A script that calls `std::regex` or `std::parse_regex` with a string literal, written without interpolation, for which that helper would throw MUST fail [evaluation](overview.md#evaluation), whether or not the call would run.
+A script that calls `std::regex` or `std::parse_regex` with a string literal, written without interpolation, for which that helper would throw with nothing yet counted toward the compiled size limit MUST fail [evaluation](overview.md#evaluation), whether or not the call would run.
 
 > [!NOTE]
 > Most patterns are written into the script, and a malformed one in a branch that rarely runs, such as an action, is then reported when the definition is first evaluated rather than when an operator first runs that action.
@@ -113,6 +109,18 @@ A replacement string replaces each match with the string, after expanding its gr
 
 A replacement closure MUST be called once for each match, in the order found, with the captures of that match as its one argument, and the match MUST be replaced with the string it returns, without expanding group references in it.
 A replacement closure that returns anything other than a string MUST raise a script error.
+
+## Compiled size
+
+Each call to `std::regex` or `std::parse_regex` MUST count the size of the pattern it compiles toward the regex compiled size [limit](../runtime/engine-limits.md#limits), whether or not the same pattern was compiled before.
+When a pattern's compiled size exceeds what remains of that limit, the helper MUST throw, and MUST count the whole remainder as used.
+
+> [!NOTE]
+> Repetition is what makes a compiled pattern large: `\w{1000}{1000}` is short to write and enormous once compiled.
+> The text of a pattern is already bounded by the string length limit.
+>
+> Using up the remainder means a script that catches the error and tries again cannot keep compiling large patterns, since every later pattern is refused as soon as compiling starts.
+> The size of a compiled pattern is measured by the engine, so a Seedling release can change how large a given pattern counts as.
 
 ## Text examined
 
