@@ -158,6 +158,10 @@ pub fn register(engine: &mut Engine) {
     // invoked from `app.action(..).invoke(..)` would find `app` locked. Rhai
     // never shares a resolved variable, so each closure captures its own copy
     // of the handle; every copy holds the same app.
+    #[expect(
+        deprecated,
+        reason = "Rhai marks on_var deprecated only to flag it as volatile"
+    )]
     engine.on_var(|name, _, ctx| {
         if name != "app" {
             return Ok(None);
