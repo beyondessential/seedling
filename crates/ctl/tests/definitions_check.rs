@@ -472,3 +472,163 @@ fn a_bad_reference_or_two_sources_check_nothing() {
     );
     assert_eq!(check(dir.path(), &[]).status, 2);
 }
+
+// spec: CLI#definition-checks
+#[test]
+fn a_folder_evaluates_its_script_files_in_order() {
+    let dir = dir_with(&[
+        (
+            "def/seedling.toml",
+            "script = [\"first.rhai\", \"second.rhai\"]\n",
+        ),
+        ("def/first.rhai", "let first = 1;\n"),
+        (
+            "def/second.rhai",
+            "if first != 1 { throw \"out of order\"; }\n",
+        ),
+    ]);
+    let run = check(dir.path(), &["def", MEMORY]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+}
+
+// spec: CLI#include-assembly
+#[test]
+fn an_included_script_is_evaluated() {
+    let dir = dir_with(&[
+        (
+            "repo/apps/def/seedling.toml",
+            "script = [\"lib/common.rhai\", \"app.seed.rhai\"]\n\n[include]\n\"lib/common.rhai\" = \"../shared/common.rhai\"\n",
+        ),
+        (
+            "repo/apps/def/app.seed.rhai",
+            "if common != 2 { throw \"not included\"; }\n",
+        ),
+        ("repo/apps/shared/common.rhai", "let common = 2;\n"),
+    ]);
+    std::fs::create_dir(dir.path().join("repo/.git")).unwrap();
+    let run = check(dir.path(), &["repo/apps/def", MEMORY]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+}
+
+// spec: CLI#check-results
+// spec: BND#script-formation
+#[test]
+fn a_syntax_error_lies_at_its_own_file_and_line() {
+    let mut second = "let a = 1;\n".repeat(11);
+    second.push_str("let = ;\n");
+    let dir = dir_with(&[
+        (
+            "def/seedling.toml",
+            "script = [\"first.rhai\", \"second.rhai\"]\n",
+        ),
+        ("def/first.rhai", "let b = 2;\nlet c = 3;\n"),
+        ("def/second.rhai", &second),
+    ]);
+    let run = check(dir.path(), &["def", MEMORY, "--json"]);
+    assert_eq!(run.status, 1);
+    let errors = json_errors(&run);
+    assert_eq!(errors[0]["kind"], "script");
+    assert_eq!(errors[0]["line"], 12);
+    let expected = Path::new("def").join("second.rhai");
+    assert_eq!(errors[0]["file"], expected.display().to_string());
+}
+
+// spec: CLI#check-results
+// spec: BND#metadata-table
+#[test]
+fn a_metadata_table_holding_nan_lies_in_the_metadata_file() {
+    let dir = dir_with(&[
+        ("def/seedling.toml", "[metadata]\nratio = nan\n"),
+        ("def/app.seed.rhai", ""),
+    ]);
+    let run = check(dir.path(), &["def", MEMORY, "--json"]);
+    assert_eq!(run.status, 1);
+    let errors = json_errors(&run);
+    assert_eq!(errors[0]["kind"], "bundle");
+    let expected = Path::new("def").join("seedling.toml");
+    assert_eq!(errors[0]["file"], expected.display().to_string());
+}
+
+// spec: BSL#evaluation
+#[test]
+fn an_import_that_never_runs_is_a_script_error() {
+    let dir = dir_with(&[("i.seed.rhai", "if false { import \"x\" as x; }\n")]);
+    let run = check(dir.path(), &["i.seed.rhai", MEMORY, "--json"]);
+    assert_eq!(run.status, 1);
+    assert_eq!(json_errors(&run)[0]["kind"], "script");
+}
+
+// spec: CLI#definition-checks
+#[test]
+fn a_script_error_hides_the_sample_values_validators_would_reject() {
+    let dir = dir_with(&[(
+        "s.seed.rhai",
+        "app.param(\"alpha\").required(false).validate(|v, all| { throw \"rejected\"; });\nthrow \"broken\";\n",
+    )]);
+    let run = check(
+        dir.path(),
+        &["s.seed.rhai", MEMORY, "--json", "--set", "alpha=x"],
+    );
+    assert_eq!(run.status, 1);
+    let errors = json_errors(&run);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0]["kind"], "script");
+}
+
+// spec: CLI#definition-checks
+// spec: LIM#limits
+#[test]
+fn the_operation_limit_can_be_tightened() {
+    let dir = dir_with(&[("loop.seed.rhai", "let n = 0;\nwhile n < 5000 { n += 1; }\n")]);
+    assert_eq!(check(dir.path(), &["loop.seed.rhai", MEMORY]).status, 0);
+    assert_eq!(
+        check(
+            dir.path(),
+            &["loop.seed.rhai", MEMORY, "--script-max-operations", "1000"]
+        )
+        .status,
+        1
+    );
+}
+
+// spec: CLI#definition-checks
+#[test]
+fn the_help_lists_the_daemons_engine_limit_options() {
+    let out = Command::new(env!("CARGO_BIN_EXE_seedling-ctl"))
+        .args(["definitions", "check", "--help"])
+        .output()
+        .unwrap();
+    let help = String::from_utf8(out.stdout).unwrap();
+    for (option, default) in [
+        ("--script-max-operations", "100000"),
+        ("--script-max-call-depth", "64"),
+        ("--script-max-expr-depth", "64"),
+        ("--script-max-string-size", "1048576"),
+        ("--script-max-array-size", "10000"),
+        ("--script-max-map-size", "10000"),
+        ("--script-max-derived-values", "1000"),
+        ("--script-max-password-hashes", "16"),
+        ("--script-max-regex-compiled-size", "33554432"),
+    ] {
+        let at = help
+            .find(option)
+            .unwrap_or_else(|| panic!("{option} missing:\n{help}"));
+        let rest = &help[at..];
+        let entry = &rest[..rest[1..].find("--script-max").map_or(rest.len(), |i| i + 1)];
+        assert!(
+            entry.contains(&format!("[default: {default}]")),
+            "{option}: {entry}"
+        );
+    }
+}
+
+// spec: CLI#definition-checks
+#[test]
+fn an_action_using_the_runtime_needs_no_container_engine() {
+    let dir = dir_with(&[(
+        "a.seed.rhai",
+        "app.on_action(\"deploy\", |rt, p| { rt.start(app.job().image(\"example\").command(IDLE_CMD)); }, #{});\n",
+    )]);
+    let run = check(dir.path(), &["a.seed.rhai", MEMORY]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
+}
