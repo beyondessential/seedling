@@ -43,7 +43,7 @@ The std module MUST offer these helpers.
 
 The string length, array length and object map [limits](../runtime/engine-limits.md#limits) MUST apply to every result of these helpers.
 
-A helper MUST raise a script error when the value it encodes or decodes nests arrays and maps more than 128 deep.
+A helper MUST raise a script error when the value it encodes or decodes nests arrays and maps more than 128 levels deep, counting the outermost array or map as the first level.
 
 ## Encoding
 
