@@ -106,7 +106,7 @@ A replacement string replaces each match with the string, after expanding its gr
 - `$` followed by ASCII letters, ASCII digits and underscores MUST expand as `${ref}` does, with `ref` the longest such run.
 - A group that took no part in the match MUST expand to an empty string.
 
-`replace` and `replace_all` MUST throw when a replacement string holds a `$` that does not begin one of these forms, or refers to a group number or name the pattern does not have.
+`replace` and `replace_all` MUST throw when a replacement string holds a `$` that does not begin one of these forms, or refers to a group number or name the pattern does not have, whether or not the text holds a match.
 
 > [!NOTE]
 > `$1a` refers to a group named `1a`; `${1}a` is the first group followed by `a`.
