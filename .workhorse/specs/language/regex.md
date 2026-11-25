@@ -33,6 +33,8 @@ A script that calls `std::regex` or `std::parse_regex` with a string literal, wr
 > [!NOTE]
 > Most patterns are written into the script, and a malformed one in a branch that rarely runs, such as an action, is then reported when the definition is first evaluated rather than when an operator first runs that action.
 
+A `Regex` MUST convert to a string as the pattern it was compiled from, unchanged.
+
 ## Searching
 
 A search MUST report the leftmost-first match of the pattern in the text, wherever in the text it starts.
