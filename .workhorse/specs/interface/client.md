@@ -184,6 +184,17 @@ Without it, the CLI MUST send no request, and MUST report that every value deriv
 If `folder` exists and is not empty, the CLI MUST report an error and write nothing.
 If a path in the bundle is absolute, or has an empty or `..` segment, the CLI MUST report an error and write nothing.
 
+## Definition packing
+
+`definitions pack <source> <file>` MUST write the bundle that `source` yields, read and assembled as a definition source sent as `bundle` is, to `file` as the layer of a [definition artefact](definitions.md#fetching): a gzip-compressed tar archive whose root is the bundle root, holding only regular files and the directories containing them.
+`source` MUST be a path to a folder or a GitHub URL, as [definition sources](#definition-sources) give them.
+If `file` exists, the CLI MUST report an error and write nothing.
+Packing the same bundle twice with the same CLI MUST write the same bytes.
+
+> [!NOTE]
+> A packed bundle is pushed to a registry with a general-purpose OCI tool, so the CLI holds no registry credentials of its own.
+> Writing the same bytes for the same bundle gives an unchanged definition the same digest when it is published again.
+
 ## Registry tags
 
 `registries tags <repository>` MUST list a repository's tags as [repository tags](definitions.md#repository-tags) does.
