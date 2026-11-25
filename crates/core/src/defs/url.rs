@@ -1,6 +1,6 @@
 //! The values the `url`, `url-origin` and `hostname` kinds' parsers return.
 
-use ::url::Host;
+use ::url::{Host, ParseError};
 use percent_encoding::percent_decode_str;
 
 use super::{ingress::check_hostname, param_def::line_breaking_character};
@@ -45,9 +45,25 @@ pub fn parse_hostname(text: &str) -> Result<String, String> {
     Ok(ascii)
 }
 
+/// The domain given an empty host the URL parser refuses, so that it reads
+/// the rest of the URL; it is never reported as the URL's host.
+const PLACEHOLDER_HOST: &str = "localhost";
+
 impl Url {
     pub fn parse(text: &str) -> Result<Self, String> {
-        Self::from_parsed(&parse(text)?)
+        match ::url::Url::parse(text) {
+            Ok(url) => Self::from_parsed(&url),
+            // spec: URL#hosts
+            Err(ParseError::EmptyHost) => {
+                let url =
+                    with_placeholder_host(text).ok_or_else(|| describe(ParseError::EmptyHost))?;
+                Ok(Self {
+                    host: None,
+                    ..Self::from_parsed(&url)?
+                })
+            }
+            Err(e) => Err(describe(e)),
+        }
     }
 
     fn from_parsed(url: &::url::Url) -> Result<Self, String> {
@@ -123,7 +139,43 @@ impl UrlOrigin {
 
 // spec: URL#urls
 fn parse(text: &str) -> Result<::url::Url, String> {
-    ::url::Url::parse(text).map_err(|e| format!("not a URL: {e}"))
+    ::url::Url::parse(text).map_err(describe)
+}
+
+fn describe(error: ParseError) -> String {
+    format!("not a URL: {error}")
+}
+
+/// `text`, a URL whose authority gives a username, password or port with an
+/// empty host, parsed with [`PLACEHOLDER_HOST`] in that host's place, or
+/// `None` where its scheme is special or the URL fails to parse even so.
+// spec: URL#hosts
+fn with_placeholder_host(text: &str) -> Option<::url::Url> {
+    let text = without_tabs_or_newlines(text);
+    let (scheme, rest) = text.split_once(':')?;
+    let after_slashes = rest.strip_prefix("//")?;
+    let authority_len = after_slashes
+        .find(['/', '?', '#'])
+        .unwrap_or(after_slashes.len());
+    let (authority, rest) = after_slashes.split_at(authority_len);
+    let host_start = authority.rfind('@').map_or(0, |at| at + 1);
+    let (userinfo, port) = authority.split_at(host_start);
+    if !(port.is_empty() || port.starts_with(':')) {
+        return None;
+    }
+    let url = ::url::Url::parse(&format!(
+        "{scheme}://{userinfo}{PLACEHOLDER_HOST}{port}{rest}"
+    ))
+    .ok()?;
+    (!url.is_special() && url.host() == Some(Host::Domain(PLACEHOLDER_HOST))).then_some(url)
+}
+
+/// `text` as the URL parser reads it, with every tab, line feed and carriage
+/// return removed.
+fn without_tabs_or_newlines(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect()
 }
 
 fn non_empty(part: Option<&str>) -> Option<String> {
@@ -155,10 +207,7 @@ fn userinfo(component: &str, encoded: &str) -> Result<Option<String>, String> {
 /// or `\`, up to the next `/`, `\`, `?` or `#`. The parser drops an empty
 /// username and password, so this is the only way to see one.
 fn has_userinfo(text: &str) -> bool {
-    let text: String = text
-        .chars()
-        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
-        .collect();
+    let text = without_tabs_or_newlines(text);
     let Some((_, rest)) = text.split_once(':') else {
         return false;
     };
