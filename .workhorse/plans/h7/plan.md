@@ -4,7 +4,7 @@ Adds the `url`, `url-origin` and `hostname` kinds and their `std::parse_*` helpe
 
 ## Tech notes
 
-- **Parsing builds on `url` 2.5.9** (servo/rust-url, WHATWG URL Standard, tested against the web platform tests, already in the dependency tree through reqwest and others), with `idna` 1.1.0 for `hostname` (`domain_to_ascii_strict`: UTS #46 with hyphen checks, STD3 ASCII rules and DNS length checks) and `percent-encoding` 2.3.2 for any decoding of userinfo.
+- **Parsing builds on `url` 2.5.8** (servo/rust-url, WHATWG URL Standard, tested against the web platform tests, already in the dependency tree through reqwest and others), with `idna` 1.1.0 for `hostname` (`domain_to_ascii_strict`: UTS #46 with hyphen checks, STD3 ASCII rules and DNS length checks) and `percent-encoding` 2.3.2 for any decoding of userinfo.
 - **Ruled out: `ada-url` 4.0.0**, WHATWG too but wraps a C++ library; **`fluent-uri` 0.4.1**, RFC 3986, which the WHATWG decision rules out.
 - **Where `url` differs from what we want**, found by probing 2.5.8:
   - non-special schemes (`postgres`, `redis`, …) get an opaque host: case kept, Unicode percent-encoded rather than punycoded, `0x7f.1` left as a name. We hand it, undecoded, to `url::Host::parse` (the non-opaque host parser, which does its own percent-decoding), keeping the opaque host only where that fails. In the crate's public API an opaque host shows as `Host::Domain` on a URL that is not `is_special()`, which is how we tell it apart;
@@ -20,7 +20,7 @@ Adds the `url`, `url-origin` and `hostname` kinds and their `std::parse_*` helpe
 
 ## Dependencies
 
-- [ ] `cargo add -p seedling-core url@2.5.9 idna@1.1.0 percent-encoding@2.3.2`, then check `Cargo.lock` holds one copy of each
+- [x] `cargo add -p seedling-core url@2.5.8 idna@1.1.0 percent-encoding@2.3.2` (2.5.9 is under the repo's minimum publish age), then check `Cargo.lock` holds one copy of each
 
 ## Shared ingress hostname check
 
