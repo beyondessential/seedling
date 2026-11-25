@@ -8,8 +8,13 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use super::tree::{Budget, Kind, Tree, VCS_METADATA_DIRS, locate, read_folder};
-use crate::{METADATA_FILE, included, normalise_path};
+use semver::Version;
+
+use super::{
+    SourceError,
+    tree::{Budget, Kind, Tree, VCS_METADATA_DIRS, locate, read_folder},
+};
+use crate::{BundleError, METADATA_FILE, included, normalise_path, requirement};
 
 /// What an include boundary is, for telling the operator a source lies
 /// outside it.
@@ -54,8 +59,30 @@ pub(super) fn repository_of(folder: &Path) -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
+/// Refuse a metadata file whose Seedling version requirement `running` does
+/// not satisfy, reading no other field, where a definition check holds the
+/// definition to a version before reading anything else of it.
+// spec: CLI#definition-checks
+pub(super) fn hold_to_version(
+    running: Option<&Version>,
+    metadata: &[u8],
+) -> Result<(), SourceError> {
+    let Some(running) = running else {
+        return Ok(());
+    };
+    match requirement(metadata).map_err(SourceError::Bundle)? {
+        Some(req) if !req.matches(running) => Err(SourceError::Bundle(BundleError::Unsupported {
+            requirement: req.to_string(),
+            running: running.clone(),
+        })),
+        _ => Ok(()),
+    }
+}
+
 /// Place every file the folder's `include` table names into `files`, which
-/// holds what the folder itself yielded.
+/// holds what the folder itself yielded, and give the source path of each
+/// file placed from its source, relative to the definition folder, by its
+/// bundle path.
 ///
 /// `tree` is rooted at the include boundary, which `bounds` says what it is,
 /// and `folder` is the definition folder's path within it.
@@ -66,13 +93,15 @@ pub(super) fn assemble(
     folder: &str,
     bounds: Bounds<'_>,
     budget: &mut Budget,
-) -> Result<(), String> {
+) -> Result<BTreeMap<String, String>, SourceError> {
+    let mut sources = BTreeMap::new();
     let Some(metadata) = files.get(METADATA_FILE) else {
-        return Ok(());
+        return Ok(sources);
     };
-    let table = included(metadata).map_err(|e| e.to_string())?;
+    let table = included(metadata).map_err(SourceError::Bundle)?;
     for (key, value) in &table {
-        let at = |msg: String| format!("include {key:?} from {value:?}: {msg}");
+        let at =
+            |msg: String| SourceError::Include(format!("include {key:?} from {value:?}: {msg}"));
         let source = source_path(folder, value);
         let has_copy = at_or_beneath(files, key).next().is_some();
         let yielded = match &source {
@@ -111,6 +140,11 @@ pub(super) fn assemble(
             })
             .collect();
         if !has_copy {
+            for path in placed.keys() {
+                // spec: CLI#check-results
+                // `path` is the key's bundle path, or one beneath it.
+                sources.insert(path.clone(), format!("{value}{}", &path[key.len()..]));
+            }
             files.extend(placed);
         } else if let Some(path) = first_difference(at_or_beneath(files, key), &placed) {
             return Err(at(format!(
@@ -118,7 +152,7 @@ pub(super) fn assemble(
             )));
         }
     }
-    Ok(())
+    Ok(sources)
 }
 
 /// The first bundle path at which the folder's copy and the files read from
@@ -186,9 +220,8 @@ pub(super) fn relative(folder: &Path, boundary: &Path) -> Result<String, String>
 /// The source paths the include table in `metadata` names for a definition
 /// folder at `within`, leaving out those out of bounds, which are never read.
 // spec: CLI#include-assembly
-pub(super) fn source_paths(within: &str, metadata: &[u8]) -> Result<Vec<String>, String> {
-    Ok(included(metadata)
-        .map_err(|e| e.to_string())?
+pub(super) fn source_paths(within: &str, metadata: &[u8]) -> Result<Vec<String>, BundleError> {
+    Ok(included(metadata)?
         .values()
         .filter_map(|value| source_path(within, value))
         .collect())

@@ -359,6 +359,7 @@ async fn main() {
         // Determined at start: the daemon does not run without it.
         has_snapshots: use_btrfs,
         node_name: constants.node_name.clone().into_result(),
+        cpu_architecture: std::env::consts::ARCH.to_owned(),
         timezone: timezone_fact
             .determined()
             .unwrap_or_else(|| "UTC".to_owned()),

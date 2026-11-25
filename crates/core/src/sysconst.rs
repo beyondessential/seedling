@@ -28,6 +28,8 @@ pub struct SystemFacts {
     pub has_snapshots: bool,
     /// Human-readable identifier for the node, or why it is undetermined.
     pub node_name: Result<String, String>,
+    /// The processor architecture, as Rust names it (e.g. `x86_64`).
+    pub cpu_architecture: String,
     /// IANA timezone name of the host (e.g. `Pacific/Auckland`); `UTC` while
     /// the host's local timezone is undetermined.
     pub timezone: String,
@@ -47,6 +49,7 @@ impl Default for SystemFacts {
             available_memory: Err("the host's memory is read only by the daemon".to_owned()),
             has_snapshots: false,
             node_name: Ok(String::new()),
+            cpu_architecture: std::env::consts::ARCH.to_owned(),
             timezone: "UTC".to_owned(),
         }
     }

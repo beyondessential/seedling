@@ -4,17 +4,63 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use crate::{METADATA_FILE, normalise_path};
-use assembly::{Bounds, assemble, relative, repository_of, source_paths};
+use semver::Version;
+
+use crate::{BundleError, METADATA_FILE, normalise_path};
+use assembly::{Bounds, assemble, hold_to_version, relative, repository_of, source_paths};
 use tree::{Archive, Budget, Disk, Kind, locate, read_file, read_folder};
 
 mod assembly;
 mod tree;
 
+/// Why a definition source could not be read and assembled.
+#[derive(Debug)]
+pub enum SourceError {
+    /// The metadata file breaks a bundle rule, or declares a Seedling
+    /// version requirement the definition was held to and does not meet.
+    Bundle(BundleError),
+    /// A key of the metadata file's `include` table could not be assembled.
+    Include(String),
+    /// Any other reason.
+    Other(String),
+}
+
+impl From<String> for SourceError {
+    fn from(e: String) -> Self {
+        Self::Other(e)
+    }
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bundle(e) => e.fmt(f),
+            Self::Include(e) | Self::Other(e) => f.write_str(e),
+        }
+    }
+}
+
+impl std::error::Error for SourceError {}
+
+/// The files read from a definition folder, with the bundle files placed
+/// from an include source each mapped to that source's path relative to the
+/// definition folder.
+#[derive(Debug, Default)]
+pub struct Assembled {
+    pub files: BTreeMap<String, Vec<u8>>,
+    pub sources: BTreeMap<String, String>,
+}
+
 /// Read a definition folder on disk and assemble what it includes from the
 /// repository it sits in.
+///
+/// Where `running` is given, the definition is held to it before its include
+/// table is read, as a definition check holds it.
 // spec: CLI#include-assembly
-pub fn read_folder_definition(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+pub fn read_folder_definition(
+    path: &Path,
+    running: Option<&Version>,
+) -> Result<Assembled, SourceError> {
     let folder = path
         .canonicalize()
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -27,8 +73,11 @@ pub fn read_folder_definition(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, 
     let within = relative(&folder, boundary)?;
     let mut budget = Budget::full();
     let mut files = read_folder(&tree, &within, &mut budget)?;
-    assemble(&mut files, &tree, &within, bounds, &mut budget)?;
-    Ok(files)
+    if let Some(metadata) = files.get(METADATA_FILE) {
+        hold_to_version(running, metadata)?;
+    }
+    let sources = assemble(&mut files, &tree, &within, bounds, &mut budget)?;
+    Ok(Assembled { files, sources })
 }
 
 /// Read a lone file as a bundle holding it under its own name, with a
@@ -63,12 +112,16 @@ pub fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> 
 /// The repository is read in memory, and only the folder and its sources
 /// are held, so a repository far larger than any definition costs no more
 /// than the definition does.
+///
+/// Where `running` is given, the definition is held to it before its include
+/// table is read, as a definition check holds it.
 // spec: CLI#definition-sources
 // spec: CLI#include-assembly
 pub fn read_archive_definition(
     tarball: &[u8],
     folder: &str,
-) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    running: Option<&Version>,
+) -> Result<Assembled, SourceError> {
     // The folder comes from the URL, so it is held to the repository as
     // an archive entry is.
     let folder = normalise_path(folder)
@@ -76,16 +129,17 @@ pub fn read_archive_definition(
     let mut archive = Archive::scan(tarball, &folder)?;
     let mut wanted = vec![folder.clone()];
     if let Some(metadata) = archive.metadata(&folder) {
-        wanted.extend(source_paths(&folder, metadata)?);
+        hold_to_version(running, metadata)?;
+        wanted.extend(source_paths(&folder, metadata).map_err(SourceError::Bundle)?);
     }
     archive.load(tarball, &wanted)?;
     if locate(&archive, &folder)? != Some(Kind::Dir) {
-        return Ok(BTreeMap::new());
+        return Ok(Assembled::default());
     }
     let mut budget = Budget::full();
     let mut files = read_folder(&archive, &folder, &mut budget)?;
-    assemble(&mut files, &archive, &folder, Bounds::Archive, &mut budget)?;
-    Ok(files)
+    let sources = assemble(&mut files, &archive, &folder, Bounds::Archive, &mut budget)?;
+    Ok(Assembled { files, sources })
 }
 
 #[cfg(test)]

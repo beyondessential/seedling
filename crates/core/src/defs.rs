@@ -282,7 +282,7 @@ pub(crate) fn scope_with(
     scope.push_constant("AVAILABLE_MEMORY", available_memory);
 
     // spec: CONST#host-constants
-    scope.push_constant("CPU_ARCHITECTURE", std::env::consts::ARCH.to_owned());
+    scope.push_constant("CPU_ARCHITECTURE", facts.cpu_architecture.clone());
 
     // spec: CONST#host-constants
     scope.push_constant("HOST_HAS_IPV4", facts.ipv4_egress);
