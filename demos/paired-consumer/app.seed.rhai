@@ -109,9 +109,9 @@ site.ingress(hostname.value(), 443)
     .redirect();
 
 // Busybox httpd ignores SIGTERM as PID 1, so a shell runs it and exits on the
-// signal.
+// signal. Alpine's busybox leaves httpd out; the busybox image has it.
 app.deployment("web")
-    .image("docker.io/library/alpine:3.24.4")
+    .image("docker.io/library/busybox:1.38.0-musl")
     .command(["/bin/sh", "-c", "trap 'exit 0' TERM INT; httpd -f -p 8080 -h /www & wait"])
     .mount("/www", page)
     .http(8080, site.route("/"));
