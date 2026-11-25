@@ -227,8 +227,9 @@ It MUST refuse a value the daemon would refuse to start with, report an error, a
 
 ### Check results
 
-When the source cannot be read or fetched, or a check fails, the CLI MUST report the errors below and exit with a non-zero status.
+When the source cannot be read or fetched, or a check fails, the CLI MUST report the errors below and exit with status 1.
 When every check passes, the CLI MUST exit with status zero.
+When the CLI reports an error and checks nothing, because of an option it was given, it MUST exit with status 2.
 
 | kind | reported when | the error names |
 | --- | --- | --- |
