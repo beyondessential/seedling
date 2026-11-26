@@ -315,34 +315,9 @@ fn reload_and_persist_apperror(
     app: &AppName,
     new_generation: generations::Generation,
 ) -> Result<(), OiError> {
-    use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields, sync_fault_state};
+    use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
 
-    let app_owned = app.clone();
-    let cipher = Arc::clone(&state.cipher);
-    let loaded_params = state
-        .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
-        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
-    // The outcome needs no gating here: this re-evaluates the app's existing
-    // definition under new param values and derives nothing from the result
-    // but the fault state synced below, which is filed on either outcome.
-    let _ = crate::runtime::apps::reload(
-        &state.registry,
-        &state.db,
-        &state.cipher,
-        app,
-        &loaded_params,
-        &state.script_limits,
-    );
-    {
-        let reg = state.registry.read();
-        if let Some(entry) = reg.get(app.as_str()) {
-            sync_fault_state(&state.db, entry);
-        }
-    }
-    // spec: FWD#forward-lifetime
-    // The re-evaluation may have dropped a service or port a forward reaches.
-    crate::oi::forwards::end_undeclared_forwards(state, app.as_str());
+    reevaluate_current(state, app)?;
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(app.as_str()) {
@@ -360,6 +335,40 @@ fn reload_and_persist_apperror(
             })
             .map_err(|e| OiError::internal(format!("db persist: {e}")))?;
     }
+    Ok(())
+}
+
+/// Evaluate the app's definition again with its stored values, and bring its
+/// faults and forwards in line with the outcome.
+pub(crate) fn reevaluate_current(state: &OiState, app: &AppName) -> Result<(), OiError> {
+    use crate::oi::handler::apps::sync_fault_state;
+
+    let app_owned = app.clone();
+    let cipher = Arc::clone(&state.cipher);
+    let loaded_params = state
+        .db
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
+    // The outcome needs no gating here: this re-evaluates the app's existing
+    // definition and derives nothing from the result but the fault state
+    // synced below, which is filed on either outcome.
+    let _ = crate::runtime::apps::reload(
+        &state.registry,
+        &state.db,
+        &state.cipher,
+        app,
+        &loaded_params,
+        &state.script_limits,
+    );
+    {
+        let reg = state.registry.read();
+        if let Some(entry) = reg.get(app.as_str()) {
+            sync_fault_state(&state.db, entry);
+        }
+    }
+    // spec: FWD#forward-lifetime
+    // The re-evaluation may have dropped a service or port a forward reaches.
+    crate::oi::forwards::end_undeclared_forwards(state, app.as_str());
     Ok(())
 }
 

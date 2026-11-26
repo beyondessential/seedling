@@ -4,7 +4,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{HandlerResult, RequestCtx};
-use crate::{oi::state::OiState, runtime::faults};
+use crate::{
+    oi::state::OiState,
+    runtime::{breakers, faults},
+};
 
 #[derive(Deserialize)]
 pub(crate) struct ListFaultsParams {
@@ -78,18 +81,30 @@ pub(crate) fn clear_app_faults(
     let app = fault_app(state, &params.app)?;
     let app_name = app.clone();
     let actor = std::sync::Arc::clone(&ctx.events.actor);
-    let cleared = state
+    let (cleared, definition_reset) = state
         .db
-        .call(move |db| -> rusqlite::Result<usize> {
+        .call(move |db| -> rusqlite::Result<(usize, bool)> {
             let active = faults::list_active_faults(db, Some(&app_name))?;
             let mut count = 0;
+            let mut definition_reset = false;
             for f in active {
                 faults::clear_fault_by(db, &f.id, &app_name, Some(std::sync::Arc::clone(&actor)))?;
+                // spec: LIM#breakers
+                // Clearing a breaker's fault is what resets it.
+                definition_reset |= f.kind == breakers::EVALUATION_RUNAWAY
+                    && breakers::Thing::from_subject(&f.subject)
+                        == Some(breakers::Thing::Definition);
                 count += 1;
             }
-            Ok(count)
+            Ok((count, definition_reset))
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("clear faults: {e}")))?;
+    // spec: LIM#breakers
+    // The definition's breaker reset, so the definition is evaluated again
+    // now rather than at whatever next asks for it.
+    if definition_reset {
+        super::params::reevaluate_current(state, &app)?;
+    }
     Ok(json!({ "app": app, "cleared": cleared }))
 }
 
