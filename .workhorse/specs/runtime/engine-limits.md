@@ -21,6 +21,7 @@ The runtime MUST bound the resources a single evaluation of a BSL script can con
 | derived values | calls to a [derivation helper](../language/random.md#derivation-helper), and helper results [withheld as derived values](secrets.md#redaction) | 1 000 | `--script-max-derived-values` |
 | regex compiled size | bytes of [patterns compiled](../language/regex.md#compiled-size) | 33 554 432 (32 MiB) | `--script-max-regex-compiled-size` |
 | password hashes | calls to a [password hash helper](../language/random.md#password-hash-helper) | 16 | `--script-max-password-hashes` |
+| evaluation time | seconds of [evaluation time](#evaluation-time) | 10 | `--script-max-evaluation-time` |
 
 An evaluation that exceeds any limit MUST fail with an error.
 A pattern that would exceed the regex compiled size limit MUST instead raise a script error, as [compiled size](../language/regex.md#compiled-size) specifies.
@@ -33,7 +34,7 @@ The expression nesting limit MUST apply both at the top level of a script and wi
 Functions in a script's scope MAY NOT pause evaluation for any span of time, other than using the methods of a [runtime handle](../language/rt.md#runtime-handle).
 
 An operator MAY override each limit with its daemon option when the daemon starts.
-Setting the operations, expression nesting, string, array, object map, derived values, regex compiled size or password hashes limit to 0 MUST remove that limit.
+Setting the operations, expression nesting, string, array, object map, derived values, regex compiled size, password hashes or evaluation time limit to 0 MUST remove that limit.
 The daemon MUST refuse to start with a function call nesting depth of 0.
 
 > [!NOTE]
@@ -41,3 +42,31 @@ The daemon MUST refuse to start with a function call nesting depth of 0.
 
 > [!NOTE]
 > The runtime keeps what an evaluation derived, and the results it withholds as derived values, for as long as it withholds them from operators, so the derived values limit bounds what one definition can make it hold.
+
+## Evaluation time
+
+An evaluation's evaluation time is the time the runtime spends evaluating it, excluding any time the evaluation spends paused in a method of a [runtime handle](../language/rt.md#runtime-handle).
+
+The runtime MUST stop an evaluation whose evaluation time exceeds the evaluation time limit, at the next operation it reaches.
+An evaluation that returns having exceeded the limit MUST fail all the same.
+
+> [!NOTE]
+> A single call into a function the runtime provides, such as one regex search, runs to its end before the evaluation can be stopped.
+
+> [!NOTE]
+> Time paused in a runtime handle method is time the script waits on the host, such as for a command to finish, and is no measure of the script itself.
+
+## Breakers
+
+The runtime MUST keep a breaker for each thing of an app it evaluates: the app's definition, each action handler, each shell handler, each gate body, and each parameter's validator.
+
+When an evaluation fails at the evaluation time limit, the runtime MUST trip the breaker of the thing evaluated, recording the definition and the inputs it was evaluated with.
+While a breaker is tripped, an evaluation of its thing with the recorded definition and inputs MUST fail at once, without evaluating any part of the script.
+An evaluation of its thing with a different definition or different inputs MUST reset the breaker and evaluate as usual.
+
+The runtime MUST reset a breaker when an operator clears its [`evaluation_runaway`](faults.md#app-faults) fault, and MUST discard every breaker of an app when the app is deregistered.
+The runtime MUST persist a tripped breaker, so that a runtime restart does not reset it.
+
+> [!NOTE]
+> Operators write the scripts a host evaluates, so the breaker is there to catch an accident, such as a pattern that is slow on a parameter's value, rather than to defend against a hostile script.
+> Tripping on the first runaway means its cost is paid once, rather than on every evaluation that follows with the same inputs.
