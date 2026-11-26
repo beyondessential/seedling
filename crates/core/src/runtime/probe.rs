@@ -623,6 +623,77 @@ mod tests {
     }
 
     // spec: IMG#image-discovery
+    // spec: LIM#breakers
+    #[test]
+    fn a_handler_whose_breaker_is_tripped_is_reported_and_not_evaluated() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("spin", |rt, p| { throw "evaluated"; });
+            app.on_action("other", |rt, p| {});
+            "#,
+        );
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let limits = crate::ScriptLimits::default();
+        let tripped = |thing: &breakers::Thing, _: breakers::Run| {
+            (*thing == breakers::Thing::Action(ActionName::new_unchecked("spin")))
+                .then(|| "tripped".to_owned())
+        };
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds {
+                limits: &limits,
+                tripped: &tripped,
+            },
+        )
+        .expect("probe");
+        let error_of = |name: &str| {
+            response
+                .per_handler
+                .iter()
+                .find(|h| h.name == name)
+                .and_then(|h| h.error.clone())
+        };
+        assert_eq!(error_of("spin").as_deref(), Some("tripped"));
+        assert_eq!(error_of("other"), None);
+    }
+
+    // spec: IMG#image-discovery
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn a_handler_that_runs_past_the_limit_is_reported_with_that_as_its_error() {
+        let limits = crate::ScriptLimits {
+            max_operations: 0,
+            max_evaluation_time: 1,
+            ..crate::ScriptLimits::default()
+        };
+        let (engine, mut scope, app) =
+            crate::setup_language(&limits, Default::default()).expect("the scope builds");
+        let ast = crate::defs::compile(&engine, r#"app.on_action("spin", |rt, p| { loop {} });"#)
+            .expect("compile");
+        engine
+            .run_ast_with_scope(&mut scope, &ast)
+            .expect("run script");
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds::unconsulted(&limits),
+        )
+        .expect("probe");
+        let error = response.per_handler[0].error.clone().unwrap_or_default();
+        assert!(error.contains("evaluation time limit"), "{error}");
+    }
+
+    // spec: IMG#image-discovery
     #[test]
     fn probes_dynamic_job_images_in_action() {
         let (engine, ast, app) = setup_engine_and_app(

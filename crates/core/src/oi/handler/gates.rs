@@ -243,7 +243,7 @@ pub(crate) fn run_gate(
                 format!("app is not installed: {app_name}"),
             ));
         }
-        // spec: ACTL#gate-runs
+        // spec: CTL#gate-runs
         super::apps::definition_refusal(app_name, &entry.script_error)?;
         (
             def,
@@ -253,7 +253,7 @@ pub(crate) fn run_gate(
         )
     };
 
-    // spec: ACTL#gate-runs
+    // spec: CTL#gate-runs
     // spec: LIM#breakers
     if def.gates.get(gate_name).is_some_and(|g| g.has_body) {
         let last = crate::runtime::gates::run::LastSuccesses::new(

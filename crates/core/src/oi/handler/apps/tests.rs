@@ -2934,3 +2934,40 @@ fn a_description_reports_each_ip_param_family() {
         .clone();
     assert_eq!(allow["params"]["subnet"]["family"], json!(6));
 }
+
+// spec: LIM#breakers
+#[test]
+fn removing_an_app_discards_its_breakers() {
+    use crate::runtime::breakers::{self, Run, Thing};
+    let oi = TestOi::with_app("demo");
+    let run = {
+        let reg = oi.state.registry.read();
+        Run::of_app(&reg.get("demo").unwrap().app, &oi.state.script_limits)
+    };
+    let cipher = std::sync::Arc::clone(&oi.state.cipher);
+    let limits = oi.state.script_limits.clone();
+    oi.state
+        .db
+        .call(move |db| {
+            breakers::trip(
+                db,
+                &cipher,
+                &seedling_protocol::names::AppName::new_unchecked("demo"),
+                &Thing::Definition,
+                &run,
+                1,
+                &limits,
+            )
+        })
+        .unwrap();
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+    let left: i64 = oi
+        .state
+        .db
+        .call(|db| {
+            db.conn
+                .query_row("SELECT COUNT(*) FROM breakers", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert_eq!(left, 0);
+}

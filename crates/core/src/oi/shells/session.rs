@@ -645,14 +645,6 @@ pub(super) fn session_outcome(
     }
 }
 
-// spec: ACN#shell-control
-/// Runs the shell's closure to its end, on a thread of its own. The closure
-/// suspends in `shell.attach` while `host` runs the job, so this returns only
-/// once the closure has returned; the session ends then.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a shell session's whole state, each piece of which the run uses"
-)]
 /// The wire name of `code`.
 fn error_code_name(code: seedling_protocol::error::ErrorCode) -> &'static str {
     use seedling_protocol::error::ErrorCode;
@@ -663,6 +655,14 @@ fn error_code_name(code: seedling_protocol::error::ErrorCode) -> &'static str {
     }
 }
 
+// spec: ACN#shell-control
+/// Runs the shell's closure to its end, on a thread of its own. The closure
+/// suspends in `shell.attach` while `host` runs the job, so this returns only
+/// once the closure has returned; the session ends then.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a shell session's whole state, each piece of which the run uses"
+)]
 pub(super) async fn run_app_shell(
     state: &OiState,
     app: App,
