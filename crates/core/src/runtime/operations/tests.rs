@@ -1306,7 +1306,8 @@ fn a_failure_masks_a_helper_result_computed_from_a_value_the_operation_derived()
 }
 
 const SPINNING_SCRIPT: &str = r#"
-    app.deployment("web").image("docker.io/library/nginx:1");
+    let web = app.deployment("web").image("docker.io/library/nginx:1");
+    app.on_action("poke", |rt, _p| { rt.start(web); });
     app.on_action("spin", |rt, _p| { loop {} });
     app.on_action("nested", |rt, _p| { app.action("spin").invoke(); });
     app.on_action("quick", |rt, _p| {});
@@ -1372,6 +1373,33 @@ fn run_target(
     current: u64,
     operation_id: &str,
 ) -> OperationEnd {
+    run_target_until(
+        app,
+        target,
+        gate,
+        db,
+        cipher,
+        current,
+        operation_id,
+        &Arc::new(CancelToken::new()),
+    )
+}
+
+/// As [`run_target`], with `cancel` the operation's cancellation token.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are what one operation needs"
+)]
+fn run_target_until(
+    app: &App,
+    target: OperationTarget,
+    gate: Option<GateInput<'_>>,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    current: u64,
+    operation_id: &str,
+    cancel: &Arc<CancelToken>,
+) -> OperationEnd {
     let mut registry = crate::runtime::apps::AppRegistry::new();
     registry
         .register(
@@ -1405,7 +1433,7 @@ fn run_target(
         Arc::clone(cipher),
         &crate::runtime::gates::GateRuntime::new(),
         &RwLock::new(registry),
-        Arc::new(CancelToken::new()),
+        Arc::clone(cancel),
         None,
         None,
         None,
@@ -1482,6 +1510,34 @@ fn trip_action(app: &App, name: &str, db: &DbHandle, cipher: &Arc<Cipher>) {
         &crate::runtime::param_map::ParamMap::default(),
         &Default::default(),
     );
+    trip_action_run(name, db, cipher, run);
+}
+
+/// Trip `name`'s breaker for a run that is not the one an operation makes,
+/// by giving it a last success no action has.
+fn trip_action_with_params(
+    app: &App,
+    name: &str,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    other: &str,
+) {
+    let mut params = crate::runtime::param_map::ParamMap::default();
+    params.insert(
+        other.to_owned(),
+        serde_json::Value::String(other.to_owned()),
+    );
+    let run = crate::runtime::breakers::Run::of_app(app, &spinning_limits())
+        .with_params(&params, &Default::default());
+    trip_action_run(name, db, cipher, run);
+}
+
+fn trip_action_run(
+    name: &str,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    run: crate::runtime::breakers::Run,
+) {
     let (cipher, name) = (Arc::clone(cipher), ActionName::new(name).unwrap());
     db.call(move |db| {
         crate::runtime::breakers::trip(
@@ -1516,6 +1572,34 @@ fn a_replayed_invoke_of_an_action_since_tripped_is_not_checked() {
 
     let why = failure_of(run_at(&app, "calls-quick", &db, &cipher, 1));
     assert!(why.contains("not evaluated again"), "{why}");
+}
+
+// spec: LIM#breakers
+#[test]
+fn a_cancelled_pass_resets_no_breaker() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+    // Tripped for inputs other than the run's, so an in-time pass would
+    // reset it.
+    trip_action_with_params(&app, "poke", &db, &cipher, "other");
+
+    let cancel = Arc::new(CancelToken::new());
+    cancel.request();
+    let end = run_target_until(
+        &app,
+        ActionName::new("poke").unwrap().into(),
+        None,
+        &db,
+        &cipher,
+        1,
+        &uuid::Uuid::new_v4().to_string(),
+        &cancel,
+    );
+    assert!(
+        matches!(end, OperationEnd::Cancelled),
+        "the pass is cancelled"
+    );
+    assert_eq!(runaway_subjects(&db), vec!["action:poke".to_owned()]);
 }
 
 // spec: LIM#breakers

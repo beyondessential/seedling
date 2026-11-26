@@ -943,8 +943,10 @@ pub(super) async fn run_app_shell(
         drop(evaluation);
         // spec: LIM#breakers
         // The run is over, and it is the whole run that finished within the
-        // limit; a pass that returns is only part of one.
-        if !ran_out {
+        // limit; a pass that returns is only part of one. A run an operator
+        // stopped neither finished nor ran away, so it says nothing about
+        // how long the closure takes and earns no reset.
+        if !ran_out && !matches!(end, ScriptEnd::Cancelled) {
             breakers::record_outcome(
                 &db,
                 &cipher,

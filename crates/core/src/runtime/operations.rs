@@ -623,7 +623,13 @@ pub(crate) fn run_operation_loop(
             }
             return OperationEnd::Failed(why);
         }
-        if let Some(standing) = standing.take() {
+        // spec: LIM#breakers
+        // A pass an operator cancelled neither finished within the limit nor
+        // ran past it, so it says nothing about how long the closure takes
+        // and earns no reset.
+        if !matches!(result, OperationResult::Cancelled)
+            && let Some(standing) = standing.take()
+        {
             crate::runtime::breakers::record_outcome(
                 &db,
                 &cipher,
