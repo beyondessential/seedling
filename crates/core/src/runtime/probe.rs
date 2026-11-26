@@ -134,6 +134,10 @@ pub fn probe_gate_body(
     last: Option<&App>,
     bounds: &ProbeBounds<'_>,
 ) -> Result<HandlerProbe, ScriptError> {
+    // spec: LIM#measuring-evaluation-time
+    // A probe is one evaluation: recovering the closures and running the
+    // body share a budget, which the starts within them join.
+    let _evaluation = crate::evaluation::Evaluation::start(bounds.limits);
     let captured = capture(engine, script_ast, app, bounds.limits)?;
     match captured.gates.get(gate) {
         Some(Some(body)) => probe_gate_closure(
@@ -220,6 +224,11 @@ pub fn probe_app(
     last_of: &dyn Fn(&GateName) -> Result<Option<App>, String>,
     bounds: &ProbeBounds<'_>,
 ) -> Result<ProbeResponse, ScriptError> {
+    // spec: LIM#measuring-evaluation-time
+    // A probe is one evaluation, so recovering the closures and probing
+    // every handler share a budget rather than each handler taking the
+    // whole limit. The starts within them join this one.
+    let _evaluation = crate::evaluation::Evaluation::start(bounds.limits);
     // Re-run the script to capture every registered closure. The script
     // itself must not fail; if it does, the caller can surface that as an
     // app-level script_error fault and there's nothing to probe.
@@ -772,6 +781,51 @@ mod tests {
         .expect("probe");
         let error = response.per_handler[0].error.clone().unwrap_or_default();
         assert!(error.contains("evaluation time limit"), "{error}");
+    }
+
+    // spec: IMG#image-discovery
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn one_handlers_runaway_spends_the_whole_probes_budget() {
+        let limits = crate::ScriptLimits {
+            max_operations: 0,
+            max_evaluation_time: 1,
+            ..crate::ScriptLimits::default()
+        };
+        let (engine, mut scope, app) =
+            crate::setup_language(&limits, Default::default()).expect("the scope builds");
+        let ast = crate::defs::compile(
+            &engine,
+            r#"
+            app.on_action("aspin", |rt, p| { loop {} });
+            app.on_action("bquick", |rt, p| {});
+            "#,
+        )
+        .expect("compile");
+        engine
+            .run_ast_with_scope(&mut scope, &ast)
+            .expect("run script");
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds::unconsulted(&limits),
+        )
+        .expect("probe");
+        // The probe is one evaluation, so the handler after the runaway is
+        // stopped on the spent budget rather than given a limit of its own.
+        for handler in &response.per_handler {
+            let error = handler.error.clone().unwrap_or_default();
+            assert!(
+                error.contains("evaluation time limit"),
+                "{}: {error}",
+                handler.name
+            );
+        }
     }
 
     // spec: IMG#image-discovery

@@ -63,10 +63,15 @@ Each of these is one evaluation:
 - an evaluation of an app's definition;
 - a pass of a lifecycle operation over its action closure, together with the evaluation of the definition the pass begins with, as [replay](suspension.md#replay) specifies;
 - a run of a shell's closure in a shell session;
-- a call of a parameter's [validator](../language/parameter.md#validators).
+- a call of a parameter's [validator](../language/parameter.md#validators);
+- an [image discovery probe](images.md#image-discovery), over every handler it probes.
+
+> [!NOTE]
+> A probe is one evaluation rather than one per handler so that the cost of probing an app is the limit however many handlers it declares, which matters because a probe follows every update. A handler the probe reaches with the budget spent is reported stopped at the limit, as the handler that spent it is.
 
 The runtime MUST stop an evaluation whose evaluation time exceeds the evaluation time limit, at the next of the operations the operations per evaluation limit counts.
 An evaluation that returns having exceeded the limit MUST fail all the same.
+The runtime MUST stop an evaluation within a short time of the limit, whatever each of its operations costs.
 An evaluation stopped at the limit fails to evaluate, and a request that reports such failures in its result rather than refusing, such as [change planning](../interface/params.md#change-planning) or a [template preview](../interface/templates.md#preview), MUST report it there.
 
 > [!NOTE]
