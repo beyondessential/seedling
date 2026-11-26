@@ -148,6 +148,9 @@ The runtime need not keep its record of the last evaluation that finished within
 
 An evaluation of the app's definition that fails at the evaluation time limit, or that a tripped [breaker](engine-limits.md#breakers) fails, MUST file `evaluation_runaway` in place of `script_error`, and MUST neither file nor clear `script_error`.
 
+> [!NOTE]
+> Leaving `script_error` as it stands is why both can be active at once: an evaluation stopped before it ran cannot say whether an earlier failure still holds. The two are only both active with the runaway as the later of them, so the requests that refuse under either name `evaluation_runaway` first, and an operator is told what is stopping the definition being evaluated at all rather than what it did last time it was.
+
 A `definition_source_moved` fault's description MUST identify the reference, the digest the app runs, and the digest the reference now selects.
 A re-check that fails MUST neither file nor clear it.
 

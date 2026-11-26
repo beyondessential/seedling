@@ -22,8 +22,8 @@ Where several of the refusals in this specification apply to one request, the se
 
 The server MUST reject a request naming an app that is not registered with `not_found`.
 The server MUST reject the request with `not_installed` unless the app is `Installed`.
-If the app has an active `script_error` [fault](../overview.md#fault), the server MUST reject the request with `script_error`.
-If the app has an active `evaluation_runaway` fault with an empty subject, the server MUST reject the request with `evaluation_runaway`.
+If the app has an active `evaluation_runaway` [fault](../overview.md#fault) with an empty subject, the server MUST reject the request with `evaluation_runaway`.
+If the app has an active `script_error` fault, the server MUST reject the request with `script_error`.
 
 The server MUST reject with `not_found` a `name` that names no action the app declares.
 
@@ -68,7 +68,7 @@ On any validation failure the server MUST reject the request with `requirements_
 
 The server MUST reject a request naming an app that is not registered with `not_found`.
 The server MUST reject the request with `already_installed` while the app is `Installed` or `Uninstalling`.
-If the app has an active `script_error` fault, the server MUST reject the request with `script_error`, and if it has an active `evaluation_runaway` fault with an empty subject, with `evaluation_runaway`.
+If the app has an active `evaluation_runaway` fault with an empty subject, the server MUST reject the request with `evaluation_runaway`, and if it has an active `script_error` fault, with `script_error`.
 The server MUST reject the request with `operation_in_progress` while a change to the app is being applied.
 Where several of these apply, the server MUST reject the request with the first in the order given.
 
