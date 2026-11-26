@@ -65,7 +65,8 @@ Specs: LIM (`runtime/engine-limits.md`, measuring evaluation time and breakers),
 
 - [x] `/apps/update` (`oi/handler/apps.rs::update_app`): a runaway in the proposed definition or a validator refuses with `evaluation_runaway` in place of `script_error` or `validation_failed`, filing nothing.
 - [x] `run_validators` (`runtime/apps.rs`): a validator stopped at the limit is no `Rejection`; carry it separately so `/apps/params/set` refuses with `evaluation_runaway` and `/apps/plan` lists it in `rejections` with a reason naming the limit.
-- [ ] Web UI (`crates/web/frontend/src/routes/AppDetail.tsx`): treat an active `evaluation_runaway` with an empty subject as `script_error` is treated for disabling Install, Gates and Actions, and disable an action or gate whose breaker fault is active.
+- [x] Fault records name an action's, shell's or gate's breaker faults by `resource_type` (`action`, `shell`, `gate`) and `resource_name`, leaving the definition's empty, so a client can tell them apart.
+- [x] Web UI (`crates/web/frontend/src/routes/AppDetail.tsx`): treat the definition's `evaluation_runaway` and `breaker_state_unreadable` as `script_error` is treated for disabling Install, Gates and Actions. An action's or gate's breaker fault leaves its button live, since other params still evaluate and the server refuses the tripped run.
 
 ## Docs
 
