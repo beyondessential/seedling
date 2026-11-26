@@ -37,8 +37,10 @@ static DEMOS: LazyLock<BTreeMap<String, Arc<Bundle>>> = LazyLock::new(|| {
         })
         .filter(|name| name != SHARED)
         .map(|name| {
-            let files = seedling_bundle::source::read_folder_definition(&demos_dir().join(&name))
-                .unwrap_or_else(|e| panic!("{name} reads as a definition folder: {e}"));
+            let files =
+                seedling_bundle::source::read_folder_definition(&demos_dir().join(&name), None)
+                    .unwrap_or_else(|e| panic!("{name} reads as a definition folder: {e}"))
+                    .files;
             let bundle =
                 Bundle::from_files(files).unwrap_or_else(|e| panic!("{name} is a bundle: {e}"));
             (name, Arc::new(bundle))

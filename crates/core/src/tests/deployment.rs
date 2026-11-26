@@ -303,5 +303,5 @@ fn a_declared_container_with_no_image_fails_evaluation() {
         &crate::ScriptLimits::default(),
     );
     let err = err.expect("the definition fails to evaluate");
-    assert!(err.0.contains("job 'migrate'"), "{err}");
+    assert!(err.message.contains("job 'migrate'"), "{err}");
 }

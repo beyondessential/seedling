@@ -4,7 +4,7 @@ id: CLI
 
 # Reference client
 
-Applies to the [CLI](#cli), the reference command-line client of the [Operator Interface](../overview.md#operator-interface).
+Applies to the [CLI](#cli), the reference command-line client of the [Operator Interface](../overview.md#operator-interface), and to the [definition checks](#definition-checks) it makes without a server.
 
 ## Borrowed terms
 
@@ -16,7 +16,7 @@ Applies to the [CLI](#cli), the reference command-line client of the [Operator I
 
 ### CLI
 
-`seedling-ctl`, the command-line program through which an [operator](../overview.md#operator) uses the Operator Interface.
+`seedling-ctl`, the command-line program through which an [operator](../overview.md#operator) uses the Operator Interface, and through which a definition's author checks it.
 Commands in this spec are written without the program name: `apps create` is `seedling-ctl apps create`.
 
 ## Client identity key
@@ -199,6 +199,108 @@ Packing the same bundle twice with the same CLI MUST write the same bytes.
 > A packed bundle is pushed to a registry with a general-purpose OCI tool, so the CLI holds no registry credentials of its own.
 > Writing the same bytes for the same bundle gives an unchanged definition the same digest when it is published again.
 > A host refuses a fetched bundle whose annotation differs from its declared requirement, so reporting the requirement lets it be carried to the push unchanged.
+
+## Definition checks
+
+`definitions check <source>` MUST check a definition without connecting to a server, using the evaluator of the Seedling version the CLI belongs to.
+It MUST take its source in any form `apps create` takes, as [definition sources](#definition-sources) specifies, including `--ref <reference>` in place of the source.
+
+For `--ref`, the CLI MUST fetch the bundle itself, as [fetching](definitions.md#fetching) specifies for the server, with its own Seedling version as the running version in [artefact selection](definitions.md#artefact-selection).
+It MUST report an error and check nothing, making no request to a registry, when the reference breaks the rules [definition sources](definitions.md#definition-sources) give for a `reference`.
+It MUST authenticate to a registry with the credentials the container engine of the user running it would use to pull images.
+
+The CLI MUST check, in this order, and MUST stop at the first check that fails:
+
+1. that the CLI's own Seedling version satisfies the bundle's [Seedling version requirement](../language/bundle.md#seedling-version-requirement), before any other part of the metadata is read;
+2. that the bundle keeps the [bundle rules](definitions.md#bundle-rules);
+3. that the script [evaluates](../language/overview.md#evaluation) without a script error;
+4. that the [sample parameter values](#sample-parameter-values) pass [validation](params.md#validation).
+
+The CLI MUST evaluate the script as the server evaluates an app's definition on [update](apps.md#update), with the sample parameter values in place of the app's stored values and the [check's host constants](#check-host-constants) in place of the host's.
+It MUST NOT run any gate, gate check or action closure.
+
+`definitions check` MUST accept each daemon option of the [engine limits](../runtime/engine-limits.md#limits), with the same name, default and meaning, and MUST evaluate within the limits so set.
+It MUST refuse a value the daemon would refuse to start with, report an error, and check nothing.
+
+> [!NOTE]
+> A definition written for hosts whose daemons set their own limits is checked with those limits given, so that the check is neither stricter nor looser than those hosts.
+
+### Check results
+
+When the source cannot be read or fetched, or a check fails, the CLI MUST report the errors below and exit with status 1.
+When every check passes, the CLI MUST exit with status zero.
+When the CLI reports an error and checks nothing, because of an option it was given, it MUST exit with status 2.
+It MUST print that error to standard error, and print nothing to standard output, with or without `--json`.
+
+| kind | reported when | the error names |
+| --- | --- | --- |
+| `source` | the source cannot be read or fetched, for a reason no other kind covers | the cause |
+| `version` | the version requirement is not satisfied, or no entry of a fetched image index is a candidate in artefact selection | the requirement and the CLI's version, or each entry's requirement and the CLI's version |
+| `bundle` | the bundle breaks a bundle rule, or a fetched bundle's version requirement differs from its annotations | the offending path or field |
+| `script` | evaluation fails | the script file and the line within it, as [script formation](../language/bundle.md#script-formation) specifies |
+| `validation` | a sample parameter value is rejected | the rejecting parameter and its reason, with one error for each such parameter |
+
+The location of an error is the file it lies in and, where it has one, the line within that file.
+A `script` error lies at the script file and line where it arose, not where a function that raised it was called.
+A `version` error about the bundle's own requirement, a `bundle` error about a field of the [metadata file](../language/bundle.md#metadata-file), and a `source` error naming a key of its `include` table, lie in the metadata file.
+A `bundle` error about a path lies at that path, where it names a file in the bundle.
+For a file source, the file MUST be given as the path the source names.
+For a folder source, it MUST be given as the path the CLI read the file from, which for a file the folder holds is the path the source names joined with the file's bundle path, and for an [included file](../language/bundle.md#included-file) read from its source is the source's file.
+For any other source, it MUST be given as the bundle path alone.
+
+Without `--json`, the CLI MUST print each error to standard error on a line of its own.
+An error with a location MUST begin with the file, then `:` and the line where it has one, then `: ` and the error's message.
+The CLI MUST print each control character in an error, a line break among them, as an escape sequence, so that no error spans more than one line.
+
+> [!NOTE]
+> A definition controls the text of its own errors, such as a thrown message, and a reader of the output, such as a CI runner, acts on lines that begin a certain way.
+
+With `--json`, the CLI MUST print to standard output a single JSON object, `{ "errors": [...] }`, holding one object per error, and an empty array when every check passes.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `kind` | string | the error's kind, from the table above |
+| `message` | string | the error's message |
+| `file` | string or null | the file of the error's location, or `null` where it has none |
+| `line` | integer or null | the line of the error's location, or `null` where it has none |
+| `parameter` | string or null | for a `validation` error, the rejecting parameter, and otherwise `null` |
+
+> [!NOTE]
+> The `file:line: message` form is the one editors and CI annotation matchers read from compilers.
+
+### Sample parameter values
+
+`definitions check` MUST accept `--set name=value`, which MAY be repeated.
+Each MUST set the parameter `name` to the string `value`, split at the first `=`.
+The CLI MUST evaluate the script with the parameters so set as its only stored parameter values, and MUST then validate them as [proposed values](params.md#proposed-values).
+A sample value for a parameter the definition does not declare MUST fail validation, with a reason saying the parameter is not declared.
+
+The CLI MUST report an error and check nothing when an argument to `--set` has no `=`, or when the same parameter is set more than once.
+
+### Check host constants
+
+`definitions check` MUST evaluate the script with each [host constant](../language/constants.md#host-constants) at its default below, unless an option sets it.
+
+| constant | default |
+| --- | --- |
+| `AVAILABLE_THREADS`, `CPU_ARCHITECTURE` | the value the runtime would determine on the machine the CLI runs on, as [host constants](../language/constants.md#host-constants) specifies |
+| `AVAILABLE_MEMORY` | undetermined |
+| `HOST_HAS_IPV4`, `HOST_HAS_IPV6`, `NAT64_ACTIVE`, `HAS_SNAPSHOTS` | `false` |
+| `NODE_NAME` | the empty string |
+| `TIMEZONE` | `UTC` |
+
+`definitions check` MUST accept `--const NAME=value`, which MAY be repeated, setting the host constant `NAME` to `value`.
+The CLI MUST read `value` as the constant's type: a decimal integer for an integer constant, `true` or `false` for a boolean constant, and the text as given for a string constant.
+
+The CLI MUST report an error and check nothing when `NAME` is not a host constant, when the same constant is set more than once, or when `value` is not of the constant's type or breaks the rules [host constants](../language/constants.md#host-constants) give for it.
+A `TIMEZONE` value MUST be an [IANA time zone name](../language/constants.md#borrowed-terms).
+While `AVAILABLE_MEMORY` is undetermined, the evaluation MUST fail where the script reads it, with a `script` error at the expression that reads it.
+
+> [!NOTE]
+> A definition that branches on the host is checked for each kind of host it will run on by running the check once per kind, such as with `--const CPU_ARCHITECTURE=aarch64`.
+>
+> Reading the memory a runtime would see is part of the Linux runtime, which the CLI does not carry, so a check of a definition that reads `AVAILABLE_MEMORY` gives it with `--const` on every platform.
+> Failing at the read, where the runtime fails the whole evaluation, lets a definition that never reads it be checked with no options, and points at the line that needs the value.
 
 ## Registry tags
 

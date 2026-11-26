@@ -10,8 +10,8 @@ use std::{fmt, sync::Arc, time::Duration};
 use bytes::Bytes;
 use futures_util::{StreamExt, future::BoxFuture};
 use seedling_bundle::{
-    ARTIFACT_TYPE, BUNDLE_SIZE_LIMIT, Bundle, BundleError, LAYER_MEDIA_TYPE, VERSIONS_ANNOTATION,
-    VersionRequirement,
+    ARTIFACT_TYPE, BUNDLE_SIZE_LIMIT, Bundle, BundleError, LAYER_MEDIA_TYPE, Place,
+    VERSIONS_ANNOTATION, VersionRequirement,
 };
 use seedling_protocol::error::{ErrorCode, OiError};
 use semver::Version;
@@ -369,6 +369,26 @@ pub async fn fetch(
     reference: &DefinitionRef,
     running: &Version,
 ) -> Result<Fetched, FetchError> {
+    fetch_layer(registry, reference, running).await?.decode()
+}
+
+/// A definition artefact's layer, fetched and verified, with what the
+/// documents that led to it claim of its bundle.
+#[derive(Debug)]
+pub struct Layer {
+    blob: bytes::Bytes,
+    digest: String,
+    annotated: [(&'static str, Option<VersionRequirement>); 2],
+}
+
+/// Fetch the layer of the definition a reference selects, without decoding
+/// it.
+// spec: DEFN#fetching
+pub async fn fetch_layer(
+    registry: &dyn Registry,
+    reference: &DefinitionRef,
+    running: &Version,
+) -> Result<Layer, FetchError> {
     let (doc, digest, claimed) = resolve(registry, reference, running).await?;
     let layers = doc.layers.as_deref().unwrap_or_default();
     let [layer] = layers else {
@@ -384,36 +404,63 @@ pub async fn fetch(
         )));
     }
     if layer.size.is_some_and(|s| s > BLOB_SIZE_LIMIT as u64) {
-        return Err(FetchError::Bundle(BundleError::Invalid(format!(
-            "definition layer exceeds the {BUNDLE_SIZE_LIMIT}-byte bundle size limit"
-        ))));
+        return Err(FetchError::Bundle(BundleError::Invalid {
+            message: format!(
+                "definition layer exceeds the {BUNDLE_SIZE_LIMIT}-byte bundle size limit"
+            ),
+            place: None,
+        }));
     }
     let blob = registry
         .blob(&reference.parsed, &layer.digest, BLOB_SIZE_LIMIT)
         .await
         .map_err(|e| failed(format!("could not fetch definition layer: {e}")))?;
     verify_digest(&blob, &layer.digest)?;
-    let bundle = Bundle::from_tar_gz(&blob)?;
+    Ok(Layer {
+        blob,
+        digest,
+        annotated: [
+            (
+                "manifest",
+                annotation_requirement(&doc.annotations, "manifest")?,
+            ),
+            ("index entry", claimed),
+        ],
+    })
+}
 
-    let declared = bundle.seedling_versions().map(|r| r.as_str().to_owned());
-    for (whose, annotated) in [
-        (
-            "manifest",
-            annotation_requirement(&doc.annotations, "manifest")?,
-        ),
-        ("index entry", claimed),
-    ] {
-        if let Some(annotated) = annotated
-            && Some(annotated.as_str()) != declared.as_deref()
-        {
-            return Err(FetchError::Bundle(BundleError::Invalid(format!(
-                "the {whose} annotation {VERSIONS_ANNOTATION} says {:?}, but the bundle declares {}",
-                annotated.as_str(),
-                declared.map_or("no requirement".to_owned(), |d| format!("{d:?}")),
-            ))));
-        }
+impl Layer {
+    /// The layer's bytes: a gzip-compressed tar whose root is the bundle
+    /// root.
+    pub fn blob(&self) -> &[u8] {
+        &self.blob
     }
-    Ok(Fetched { bundle, digest })
+
+    /// Decode the layer as a bundle, refusing one whose declared requirement
+    /// differs from what the documents that led to it claim.
+    // spec: DEFN#fetching
+    pub fn decode(self) -> Result<Fetched, FetchError> {
+        let bundle = Bundle::from_tar_gz(&self.blob)?;
+        let declared = bundle.seedling_versions().map(|r| r.as_str().to_owned());
+        for (whose, annotated) in self.annotated {
+            if let Some(annotated) = annotated
+                && Some(annotated.as_str()) != declared.as_deref()
+            {
+                return Err(FetchError::Bundle(BundleError::Invalid {
+                    message: format!(
+                        "the {whose} annotation {VERSIONS_ANNOTATION} says {:?}, but the bundle declares {}",
+                        annotated.as_str(),
+                        declared.map_or("no requirement".to_owned(), |d| format!("{d:?}")),
+                    ),
+                    place: Some(Place::MetadataFile { line: None }),
+                }));
+            }
+        }
+        Ok(Fetched {
+            bundle,
+            digest: self.digest,
+        })
+    }
 }
 
 /// The `sha256:` digest of some bytes.

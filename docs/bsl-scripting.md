@@ -281,6 +281,8 @@ col.select(#{ name_patterns: ["worker-*"] })
 
 ### Constants
 
+Constants and enums can be read anywhere in a script, including inside the functions it defines. A variable or parameter of the same name hides one.
+
 | Name | Type | Description |
 |---|---|---|
 | `AVAILABLE_THREADS` | int | Compute threads available; `1` while undetermined, with a `host_constant_undetermined` fault on `_system` |
@@ -1017,6 +1019,24 @@ Sibling definitions in one repository share helpers and sidecars through `[inclu
 The [bundle-tour](../demos/bundle-tour/) and [bundle-share](../demos/bundle-share/) demos include the same helper script and pages from `demos/shared/`.
 
 An included folder is read like a definition folder, honouring its own `.seedignore`, and may not hold a `seedling.toml`: only the definition folder's own is read. A copy already in the folder must match its source; where the source cannot be reached, as when pushing a folder written by `apps export`, the copy is used as it stands.
+
+### Checking a definition
+
+`seedling-ctl definitions check` evaluates a definition with no server, using the evaluator of the Seedling the CLI belongs to, so a repository holding definitions can check them in CI:
+
+```bash
+seedling-ctl definitions check deploy/seedling \
+    --set version=18.3 --set password=correct-horse-battery-staple-9 \
+    --const AVAILABLE_MEMORY=2147483648
+```
+
+It takes any source `apps create` takes, including `--ref`, which it fetches itself with the container engine's registry credentials. It stops at the first of these that fails: the `seedling` version requirement, the bundle rules, evaluating the script, and validating the sample values. Gates and actions are declared but never run.
+
+- `--set name=value` gives a sample parameter value. The values are the only ones set, and are validated as an update's would be; a value for a parameter the definition does not declare is rejected.
+- `--const NAME=value` sets a host constant. Otherwise `NODE_NAME` is empty, `TIMEZONE` is `UTC`, the egress, NAT64 and snapshot constants are `false`, and `AVAILABLE_THREADS` and `CPU_ARCHITECTURE` are the machine's own. `AVAILABLE_MEMORY` has no default, so a script that reads it fails at that line until it is given.
+- The daemon's `--script-max-*` options set the engine limits, with the daemon's defaults.
+
+Each error is printed to standard error as `file:line: message`, naming the file the CLI read: for an included file, its source. An error takes one line, with any line break or other control character in it escaped. `--json` prints `{"errors": [...]}` to standard output instead, each error with its `kind` (`source`, `version`, `bundle`, `script` or `validation`), `message`, `file`, `line` and, for a rejected value, `parameter`. The check exits 1 when it fails, and 2, having checked nothing, when an option is wrong.
 
 ## Running a command inside a container: `rt.exec`
 

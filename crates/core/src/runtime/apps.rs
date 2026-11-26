@@ -39,11 +39,47 @@ pub use params::{
 pub use registry_faults::{sync_registry_faults, sync_used_registries};
 
 #[derive(Debug)]
-pub struct ScriptError(pub String);
+pub struct ScriptError {
+    pub message: String,
+    /// The script file, and the line within it, where the error arose, for
+    /// an error that arose at a position in the script.
+    // spec: CLI#check-results
+    pub at: Option<(String, usize)>,
+}
+
+impl ScriptError {
+    fn new(message: String) -> Self {
+        Self { message, at: None }
+    }
+
+    /// An error Rhai raised evaluating `script`, at the position where it
+    /// arose: for one raised inside a called function, the position in the
+    /// function rather than where it was called, and none where it arose at
+    /// no position.
+    // spec: BND#script-formation
+    // spec: CLI#check-results
+    fn raised(script: &seedling_bundle::Script, e: &rhai::EvalAltResult) -> Self {
+        fn innermost(e: &rhai::EvalAltResult) -> rhai::Position {
+            match e {
+                rhai::EvalAltResult::ErrorInFunctionCall(_, _, inner, _)
+                | rhai::EvalAltResult::ErrorInModule(_, inner, _) => innermost(inner),
+                _ => e.position(),
+            }
+        }
+        let at = innermost(e)
+            .line()
+            .and_then(|line| script.locate(line))
+            .map(|(file, line)| (file.to_owned(), line));
+        Self {
+            message: script.remap_error(&e.to_string()),
+            at,
+        }
+    }
+}
 
 impl std::fmt::Display for ScriptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -908,7 +944,7 @@ fn run_definition(
         Ok(derived) => derived,
         Err(e) => {
             if result.is_ok() {
-                result = Err(ScriptError(e));
+                result = Err(ScriptError::new(e));
             }
             crate::runtime::redact::SensitiveValues::default()
         }
@@ -941,7 +977,10 @@ fn run_definition(
                 ..r
             })
             .collect()),
-        Err(ScriptError(e)) => Err(ScriptError(sensitive.mask(&e).into_owned())),
+        Err(ScriptError { message, at }) => Err(ScriptError {
+            message: sensitive.mask(&message).into_owned(),
+            at,
+        }),
     };
     (app, result)
 }
@@ -959,7 +998,10 @@ fn run_seeded_definition(
         // A host constant the evaluation cannot stand without fails it, so
         // it declares nothing.
         Err(e) => {
-            return (App::with_bundle(Arc::clone(bundle)), Err(ScriptError(e)));
+            return (
+                App::with_bundle(Arc::clone(bundle)),
+                Err(ScriptError::new(e)),
+            );
         }
     };
     let _evaluation = app.guard_evaluation();
@@ -967,7 +1009,7 @@ fn run_seeded_definition(
         Ok(s) => s,
         // A stored definition that no longer reads as one (only possible
         // for a bundle written for another Seedling) evaluates to nothing.
-        Err(e) => return (app, Err(ScriptError(e.to_string()))),
+        Err(e) => return (app, Err(ScriptError::new(e.to_string()))),
     };
     // spec: PRM#parameter-storage — pre-populate stored values so is_set()/value() work
     // during script evaluation. AppDef.params (the BSL-declared set) is
@@ -988,7 +1030,7 @@ fn run_seeded_definition(
     // is available to BSL authors for recovery; anything that escapes it
     // becomes a ScriptError and is surfaced as a fault by the caller.
     // spec: BND#script-formation
-    let remap = |e: Box<rhai::EvalAltResult>| ScriptError(script.remap_error(&e.to_string()));
+    let remap = |e: Box<rhai::EvalAltResult>| ScriptError::raised(script, &e);
     let ran = crate::defs::compile(&engine, script.text())
         .map_err(remap)
         .and_then(|ast| {
@@ -1005,7 +1047,7 @@ fn run_seeded_definition(
     };
     // spec: BSL#evaluation
     if let Err(e) = crate::defs::finish_evaluation(&app, limits) {
-        return (app, Err(ScriptError(e)));
+        return (app, Err(ScriptError::new(e)));
     }
     let (Some(proposed), Some(mut validators)) = (validate, validators) else {
         return (app, Ok(Vec::new()));

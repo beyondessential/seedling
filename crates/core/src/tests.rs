@@ -237,8 +237,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
     // Re-run the script with the TLS capture active to recover FnPtrs,
     // exactly as run_operation does. FnPtrs are never stored persistently.
     let (actions, shells) = {
-        let (mut fresh_scope, fresh_app) =
-            defs::scope(Default::default()).expect("the scope builds");
+        let (mut fresh_scope, fresh_app) = defs::scope(Default::default());
         fresh_app.def.rcu(|old| {
             let mut new_def = (**old).clone();
             new_def.name = app.def.load().name.clone();

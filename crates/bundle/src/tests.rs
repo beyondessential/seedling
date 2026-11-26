@@ -11,7 +11,7 @@ fn files(entries: &[(&str, &[u8])]) -> Vec<(String, Vec<u8>)> {
 
 fn invalid_message(r: Result<Bundle, BundleError>) -> String {
     match r {
-        Err(BundleError::Invalid(m)) => m,
+        Err(BundleError::Invalid { message, .. }) => message,
         other => panic!("expected an invalid bundle, got {other:?}"),
     }
 }
@@ -379,7 +379,7 @@ fn unrepresentable_metadata_is_refused_by_where_it_sits() {
         let b = Bundle::from_files(files(&[("seedling.toml", meta), ("app.seed.rhai", b"")]))
             .expect("the strict reading of metadata does not stop a bundle being held");
         let m = match b.metadata() {
-            Err(BundleError::Invalid(m)) => m,
+            Err(BundleError::Invalid { message, .. }) => message,
             other => panic!("expected invalid metadata, got {other:?}"),
         };
         assert!(m.contains(needle), "{needle}: {m}");
@@ -600,4 +600,72 @@ fn the_include_table_reads_as_normalised_keys_and_their_sources() {
     );
     assert!(included(b"").unwrap().is_empty());
     assert!(included(b"[include]\n\"lib\" = 1").is_err());
+}
+
+fn place_of(r: Result<&Script, BundleError>) -> Option<Place> {
+    match r {
+        Err(BundleError::Invalid { place, .. }) => place,
+        other => panic!("expected an invalid bundle, got {other:?}"),
+    }
+}
+
+// spec: CLI#check-results
+#[test]
+fn a_metadata_file_that_does_not_parse_lies_at_its_line() {
+    let r = Bundle::from_files(files(&[
+        ("app.seed.rhai", b""),
+        (METADATA_FILE, b"script = [\"app.seed.rhai\"]\n\nbroken =\n"),
+    ]));
+    match r {
+        Err(BundleError::Invalid { place, .. }) => {
+            assert_eq!(place, Some(Place::MetadataFile { line: Some(3) }));
+        }
+        other => panic!("expected an invalid bundle, got {other:?}"),
+    }
+}
+
+// spec: CLI#check-results
+#[test]
+fn a_broken_field_lies_in_the_metadata_file_and_a_broken_file_at_its_path() {
+    let b = Bundle::from_files(files(&[
+        ("app.seed.rhai", b""),
+        (METADATA_FILE, b"script = [\"missing.rhai\"]\n"),
+    ]))
+    .unwrap();
+    assert_eq!(
+        place_of(b.script()),
+        Some(Place::MetadataFile { line: None })
+    );
+    let b = Bundle::from_files(files(&[("app.seed.rhai", b"\xff")])).unwrap();
+    assert_eq!(
+        place_of(b.script()),
+        Some(Place::Path("app.seed.rhai".to_owned()))
+    );
+}
+
+// spec: CLI#definition-checks
+#[test]
+fn the_requirement_is_read_without_the_other_fields() {
+    let req = requirement(b"seedling = \">=999\"\nunknown = 1\n").unwrap();
+    assert_eq!(req.map(|r| r.to_string()), Some(">=999".to_owned()));
+    assert_eq!(requirement(b"unknown = 1\n").unwrap(), None);
+}
+
+// spec: BND#metadata-file
+#[test]
+fn an_archive_breaking_the_bundle_rules_still_gives_its_requirement() {
+    let data = tar_gz(|b| {
+        add_file(b, "app.seed.rhai", b"x");
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Symlink);
+        link.set_size(0);
+        b.append_link(&mut link, "evil", "/etc/passwd").unwrap();
+        add_file(b, "./seedling.toml", b"seedling = \">=999\"\nunknown = 1\n");
+    });
+    assert!(Bundle::from_tar_gz(&data).is_err());
+    let requirement = requirement_in_tar_gz(&data).unwrap().unwrap();
+    assert_eq!(requirement.as_str(), ">=999");
+
+    let none = tar_gz(|b| add_file(b, "app.seed.rhai", b"x"));
+    assert!(requirement_in_tar_gz(&none).unwrap().is_none());
 }

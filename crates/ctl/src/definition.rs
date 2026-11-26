@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 
 use github::GithubUrl;
 
+mod check;
 mod github;
 
 /// Where a definition comes from.
@@ -103,16 +104,20 @@ impl DefinitionArgs {
             return Ok(None);
         };
         let (files, origin) = if let Some(url) = GithubUrl::parse(source) {
-            let (files, origin) = github::download(&url).await?;
-            (files, Some(origin))
+            let (assembled, origin) = github::download(&url, None)
+                .await
+                .map_err(|e| e.to_string())?;
+            (assembled.files, Some(origin))
         } else {
             let path = PathBuf::from(source);
             let meta =
                 std::fs::metadata(&path).map_err(|e| format!("cannot read {source}: {e}"))?;
             let files = if meta.is_dir() {
-                read_folder_definition(&path)?
+                read_folder_definition(&path, None)
+                    .map_err(|e| e.to_string())?
+                    .files
             } else {
-                read_lone_file(&path)?
+                read_lone_file(&path).map_err(|e| e.to_string())?
             };
             (files, None)
         };
@@ -140,6 +145,10 @@ pub(super) enum DefinitionsCommand {
         /// The gzipped tar to write, which must not exist yet
         file: PathBuf,
     },
+    /// Check a definition without a server: its Seedling version
+    /// requirement, the bundle rules, its evaluation, and any sample
+    /// parameter values. Exits 1 when a check fails and 2 on a bad option
+    Check(check::CheckArgs),
 }
 
 pub(super) async fn dispatch(command: &DefinitionsCommand) {
@@ -152,6 +161,7 @@ pub(super) async fn dispatch(command: &DefinitionsCommand) {
                 std::process::exit(1);
             }
         },
+        DefinitionsCommand::Check(args) => std::process::exit(check::run(args).await),
     }
 }
 

@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use super::*;
-use crate::Bundle;
+use crate::{Bundle, BundleError};
 
 fn write(root: &Path, rel: &str, contents: &[u8]) {
     let path = root.join(rel);
@@ -57,11 +57,13 @@ fn folders_skip_vcs_metadata_and_seedignored_paths() {
 
 // spec: CLI#definition-folders
 #[test]
+#[cfg(unix)]
 fn a_symlink_is_reported_and_nothing_is_read() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "app.seed.rhai", b"app;");
     std::os::unix::fs::symlink("/etc/passwd", dir.path().join("evil")).unwrap();
-    let err = read_folder(&Disk::new(dir.path()), "", &mut Budget::full()).unwrap_err();
+    let err =
+        String::from(read_folder(&Disk::new(dir.path()), "", &mut Budget::full()).unwrap_err());
     assert!(err.contains("evil"), "{err}");
     // An ignored symlink is simply left out.
     write(dir.path(), ".seedignore", b"evil\n");
@@ -77,7 +79,9 @@ fn a_github_tarball_yields_the_named_folder() {
         tar_file(b, "org-repo-abc123/apps/web/pages/500.html", b"<p>");
         tar_file(b, "org-repo-abc123/apps/other/app.seed.rhai", b"no");
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         vec!["app.seed.rhai", "pages/500.html"]
@@ -103,19 +107,27 @@ fn a_lone_file_is_a_bundle_holding_it_under_its_own_name() {
 
 // spec: CLI#definition-sources
 #[test]
-fn a_lone_seedling_toml_or_a_non_utf8_name_is_refused() {
+fn a_lone_seedling_toml_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "seedling.toml", b"");
+    let err = read_lone_file(&dir.path().join("seedling.toml"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("seedling.toml"), "{err}");
+}
+
+// spec: CLI#definition-sources
+#[test]
+#[cfg(unix)]
+fn a_non_utf8_name_is_refused() {
     use std::os::unix::ffi::OsStrExt;
 
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "seedling.toml", b"");
-    let err = read_lone_file(&dir.path().join("seedling.toml")).unwrap_err();
-    assert!(err.contains("seedling.toml"), "{err}");
-
     let odd = dir
         .path()
         .join(std::ffi::OsStr::from_bytes(b"app-\xff.rhai"));
     std::fs::write(&odd, b"app;").unwrap();
-    let err = read_lone_file(&odd).unwrap_err();
+    let err = read_lone_file(&odd).unwrap_err().to_string();
     assert!(err.contains("not valid UTF-8"), "{err}");
 }
 
@@ -136,7 +148,9 @@ fn a_tarball_entry_may_not_escape_the_repository_or_be_a_link_in_the_folder() {
         header.set_cksum();
         b.append(&header, &b"owned"[..]).unwrap();
     });
-    let e = read_archive_definition(&escaping, "").unwrap_err();
+    let e = read_archive_definition(&escaping, "", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("outside the repository"), "{e}");
 
     // Dropping GitHub's prefix directory would otherwise drop a leading
@@ -151,7 +165,9 @@ fn a_tarball_entry_may_not_escape_the_repository_or_be_a_link_in_the_folder() {
         header.set_cksum();
         b.append(&header, &b"owned"[..]).unwrap();
     });
-    let e = read_archive_definition(&leading, "").unwrap_err();
+    let e = read_archive_definition(&leading, "", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("outside the repository"), "{e}");
 
     for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
@@ -164,7 +180,9 @@ fn a_tarball_entry_may_not_escape_the_repository_or_be_a_link_in_the_folder() {
                 "../../../../etc/passwd",
             );
         });
-        let e = read_archive_definition(&linked, "apps/web").unwrap_err();
+        let e = read_archive_definition(&linked, "apps/web", None)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("not a regular file"), "{e}");
     }
 }
@@ -183,7 +201,9 @@ fn a_github_folder_includes_from_elsewhere_in_the_repository() {
         tar_file(b, "o-r-abc/apps/common/db.seed.rhai", b"db;");
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/docs/latest", "v2");
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert_eq!(files["lib/db.seed.rhai"], b"db;");
 
     let escaping = tarball(|b| {
@@ -193,7 +213,9 @@ fn a_github_folder_includes_from_elsewhere_in_the_repository() {
             b"[include]\n\"lib\" = \"../../../db.seed.rhai\"",
         );
     });
-    let e = read_archive_definition(&escaping, "apps/web").unwrap_err();
+    let e = read_archive_definition(&escaping, "apps/web", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.ends_with("lies outside the repository"), "{e}");
 }
 
@@ -209,14 +231,18 @@ fn a_github_include_through_a_link_or_beneath_one_is_refused() {
         );
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
     });
-    let e = read_archive_definition(&through, "apps/web").unwrap_err();
+    let e = read_archive_definition(&through, "apps/web", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("apps/shared is a symlink"), "{e}");
 
     let beneath = tarball(|b| {
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
         tar_file(b, "o-r-abc/apps/shared/passwd", b"x");
     });
-    let e = read_archive_definition(&beneath, "apps").unwrap_err();
+    let e = read_archive_definition(&beneath, "apps", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("apps/shared is not a regular file"), "{e}");
 
     // The same archive with the link last is refused the same way, before
@@ -225,7 +251,9 @@ fn a_github_include_through_a_link_or_beneath_one_is_refused() {
         tar_file(b, "o-r-abc/apps/shared/passwd", b"x");
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
     });
-    let e = read_archive_definition(&link_last, "apps").unwrap_err();
+    let e = read_archive_definition(&link_last, "apps", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("apps/shared is not a regular file"), "{e}");
 }
 
@@ -235,7 +263,9 @@ fn a_github_folder_beneath_a_link_is_refused() {
     let data = tarball(|b| {
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps", "elsewhere");
     });
-    let e = read_archive_definition(&data, "apps/web").unwrap_err();
+    let e = read_archive_definition(&data, "apps/web", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("apps is a symlink"), "{e}");
 }
 
@@ -268,7 +298,9 @@ fn repo(marker: &str, key: &str, source: &str) -> tempfile::TempDir {
 }
 
 fn assembled(dir: &tempfile::TempDir) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    read_folder_definition(&dir.path().join("apps/def"))
+    read_folder_definition(&dir.path().join("apps/def"), None)
+        .map(|a| a.files)
+        .map_err(|e| e.to_string())
 }
 
 // spec: CLI#include-assembly
@@ -315,6 +347,7 @@ fn an_out_of_bounds_source_is_never_read() {
 
 // spec: CLI#include-assembly
 #[test]
+#[cfg(unix)]
 fn a_symlink_below_the_boundary_is_refused_and_one_above_it_is_not() {
     let dir = repo(".git", "lib/db.seed.rhai", "../linked/db.seed.rhai");
     std::os::unix::fs::symlink(
@@ -329,7 +362,9 @@ fn a_symlink_below_the_boundary_is_refused_and_one_above_it_is_not() {
     let inner = repo(".git", "lib/db.seed.rhai", "../common/db.seed.rhai");
     let via = outer.path().join("via");
     std::os::unix::fs::symlink(inner.path(), &via).unwrap();
-    let files = read_folder_definition(&via.join("apps/def")).unwrap();
+    let files = read_folder_definition(&via.join("apps/def"), None)
+        .unwrap()
+        .files;
     assert_eq!(files["lib/db.seed.rhai"], b"db;");
 }
 
@@ -403,9 +438,13 @@ fn a_lone_files_script_errors_name_the_file() {
 #[test]
 fn a_github_url_folder_may_not_climb_out_of_the_repository() {
     let data = tarball(|b| tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;"));
-    let e = read_archive_definition(&data, "apps/../../outside").unwrap_err();
+    let e = read_archive_definition(&data, "apps/../../outside", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("outside the repository"), "{e}");
-    let files = read_archive_definition(&data, "apps/./web/").unwrap();
+    let files = read_archive_definition(&data, "apps/./web/", None)
+        .unwrap()
+        .files;
     assert_eq!(files["app.seed.rhai"], b"app;");
 }
 
@@ -427,8 +466,12 @@ fn a_source_larger_than_any_bundle_is_refused_as_it_is_read() {
     for i in 0..=crate::BUNDLE_FILE_LIMIT {
         write(dir.path(), &format!("many/{i}"), b"");
     }
-    let e = assembled(&dir).unwrap_err();
-    assert!(e.contains("past the 4096 files"), "{e}");
+    let e = read_folder_definition(&dir.path().join("apps/def"), None).unwrap_err();
+    assert!(
+        matches!(e, SourceError::Bundle(BundleError::Invalid { .. })),
+        "{e}"
+    );
+    assert!(e.to_string().contains("past the 4096 files"), "{e}");
 
     let dir = repo(".git", "big.bin", "../big.bin");
     let big = vec![0u8; crate::BUNDLE_SIZE_LIMIT + 1];
@@ -444,7 +487,9 @@ fn an_archive_entry_named_as_a_link_stays_a_link() {
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/shared", "/etc");
         tar_file(b, "o-r-abc/apps/shared", b"shadow");
     });
-    let e = read_archive_definition(&data, "apps").unwrap_err();
+    let e = read_archive_definition(&data, "apps", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("apps/shared is not a regular file"), "{e}");
 }
 
@@ -475,7 +520,11 @@ fn a_lone_file_larger_than_any_bundle_is_refused_as_it_is_read() {
         &vec![b' '; crate::BUNDLE_SIZE_LIMIT + 1],
     );
     let e = read_lone_file(&dir.path().join("big.seed.rhai")).unwrap_err();
-    assert!(e.contains("size limit"), "{e}");
+    assert!(
+        matches!(e, SourceError::Bundle(BundleError::Invalid { .. })),
+        "{e}"
+    );
+    assert!(e.to_string().contains("size limit"), "{e}");
 }
 
 // spec: CLI#definition-sources
@@ -494,14 +543,18 @@ fn only_the_definition_and_its_sources_are_unpacked_from_a_github_archive() {
         tar_file(b, "o-r-abc/assets/huge.bin", &big);
         tar_file(b, "o-r-abc/README.md", b"readme");
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert_eq!(files["lib/db.seed.rhai"], b"db;");
 
     let wanting_it = tarball(|b| {
         tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
         tar_file(b, "o-r-abc/apps/web/huge.bin", &big);
     });
-    let e = read_archive_definition(&wanting_it, "apps/web").unwrap_err();
+    let e = read_archive_definition(&wanting_it, "apps/web", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("size limit"), "{e}");
 }
 
@@ -516,7 +569,9 @@ fn a_folder_at_its_repository_root_is_told_it_is_in_one() {
         "seedling.toml",
         b"[include]\n\"lib\" = \"../lib\"",
     );
-    let e = read_folder_definition(dir.path()).unwrap_err();
+    let e = read_folder_definition(dir.path(), None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("lies outside the repository at"), "{e}");
 }
 
@@ -536,13 +591,15 @@ fn a_non_utf8_path_fails_only_a_definition_that_reads_it() {
         tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
         odd_name(b, b"o-r-abc/docs/caf\xe9.txt");
     });
-    read_archive_definition(&elsewhere, "apps/web").unwrap();
+    read_archive_definition(&elsewhere, "apps/web", None).unwrap();
 
     let within = tarball(|b| {
         tar_file(b, "o-r-abc/apps/web/app.seed.rhai", b"app;");
         odd_name(b, b"o-r-abc/apps/web/caf\xe9.txt");
     });
-    let e = read_archive_definition(&within, "apps/web").unwrap_err();
+    let e = read_archive_definition(&within, "apps/web", None)
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("non-UTF-8"), "{e}");
 }
 
@@ -589,8 +646,12 @@ fn a_definition_reads_the_same_from_disk_and_from_github() {
         ("apps/pages/cache.tmp", b"left out"),
         ("README.md", b"elsewhere"),
     ]);
-    let from_disk = read_folder_definition(&dir.path().join("apps/def")).unwrap();
-    let from_github = read_archive_definition(&data, "apps/def").unwrap();
+    let from_disk = read_folder_definition(&dir.path().join("apps/def"), None)
+        .unwrap()
+        .files;
+    let from_github = read_archive_definition(&data, "apps/def", None)
+        .unwrap()
+        .files;
     assert_eq!(from_disk, from_github);
     assert_eq!(
         from_disk.keys().collect::<Vec<_>>(),
@@ -616,7 +677,9 @@ fn a_link_a_definition_leaves_out_is_no_bar_from_github() {
         tar_file(b, "o-r-abc/apps/web/.seedignore", b"latest\n");
         tar_link(b, tar::EntryType::Symlink, "o-r-abc/apps/web/latest", "v2");
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert!(!files.contains_key("latest"));
 }
 
@@ -638,7 +701,9 @@ fn what_a_github_definition_leaves_out_or_repeats_costs_nothing() {
         tar_file(b, "o-r-abc/apps/web/big.bin", &most);
         tar_file(b, "o-r-abc/apps/shared/big.bin", &most);
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert_eq!(files["big.bin"], most);
     assert!(!files.keys().any(|k| k.starts_with("fixtures")));
 }
@@ -650,7 +715,7 @@ fn a_github_definition_at_the_repository_root_reads_the_whole_repository() {
         tar_file(b, "o-r-abc/app.seed.rhai", b"app;");
         tar_file(b, "o-r-abc/pages/500.html", b"<p>");
     });
-    let files = read_archive_definition(&data, "").unwrap();
+    let files = read_archive_definition(&data, "", None).unwrap().files;
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         vec!["app.seed.rhai", "pages/500.html"]
@@ -677,7 +742,9 @@ fn many_includes_read_from_github_as_few_do() {
             tar_file(b, &format!("o-r-abc/docs/{i}.md"), b"elsewhere");
         }
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert_eq!(
         files[&format!("lib/{}", keys - 1)],
         (keys - 1).to_string().as_bytes()
@@ -699,7 +766,9 @@ fn a_deeply_nested_github_path_is_read_without_exhausting_the_stack() {
         header.set_entry_type(tar::EntryType::Regular);
         b.append_data(&mut header, path, &b"x"[..]).unwrap();
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert_eq!(files[&format!("{deep}/x")], b"x");
 }
 
@@ -718,7 +787,9 @@ fn a_non_utf8_path_a_github_definition_leaves_out_is_no_bar() {
         header.set_cksum();
         b.append(&header, &b"x"[..]).unwrap();
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         [".seedignore", "app.seed.rhai"]
@@ -744,7 +815,9 @@ fn a_copy_beside_its_source_counts_once_against_the_file_limit_from_github() {
             tar_file(b, &format!("o-r-abc/apps/shared/{i}"), contents.as_bytes());
         }
     });
-    let files = read_archive_definition(&data, "apps/web").unwrap();
+    let files = read_archive_definition(&data, "apps/web", None)
+        .unwrap()
+        .files;
     assert_eq!(files.len(), half + 2);
 }
 
@@ -774,8 +847,12 @@ fn an_empty_source_folder_reads_the_same_from_disk_and_from_github() {
         b.append_data(&mut header, "o-r-abc/apps/empty/", &[][..])
             .unwrap();
     });
-    let from_disk = read_folder_definition(&dir.path().join("apps/def")).unwrap_err();
-    let from_github = read_archive_definition(&data, "apps/def").unwrap_err();
+    let from_disk = read_folder_definition(&dir.path().join("apps/def"), None)
+        .unwrap_err()
+        .to_string();
+    let from_github = read_archive_definition(&data, "apps/def", None)
+        .unwrap_err()
+        .to_string();
     assert!(from_disk.ends_with("holds no files"), "{from_disk}");
     assert!(from_github.ends_with("holds no files"), "{from_github}");
 }

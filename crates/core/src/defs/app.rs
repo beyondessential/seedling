@@ -72,9 +72,7 @@ pub(crate) fn capture_closures(
     script_ast: &AST,
     app: &App,
 ) -> Result<ClosureCapture, Box<EvalAltResult>> {
-    let (mut scope, fresh_app) = super::scope(Arc::clone(&app.bundle))
-        // spec: CONST#host-constants
-        .map_err(|e| Box::new(EvalAltResult::ErrorRuntime(e.into(), Position::NONE)))?;
+    let (mut scope, fresh_app) = super::scope(Arc::clone(&app.bundle));
     let _evaluation = fresh_app.guard_evaluation();
     let _seed = app
         .seed

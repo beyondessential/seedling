@@ -2,10 +2,10 @@
 // reconciliation loop is wired up. Until then, suppress dead_code warnings.
 #![allow(dead_code)]
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use parking_lot::Mutex;
-use rhai::{AST, Engine, EvalAltResult, OptimizationLevel, Scope};
+use rhai::{AST, Dynamic, Engine, EvalAltResult, OptimizationLevel, Scope};
 
 use crate::runtime::barrier::{runtime, shell};
 
@@ -156,27 +156,6 @@ pub fn register(engine: &mut Engine) {
     // spec: COL#coercion
     engine.register_fn("col", collection::col);
 
-    // spec: APP#the-app-variable
-    // A closure captures a scope variable as one shared cell, and a method
-    // chain holds a lock on a shared root for its whole length, so a closure
-    // invoked from `app.action(..).invoke(..)` would find `app` locked. Rhai
-    // never shares a resolved variable, so each closure captures its own copy
-    // of the handle; every copy holds the same app.
-    #[expect(
-        deprecated,
-        reason = "Rhai marks on_var deprecated only to flag it as volatile"
-    )]
-    engine.on_var(|name, _, ctx| {
-        if name != "app" {
-            return Ok(None);
-        }
-        Ok(ctx
-            .scope()
-            .get(name)
-            .filter(|value| value.is::<app::App>())
-            .cloned())
-    });
-
     // spec: STD#the-std-module
     engine.register_static_module(stdlib::MODULE, stdlib::module().into());
 
@@ -248,59 +227,64 @@ pub fn finish_evaluation(app: &app::App, limits: &crate::ScriptLimits) -> Result
     gate::check_gates(&def)
 }
 
-/// The scope a script is evaluated in, holding the constants for the host
-/// facts as they stand, and the app it declares into.
+/// The constants and enums every evaluation reads, by name, with the host
+/// constants as `facts` holds them.
 ///
 /// Fails where a host constant the evaluation cannot stand without is
-/// undetermined.
-pub fn scope(bundle: Arc<seedling_bundle::Bundle>) -> Result<(Scope<'static>, app::App), String> {
-    scope_with(&crate::sysconst::get(), bundle)
-}
-
-pub(crate) fn scope_with(
+/// undetermined, unless `facts` has such a constant fail only where it is
+/// read, in which case it is left out.
+pub fn constants(
     facts: &crate::sysconst::SystemFacts,
-    bundle: Arc<seedling_bundle::Bundle>,
-) -> Result<(Scope<'static>, app::App), String> {
+) -> Result<BTreeMap<&'static str, Dynamic>, String> {
     // spec: CONST#host-constants
     // Undetermined memory or host name fails the evaluation rather than
     // standing in a value the script would plan around.
-    let available_memory = facts
-        .available_memory
-        .clone()
-        .map_err(|why| format!("AVAILABLE_MEMORY cannot be determined: {why}"))?;
-    let node_name = facts
-        .node_name
-        .clone()
-        .map_err(|why| format!("NODE_NAME cannot be determined: {why}"))?;
+    if facts.undetermined == crate::sysconst::Undetermined::FailsEvaluation
+        && let Some(why) = crate::sysconst::UNDETERMINABLE
+            .iter()
+            .find_map(|name| facts.why_undetermined(name))
+    {
+        return Err(why);
+    }
 
-    let mut scope = Scope::new();
-
-    // spec: CONST#host-constants
-    scope.push_constant("AVAILABLE_THREADS", facts.available_threads.unwrap_or(1));
+    let mut constants = BTreeMap::new();
 
     // spec: CONST#host-constants
-    scope.push_constant("AVAILABLE_MEMORY", available_memory);
+    constants.insert(
+        "AVAILABLE_THREADS",
+        Dynamic::from(facts.available_threads.unwrap_or(1)),
+    );
 
     // spec: CONST#host-constants
-    scope.push_constant("CPU_ARCHITECTURE", std::env::consts::ARCH.to_owned());
+    if let Ok(memory) = facts.available_memory {
+        constants.insert("AVAILABLE_MEMORY", Dynamic::from(memory));
+    }
 
     // spec: CONST#host-constants
-    scope.push_constant("HOST_HAS_IPV4", facts.ipv4_egress);
+    constants.insert(
+        "CPU_ARCHITECTURE",
+        Dynamic::from(facts.cpu_architecture.clone()),
+    );
 
     // spec: CONST#host-constants
-    scope.push_constant("HOST_HAS_IPV6", facts.ipv6_egress);
+    constants.insert("HOST_HAS_IPV4", Dynamic::from(facts.ipv4_egress));
 
     // spec: CONST#host-constants
-    scope.push_constant("NAT64_ACTIVE", facts.nat64_active);
+    constants.insert("HOST_HAS_IPV6", Dynamic::from(facts.ipv6_egress));
 
     // spec: CONST#host-constants
-    scope.push_constant("HAS_SNAPSHOTS", facts.has_snapshots);
+    constants.insert("NAT64_ACTIVE", Dynamic::from(facts.nat64_active));
 
     // spec: CONST#host-constants
-    scope.push_constant("NODE_NAME", node_name);
+    constants.insert("HAS_SNAPSHOTS", Dynamic::from(facts.has_snapshots));
 
     // spec: CONST#host-constants
-    scope.push_constant("TIMEZONE", facts.timezone.clone());
+    if let Ok(name) = &facts.node_name {
+        constants.insert("NODE_NAME", Dynamic::from(name.clone()));
+    }
+
+    // spec: CONST#host-constants
+    constants.insert("TIMEZONE", Dynamic::from(facts.timezone.clone()));
 
     // spec: CONST#idle-command
     // spec: LINUX#idle-command
@@ -308,31 +292,98 @@ pub(crate) fn scope_with(
         .into_iter()
         .map(|arg| rhai::Dynamic::from(arg.to_owned()))
         .collect();
-    scope.push_constant("IDLE_CMD", idle_cmd);
+    constants.insert("IDLE_CMD", Dynamic::from(idle_cmd));
 
     // spec: CONST#onupdate
-    scope.push_constant("OnUpdate", enums::OnUpdate::rhai_constant());
+    constants.insert("OnUpdate", Dynamic::from(enums::OnUpdate::rhai_constant()));
 
     // spec: CONST#onterminate
-    scope.push_constant("OnTerminate", enums::OnTerminate::rhai_constant());
+    constants.insert(
+        "OnTerminate",
+        Dynamic::from(enums::OnTerminate::rhai_constant()),
+    );
 
     // spec: CONST#onexit
-    scope.push_constant("OnExit", enums::OnExit::rhai_constant());
+    constants.insert("OnExit", Dynamic::from(enums::OnExit::rhai_constant()));
 
     // spec: CONST#priority
-    scope.push_constant("Priority", enums::Priority::rhai_constant());
+    constants.insert("Priority", Dynamic::from(enums::Priority::rhai_constant()));
 
     // spec: CONST#resourcetype
-    scope.push_constant("ResourceType", resource::ResourceKind::rhai_constant());
+    constants.insert(
+        "ResourceType",
+        Dynamic::from(resource::ResourceKind::rhai_constant()),
+    );
 
     // spec: ING#terminate
-    scope.push_constant("Terminate", enums::Terminate::rhai_constant());
+    constants.insert(
+        "Terminate",
+        Dynamic::from(enums::Terminate::rhai_constant()),
+    );
 
     // spec: ING#output
-    scope.push_constant("Output", enums::Output::rhai_constant());
+    constants.insert("Output", Dynamic::from(enums::Output::rhai_constant()));
 
+    Ok(constants)
+}
+
+/// Have `engine` supply the variables a script reads without declaring them:
+/// the constants and enums, from `facts` as they stand now, and the `app`
+/// handle from the scope.
+///
+/// Fails as [`constants`] does.
+pub fn resolve_variables(
+    engine: &mut Engine,
+    facts: &crate::sysconst::SystemFacts,
+) -> Result<(), String> {
+    let constants = constants(facts)?;
+    let undetermined: Vec<(&str, String)> = crate::sysconst::UNDETERMINABLE
+        .iter()
+        .filter_map(|name| Some((*name, facts.why_undetermined(name)?)))
+        .collect();
+    #[expect(
+        deprecated,
+        reason = "Rhai marks on_var deprecated only to flag it as volatile"
+    )]
+    engine.on_var(move |name, _, ctx| {
+        // spec: APP#the-app-variable
+        // A closure captures a scope variable as one shared cell, and a method
+        // chain holds a lock on a shared root for its whole length, so a
+        // closure invoked from `app.action(..).invoke(..)` would find `app`
+        // locked. Rhai never shares a resolved variable, so each closure
+        // captures its own copy of the handle; every copy holds the same app.
+        if name == "app" {
+            return Ok(ctx
+                .scope()
+                .get(name)
+                .filter(|value| value.is::<app::App>())
+                .cloned());
+        }
+        // spec: CONST#constant-lifetime
+        // A function body never sees the script's scope, so the constants are
+        // supplied here rather than placed in it. Rhai holds a resolved
+        // variable read-only, as it does a scope constant, and a variable or
+        // parameter of the same name shadows it.
+        if let Some(value) = constants.get(name) {
+            return Ok((!ctx.scope().contains(name)).then(|| value.clone()));
+        }
+        // spec: CLI#check-host-constants
+        // A constant left out as undetermined fails where it is read.
+        if let Some((_, why)) = undetermined.iter().find(|(n, _)| *n == name)
+            && !ctx.scope().contains(name)
+        {
+            return Err(why.clone().into());
+        }
+        Ok(None)
+    });
+    Ok(())
+}
+
+/// The scope a script is evaluated in, holding the app it declares into.
+pub fn scope(bundle: Arc<seedling_bundle::Bundle>) -> (Scope<'static>, app::App) {
+    let mut scope = Scope::new();
     let app = app::App::with_bundle(bundle);
     // spec: APP#the-app-variable
     scope.push("app", app.clone());
-    Ok((scope, app))
+    (scope, app)
 }

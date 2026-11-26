@@ -94,7 +94,7 @@ fn export_reproduces_the_bundle_into_a_new_folder_only() {
         std::fs::read(target.join("pages/logo.png")).unwrap(),
         [0x89, 0x50, 0x00, 0xff]
     );
-    let files = read_folder_definition(&target).unwrap();
+    let files = read_folder_definition(&target, None).unwrap().files;
     assert_eq!(files.len(), 2);
 
     let err = export(&bundle, &target).unwrap_err();
@@ -137,7 +137,9 @@ fn repo(marker: &str, key: &str, source: &str) -> tempfile::TempDir {
 #[test]
 fn an_exported_bundle_with_includes_pushes_again_unchanged() {
     let dir = repo(".git", "errors", "../pages");
-    let files = read_folder_definition(&dir.path().join("apps/def")).unwrap();
+    let files = read_folder_definition(&dir.path().join("apps/def"), None)
+        .unwrap()
+        .files;
     let wire: Map<String, Value> = files
         .iter()
         .map(|(p, c)| (p.clone(), json!(BASE64.encode(c))))
@@ -145,7 +147,7 @@ fn an_exported_bundle_with_includes_pushes_again_unchanged() {
     let out = tempfile::tempdir().unwrap();
     let target = out.path().join("exported");
     export(&wire, &target).unwrap();
-    assert_eq!(read_folder_definition(&target).unwrap(), files);
+    assert_eq!(read_folder_definition(&target, None).unwrap().files, files);
 }
 
 // spec: CLI#definition-packing
@@ -157,7 +159,7 @@ async fn a_packed_folder_is_the_bundle_a_push_would_send() {
     let first = out.path().join("first.tar.gz");
     assert_eq!(pack(folder.to_str().unwrap(), &first).await.unwrap(), None);
     let packed = Bundle::from_tar_gz(&std::fs::read(&first).unwrap()).unwrap();
-    let pushed = Bundle::from_files(read_folder_definition(&folder).unwrap()).unwrap();
+    let pushed = Bundle::from_files(read_folder_definition(&folder, None).unwrap().files).unwrap();
     assert_eq!(packed.hash(), pushed.hash());
 
     let second = out.path().join("second.tar.gz");

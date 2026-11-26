@@ -14,47 +14,78 @@ pub mod system;
 )]
 mod tests;
 
-/// Configurable limits for the Rhai script engine.
+/// Configurable limits for the Rhai script engine, read from the options the
+/// runtime and the CLI's definition check share.
 // spec: LIM#limits
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, clap::Args)]
 pub struct ScriptLimits {
+    /// Maximum operations per script evaluation (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-operations", default_value_t = ScriptLimits::DEFAULT.max_operations)]
     pub max_operations: u64,
+    /// Maximum function call nesting depth (at least 1)
     // spec: LIM#limits
+    #[arg(long = "script-max-call-depth", default_value_t = ScriptLimits::DEFAULT.max_call_levels, value_parser = parse_call_depth)]
     pub max_call_levels: usize,
+    /// Maximum expression nesting depth (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-expr-depth", default_value_t = ScriptLimits::DEFAULT.max_expr_depth)]
     pub max_expr_depth: usize,
+    /// Maximum string size in bytes (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-string-size", default_value_t = ScriptLimits::DEFAULT.max_string_size)]
     pub max_string_size: usize,
+    /// Maximum array size in elements (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-array-size", default_value_t = ScriptLimits::DEFAULT.max_array_size)]
     pub max_array_size: usize,
+    /// Maximum object map size in entries (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-map-size", default_value_t = ScriptLimits::DEFAULT.max_map_size)]
     pub max_map_size: usize,
+    /// Maximum calls to a derivation helper per evaluation (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-derived-values", default_value_t = ScriptLimits::DEFAULT.max_derived_values)]
     pub max_derived_values: usize,
+    /// Maximum calls to a password hash helper per evaluation (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-password-hashes", default_value_t = ScriptLimits::DEFAULT.max_password_hashes)]
     pub max_password_hashes: usize,
+    /// Maximum bytes of patterns compiled by `std::regex` per evaluation (0 = unlimited)
     // spec: LIM#limits
+    #[arg(long = "script-max-regex-compiled-size", default_value_t = ScriptLimits::DEFAULT.max_regex_compiled_size)]
     pub max_regex_compiled_size: usize,
 }
 
 impl Default for ScriptLimits {
     fn default() -> Self {
-        Self {
-            max_operations: 100_000,
-            max_call_levels: 64,
-            max_expr_depth: 64,
-            max_string_size: 1_048_576,
-            max_array_size: 10_000,
-            max_map_size: 10_000,
-            max_derived_values: 1_000,
-            max_password_hashes: 16,
-            max_regex_compiled_size: 33_554_432,
-        }
+        Self::DEFAULT
     }
 }
 
+// spec: LIM#limits
+fn parse_call_depth(raw: &str) -> Result<usize, String> {
+    let depth: usize = raw.parse().map_err(|e| format!("{e}"))?;
+    if depth == 0 {
+        return Err("a call depth of 0 would allow no function calls".to_owned());
+    }
+    Ok(depth)
+}
+
 impl ScriptLimits {
+    /// The limits an evaluation is held to where no option sets them.
+    pub const DEFAULT: Self = Self {
+        max_operations: 100_000,
+        max_call_levels: 64,
+        max_expr_depth: 64,
+        max_string_size: 1_048_576,
+        max_array_size: 10_000,
+        max_map_size: 10_000,
+        max_derived_values: 1_000,
+        max_password_hashes: 16,
+        max_regex_compiled_size: 33_554_432,
+    };
+
     /// The limits the `std` helpers and the kind parsers hold values to.
     pub fn helpers(&self) -> defs::stdlib::HelperLimits {
         defs::stdlib::HelperLimits {
@@ -66,7 +97,8 @@ impl ScriptLimits {
 }
 
 /// An engine for evaluating a script, and the scope and app it evaluates
-/// into; fails where the scope cannot be built, as [`defs::scope`] does.
+/// into; fails where the host constants cannot be read, as
+/// [`defs::constants`] does.
 pub fn setup_language(
     limits: &ScriptLimits,
     bundle: std::sync::Arc<seedling_bundle::Bundle>,
@@ -87,7 +119,8 @@ pub fn setup_language(
     engine.set_optimization_level(rhai::OptimizationLevel::None);
 
     defs::register(&mut engine);
-    let (scope, app) = defs::scope(bundle)?;
+    defs::resolve_variables(&mut engine, &sysconst::get())?;
+    let (scope, app) = defs::scope(bundle);
     Ok((engine, scope, app))
 }
 

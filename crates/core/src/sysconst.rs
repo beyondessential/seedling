@@ -4,7 +4,7 @@
 //! Some values (IPv4/IPv6 egress, snapshot support, etc.) can only be
 //! determined asynchronously or from runtime daemon state, so they are
 //! cached here once at daemon startup and read synchronously from
-//! `defs::scope()` on every script execution.
+//! `defs::constants()` each time an engine is set up for a script.
 
 use parking_lot::RwLock;
 
@@ -28,9 +28,41 @@ pub struct SystemFacts {
     pub has_snapshots: bool,
     /// Human-readable identifier for the node, or why it is undetermined.
     pub node_name: Result<String, String>,
+    /// The processor architecture, as Rust names it (e.g. `x86_64`).
+    pub cpu_architecture: String,
     /// IANA timezone name of the host (e.g. `Pacific/Auckland`); `UTC` while
     /// the host's local timezone is undetermined.
     pub timezone: String,
+    /// What an undetermined memory or node name does to an evaluation.
+    pub undetermined: Undetermined,
+}
+
+/// What an undetermined host constant that has no stand-in value does to an
+/// evaluation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Undetermined {
+    /// The evaluation fails before the script runs, as the runtime has it.
+    #[default]
+    FailsEvaluation,
+    /// The constant is left out of the scope, and the script fails where it
+    /// reads it, as a definition check has it.
+    FailsRead,
+}
+
+/// The host constants that have no stand-in value while undetermined.
+pub const UNDETERMINABLE: [&str; 2] = ["AVAILABLE_MEMORY", "NODE_NAME"];
+
+impl SystemFacts {
+    /// Why the host constant `name` has no value, where it is one of
+    /// [`UNDETERMINABLE`] and is undetermined.
+    pub fn why_undetermined(&self, name: &str) -> Option<String> {
+        let why = match name {
+            "AVAILABLE_MEMORY" => self.available_memory.as_ref().err(),
+            "NODE_NAME" => self.node_name.as_ref().err(),
+            _ => None,
+        }?;
+        Some(format!("{name} cannot be determined: {why}"))
+    }
 }
 
 impl Default for SystemFacts {
@@ -47,7 +79,9 @@ impl Default for SystemFacts {
             available_memory: Err("the host's memory is read only by the daemon".to_owned()),
             has_snapshots: false,
             node_name: Ok(String::new()),
+            cpu_architecture: std::env::consts::ARCH.to_owned(),
             timezone: "UTC".to_owned(),
+            undetermined: Undetermined::FailsEvaluation,
         }
     }
 }

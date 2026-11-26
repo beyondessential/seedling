@@ -132,7 +132,7 @@ fn a_redirect_on_an_ingress_whose_final_termination_is_not_https_fails_evaluatio
     ] {
         let err = evaluate(script).expect("the definition fails to evaluate");
         assert!(
-            err.0.contains("example.com:443"),
+            err.message.contains("example.com:443"),
             "names the ingress: {err}"
         );
     }
@@ -515,7 +515,7 @@ fn conflicting_claims_on_a_port_fail_evaluation_naming_both_ingresses() {
     ] {
         let err = evaluate(script).expect("the definition fails to evaluate");
         assert!(
-            err.0.contains(first) && err.0.contains(second),
+            err.message.contains(first) && err.message.contains(second),
             "names both ingresses: {err}"
         );
     }
@@ -530,7 +530,7 @@ fn a_pass_through_ingress_and_a_dtls_ingress_claim_different_transports() {
             s.ingress("a.example.com", 5684);
             s.ingress("a.example.com", 5684).tls(Terminate.Dtls, Output.Udp);"#
         )
-        .is_some_and(|e| e.0.contains("ingress conflict")),
+        .is_some_and(|e| e.message.contains("ingress conflict")),
         "the same hostname and port is one ingress, whatever its termination"
     );
     assert!(
@@ -553,7 +553,7 @@ fn a_redirect_on_the_ingresses_own_port_fails_evaluation() {
     )
     .expect("the definition fails to evaluate");
     assert!(
-        err.0.contains("example.com:443"),
+        err.message.contains("example.com:443"),
         "names the ingress: {err}"
     );
 }

@@ -1,9 +1,8 @@
 //! Reading a definition from a folder of a GitHub repository, at a branch,
 //! tag or commit.
 
-use std::collections::BTreeMap;
-
-use seedling_bundle::source::read_archive_definition;
+use seedling_bundle::source::{Assembled, SourceError, read_archive_definition};
+use semver::Version;
 
 /// A GitHub URL naming a folder: `https://github.com/<owner>/<repo>/tree/<rest>`,
 /// where `<rest>` is a ref followed by a path and the split between them is
@@ -62,10 +61,14 @@ fn authorise(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 
 /// Resolve the URL's ref to a commit, download that commit, and read the
 /// folder out of it, with the URL and commit to record as its origin.
+///
+/// Where `running` is given, the definition is held to it before its include
+/// table is read.
 // spec: CLI#definition-sources
 pub(super) async fn download(
     url: &GithubUrl,
-) -> Result<(BTreeMap<String, Vec<u8>>, (String, String)), String> {
+    running: Option<&Version>,
+) -> Result<(Assembled, (String, String)), SourceError> {
     let client = client()?;
     let mut resolved = None;
     for (git_ref, folder) in url.splits() {
@@ -89,7 +92,7 @@ pub(super) async fn download(
         if resp.status() != reqwest::StatusCode::NOT_FOUND
             && resp.status() != reqwest::StatusCode::UNPROCESSABLE_ENTITY
         {
-            return Err(format!("GitHub refused {api}: {}", resp.status()));
+            return Err(format!("GitHub refused {api}: {}", resp.status()).into());
         }
     }
     let (sha, folder) =
@@ -104,16 +107,16 @@ pub(super) async fn download(
         .await
         .map_err(|e| format!("cannot download {tarball}: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("GitHub refused {tarball}: {}", resp.status()));
+        return Err(format!("GitHub refused {tarball}: {}", resp.status()).into());
     }
     let bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("cannot download {tarball}: {e}"))?;
 
-    let files = read_archive_definition(&bytes, &folder)?;
-    if files.is_empty() {
-        return Err(format!("{} holds no files", url.url));
+    let assembled = read_archive_definition(&bytes, &folder, running)?;
+    if assembled.files.is_empty() {
+        return Err(format!("{} holds no files", url.url).into());
     }
-    Ok((files, (url.url.clone(), sha)))
+    Ok((assembled, (url.url.clone(), sha)))
 }

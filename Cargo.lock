@@ -4111,6 +4111,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
 name = "pbkdf2"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5194,12 +5200,16 @@ dependencies = [
  "crossterm",
  "dirs",
  "futures-util",
+ "jiff 1.0.1",
  "lloggs",
+ "pathdiff",
  "quinn",
  "reqwest",
  "rustls",
  "seedling-bundle",
+ "seedling-core",
  "seedling-protocol",
+ "semver",
  "serde_json",
  "tempfile",
  "tokio",
