@@ -21,50 +21,45 @@ mod tests;
 pub struct ScriptLimits {
     /// Maximum operations per script evaluation (0 = unlimited)
     // spec: LIM#limits
-    #[arg(long = "script-max-operations", default_value_t = 100_000)]
+    #[arg(long = "script-max-operations", default_value_t = ScriptLimits::DEFAULT.max_operations)]
     pub max_operations: u64,
     /// Maximum function call nesting depth (at least 1)
     // spec: LIM#limits
-    #[arg(long = "script-max-call-depth", default_value_t = 64, value_parser = parse_call_depth)]
+    #[arg(long = "script-max-call-depth", default_value_t = ScriptLimits::DEFAULT.max_call_levels, value_parser = parse_call_depth)]
     pub max_call_levels: usize,
     /// Maximum expression nesting depth (0 = unlimited)
     // spec: LIM#limits
-    #[arg(long = "script-max-expr-depth", default_value_t = 64)]
+    #[arg(long = "script-max-expr-depth", default_value_t = ScriptLimits::DEFAULT.max_expr_depth)]
     pub max_expr_depth: usize,
     /// Maximum string size in bytes (0 = unlimited)
     // spec: LIM#limits
-    #[arg(long = "script-max-string-size", default_value_t = 1_048_576)]
+    #[arg(long = "script-max-string-size", default_value_t = ScriptLimits::DEFAULT.max_string_size)]
     pub max_string_size: usize,
     /// Maximum array size in elements (0 = unlimited)
     // spec: LIM#limits
-    #[arg(long = "script-max-array-size", default_value_t = 10_000)]
+    #[arg(long = "script-max-array-size", default_value_t = ScriptLimits::DEFAULT.max_array_size)]
     pub max_array_size: usize,
     /// Maximum object map size in entries (0 = unlimited)
     // spec: LIM#limits
-    #[arg(long = "script-max-map-size", default_value_t = 10_000)]
+    #[arg(long = "script-max-map-size", default_value_t = ScriptLimits::DEFAULT.max_map_size)]
     pub max_map_size: usize,
     /// Maximum calls to a derivation helper per evaluation (0 = unlimited)
     // spec: LIM#limits
-    #[arg(long = "script-max-derived-values", default_value_t = 1_000)]
+    #[arg(long = "script-max-derived-values", default_value_t = ScriptLimits::DEFAULT.max_derived_values)]
     pub max_derived_values: usize,
     /// Maximum calls to a password hash helper per evaluation (0 = unlimited)
     // spec: LIM#limits
-    #[arg(long = "script-max-password-hashes", default_value_t = 16)]
+    #[arg(long = "script-max-password-hashes", default_value_t = ScriptLimits::DEFAULT.max_password_hashes)]
     pub max_password_hashes: usize,
     /// Maximum bytes of patterns compiled by `std::regex` per evaluation (0 = unlimited)
     // spec: LIM#limits
-    #[arg(long = "script-max-regex-compiled-size", default_value_t = 33_554_432)]
+    #[arg(long = "script-max-regex-compiled-size", default_value_t = ScriptLimits::DEFAULT.max_regex_compiled_size)]
     pub max_regex_compiled_size: usize,
 }
 
 impl Default for ScriptLimits {
     fn default() -> Self {
-        #[derive(clap::Parser)]
-        struct Defaults {
-            #[command(flatten)]
-            limits: ScriptLimits,
-        }
-        <Defaults as clap::Parser>::parse_from(["seedling"]).limits
+        Self::DEFAULT
     }
 }
 
@@ -78,6 +73,19 @@ fn parse_call_depth(raw: &str) -> Result<usize, String> {
 }
 
 impl ScriptLimits {
+    /// The limits an evaluation is held to where no option sets them.
+    pub const DEFAULT: Self = Self {
+        max_operations: 100_000,
+        max_call_levels: 64,
+        max_expr_depth: 64,
+        max_string_size: 1_048_576,
+        max_array_size: 10_000,
+        max_map_size: 10_000,
+        max_derived_values: 1_000,
+        max_password_hashes: 16,
+        max_regex_compiled_size: 33_554_432,
+    };
+
     /// The limits the `std` helpers and the kind parsers hold values to.
     pub fn helpers(&self) -> defs::stdlib::HelperLimits {
         defs::stdlib::HelperLimits {
