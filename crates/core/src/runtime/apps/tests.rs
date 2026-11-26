@@ -1025,6 +1025,25 @@ fn a_script_error_in_a_function_lies_where_it_was_raised() {
 
 // spec: CLI#check-results
 #[test]
+fn an_error_with_no_position_in_a_function_is_not_placed_at_its_call() {
+    let bundle = seedling_bundle::Bundle::from_files([(
+        "app.seed.rhai".to_owned(),
+        b"fn fail() {}\nfail();\n".to_vec(),
+    )])
+    .unwrap();
+    let cause = rhai::EvalAltResult::ErrorRuntime("broken".into(), rhai::Position::NONE);
+    let e = rhai::EvalAltResult::ErrorInFunctionCall(
+        "fail".into(),
+        String::new(),
+        cause.into(),
+        rhai::Position::new(2, 1),
+    );
+    let err = ScriptError::raised(bundle.script().unwrap(), &e);
+    assert_eq!(err.at, None, "{err}");
+}
+
+// spec: CLI#check-results
+#[test]
 fn a_syntax_error_lies_at_its_line() {
     let err = script_error_at(&[("app.seed.rhai", "let a = 1;\nlet = ;\n")]);
     assert_eq!(err.at, Some(("app.seed.rhai".to_owned(), 2)), "{err}");

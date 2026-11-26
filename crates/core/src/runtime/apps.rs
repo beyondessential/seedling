@@ -54,16 +54,17 @@ impl ScriptError {
 
     /// An error Rhai raised evaluating `script`, at the position where it
     /// arose: for one raised inside a called function, the position in the
-    /// function rather than where it was called.
+    /// function rather than where it was called, and none where it arose at
+    /// no position.
     // spec: BND#script-formation
+    // spec: CLI#check-results
     fn raised(script: &seedling_bundle::Script, e: &rhai::EvalAltResult) -> Self {
         fn innermost(e: &rhai::EvalAltResult) -> rhai::Position {
-            let inner = match e {
+            match e {
                 rhai::EvalAltResult::ErrorInFunctionCall(_, _, inner, _)
                 | rhai::EvalAltResult::ErrorInModule(_, inner, _) => innermost(inner),
-                _ => rhai::Position::NONE,
-            };
-            if inner.is_none() { e.position() } else { inner }
+                _ => e.position(),
+            }
         }
         let at = innermost(e)
             .line()
