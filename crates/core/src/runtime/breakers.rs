@@ -410,14 +410,14 @@ pub fn record_outcome(
     run: &Run,
     outcome: Outcome,
 ) {
-    let (name, cipher, checked, run) = (
-        app.clone(),
-        std::sync::Arc::clone(cipher),
-        thing.clone(),
-        run.clone(),
-    );
     match outcome {
         Outcome::RanOut { generation, limits } => {
+            let (name, cipher, checked, run) = (
+                app.clone(),
+                std::sync::Arc::clone(cipher),
+                thing.clone(),
+                run.clone(),
+            );
             if let Err(e) =
                 db.call(move |db| trip(db, &cipher, &name, &checked, &run, generation, &limits))
             {
@@ -425,7 +425,16 @@ pub fn record_outcome(
             }
         }
         Outcome::InTime(standing) => {
-            db.call(move |db| finished_in_time(db, &cipher, &name, &checked, &run, standing));
+            // The in-time record is digests held in memory, so it is made
+            // here. A breaker that was clear, which is the common end of a
+            // pass, needs the database for nothing at all.
+            note_in_time(cipher, app, thing, run);
+            if standing != Standing::Clear {
+                let (name, checked) = (app.clone(), thing.clone());
+                if let Err(e) = db.call(move |db| reset(db, &name, &checked)) {
+                    tracing::error!(%app, "{e}");
+                }
+            }
         }
     }
 }
@@ -576,15 +585,23 @@ pub fn finished_in_time(
     run: &Run,
     standing: Standing,
 ) {
+    note_in_time(cipher, app, thing, run);
+    if standing != Standing::Clear
+        && let Err(e) = reset(db, app, thing)
+    {
+        tracing::error!(%app, "{e}");
+    }
+}
+
+/// Hold `run` as the last evaluation of `thing` that finished within the
+/// limit, for a later runaway's likely cause to be judged against. Holds
+/// digests alone, and touches no storage.
+// spec: FLT#app-faults
+fn note_in_time(cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) {
     LAST_IN_TIME.lock().insert(
         (app.clone(), thing.clone()),
         (run.definition.clone(), run.input_digests(cipher)),
     );
-    if standing != Standing::Clear
-        && let Err(e) = reset(db, app, thing)
-    {
-        tracing::error!(%app, "cannot reset the breaker of {}: {e}", thing.describe());
-    }
 }
 
 /// The likely cause of a runaway of `run`, judged against the last
