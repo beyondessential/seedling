@@ -488,25 +488,29 @@ fn undetermined_memory_fails_where_a_closure_captures_it() {
 }
 
 // spec: CLI#check-host-constants
+// spec: CONST#constant-lifetime
 #[test]
-fn undetermined_memory_read_in_a_function_fails_as_it_would_when_given() {
+fn undetermined_memory_read_in_a_function_fails_where_it_is_read() {
     let dir = dir_with(&[(
         "m.seed.rhai",
         "fn half() {\n    AVAILABLE_MEMORY / 2\n}\nlet h = half();\n",
     )]);
-    let undetermined = check(dir.path(), &["m.seed.rhai", "--json"]);
+    let run = check(dir.path(), &["m.seed.rhai", "--json"]);
+    assert_eq!(run.status, 1);
+    let errors = json_errors(&run);
+    assert_eq!(errors[0]["line"], 2, "{errors:?}");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("AVAILABLE_MEMORY cannot be determined"),
+        "{errors:?}"
+    );
     let given = check(
         dir.path(),
-        &[
-            "m.seed.rhai",
-            "--json",
-            "--const",
-            "AVAILABLE_MEMORY=2147483648",
-        ],
+        &["m.seed.rhai", "--const", "AVAILABLE_MEMORY=2147483648"],
     );
-    assert_eq!(undetermined.status, 1);
-    assert_eq!(json_errors(&undetermined), json_errors(&given));
-    assert_eq!(json_errors(&undetermined)[0]["line"], 2);
+    assert_eq!(given.status, 0, "{}", given.stderr);
 }
 
 // spec: CLI#check-host-constants

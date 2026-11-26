@@ -412,8 +412,7 @@ fn undetermined_memory_fails_the_evaluation() {
         available_memory: Err("no meminfo".to_owned()),
         ..facts()
     };
-    let err = crate::defs::scope_with(&undetermined, Default::default())
-        .expect_err("the evaluation fails");
+    let err = crate::defs::constants(&undetermined).expect_err("the evaluation fails");
     assert!(err.contains("AVAILABLE_MEMORY"), "{err}");
 }
 
@@ -425,12 +424,11 @@ fn undetermined_memory_is_left_out_where_only_a_read_fails() {
         undetermined: crate::sysconst::Undetermined::FailsRead,
         ..facts()
     };
-    let (scope, _app) =
-        crate::defs::scope_with(&undetermined, Default::default()).expect("the scope builds");
-    assert!(!scope.contains("AVAILABLE_MEMORY"));
+    let constants = crate::defs::constants(&undetermined).expect("the constants are read");
+    assert!(!constants.contains_key("AVAILABLE_MEMORY"));
     assert_eq!(
-        scope.get_value::<String>("NODE_NAME").as_deref(),
-        Some("host")
+        constants["NODE_NAME"].clone().into_string().unwrap(),
+        "host"
     );
 }
 
@@ -441,8 +439,7 @@ fn an_undetermined_node_name_fails_the_evaluation() {
         node_name: Err("no hostname".to_owned()),
         ..facts()
     };
-    let err = crate::defs::scope_with(&undetermined, Default::default())
-        .expect_err("the evaluation fails");
+    let err = crate::defs::constants(&undetermined).expect_err("the evaluation fails");
     assert!(err.contains("NODE_NAME"), "{err}");
 }
 
@@ -453,11 +450,66 @@ fn undetermined_threads_read_as_one() {
         available_threads: None,
         ..facts()
     };
-    let (scope, _app) =
-        crate::defs::scope_with(&undetermined, Default::default()).expect("the scope builds");
-    assert_eq!(scope.get_value::<i64>("AVAILABLE_THREADS"), Some(1));
+    let constants = crate::defs::constants(&undetermined).expect("the constants are read");
+    assert_eq!(constants["AVAILABLE_THREADS"].as_int(), Ok(1));
     assert_eq!(
-        scope.get_value::<String>("NODE_NAME").as_deref(),
-        Some("host")
+        constants["NODE_NAME"].clone().into_string().unwrap(),
+        "host"
     );
+}
+
+// spec: CONST#constant-lifetime
+#[test]
+fn a_function_reads_constants_and_enums() {
+    let app = run_test_script_app(
+        r#"
+        fn half() { AVAILABLE_MEMORY / 2 }
+        fn critical() { Priority.Critical }
+        fn idle() { IDLE_CMD }
+        if half() * 2 != AVAILABLE_MEMORY { throw "half"; }
+        if idle() != IDLE_CMD { throw "idle"; }
+        let f = || [1].map(|v| TIMEZONE);
+        if f.call()[0] != TIMEZONE { throw "closure"; }
+        app.deployment("api").image("docker.io/library/nginx:1").priority(critical());
+    "#,
+    );
+    let def = app.def.load();
+    let priority = def.resources.values().find_map(|r| match r {
+        Resource::Deployment(d) => Some(d.def.lock().priority),
+        _ => None,
+    });
+    assert_eq!(priority, Some(Priority::Critical));
+}
+
+// spec: CONST#constant-lifetime
+#[test]
+fn a_variable_or_parameter_shadows_a_constant() {
+    run_test_script_app(
+        r#"
+        fn given(AVAILABLE_THREADS) { AVAILABLE_THREADS }
+        fn local() { let NODE_NAME = "inner"; NODE_NAME }
+        if given(-3) != -3 { throw "parameter"; }
+        if local() != "inner" { throw "local"; }
+        let TIMEZONE = "Mars/Olympus";
+        if TIMEZONE != "Mars/Olympus" { throw "top level"; }
+    "#,
+    );
+}
+
+// spec: CONST#constant-lifetime
+#[test]
+fn a_constant_cannot_be_changed() {
+    for script in [
+        "AVAILABLE_THREADS = 5;",
+        "fn f() { AVAILABLE_THREADS += 1; } f();",
+        "IDLE_CMD.push(\"x\");",
+        "fn f() { IDLE_CMD[0] = \"x\"; } f();",
+    ] {
+        let err = run_test_script_err(script);
+        let message = err.to_string();
+        assert!(
+            message.contains("constant") || message.contains("Constant"),
+            "{script}: {message}"
+        );
+    }
 }

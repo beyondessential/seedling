@@ -4,7 +4,7 @@
 //! Some values (IPv4/IPv6 egress, snapshot support, etc.) can only be
 //! determined asynchronously or from runtime daemon state, so they are
 //! cached here once at daemon startup and read synchronously from
-//! `defs::scope()` on every script execution.
+//! `defs::constants()` each time an engine is set up for a script.
 
 use parking_lot::RwLock;
 

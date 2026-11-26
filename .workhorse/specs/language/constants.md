@@ -16,7 +16,7 @@ Applies to the constants and enums that BSL places in the scope of every [script
 
 ## Constant lifetime
 
-The runtime MUST place every constant and enum in this specification in the scope of each evaluation of a script.
+The runtime MUST place every constant and enum in this specification in the scope of each evaluation of a script, where the script reads it at its top level and within every function it defines.
 A constant's value MUST NOT change during one evaluation.
 A later evaluation MAY see a different value.
 

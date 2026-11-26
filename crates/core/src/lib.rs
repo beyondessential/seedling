@@ -97,7 +97,8 @@ impl ScriptLimits {
 }
 
 /// An engine for evaluating a script, and the scope and app it evaluates
-/// into; fails where the scope cannot be built, as [`defs::scope`] does.
+/// into; fails where the host constants cannot be read, as
+/// [`defs::constants`] does.
 pub fn setup_language(
     limits: &ScriptLimits,
     bundle: std::sync::Arc<seedling_bundle::Bundle>,
@@ -118,7 +119,8 @@ pub fn setup_language(
     engine.set_optimization_level(rhai::OptimizationLevel::None);
 
     defs::register(&mut engine);
-    let (scope, app) = defs::scope(bundle)?;
+    defs::resolve_variables(&mut engine, &sysconst::get())?;
+    let (scope, app) = defs::scope(bundle);
     Ok((engine, scope, app))
 }
 

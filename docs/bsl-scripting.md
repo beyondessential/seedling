@@ -281,6 +281,8 @@ col.select(#{ name_patterns: ["worker-*"] })
 
 ### Constants
 
+Constants and enums can be read anywhere in a script, including inside the functions it defines. A variable or parameter of the same name hides one.
+
 | Name | Type | Description |
 |---|---|---|
 | `AVAILABLE_THREADS` | int | Compute threads available; `1` while undetermined, with a `host_constant_undetermined` fault on `_system` |

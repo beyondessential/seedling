@@ -52,7 +52,7 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 - [x] `--const IDLE_CMD=x`, `--const NOT_A_CONSTANT=1`, and the same constant given twice: each exits 2 (verifies spec: CLI#check-host-constants)
 - [ ] On each of the Linux, macOS and Windows builds, a script that reads `AVAILABLE_MEMORY`: with no `--const` the evaluation fails as a `script` error at the line that reads it; with `--const AVAILABLE_MEMORY=2147483648` it passes (verifies spec: CLI#check-host-constants)
 - [x] A closure that captures `AVAILABLE_MEMORY`: with no `--const` the `script` error lies at the line that creates it (verifies spec: CLI#check-host-constants)
-- [x] A script that reads `AVAILABLE_MEMORY` only inside a function it calls: with no `--const` it fails as it does with the constant given, at the line in the function that reads it (verifies spec: CLI#check-host-constants)
+- [x] A script that reads `AVAILABLE_MEMORY` only inside a function it calls: with no `--const` the `script` error lies at the line in the function that reads it; with `--const AVAILABLE_MEMORY=2147483648` it passes (verifies spec: CLI#check-host-constants, CONST#constant-lifetime)
 - [x] A script that never reads `AVAILABLE_MEMORY`, or reads it only in a branch not taken: with no `--const` it passes (verifies spec: CLI#check-host-constants)
 - [x] A script that declares its own `AVAILABLE_MEMORY` variable and reads it: with no `--const` it passes (verifies spec: CLI#check-host-constants)
 - [ ] On the macOS and Windows builds, a script that prints `AVAILABLE_THREADS` and `CPU_ARCHITECTURE` into a throw: both are the machine's own values (verifies spec: CLI#check-host-constants)
