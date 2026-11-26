@@ -72,13 +72,6 @@ let upstream = app.external_service("upstream")
 let echo = app.external_service("echo")
     .description("A TCP echo server on port 7000; map it to paired-provider/echo");
 
-// An external service takes the HTTP view, routes, redirects and balancing a
-// service does. No ingress can be declared on an external service, so nothing
-// serves these settings; they are here so the definition exercises them.
-upstream.balance(#{ policy: "first", try_duration: "2s" });
-let upstream_http = upstream.http(80);
-upstream_http.route("/v1").redirect("/v2", 308);
-
 // An external volume: storage the operator supplies by mapping it, here to
 // paired-provider's exported volume.
 let provider_volume = app.external_volume("shared")
@@ -138,7 +131,7 @@ while true; do
   wait
 done
 `])
-    .mount(upstream_http.port(80))
+    .mount(upstream.port(80))
     .mount(echo.port(7000))
     .mount("/www", page);
 

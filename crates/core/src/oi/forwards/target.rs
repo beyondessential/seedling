@@ -55,11 +55,11 @@ fn collect_pod_ports(pod: &PodDef, declared: &mut DeclaredPorts) {
     declare_bindings(&pod.tcp_bindings, ForwardProto::Tcp);
     declare_bindings(&pod.udp_bindings, ForwardProto::Udp);
     for binding in &pod.http_bindings {
-        declare(
-            &binding.route.http.service,
+        declared.insert((
+            binding.route.http.service.name.as_str().to_owned(),
             binding.route.http.port.get(),
             ForwardProto::Tcp,
-        );
+        ));
     }
 }
 

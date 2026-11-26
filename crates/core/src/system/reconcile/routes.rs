@@ -314,7 +314,7 @@ fn collect_ports(pod: &PodDef, service_name: &str, ports: &mut std::collections:
     for b in pod
         .http_bindings
         .iter()
-        .filter(|b| b.route.http.service.name().as_str() == service_name)
+        .filter(|b| b.route.http.service.name.as_str() == service_name)
     {
         ports.insert(b.route.http.port.get());
     }
@@ -344,7 +344,7 @@ fn pod_def_backs_service(pod: &PodDef, service_name: &str) -> bool {
         || pod
             .http_bindings
             .iter()
-            .any(|b| b.route.http.service.name().as_str() == service_name)
+            .any(|b| b.route.http.service.name.as_str() == service_name)
 }
 
 #[cfg(test)]

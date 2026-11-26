@@ -7,7 +7,7 @@ use super::deployment::Deployment;
 use super::ingress::Ingress;
 use super::job::Job;
 use super::resource::{ResourceId, ResourceKind, ResourceName};
-use super::service::{BoundService, ExternalService, HttpService, Service};
+use super::service::{ExternalService, HttpService, Service};
 use super::volume::{ExternalVolume, Volume};
 use crate::runtime::identity::InstanceId;
 
@@ -151,10 +151,7 @@ pub fn col(val: Dynamic) -> Collection {
 
     // An HttpService is a view of a service, so it is that service.
     if let Some(h) = val.clone().try_cast::<HttpService>() {
-        return match h.service {
-            BoundService::App(svc) => col(Dynamic::from(svc)),
-            BoundService::External(ext) => col(Dynamic::from(ext)),
-        };
+        return col(Dynamic::from(h.service));
     }
 
     if let Some(job) = val.clone().try_cast::<Job>() {

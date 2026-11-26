@@ -33,7 +33,7 @@ The compression, balancing, rate-limiting and header settings declared on a serv
 
 ## Declaration
 
-A script obtains an HTTP service with `service.http()` or `service.http(port: number)`, on a Service or on an [External Service](service.md#external-services).
+A script obtains an HTTP service with `service.http()` or `service.http(port: number)` on a Service.
 Either method returns an `HttpService`.
 The `port` is the [Service Port](service.md#service-ports) on which the HTTP service is reached, and defaults to 80.
 A `port` MUST be validated as a [port number](overview.md#ports).
@@ -44,7 +44,6 @@ Settings declared through an `HttpService` MUST be recorded on the Service it vi
 `httpService.port(port: number)` returns the `ServicePort` of the viewed Service at `port`, as `service.port(port)` does.
 
 `httpService.ingress(hostname: string, port: number)` MUST declare an [ingress](ingress.md) on the viewed Service, exactly as `service.ingress(hostname, port)` does.
-Called on an `HttpService` that views an External Service, it MUST throw.
 
 ## Routes
 
@@ -84,7 +83,6 @@ A script declares one with these methods of `HttpServiceRoute`:
 The `config` map carries `to`, which is REQUIRED, and `code`, which is OPTIONAL.
 A `config` with any other key MUST throw.
 
-The methods MUST be accepted on the routes of a Service and of an External Service alike.
 A redirect route MUST NOT require a pod bound to it.
 
 ### Redirect targets
@@ -187,8 +185,8 @@ How the runtime compresses is specified by [route compression](../runtime/proxy.
 
 ## Balancing
 
-A script declares how the proxy chooses among a service's backends with `balance(config: map)`, on a Service, an External Service, an `HttpService` or an `HttpServiceRoute`.
-On the first three, `balance` sets one service-wide value.
+A script declares how the proxy chooses among a service's backends with `balance(config: map)`, on a Service, an `HttpService` or an `HttpServiceRoute`.
+On the first two, `balance` sets one service-wide value.
 On a route, it overrides that value for the route.
 
 | field | type | default | meaning |

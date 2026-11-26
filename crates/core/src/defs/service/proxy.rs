@@ -251,28 +251,13 @@ pub(crate) fn check_route_balances(def: &crate::defs::app::AppDef) -> Result<(),
     use crate::defs::resource::Resource;
 
     for resource in def.resources.values() {
-        let (kind, name, service_level, http) = match resource {
-            Resource::Service(service) => {
-                let def = service.def.lock();
-                (
-                    "service",
-                    service.name.to_string(),
-                    def.proxy_settings(),
-                    def.http.clone(),
-                )
-            }
-            Resource::ExternalService(service) => {
-                let def = service.def.lock();
-                (
-                    "external service",
-                    service.name.to_string(),
-                    def.proxy_settings(),
-                    def.http.clone(),
-                )
-            }
-            _ => continue,
+        let Resource::Service(service) = resource else {
+            continue;
         };
-        let Some(http) = http else { continue };
+        let def = service.def.lock();
+        let Some(http) = &def.http else { continue };
+        let service_level = def.proxy_settings();
+        let name = &service.name;
 
         let mut prefixes: Vec<&str> = http.routes.keys().map(String::as_str).collect();
         if !http.routes.contains_key("/") {
@@ -284,9 +269,9 @@ pub(crate) fn check_route_balances(def: &crate::defs::app::AppDef) -> Result<(),
                 .spins()
             {
                 return Err(format!(
-                    "route `{prefix}` of {kind} '{name}' resolves to a balance `interval` of zero \
+                    "route `{prefix}` of service '{name}' resolves to a balance `interval` of zero \
                      with a non-zero `try_duration`, which retries without pause; give the \
-                     route or the {kind} an `interval` above zero, or a `try_duration` of zero"
+                     route or the service an `interval` above zero, or a `try_duration` of zero"
                 ));
             }
         }

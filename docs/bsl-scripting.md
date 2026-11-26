@@ -102,7 +102,7 @@ svc.ingress("dtls.example.com", 5684)
 
 // HttpService.ingress() delegates to the wrapped Service, so chains
 // that flow through .http() can declare ingresses without backing out.
-// The resulting Ingress is bound to the Service. Throws on external services.
+// The resulting Ingress is bound to the Service.
 http_svc.ingress("api.example.com", 443).tls(Terminate.Https, Output.Http1);
 
 // External services are slots; the operator maps them to a concrete endpoint.
