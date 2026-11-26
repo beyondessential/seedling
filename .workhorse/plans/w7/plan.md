@@ -14,11 +14,11 @@
 
 ## First PR
 
-- [ ] Run stored closures against the definition's functions, through one helper shared by replay and probe
-- [ ] Pin rhai to a commit on main; replace the hold comment with the reason and the switch back to `=1.27.1`
-- [ ] Drop the stale dependabot ignore for `rhai >= 1.26`
-- [ ] Turn on rhai's `compact_str` feature and drop the `smartstring` patch (root and fuzz workspace)
-- [ ] clippy, fmt, spec style and citation checks; core tests
+- [x] Run stored closures against the definition's functions, through one helper shared by replay and probe
+- [x] Pin rhai to a commit on main; replace the hold comment with the reason and the switch back to `=1.27.1`
+- [x] Drop the stale dependabot ignore for `rhai >= 1.26`
+- [x] Turn on rhai's `compact_str` feature and drop the `smartstring` patch (root and fuzz workspace). rhai lists `smartstring` as a required dependency, so it stays compiled and in the lockfile, though nothing uses it
+- [x] clippy, fmt, spec style and citation checks; core tests
 
 ## After the first PR merges
 
