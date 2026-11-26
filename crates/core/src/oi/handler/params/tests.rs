@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::oi::test_support::{PARAMS_SCRIPT, TestOi};
+use crate::oi::test_support::{PARAMS_SCRIPT, TestOi, runaway_limits};
 
 fn oi_with_params_app() -> TestOi {
     let oi = TestOi::new();
@@ -1426,5 +1426,53 @@ fn a_plan_and_an_update_take_native_values_as_a_change_does() {
     assert_eq!(
         stored_values(&oi),
         vec![("replicas".to_owned(), "2".to_owned())]
+    );
+}
+
+// spec: PARAM#validators
+// spec: PRM#change-planning
+// spec: WIRE#error-codes
+#[test]
+fn a_validator_that_runs_away_refuses_the_change_and_is_a_plan_rejection() {
+    let oi = TestOi::with_script_limits(runaway_limits());
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.param("pattern").required(false).validate(|v, all| {
+                    if v == "spin" { loop {} }
+                });
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+
+    let (code, message) = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "params": { "pattern": "spin" } }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "evaluation_runaway", "{message}");
+    assert_eq!(stored_values(&oi), vec![]);
+    assert_eq!(generation_count(&oi), 1);
+
+    let plan = oi
+        .call(
+            "/apps/plan",
+            json!({ "app": "demo", "proposed_params": { "pattern": "spin" } }),
+        )
+        .unwrap();
+    let rejections = plan["rejections"].as_array().unwrap();
+    assert_eq!(rejections.len(), 1, "{plan}");
+    assert_eq!(rejections[0]["name"], "pattern");
+    assert!(
+        rejections[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("evaluation time limit"),
+        "{plan}"
     );
 }

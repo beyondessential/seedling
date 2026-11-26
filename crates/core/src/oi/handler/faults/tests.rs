@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::oi::test_support::TestOi;
+use crate::oi::test_support::{TestOi, runaway_limits};
 
 /// Registers `broken` (script error fault) and `demo` (no faults).
 fn oi_with_fault() -> TestOi {
@@ -113,4 +113,41 @@ fn an_unregistered_app_is_not_found() {
         let (code, _) = oi.call(method, json!({ "app": "ghost" })).unwrap_err();
         assert_eq!(code, "not_found", "{method}");
     }
+}
+
+fn runaway_ids(oi: &TestOi) -> Vec<String> {
+    oi.call("/faults/list", json!({ "app": "spinning" }))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "evaluation_runaway")
+        .map(|f| f["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+// spec: LIM#breakers
+// spec: FLTS#clearing-faults
+#[test]
+fn clearing_a_definitions_runaway_evaluates_it_again() {
+    let oi = TestOi::with_script_limits(runaway_limits());
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "spinning",
+            "script": r#"
+                loop {}
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    let tripped = runaway_ids(&oi);
+    assert_eq!(tripped.len(), 1);
+
+    oi.call("/faults/clear", json!({ "app": "spinning" }))
+        .unwrap();
+    let again = runaway_ids(&oi);
+    assert_eq!(again.len(), 1, "the definition ran away again");
+    assert_ne!(again, tripped, "a new fault was filed by a new evaluation");
 }

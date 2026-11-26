@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::oi::test_support::{MINIMAL_SCRIPT, TestOi};
+use crate::oi::test_support::{MINIMAL_SCRIPT, TestOi, runaway_limits};
 
 // spec: APPS#registration
 // spec: APPS#listing
@@ -197,6 +197,32 @@ fn update_bumps_generation_and_records_history() {
         .collect();
     assert!(kinds.contains(&"register"));
     assert!(kinds.contains(&"script_update"));
+}
+
+// spec: APPS#update
+// spec: WIRE#error-codes
+#[test]
+fn an_update_whose_definition_runs_away_is_refused_and_files_nothing() {
+    let oi = TestOi::with_script_limits(runaway_limits());
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+
+    let (code, message) = oi
+        .call(
+            "/apps/update",
+            json!({ "app": "demo", "script": format!("loop {{}}\n{MINIMAL_SCRIPT}") }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "evaluation_runaway", "{message}");
+    let generations = oi
+        .call("/apps/generations", json!({ "app": "demo" }))
+        .unwrap();
+    assert_eq!(generations.as_array().unwrap().len(), 1);
+    let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+    assert_eq!(faults, json!([]));
 }
 
 // spec: APPS#update

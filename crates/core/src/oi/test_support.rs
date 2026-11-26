@@ -43,6 +43,16 @@ pub(crate) const PARAMS_SCRIPT: &str = r#"
         .image("docker.io/library/nginx:1.29");
 "#;
 
+/// Limits under which a script that loops forever runs for a second of
+/// processor time and is then stopped at the evaluation time limit.
+pub fn runaway_limits() -> ScriptLimits {
+    ScriptLimits {
+        max_operations: 0,
+        max_evaluation_time: 1,
+        ..ScriptLimits::default()
+    }
+}
+
 /// A fully-wired in-memory OI: call [`TestOi::call`] with a method path and
 /// params to exercise the same dispatch path the QUIC server uses.
 pub(crate) struct TestOi {
@@ -58,7 +68,12 @@ pub(crate) struct TestOi {
 
 impl TestOi {
     pub fn new() -> Self {
-        Self::build(None, None, None)
+        Self::build(None, None, None, ScriptLimits::default())
+    }
+
+    /// A harness whose evaluations run under `script_limits`.
+    pub fn with_script_limits(script_limits: ScriptLimits) -> Self {
+        Self::build(None, None, None, script_limits)
     }
 
     /// A harness whose daemon runs the Tailscale discovery provider, which has
@@ -69,12 +84,12 @@ impl TestOi {
             crate::runtime::tailscale::TailscaleConfig::default(),
             new_event_channel(),
         );
-        Self::build(None, None, Some(provider))
+        Self::build(None, None, Some(provider), ScriptLimits::default())
     }
 
     /// A harness running over `driver` rather than the stub system.
     pub fn with_driver(driver: Arc<System>) -> Self {
-        Self::build(Some(driver), None, None)
+        Self::build(Some(driver), None, None, ScriptLimits::default())
     }
 
     /// A harness whose container runtime fails every call, as when podman
@@ -86,6 +101,7 @@ impl TestOi {
                 crate::system::unavailable::UnavailableContainerRuntime,
             )),
             None,
+            ScriptLimits::default(),
         )
     }
 
@@ -94,13 +110,14 @@ impl TestOi {
     pub fn with_container_runtime(
         container_runtime: Arc<dyn crate::system::ContainerRuntime>,
     ) -> Self {
-        Self::build(None, Some(container_runtime), None)
+        Self::build(None, Some(container_runtime), None, ScriptLimits::default())
     }
 
     fn build(
         driver: Option<Arc<System>>,
         container_runtime: Option<Arc<dyn crate::system::ContainerRuntime>>,
         tailscale_provider: Option<Arc<crate::runtime::tailscale::TailscaleProvider>>,
+        script_limits: ScriptLimits,
     ) -> Self {
         let data_dir = tempfile::tempdir().expect("create temp data dir");
         let driver = driver.unwrap_or_else(|| {
@@ -132,7 +149,7 @@ impl TestOi {
             container_runtime: container_runtime.unwrap_or_else(|| Arc::clone(&driver.container)),
             driver,
             event_tx: event_tx.clone(),
-            script_limits: ScriptLimits::default(),
+            script_limits,
             cipher: Arc::clone(&cipher),
             gate_runtime: Arc::new(crate::runtime::gates::GateRuntime::new()),
         });
