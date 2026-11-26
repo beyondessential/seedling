@@ -9,6 +9,7 @@
 - [x] An evaluation started inside another shares its time (verifies spec: LIM)
 - [x] A validator that runs away makes `/apps/params/set` fail with `evaluation_runaway`, and `/apps/plan` list it in `rejections` saying so (verifies spec: PARAM, WIRE)
 - [x] An `/apps/update` whose new definition runs away is refused with `evaluation_runaway` and files nothing (verifies spec: WIRE, APPS)
+- [x] `seedling-ctl definitions check` takes `--script-max-evaluation-time`, and reports a definition that runs past it as a `script` error (verifies spec: CLI, LIM)
 
 ## Breakers
 
@@ -39,6 +40,7 @@
 - [x] A gate run fails with nothing stopped when its body's breaker is tripped (verifies spec: GRUN)
 - [x] An operator gate-run request is refused with `evaluation_runaway` while the body's breaker is tripped for the run (verifies spec: CTL)
 - [x] A probe reports a tripped handler, and one stopped at the limit, as that handler's error (verifies spec: IMG)
+- [x] A probed action or gate body that invokes an action whose breaker is tripped reports the refusal as its error (verifies spec: IMG, ACN)
 - [x] Clearing an app's faults while its definition's breaker is tripped evaluates the definition again (verifies spec: LIM)
 - [x] A breaker fault about an action names it by `resource_type` and `resource_name`; the definition's names nothing (verifies spec: FLTS)
 - [x] The web UI withholds Install while the definition has run away, and not while only an action has (verifies spec: UI)

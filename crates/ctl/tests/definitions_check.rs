@@ -720,6 +720,34 @@ fn the_operation_limit_can_be_tightened() {
 }
 
 // spec: CLI#definition-checks
+// spec: LIM#measuring-evaluation-time
+#[test]
+fn a_definition_past_the_evaluation_time_limit_is_a_script_error() {
+    let dir = dir_with(&[("loop.seed.rhai", "loop {}\n")]);
+    let run = check(
+        dir.path(),
+        &[
+            "loop.seed.rhai",
+            "--json",
+            "--script-max-operations",
+            "0",
+            "--script-max-evaluation-time",
+            "1",
+        ],
+    );
+    assert_eq!(run.status, 1, "{}", run.stderr);
+    let errors = json_errors(&run);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0]["kind"], "script");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("evaluation time limit")),
+        "{errors:?}"
+    );
+}
+
+// spec: CLI#definition-checks
 #[test]
 fn the_help_lists_the_daemons_engine_limit_options() {
     let out = Command::new(env!("CARGO_BIN_EXE_seedling-ctl"))
@@ -737,6 +765,7 @@ fn the_help_lists_the_daemons_engine_limit_options() {
         ("--script-max-derived-values", "1000"),
         ("--script-max-password-hashes", "16"),
         ("--script-max-regex-compiled-size", "33554432"),
+        ("--script-max-evaluation-time", "10"),
     ] {
         let at = help
             .find(option)
