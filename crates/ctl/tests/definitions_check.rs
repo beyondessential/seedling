@@ -148,6 +148,40 @@ fn a_script_error_in_an_included_file_lies_at_its_source() {
 
 // spec: CLI#check-results
 #[test]
+#[cfg(unix)]
+fn an_included_file_through_a_symlinked_folder_lies_at_its_source() {
+    let dir = dir_with(&[
+        (
+            "repo/apps/def/seedling.toml",
+            "script = [\"app.seed.rhai\", \"lib/common.rhai\"]\n\n[include]\n\"lib/common.rhai\" = \"../shared/common.rhai\"\n",
+        ),
+        ("repo/apps/def/app.seed.rhai", "let a = 1;\n"),
+        (
+            "repo/apps/shared/common.rhai",
+            "let b = 2;\nthrow \"broken\";\n",
+        ),
+    ]);
+    std::fs::create_dir(dir.path().join("repo/.git")).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("repo/apps/def"), dir.path().join("link")).unwrap();
+    let run = check(dir.path(), &["link"]);
+    assert_eq!(run.status, 1);
+    assert!(
+        run.stderr.starts_with("repo/apps/shared/common.rhai:2: "),
+        "{}",
+        run.stderr
+    );
+
+    let inner = dir.path().join("repo/apps/def");
+    let run = check(&inner, &["."]);
+    assert!(
+        run.stderr.starts_with("../shared/common.rhai:2: "),
+        "{}",
+        run.stderr
+    );
+}
+
+// spec: CLI#check-results
+#[test]
 fn an_error_raised_in_a_function_lies_where_it_was_raised() {
     let mut script = String::from("fn fail() {\n    throw \"broken\";\n}\n");
     script.push_str(&"\n".repeat(36));

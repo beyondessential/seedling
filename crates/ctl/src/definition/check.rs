@@ -137,8 +137,8 @@ impl std::fmt::Display for CheckError {
 pub(super) enum Origin {
     /// A file source: every location names the path it was given as.
     File(String),
-    /// A folder source, by the path it was given as, with the source of
-    /// each file placed from one, relative to the folder, by bundle path.
+    /// A folder source, by the path it was given as, with the path each
+    /// file placed from a source was read from, by bundle path.
     Folder {
         folder: String,
         sources: BTreeMap<String, String>,
@@ -152,12 +152,10 @@ impl Origin {
     fn file(&self, path: &str) -> String {
         match self {
             Self::File(given) => given.clone(),
-            Self::Folder { folder, sources } => {
-                let within = sources.get(path).map_or(path, String::as_str);
-                lexical_join(Path::new(folder), within)
-                    .display()
-                    .to_string()
-            }
+            Self::Folder { folder, sources } => sources
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| lexical_join(Path::new(folder), path).display().to_string()),
             Self::Bundle => path.to_owned(),
         }
     }
@@ -191,6 +189,40 @@ impl Origin {
             SourceError::Other(message) => CheckError::new(Kind::Source, message),
         }
     }
+}
+
+/// The path each included file was read from, given the folder as `given`
+/// and each file's source relative to the folder: relative to the working
+/// directory where `given` is relative, so it reads as the folder does.
+// spec: CLI#check-results
+// A `..` resolved against the path as given would climb out of a symlinked
+// folder rather than the folder it names, so the source is resolved against
+// the canonical folder.
+fn read_from(
+    given: &Path,
+    sources: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let canonical = given
+        .canonicalize()
+        .map_err(|e| format!("cannot read {}: {e}", given.display()))?;
+    let base = if given.is_relative() {
+        std::env::current_dir()
+            .and_then(|cwd| cwd.canonicalize())
+            .ok()
+    } else {
+        None
+    };
+    Ok(sources
+        .into_iter()
+        .map(|(path, within)| {
+            let file = lexical_join(&canonical, &within);
+            let shown = base
+                .as_deref()
+                .and_then(|base| pathdiff::diff_paths(&file, base))
+                .unwrap_or(file);
+            (path, shown.display().to_string())
+        })
+        .collect())
 }
 
 /// `rel`, a `/`-separated path, joined onto `base`, with each `..` taking
@@ -389,7 +421,8 @@ async fn read(
             let assembled =
                 read_folder_definition(&path, Some(running)).map_err(|e| origin.source_error(e))?;
             if let Origin::Folder { sources, .. } = &mut origin {
-                *sources = assembled.sources;
+                *sources = read_from(&path, assembled.sources)
+                    .map_err(|e| CheckError::new(Kind::Source, e))?;
             }
             (assembled.files, origin)
         } else {
