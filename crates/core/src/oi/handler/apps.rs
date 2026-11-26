@@ -364,7 +364,7 @@ fn compute_next_fire(
     let base_time = last_fired_at
         .and_then(|s| s.parse::<jiff::Timestamp>().ok())
         .unwrap_or(now);
-    crontab.find_next(base_time).ok().map(jiff::Timestamp::from)
+    crate::defs::action::next_cron_fire(&crontab, base_time).ok()
 }
 
 pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {

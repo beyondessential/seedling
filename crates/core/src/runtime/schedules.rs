@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use seedling_protocol::events::OperationTarget;
 use seedling_protocol::names::{ActionName, AppName, ParamName};
 
-use crate::defs::action::parse_cron_expr;
+use crate::defs::action::{next_cron_fire, parse_cron_expr};
 use crate::defs::param_def::ParamDef;
 use crate::runtime::apps::AppPhase;
 use crate::runtime::barrier::OperationId;
@@ -133,8 +133,8 @@ pub fn check_due_schedules(
         };
         let _ = faults::clear_fault_by_key(db, &unreadable);
 
-        let next_fire = match crontab.find_next(base_time) {
-            Ok(zoned) => Timestamp::from(zoned),
+        let next_fire = match next_cron_fire(&crontab, base_time) {
+            Ok(next) => next,
             Err(e) => {
                 tracing::warn!(
                     app = %row.app,
