@@ -297,3 +297,27 @@ fn raising_the_limit_is_a_change_of_inputs() {
         Ok(Standing::TrippedForOther)
     );
 }
+
+// spec: FLTS#fault-records
+#[test]
+fn a_closure_fault_names_its_closure_and_a_definition_fault_names_nothing() {
+    let (db, cipher) = (Db::open_in_memory().unwrap(), Cipher::for_tests());
+    let run = run_with("sha256:a", "x+");
+    trip(&db, &cipher, &app(), &action(), &run, 3, &limits()).unwrap();
+    trip(&db, &cipher, &app(), &Thing::Definition, &run, 3, &limits()).unwrap();
+
+    let faults = runaway_faults(&db);
+    let named = |subject: &str| {
+        let fault = faults.iter().find(|f| f.subject == subject).unwrap();
+        (
+            fault.resource_type.as_deref(),
+            fault.resource_name.as_deref(),
+            fault.instance_id.as_deref(),
+        )
+    };
+    assert_eq!(
+        named("action:backup"),
+        (Some("action"), Some("backup"), None)
+    );
+    assert_eq!(named(""), (None, None, None));
+}

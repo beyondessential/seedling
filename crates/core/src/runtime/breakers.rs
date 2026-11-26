@@ -70,6 +70,18 @@ impl Thing {
         matches!(self, Self::Definition | Self::Gate(_))
     }
 
+    /// How the thing's faults name it for display: the action, shell or gate
+    /// by kind and name, and the definition not at all.
+    // spec: FLTS#fault-records
+    fn fault_meta(&self) -> FaultMeta {
+        match self {
+            Self::Definition => FaultMeta::default(),
+            Self::Action(name) => FaultMeta::resource("action", name.as_str()),
+            Self::Shell(name) => FaultMeta::resource("shell", name.as_str()),
+            Self::Gate(name) => FaultMeta::resource("gate", name.as_str()),
+        }
+    }
+
     fn describe(&self) -> String {
         match self {
             Self::Definition => "the app's definition".to_owned(),
@@ -310,7 +322,7 @@ pub fn standing(
                 "cannot read whether the breaker of {} is tripped, so it is not evaluated: {why}",
                 thing.describe()
             );
-            if let Err(e) = faults::file_once(db, &key, &FaultMeta::default(), &description) {
+            if let Err(e) = faults::file_once(db, &key, &thing.fault_meta(), &description) {
                 tracing::error!(%app, "cannot file {BREAKER_STATE_UNREADABLE}: {e}");
             }
             Err(why)
@@ -361,7 +373,7 @@ pub fn trip(
     );
     tracing::error!(%app, "{description}");
     let key = FaultKey::new(app, EVALUATION_RUNAWAY, subject);
-    let filed = faults::file_once(db, &key, &FaultMeta::default(), &description)
+    let filed = faults::file_once(db, &key, &thing.fault_meta(), &description)
         .map_err(|e| format!("cannot file {EVALUATION_RUNAWAY}: {e}"))?;
     if !filed {
         faults::update_description(db, &key, &description)
