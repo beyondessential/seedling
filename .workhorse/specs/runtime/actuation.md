@@ -123,6 +123,10 @@ A part of the runtime that finds the storage already present MUST NOT apply them
 Several parts of the runtime MAY find the storage absent at the same moment.
 Exactly one of them MUST create it, and creation MUST report whether this caller created it.
 A caller whose creation did not take effect MUST treat the storage as already present, and MUST NOT report the name being in use as an error.
+A caller that reaches a volume's storage, tmpfs or not, while another is creating it MUST wait until that step has finished before using the storage, and MUST create and seed the storage itself if the step failed and removed it.
+
+> [!NOTE]
+> A container that mounted the storage mid-step would start with declared files missing, and would keep a mount of storage a failed step then removes.
 
 If a declared write fails, the runtime MUST remove storage the same step created, so that the next attempt creates and seeds it from scratch.
 

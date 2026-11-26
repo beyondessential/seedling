@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -116,6 +117,35 @@ pub struct VolumeStore {
     /// Held while a site volume's name is found free and then taken.
     // spec: SITE#site-volume-names
     site_name_claim: parking_lot::Mutex<()>,
+    /// One lock per storage path being created and seeded. An entry lives
+    /// only while a caller holds or waits on it.
+    // spec: ACTU#volume-creation-and-seeding
+    creating: parking_lot::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+/// The right to create and seed the storage at one path, released on drop.
+pub struct CreationHold<'a> {
+    creating: &'a parking_lot::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+    path: PathBuf,
+    lock: Option<Arc<tokio::sync::Mutex<()>>>,
+    held: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl Drop for CreationHold<'_> {
+    fn drop(&mut self) {
+        self.held.take();
+        self.lock.take();
+        // Reaped once nobody holds or waits on it, so the map does not grow
+        // with every path ever created. Waiters clone the lock under the map
+        // lock, so the count read here cannot miss one.
+        let mut creating = self.creating.lock();
+        if creating
+            .get(&self.path)
+            .is_some_and(|lock| Arc::strong_count(lock) == 1)
+        {
+            creating.remove(&self.path);
+        }
+    }
 }
 
 impl VolumeStore {
@@ -126,7 +156,33 @@ impl VolumeStore {
             volumes_dir,
             storage,
             site_name_claim: parking_lot::Mutex::new(()),
+            creating: parking_lot::Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Wait for the right to create and seed the storage at `path`, and
+    /// hold it until the returned guard drops.
+    ///
+    /// Creating storage and seeding it is one step, and storage found while
+    /// another caller is in that step is not ready: a container mounting it
+    /// would start with declared files missing, and a seed that fails takes
+    /// the storage back out from under the mount. Every caller that may
+    /// create a volume's storage holds this across the whole step, so one
+    /// that loses the race waits for the winner, then finds the storage
+    /// either seeded or gone.
+    // spec: ACTU#volume-creation-and-seeding
+    pub async fn hold_creation(&self, path: &Path) -> CreationHold<'_> {
+        let lock = Arc::clone(self.creating.lock().entry(path.to_path_buf()).or_default());
+        // The hold owns its clone of the lock before waiting, so a wait that
+        // is cancelled still reaps the entry.
+        let mut hold = CreationHold {
+            creating: &self.creating,
+            path: path.to_path_buf(),
+            lock: Some(Arc::clone(&lock)),
+            held: None,
+        };
+        hold.held = Some(lock.lock_owned().await);
+        hold
     }
 
     /// Claim the right to decide whether a site volume name is free.
@@ -869,5 +925,28 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
         let err = owned_dir(&dir.path().join("link")).unwrap_err();
         assert!(err.to_string().contains("symlink"), "{err}");
+    }
+
+    /// The map of creation locks holds an entry only while a caller holds or
+    /// waits on it, including one whose wait was abandoned.
+    // spec: ACTU#volume-creation-and-seeding
+    #[tokio::test]
+    async fn a_creation_hold_is_forgotten_once_nobody_holds_or_waits_on_it() {
+        let (data, store) = store();
+        let path = data.path().join("volumes").join("app-volume-data");
+
+        let hold = store.hold_creation(&path).await;
+        let mut waiting = Box::pin(store.hold_creation(&path));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        drop(waiting);
+        drop(hold);
+        assert!(store.creating.lock().is_empty());
+
+        drop(store.hold_creation(&path).await);
+        assert!(store.creating.lock().is_empty());
     }
 }

@@ -195,10 +195,10 @@ pub(crate) async fn safe_volume_write(
 /// will never be written to. Only storage this call created is taken back
 /// out: the loser of a race must not tear out what the winner is seeding.
 ///
-/// Creation is the decision, not a look before it. Both phases can find the
-/// volume absent at the same moment, so asking first and creating second
-/// would only narrow the window; `create` reports which call made the
-/// storage, and that answer is what settles who owes the writes.
+/// The whole step runs under the store's creation hold, so a call that finds
+/// the storage present returns only once whoever created it has finished
+/// seeding it. `create` still reports which call made the storage, and that
+/// answer is what settles who owes the writes.
 // spec: ACTU#volume-creation-and-seeding
 pub(crate) async fn ensure_named_volume(
     vol_store: &VolumeStore,
@@ -206,6 +206,7 @@ pub(crate) async fn ensure_named_volume(
     writes: &[(String, bytes::Bytes)],
 ) -> Result<bool, ActuateError> {
     let mountpoint = vol_store.path(name);
+    let _creating = vol_store.hold_creation(&mountpoint).await;
     let created = vol_store.create(name).await.map_err(|e| {
         VolumeWriteSnafu {
             path: mountpoint.clone(),
@@ -268,12 +269,15 @@ pub(crate) async fn ensure_named_volume_storage(
 /// A directory already present is left as it is: whoever created it seeded
 /// it, and writes the app made since are its own. A seed that fails takes
 /// the directory back out, so the next attempt creates and seeds it afresh.
+/// The step runs under the store's creation hold, so a directory found
+/// present has finished being seeded.
 // spec: ACTU#volume-creation-and-seeding
 pub(crate) async fn ensure_tmpfs_volume_dir(
     vol_store: &VolumeStore,
     host_path: &Path,
     writes: &[(String, bytes::Bytes)],
 ) -> Result<(), ActuateError> {
+    let _creating = vol_store.hold_creation(host_path).await;
     // spec: ACTU#storage-confinement
     if owned_dir_async(host_path).await.context(VolumeWriteSnafu {
         path: host_path.to_path_buf(),
@@ -289,7 +293,8 @@ pub(crate) async fn ensure_tmpfs_volume_dir(
     }
     match tokio::fs::create_dir(host_path).await {
         Ok(()) => {}
-        // Another part of the runtime created it first, and seeds it.
+        // Made since the look by something outside the runtime, which holds
+        // no creation hold; found present, so not seeded here.
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
         Err(e) => {
             return Err(VolumeWriteSnafu {
@@ -570,25 +575,7 @@ impl Actuator {
                     // through the container runtime's tmpfs driver instead
                     // would seed a mountpoint nothing ever mounts.
                     let host_path = tmpfs_volume_path(&instance.display_name);
-                    // spec: ACTU#storage-confinement — classify the path before
-                    // making anything at it. `create_dir_all` succeeds
-                    // straight through a symlink standing at the name, and
-                    // the declared writes would then land wherever it points.
-                    owned_dir_async(&host_path)
-                        .await
-                        .context(VolumeWriteSnafu {
-                            path: host_path.clone(),
-                        })?;
-                    tokio::fs::create_dir_all(&host_path)
-                        .await
-                        .context(VolumeWriteSnafu {
-                            path: host_path.clone(),
-                        })?;
-                    // Tmpfs contents don't survive a reboot; always re-apply writes.
-                    for (path, contents) in &writes {
-                        safe_volume_write(&self.driver.volume_store, &host_path, path, contents)
-                            .await?;
-                    }
+                    ensure_tmpfs_volume_dir(&self.driver.volume_store, &host_path, &writes).await?;
                 } else {
                     // spec: ACTU#volume-storage
                     let vol_store = &self.driver.volume_store;
@@ -1142,6 +1129,58 @@ mod tests {
 
         assert!(store.create(&name).await.unwrap());
         assert!(!store.create(&name).await.unwrap());
+    }
+
+    /// A call that finds the volume while another is creating it must not
+    /// hand it on half seeded, and must seed it itself if the other call's
+    /// step failed and took the storage back out.
+    // spec: ACTU#volume-creation-and-seeding
+    #[tokio::test]
+    async fn a_call_that_finds_a_named_volume_being_created_waits_for_that_step() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let writes = vec![("conf/app.toml".to_owned(), bytes::Bytes::from("port = 80"))];
+
+        let creating = store.hold_creation(&store.path(&name)).await;
+        let waiting = ensure_named_volume(&store, &name, &writes);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut waiting)
+                .await
+                .is_err(),
+            "the call waits while another holds the volume's creation"
+        );
+
+        // The other call's step ended without leaving the volume behind.
+        drop(creating);
+        assert!(waiting.await.unwrap(), "so this call creates it");
+        let seeded = store.path(&name).join("conf/app.toml");
+        assert_eq!(std::fs::read_to_string(seeded).unwrap(), "port = 80");
+    }
+
+    // spec: ACTU#volume-creation-and-seeding
+    #[tokio::test]
+    async fn a_call_that_finds_a_tmpfs_directory_being_created_waits_for_that_step() {
+        let (data, store) = store();
+        let dir = data.path().join("tmpfs").join("app-volume-scratch");
+        let writes = vec![("note".to_owned(), bytes::Bytes::from("seed"))];
+
+        let creating = store.hold_creation(&dir).await;
+        std::fs::create_dir_all(&dir).unwrap();
+        let waiting = ensure_tmpfs_volume_dir(&store, &dir, &writes);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut waiting)
+                .await
+                .is_err(),
+            "the call waits while another holds the directory's creation"
+        );
+
+        // The other call seeds the directory it created, then lets go.
+        std::fs::write(dir.join("note"), "seed").unwrap();
+        drop(creating);
+        waiting.await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("note")).unwrap(), "seed");
     }
 
     // spec: ACTU#volume-creation-and-seeding
