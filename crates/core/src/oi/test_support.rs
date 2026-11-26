@@ -401,6 +401,7 @@ mod tests {
                         &mut sched.lock(),
                         now,
                         &crate::ScriptLimits::default().helpers(),
+                        &|_, _, _, _| Ok(crate::runtime::breakers::Standing::Clear),
                         &|_| Some((1, Arc::clone(&phase), Default::default())),
                     )
                 }

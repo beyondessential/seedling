@@ -250,7 +250,8 @@ pub(crate) async fn open_shell_session(
     {
         use crate::runtime::breakers::{self, Thing};
         let thing = Thing::Shell(shell_name.clone());
-        let run = breakers::Run::of_app(&app, &state.script_limits).with_params(&validated_params);
+        let run = breakers::Run::of_app(&app, &state.script_limits)
+            .with_params(&validated_params, &shell_params_schema);
         let (name, cipher, checked) = (app_name.clone(), Arc::clone(&state.cipher), thing.clone());
         let refusal = match state
             .db
@@ -707,6 +708,9 @@ pub(super) async fn run_app_shell(
     let progress_for_task = Arc::clone(&progress);
     let db_for_task = state.db.clone();
     let script_limits = state.script_limits.clone();
+    // spec: LIM#breakers
+    let run_for_task = crate::runtime::breakers::Run::of_app(&app, &script_limits)
+        .with_params(&validated_params, schema);
     let cipher = Arc::clone(&state.cipher);
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
@@ -809,7 +813,7 @@ pub(super) async fn run_app_shell(
         // its passes is tracked.
         use crate::runtime::breakers::{self, Thing};
         let thing = Thing::Shell(shell_name_for_task.clone());
-        let run = breakers::Run::of_app(&app, &script_limits).with_params(&validated_params);
+        let run = run_for_task;
         let mut standing = {
             let (name, cipher, checked, run) = (
                 app_name_for_task.clone(),
@@ -825,6 +829,13 @@ pub(super) async fn run_app_shell(
                 Err(why) => return ScriptEnd::Failed(breakers::unreadable_message(&thing, &why)),
             }
         };
+        // spec: ACN#action-invocation
+        let _invokes = breakers::InvokesGuard::enter(
+            &app_name_for_task,
+            breakers::Run::of_app(&app, &script_limits),
+            db.clone(),
+            Arc::clone(&cipher),
+        );
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,

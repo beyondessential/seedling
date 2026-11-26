@@ -2382,7 +2382,10 @@ fn install_refusals_are_given_in_the_order_the_spec_lists_them() {
             .write()
             .get_mut("demo")
             .unwrap()
-            .script_error = Some(("it broke".to_owned(), Timestamp::now()));
+            .script_error = Some((
+            crate::runtime::apps::ScriptError::failed("it broke".to_owned()),
+            Timestamp::now(),
+        ));
     };
 
     let hold = AppHold::take(&oi.state.scheduler, &name).expect("nothing holds the app");

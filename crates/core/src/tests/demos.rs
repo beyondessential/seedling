@@ -160,6 +160,7 @@ fn probe(
             lenient,
         },
         &move |_| Ok(last.clone()),
+        &crate::runtime::probe::ProbeBounds::unconsulted(&crate::ScriptLimits::default()),
     )
     .expect("the probe runs")
 }

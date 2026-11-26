@@ -11,10 +11,10 @@ use serde_json::{Value, json};
 use crate::{
     oi::state::OiState,
     runtime::{
-        DbInstanceRegistry, InstanceRegistry,
+        DbInstanceRegistry, InstanceRegistry, breakers,
         gates::run::LastSuccesses,
         images,
-        probe::{ProbeRequest, probe_app},
+        probe::{ProbeBounds, ProbeRequest, probe_app},
     },
 };
 
@@ -464,9 +464,19 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         &state.script_limits,
         &state.cipher,
     );
-    let response = probe_app(&engine, &ast, &app, registry, &request, &|gate| {
-        last.of(gate)
-    })
+    let tripped = tripped_breakers(state, &name);
+    let response = probe_app(
+        &engine,
+        &ast,
+        &app,
+        registry,
+        &request,
+        &|gate| last.of(gate),
+        &ProbeBounds {
+            limits: &state.script_limits,
+            tripped: &tripped,
+        },
+    )
     .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
 
     let per_handler: Vec<Value> = response
@@ -488,6 +498,30 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         "per_handler": per_handler,
         "all_images": all_images,
     }))
+}
+
+/// Why a probe does not evaluate a handler of `app`, where its breaker is
+/// tripped for the run or cannot be read.
+// spec: IMG#image-discovery
+fn tripped_breakers<'a>(
+    state: &'a OiState,
+    app: &'a AppName,
+) -> impl Fn(&breakers::Thing, breakers::Run) -> Option<String> + 'a {
+    move |thing, run| {
+        let (name, cipher, checked) = (
+            app.clone(),
+            std::sync::Arc::clone(&state.cipher),
+            thing.clone(),
+        );
+        match state
+            .db
+            .call(move |db| breakers::standing(db, &cipher, &name, &checked, &run))
+        {
+            Ok(breakers::Standing::Tripped) => Some(breakers::tripped_message(thing)),
+            Ok(_) => None,
+            Err(why) => Some(breakers::unreadable_message(thing, &why)),
+        }
+    }
 }
 
 /// Reconcile `app`'s pins against the current AppDef and a lenient probe
@@ -580,6 +614,10 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
             ..Default::default()
         },
         &|gate| last.of(gate),
+        &crate::runtime::probe::ProbeBounds {
+            limits: &state.script_limits,
+            tripped: &tripped_breakers(state, app_name),
+        },
     ) {
         Ok(r) => r,
         Err(e) => {

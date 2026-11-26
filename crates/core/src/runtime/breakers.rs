@@ -140,10 +140,18 @@ impl Run {
     }
 
     /// Add the params of an invocation or session, in their canonical form,
-    /// leaving out the keys the runtime inserts.
-    pub fn with_params(mut self, params: &crate::runtime::param_map::ParamMap) -> Self {
+    /// leaving out volume params, which the runtime replaces with keys of its
+    /// own when it dispatches the invocation, and the keys it inserts.
+    pub fn with_params(
+        mut self,
+        params: &crate::runtime::param_map::ParamMap,
+        schema: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
+    ) -> Self {
         for (name, value) in params.values() {
-            if crate::runtime::action_params::is_reserved(name) {
+            let volume = schema
+                .get(name.as_str())
+                .is_some_and(|p| p.kind == crate::defs::param_def::ParamKind::Volume);
+            if volume || crate::runtime::action_params::is_reserved(name) {
                 continue;
             }
             let typed = params.types().get(name).map(|t| format!("{t:?}"));
@@ -484,6 +492,78 @@ fn likely_cause(cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) -> Str
         ),
         (false, true) => "the likely cause is the definition".to_owned(),
         _ => "the likely cause is unknown".to_owned(),
+    }
+}
+
+/// What `Action.invoke` consults the invoked action's breaker with, for the
+/// passes of one operation or shell session on this thread.
+struct Invokes {
+    app: AppName,
+    base: Run,
+    db: crate::runtime::db::DbHandle,
+    cipher: std::sync::Arc<Cipher>,
+}
+
+thread_local! {
+    static INVOKES: std::cell::RefCell<Option<Invokes>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Lets `Action.invoke` consult breakers while it is held.
+#[must_use = "breakers are consulted only while this is held"]
+pub struct InvokesGuard(());
+
+impl InvokesGuard {
+    /// Consult the breakers of `app`, whose evaluations run with `base`'s
+    /// definition and inputs, before any params.
+    pub fn enter(
+        app: &AppName,
+        base: Run,
+        db: crate::runtime::db::DbHandle,
+        cipher: std::sync::Arc<Cipher>,
+    ) -> Self {
+        INVOKES.with_borrow_mut(|held| {
+            *held = Some(Invokes {
+                app: app.clone(),
+                base,
+                db,
+                cipher,
+            })
+        });
+        Self(())
+    }
+}
+
+impl Drop for InvokesGuard {
+    fn drop(&mut self) {
+        INVOKES.with_borrow_mut(|held| *held = None);
+    }
+}
+
+/// Why `Action.invoke` does not run `action` with `params`: its breaker is
+/// tripped for them, or cannot be read. `None` to run it, as it is where no
+/// operation's breakers are being consulted.
+// spec: ACN#action-invocation
+pub fn invoke_refused(
+    action: &ActionName,
+    params: &crate::runtime::param_map::ParamMap,
+    schema: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
+) -> Option<String> {
+    let (app, run, db, cipher) = INVOKES.with_borrow(|held| {
+        held.as_ref().map(|i| {
+            (
+                i.app.clone(),
+                i.base.clone().with_params(params, schema),
+                i.db.clone(),
+                std::sync::Arc::clone(&i.cipher),
+            )
+        })
+    })?;
+    let thing = Thing::Action(action.clone());
+    let checked = thing.clone();
+    match db.call(move |db| standing(db, &cipher, &app, &checked, &run)) {
+        Ok(Standing::Tripped) => Some(tripped_message(&thing)),
+        Ok(_) => None,
+        Err(why) => Some(unreadable_message(&thing, &why)),
     }
 }
 

@@ -977,6 +977,26 @@ async fn main() {
                             })
                             .collect()
                     };
+                    // spec: ACN#scheduled-actions
+                    // What each installed app's runs are evaluated with,
+                    // before their params.
+                    let runs: std::collections::HashMap<AppName, _> = {
+                        let reg = schedule_registry.read();
+                        app_generations
+                            .keys()
+                            .filter_map(|name| {
+                                let entry = reg.get(name.as_str())?;
+                                Some((
+                                    name.clone(),
+                                    seedling_core::runtime::breakers::Run::of_app(
+                                        &entry.app,
+                                        &oi_state_for_sched.script_limits,
+                                    ),
+                                ))
+                            })
+                            .collect()
+                    };
+                    let breaker_cipher = Arc::clone(&oi_state_for_sched.cipher);
                     let sched_arc = Arc::clone(&schedule_scheduler);
                     let helper_limits = oi_state_for_sched.script_limits.helpers();
                     let accepted_fires = schedule_db.call(move |db| {
@@ -986,6 +1006,23 @@ async fn main() {
                             &mut sched,
                             now,
                             &helper_limits,
+                            &|db, app, action, params| {
+                                use seedling_core::runtime::breakers::{self, Thing};
+                                let Some(run) = runs.get(app) else {
+                                    return Ok(breakers::Standing::Clear);
+                                };
+                                let schema = app_generations
+                                    .get(app)
+                                    .and_then(|(_, _, schemas)| schemas.get(action).cloned())
+                                    .unwrap_or_default();
+                                breakers::standing(
+                                    db,
+                                    &breaker_cipher,
+                                    app,
+                                    &Thing::Action(action.clone()),
+                                    &run.clone().with_params(params, &schema),
+                                )
+                            },
                             &|app_name| app_generations.get(app_name).cloned(),
                         );
                         drop(sched);

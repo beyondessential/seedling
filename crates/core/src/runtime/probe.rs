@@ -12,7 +12,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rhai::{AST, Dynamic, Engine, FnPtr, Scope};
-use seedling_protocol::names::{ActionName, AppName, GateName, ParamName};
+use seedling_protocol::names::{ActionName, AppName, GateName, ParamName, ShellName};
 
 use crate::{
     defs::{
@@ -27,6 +27,7 @@ use crate::{
             oracle::TestWorldOracle,
             runtime::{ActionClosureGuard, ProbeGuard, RuntimeInstance, clear_barrier_hit},
         },
+        breakers,
         param_map::ParamMap,
     },
 };
@@ -74,6 +75,42 @@ pub struct ProbeRequest {
     pub lenient: bool,
 }
 
+/// The bounds a probe evaluates within: the evaluation time limit, and the
+/// breakers of the handlers it probes.
+// spec: IMG#image-discovery
+pub struct ProbeBounds<'a> {
+    pub limits: &'a crate::ScriptLimits,
+    /// Why a handler is not evaluated with `run`, where its breaker is
+    /// tripped for it or cannot be read; `None` to evaluate it.
+    pub tripped: &'a dyn Fn(&breakers::Thing, breakers::Run) -> Option<String>,
+}
+
+impl<'a> ProbeBounds<'a> {
+    /// Bounds that consult no breaker, for a caller that has consulted it.
+    pub fn unconsulted(limits: &'a crate::ScriptLimits) -> Self {
+        Self {
+            limits,
+            tripped: &|_, _| None,
+        }
+    }
+}
+
+/// Recover `app`'s closures, as one evaluation under the limit.
+fn capture(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+    limits: &crate::ScriptLimits,
+) -> Result<crate::defs::app::ClosureCapture, String> {
+    // spec: LIM#measuring-evaluation-time
+    let evaluation = crate::evaluation::Evaluation::start(limits);
+    let captured = capture_closures(engine, script_ast, app);
+    if evaluation.exceeded() {
+        return Err(crate::evaluation::out_of_time_message(limits));
+    }
+    captured.map_err(|e| format!("script evaluation failed: {e}"))
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ProbeResponse {
     pub per_handler: Vec<HandlerProbe>,
@@ -93,9 +130,9 @@ pub fn probe_gate_body(
     registry: Arc<dyn InstanceRegistry>,
     gate: &GateName,
     last: Option<&App>,
+    bounds: &ProbeBounds<'_>,
 ) -> Result<HandlerProbe, String> {
-    let captured = capture_closures(engine, script_ast, app)
-        .map_err(|e| format!("script evaluation failed: {e}"))?;
+    let captured = capture(engine, script_ast, app, bounds.limits)?;
     match captured.gates.get(gate) {
         Some(Some(body)) => probe_gate_closure(
             engine,
@@ -106,6 +143,7 @@ pub fn probe_gate_body(
             gate,
             body.clone(),
             last,
+            bounds,
         ),
         Some(None) => Ok(HandlerProbe {
             name: gate.as_str().to_owned(),
@@ -132,9 +170,21 @@ fn probe_gate_closure(
     gate: &GateName,
     body: FnPtr,
     last: Option<&App>,
+    bounds: &ProbeBounds<'_>,
 ) -> Result<HandlerProbe, String> {
     let arity = closure_arity(script_ast, &body)
         .ok_or_else(|| format!("the body of gate '{gate}' cannot be called"))?;
+    // spec: IMG#image-discovery
+    let run = breakers::Run::of_app(app, bounds.limits).with_last_success(last);
+    if let Some(why) = (bounds.tripped)(&breakers::Thing::Gate(gate.clone()), run) {
+        return Ok(HandlerProbe {
+            name: gate.as_str().to_owned(),
+            kind: HandlerKind::Gate,
+            images: BTreeSet::new(),
+            error: Some(why),
+            skipped_reason: None,
+        });
+    }
     Ok(run_probe(
         engine,
         script_ast,
@@ -148,6 +198,7 @@ fn probe_gate_closure(
             arity,
             last: last.map_or(Dynamic::UNIT, |last| Dynamic::from(last.clone())),
         },
+        bounds.limits,
     ))
 }
 
@@ -162,12 +213,12 @@ pub fn probe_app(
     registry: Arc<dyn InstanceRegistry>,
     request: &ProbeRequest,
     last_of: &dyn Fn(&GateName) -> Result<Option<App>, String>,
+    bounds: &ProbeBounds<'_>,
 ) -> Result<ProbeResponse, String> {
     // Re-run the script to capture every registered closure. The script
     // itself must not fail; if it does, the caller can surface that as an
     // app-level script_error fault and there's nothing to probe.
-    let captured = capture_closures(engine, script_ast, app)
-        .map_err(|e| format!("script evaluation failed: {e}"))?;
+    let captured = capture(engine, script_ast, app, bounds.limits)?;
 
     // Build the per-handler probe list in declaration order from the def.
     let def = app.def.load_full();
@@ -214,6 +265,7 @@ pub fn probe_app(
             closure,
             &param_schema,
             request,
+            bounds,
         );
         results.push(probe_result);
     }
@@ -231,6 +283,7 @@ pub fn probe_app(
                 name,
                 body.clone(),
                 last.as_ref(),
+                bounds,
             )
         });
         results.push(probed.unwrap_or_else(|error| HandlerProbe {
@@ -270,6 +323,7 @@ fn probe_handler(
     closure: FnPtr,
     schema: &BTreeMap<ParamName, ParamDef>,
     request: &ProbeRequest,
+    bounds: &ProbeBounds<'_>,
 ) -> HandlerProbe {
     // spec: IMG#probe-parameters
     let supplied = request
@@ -305,6 +359,27 @@ fn probe_handler(
             };
         }
     };
+    // spec: IMG#image-discovery
+    let thing = match kind {
+        HandlerKind::Shell => ShellName::new(handler_name)
+            .ok()
+            .map(breakers::Thing::Shell),
+        _ => ActionName::new(handler_name)
+            .ok()
+            .map(breakers::Thing::Action),
+    };
+    if let Some(thing) = thing {
+        let run = breakers::Run::of_app(app, bounds.limits).with_params(&resolved_params, schema);
+        if let Some(why) = (bounds.tripped)(&thing, run) {
+            return HandlerProbe {
+                name: handler_name.to_owned(),
+                kind,
+                images: BTreeSet::new(),
+                error: Some(why),
+                skipped_reason: None,
+            };
+        }
+    }
     let call = match kind {
         HandlerKind::Shell => ProbeCall::Shell(param_map),
         HandlerKind::Action | HandlerKind::Gate => ProbeCall::Action(param_map),
@@ -319,6 +394,7 @@ fn probe_handler(
         kind,
         closure,
         call,
+        bounds.limits,
     )
 }
 
@@ -349,6 +425,7 @@ fn run_probe(
     kind: HandlerKind,
     closure: FnPtr,
     call: ProbeCall,
+    limits: &crate::ScriptLimits,
 ) -> HandlerProbe {
     // Fresh probe buffer per handler. Shared across rt.* calls through the
     // ReplayContext and into Started's check_barrier.
@@ -429,19 +506,29 @@ fn run_probe(
             .with_operation_seed(&seed, &probe_sensitive);
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
-        crate::defs::compile_closure_call(engine, script_ast, call_script)
+        // spec: LIM#measuring-evaluation-time
+        let evaluation = crate::evaluation::Evaluation::start(limits);
+        let failed = crate::defs::compile_closure_call(engine, script_ast, call_script)
             .ok()
             .and_then(|ast| {
                 engine
                     .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
                     .err()
-            })
+            });
+        if evaluation.exceeded() {
+            Err(crate::evaluation::out_of_time_message(limits))
+        } else {
+            Ok(failed)
+        }
     });
 
     let gathered_images = images.lock().clone();
 
     // spec: SEC#withheld-values
-    let error = eval_result.map(|e| probe_sensitive.values().mask(&e.to_string()).into_owned());
+    let error = match eval_result {
+        Err(out_of_time) => Some(out_of_time),
+        Ok(failed) => failed.map(|e| probe_sensitive.values().mask(&e.to_string()).into_owned()),
+    };
 
     HandlerProbe {
         name: handler_name.to_owned(),
@@ -524,7 +611,15 @@ mod tests {
         registry: Arc<dyn InstanceRegistry>,
         request: &ProbeRequest,
     ) -> Result<ProbeResponse, String> {
-        probe_app(engine, ast, app, registry, request, &|_| Ok(None))
+        probe_app(
+            engine,
+            ast,
+            app,
+            registry,
+            request,
+            &|_| Ok(None),
+            &ProbeBounds::unconsulted(&crate::ScriptLimits::default()),
+        )
     }
 
     // spec: IMG#image-discovery
@@ -614,6 +709,7 @@ mod tests {
                 Arc::clone(&registry),
                 &ProbeRequest::default(),
                 &move |_| Ok(last.clone()),
+                &ProbeBounds::unconsulted(&crate::ScriptLimits::default()),
             )
             .expect("probe")
         };
@@ -653,6 +749,7 @@ mod tests {
             registry,
             &ProbeRequest::default(),
             &|_| Err("generation 3 cannot be rebuilt".to_owned()),
+            &ProbeBounds::unconsulted(&crate::ScriptLimits::default()),
         )
         .expect("probe");
         let migrate = &response.per_handler[0];

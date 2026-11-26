@@ -499,7 +499,15 @@ pub(crate) fn run_operation_loop(
         let run = crate::runtime::breakers::Run::of_app(app, script_limits);
         match &gate {
             Some(input) => run.with_last_success(input.last),
-            None => run.with_params(&params),
+            None => {
+                let def = app.def.load();
+                let schema = target
+                    .action()
+                    .and_then(|action| def.actions.get(action))
+                    .map(|a| a.params.clone())
+                    .unwrap_or_default();
+                run.with_params(&params, &schema)
+            }
         }
     };
     let tracked = || {
@@ -507,6 +515,13 @@ pub(crate) fn run_operation_loop(
             .get(app_name.as_str())
             .is_some_and(|e| e.current_generation == op_ctx.operation_generation)
     };
+    // spec: ACN#action-invocation
+    let _invokes = crate::runtime::breakers::InvokesGuard::enter(
+        app_name,
+        crate::runtime::breakers::Run::of_app(app, script_limits),
+        db.clone(),
+        Arc::clone(&cipher),
+    );
     let mut standing = None;
     if tracked() {
         let (name, cipher, checked, run) = (

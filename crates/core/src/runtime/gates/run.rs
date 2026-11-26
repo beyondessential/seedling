@@ -48,7 +48,7 @@ use crate::{
             BoundParams, Engine, GateInput, OperationEnd, Persisted, adapters, app_at_generation,
             clear_superseded_operation_faults, language_for, run_operation_loop,
         },
-        probe::probe_gate_body,
+        probe::{ProbeBounds, probe_gate_body},
         registry::DbInstanceRegistry,
         secrets::KeyDigest,
     },
@@ -394,6 +394,27 @@ impl Run<'_> {
             .call(move |db| store::begin_run(db, &n, &g))
             .map_err(|e| format!("the gate's last success could not be invalidated: {e}"))?;
 
+        // spec: GRUN#preparation
+        // spec: LIM#breakers
+        if gate_def.has_body {
+            use crate::runtime::breakers::{self, Standing, Thing};
+            let thing = Thing::Gate(gate.clone());
+            let run = breakers::Run::of_app(app, &state.script_limits).with_last_success(last);
+            let (n, cipher, checked) = (name.clone(), Arc::clone(&state.cipher), thing.clone());
+            match state
+                .db
+                .call(move |db| breakers::standing(db, &cipher, &n, &checked, &run))
+            {
+                Ok(Standing::Tripped) => {
+                    return Err(Stopped::Failed(breakers::tripped_message(&thing)));
+                }
+                Ok(Standing::Clear | Standing::TrippedForOther) => {}
+                Err(why) => {
+                    return Err(Stopped::Failed(breakers::unreadable_message(&thing, &why)));
+                }
+            }
+        }
+
         let images = self.images(app, def, gate_def, last).await?;
         stream::iter(images)
             .map(|image| async move { self.ensure_image(&image).await })
@@ -437,7 +458,16 @@ impl Run<'_> {
                 let (engine, _scope, ast) = language_for(&app, &limits)?;
                 let registry: Arc<dyn crate::runtime::InstanceRegistry> =
                     Arc::new(DbInstanceRegistry::new(db));
-                probe_gate_body(&engine, &ast, &app, registry, &gate, last.as_ref())
+                // The run has consulted the body's breaker before preparing.
+                probe_gate_body(
+                    &engine,
+                    &ast,
+                    &app,
+                    registry,
+                    &gate,
+                    last.as_ref(),
+                    &ProbeBounds::unconsulted(&limits),
+                )
             })
             .await
             .map_err(|e| format!("the probe of the gate's body failed: {e}"))?

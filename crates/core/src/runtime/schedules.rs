@@ -27,6 +27,11 @@ pub type ScheduledApp = (
     Arc<BTreeMap<ActionName, BTreeMap<ParamName, ParamDef>>>,
 );
 
+/// Where the breaker of a scheduled run's action stands for the run's
+/// params, or why that cannot be read.
+pub type ScheduledBreaker<'a> = dyn Fn(&Db, &AppName, &ActionName, &ParamMap) -> Result<crate::runtime::breakers::Standing, String>
+    + 'a;
+
 pub struct FiredSchedule {
     pub app: AppName,
     pub action: ActionName,
@@ -54,6 +59,7 @@ pub fn check_due_schedules(
     scheduler: &mut Scheduler,
     now: Timestamp,
     limits: &crate::defs::stdlib::HelperLimits,
+    breaker: &ScheduledBreaker<'_>,
     installed_app: &dyn Fn(&AppName) -> Option<ScheduledApp>,
 ) -> Vec<FiredSchedule> {
     // spec: SCHED#firing
@@ -201,6 +207,32 @@ pub fn check_due_schedules(
                     params
                 }
             };
+
+            // spec: ACN#scheduled-actions
+            // spec: SCHED#fire-times
+            // A run its action's breaker holds back is accounted for as one
+            // that fails validation is, with no further fault; one whose
+            // breaker cannot be read is not made, and stays due.
+            match breaker(db, &row.app, &row.action, &params) {
+                Ok(crate::runtime::breakers::Standing::Tripped) => {
+                    tracing::warn!(
+                        app = %row.app,
+                        action = %row.action,
+                        "scheduled run not made: the action's breaker is tripped for it"
+                    );
+                    stamp_fire(db);
+                    continue;
+                }
+                Ok(_) => {}
+                Err(why) => {
+                    tracing::error!(
+                        app = %row.app,
+                        action = %row.action,
+                        "scheduled run not made: {why}"
+                    );
+                    continue;
+                }
+            }
 
             // spec: TRD#uninstall-admission
             // The phase behind `installed_app` was read before the scheduler
@@ -450,6 +482,15 @@ mod tests {
         assert_eq!(rows[0].action, "backup");
     }
 
+    fn no_breakers(
+        _: &Db,
+        _: &AppName,
+        _: &ActionName,
+        _: &ParamMap,
+    ) -> Result<crate::runtime::breakers::Standing, String> {
+        Ok(crate::runtime::breakers::Standing::Clear)
+    }
+
     // spec: SCHED#firing
     #[test]
     fn check_due_fires_overdue_schedule() {
@@ -469,7 +510,7 @@ mod tests {
         .unwrap();
 
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert_eq!(fired.len(), 1);
@@ -490,7 +531,7 @@ mod tests {
 
         let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert!(fired.is_empty(), "an unreadable schedule must not fire");
@@ -508,7 +549,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert_eq!(fired.len(), 1);
@@ -532,7 +573,7 @@ mod tests {
 
         let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert!(fired.is_empty());
@@ -546,7 +587,7 @@ mod tests {
         db.conn
             .execute_batch("ALTER TABLE gone RENAME TO action_schedules;")
             .unwrap();
-        check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
+        check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert!(
@@ -583,16 +624,17 @@ mod tests {
 
         let now: Timestamp = "2026-04-21T18:37:22Z".parse().unwrap();
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
             Some((1, installed(), no_schemas()))
         });
         assert_eq!(fired.len(), 1, "missed hourly schedule must catch up");
 
         // After firing we record last_fired_at = now, so the immediate next
         // check sees the next boundary still in the future.
-        let fired_again = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
-            Some((1, installed(), no_schemas()))
-        });
+        let fired_again =
+            check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
+                Some((1, installed(), no_schemas()))
+            });
         assert!(
             fired_again.is_empty(),
             "second check at same instant must not refire"
@@ -622,7 +664,7 @@ mod tests {
             action_name("backup"),
             required_text_param(),
         )]));
-        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
             Some((1, installed(), Arc::clone(&schemas)))
         });
         assert!(fired.is_empty(), "the closure is not run");
@@ -633,7 +675,7 @@ mod tests {
         assert_eq!(filed[0].subject, "backup", "the action is the subject");
 
         // The fire is recorded, so the next check is not another failure.
-        check_due_schedules(&db, &mut scheduler, now, &limits(), &|_| {
+        check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
             Some((1, installed(), Arc::clone(&schemas)))
         });
         assert_eq!(
@@ -653,9 +695,10 @@ mod tests {
         ));
         let schemas = Arc::new(BTreeMap::from([(action_name("backup"), with_default)]));
         let later: Timestamp = "2026-04-21T19:37:22Z".parse().unwrap();
-        let fired = check_due_schedules(&db, &mut scheduler, later, &limits(), &|_| {
-            Some((1, installed(), Arc::clone(&schemas)))
-        });
+        let fired =
+            check_due_schedules(&db, &mut scheduler, later, &limits(), &no_breakers, &|_| {
+                Some((1, installed(), Arc::clone(&schemas)))
+            });
         assert_eq!(fired.len(), 1, "the declared default satisfies the schema");
         // spec: ACN#param-delivery
         assert_eq!(

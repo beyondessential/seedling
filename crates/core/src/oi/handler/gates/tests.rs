@@ -353,7 +353,10 @@ fn a_gate_run_is_refused_for_what_is_not_there_or_not_installed() {
         .write()
         .get_mut("demo")
         .unwrap()
-        .script_error = Some(("it broke".to_owned(), Timestamp::now()));
+        .script_error = Some((
+        crate::runtime::apps::ScriptError::failed("it broke".to_owned()),
+        Timestamp::now(),
+    ));
     let (code, _) = run(&oi, "migrate").unwrap_err();
     assert_eq!(code, "script_error");
 }

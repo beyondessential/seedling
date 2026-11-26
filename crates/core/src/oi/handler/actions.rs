@@ -155,6 +155,32 @@ pub(crate) fn rejection_error(app_name: &AppName, reason: RejectReason) -> OiErr
     }
 }
 
+/// Refuse a request that would evaluate `thing` with `run` while its breaker
+/// is tripped for it, or while whether it is cannot be read.
+// spec: LIM#breakers
+pub(crate) fn breaker_refusal(
+    state: &OiState,
+    app: &AppName,
+    thing: crate::runtime::breakers::Thing,
+    run: crate::runtime::breakers::Run,
+) -> Result<(), OiError> {
+    use crate::runtime::breakers::{self, Standing};
+    let (name, cipher, checked) = (app.clone(), Arc::clone(&state.cipher), thing.clone());
+    match state
+        .db
+        .call(move |db| breakers::standing(db, &cipher, &name, &checked, &run))
+    {
+        Ok(Standing::Tripped) => Err(OiError::new(
+            ErrorCode::EvaluationRunaway,
+            breakers::tripped_message(&thing),
+        )),
+        Ok(Standing::Clear | Standing::TrippedForOther) => Ok(()),
+        Err(why) => Err(OiError::internal(breakers::unreadable_message(
+            &thing, &why,
+        ))),
+    }
+}
+
 // spec: ACI#invoking-an-action
 pub(crate) fn invoke_action(
     state: &Arc<OiState>,
@@ -166,7 +192,7 @@ pub(crate) fn invoke_action(
     let supplied_params = params.params.unwrap_or_default();
     validate_action_params(&supplied_params)?;
 
-    let (phase_handle, action_params) = {
+    let (phase_handle, action_params, run) = {
         let reg = state.registry.read();
         let entry = reg
             .get(app_name.as_str())
@@ -197,8 +223,19 @@ pub(crate) fn invoke_action(
         // spec: ACN#volume-params
         validate_volume_params(state, &action_def.params, &action_params)?;
 
-        (Arc::clone(&entry.phase), action_params)
+        // spec: LIM#breakers
+        let run = crate::runtime::breakers::Run::of_app(&entry.app, &state.script_limits)
+            .with_params(&action_params, &action_def.params);
+        (Arc::clone(&entry.phase), action_params, run)
     };
+
+    // spec: ACI#invoking-an-action
+    breaker_refusal(
+        state,
+        app_name,
+        crate::runtime::breakers::Thing::Action(action_name.clone()),
+        run,
+    )?;
 
     // Operator-invoked action: source and target generation are equal to the
     // app's current generation at dispatch.

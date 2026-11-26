@@ -226,7 +226,7 @@ pub(crate) fn run_gate(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     let (app_name, gate_name) = (&params.app, &params.gate);
-    let (def, phase, generation) = {
+    let (def, phase, generation, current) = {
         let reg = state.registry.read();
         let entry = reg
             .get(app_name.as_str())
@@ -245,8 +245,35 @@ pub(crate) fn run_gate(
         }
         // spec: ACTL#gate-runs
         super::apps::definition_refusal(app_name, &entry.script_error)?;
-        (def, Arc::clone(&entry.phase), entry.current_generation)
+        (
+            def,
+            Arc::clone(&entry.phase),
+            entry.current_generation,
+            entry.app.clone(),
+        )
     };
+
+    // spec: ACTL#gate-runs
+    // spec: LIM#breakers
+    if def.gates.get(gate_name).is_some_and(|g| g.has_body) {
+        let last = crate::runtime::gates::run::LastSuccesses::new(
+            &state.db,
+            app_name,
+            &current,
+            &state.script_limits,
+            &state.cipher,
+        )
+        .of(gate_name)
+        .map_err(OiError::internal)?;
+        let run = crate::runtime::breakers::Run::of_app(&current, &state.script_limits)
+            .with_last_success(last.as_ref());
+        actions::breaker_refusal(
+            state,
+            app_name,
+            crate::runtime::breakers::Thing::Gate(gate_name.clone()),
+            run,
+        )?;
+    }
 
     let unready = unready_targets_of(state, app_name, &def, gate_name)?;
     if !unready.is_empty() {

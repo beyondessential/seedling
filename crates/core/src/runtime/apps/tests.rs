@@ -78,7 +78,8 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         sessions: Default::default(),
         checks: Default::default(),
         tick_notify: Arc::new(Notify::new()),
-        script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
+        script_error: script_error
+            .map(|msg| (super::ScriptError::failed(msg.to_owned()), Timestamp::now())),
         current_generation: 0,
         install_seq: None,
         seed: crate::runtime::seeds::AppSeed::for_tests(),
@@ -94,7 +95,7 @@ fn sync_clears_fault_on_successful_reload() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     assert_eq!(
         crate::runtime::faults::list_active_faults(&db, Some(&app("myapp")))
@@ -107,7 +108,7 @@ fn sync_clears_fault_on_successful_reload() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     assert!(
         crate::runtime::faults::list_active_faults(&db, Some(&app("myapp")))
@@ -126,7 +127,7 @@ fn sync_replaces_fault_when_error_changes() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(faults.len(), 1);
@@ -137,7 +138,7 @@ fn sync_replaces_fault_when_error_changes() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(
@@ -158,7 +159,7 @@ fn sync_is_idempotent_for_same_error() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     let first = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(first.len(), 1);
@@ -167,7 +168,7 @@ fn sync_is_idempotent_for_same_error() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     let second = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(second.len(), 1);
@@ -849,7 +850,7 @@ fn a_stored_definition_that_no_longer_evaluates_is_faulted_on_reload() {
     sync_script_error_fault(
         &db,
         &loaded.name,
-        loaded.script_error.as_ref().map(|(m, _)| m.as_str()),
+        loaded.script_error.as_ref().map(|(e, _)| e),
     );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert!(
