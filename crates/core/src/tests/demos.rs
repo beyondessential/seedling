@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use seedling_bundle::Bundle;
 use seedling_protocol::names::{AppName, GateName};
@@ -22,8 +22,10 @@ fn demos_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demos")
 }
 
-fn demo_names() -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(demos_dir())
+/// Every demo's bundle, by name, assembled once as the CLI assembles a
+/// folder it pushes.
+static DEMOS: LazyLock<BTreeMap<String, Arc<Bundle>>> = LazyLock::new(|| {
+    std::fs::read_dir(demos_dir())
         .expect("the demos folder reads")
         .map(|entry| entry.expect("a demos entry reads"))
         .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
@@ -34,16 +36,26 @@ fn demo_names() -> Vec<String> {
                 .expect("a demo's name is UTF-8")
         })
         .filter(|name| name != SHARED)
-        .collect();
-    names.sort();
-    names
+        .map(|name| {
+            let files = seedling_bundle::source::read_folder_definition(&demos_dir().join(&name))
+                .unwrap_or_else(|e| panic!("{name} reads as a definition folder: {e}"));
+            let bundle =
+                Bundle::from_files(files).unwrap_or_else(|e| panic!("{name} is a bundle: {e}"));
+            (name, Arc::new(bundle))
+        })
+        .collect()
+});
+
+fn demo_names() -> impl Iterator<Item = &'static String> {
+    DEMOS.keys()
 }
 
-/// A demo's bundle, assembled as the CLI assembles a folder it pushes.
 fn demo(name: &str) -> Arc<Bundle> {
-    let files = seedling_bundle::source::read_folder_definition(&demos_dir().join(name))
-        .unwrap_or_else(|e| panic!("{name} reads as a definition folder: {e}"));
-    Arc::new(Bundle::from_files(files).unwrap_or_else(|e| panic!("{name} is a bundle: {e}")))
+    Arc::clone(
+        DEMOS
+            .get(name)
+            .unwrap_or_else(|| panic!("no demo named {name}")),
+    )
 }
 
 fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -195,17 +207,16 @@ fn declared(app: &defs::app::App) -> Vec<String> {
 
 #[test]
 fn every_demo_evaluates_with_only_the_params_it_requires() {
-    let names = demo_names();
-    assert!(names.iter().any(|n| n == "hello-world"), "{names:?}");
-    for name in names {
-        evaluated(&name, &install_params(&name));
+    assert!(DEMOS.contains_key("hello-world"), "{:?}", DEMOS.keys());
+    for name in demo_names() {
+        evaluated(name, &install_params(name));
     }
 }
 
 #[test]
 fn every_demo_says_it_is_a_demo() {
     for name in demo_names() {
-        let app = evaluated(&name, &install_params(&name));
+        let app = evaluated(name, &install_params(name));
         let description = app.def.load().description.clone();
         assert!(
             description
@@ -219,7 +230,7 @@ fn every_demo_says_it_is_a_demo() {
 #[test]
 fn every_demo_action_and_gate_body_runs_under_a_probe() {
     for name in demo_names() {
-        let response = probe(&name, &install_params(&name), None, true);
+        let response = probe(name, &install_params(name), None, true);
         for handler in &response.per_handler {
             assert!(handler.error.is_none(), "{name}: {handler:?}");
             assert!(handler.skipped_reason.is_none(), "{name}: {handler:?}");
