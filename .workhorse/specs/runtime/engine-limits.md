@@ -79,18 +79,23 @@ Every other evaluation, such as of a proposed definition or proposed values, a c
 > [!NOTE]
 > An evaluation that is not tracked either answers a request whose caller sees the failure at once, or fails the operation it belongs to, so its cost is not paid again until someone acts.
 
-A thing's inputs are the app's [host constants](../language/constants.md#host-constants), its [app seed](secrets.md#app-seed) and the running Seedling version, together with the inputs below.
+The definition of an evaluation is the definition bundle of the generation it evaluates.
+Its inputs are the app's [host constants](../language/constants.md#host-constants), its [app seed](secrets.md#app-seed), the running Seedling version and the evaluation time limit in force, together with the inputs below.
 
 | thing | inputs |
 | --- | --- |
-| definition | the app's parameter values |
-| action handler | the app's parameter values, and the params of the invocation once defaults are filled in |
-| shell handler | the app's parameter values, and the params of the session once defaults are filled in |
-| gate body | the app's parameter values, and the `last` the body is passed |
-| parameter validator | the proposed parameter values |
+| definition | the app's stored parameter values |
+| an action's closure | the app's stored parameter values, and the params of the invocation once validated and filled in from defaults, each in its [canonical form](../language/action.md#kind-parsers), leaving out [reserved keys](../language/action.md#param-delivery) |
+| a shell's closure | the app's stored parameter values, and the params of the session, taken as for an action |
+| a gate's body | the app's stored parameter values, and the generation of the gate's last success that the body's `last` reflects, if any |
 
 > [!NOTE]
-> The running Seedling version is an input because a release can change how long the same script takes, such as through a different regex engine.
+> The running Seedling version is an input because a release can change how long the same script takes, such as through a different regex engine, and the limit in force is one so that an operator who raises or removes it can run again what it stopped.
+
+> [!NOTE]
+> The world an action closure observes through its runtime handle, and its [operation seed](secrets.md#operation-seed), are not inputs, so a change on the host does not reset a breaker; an operator who has fixed the host clears the fault to try again.
+
+The runtime MUST record a breaker's definition and inputs as a digest computed under the host's [secret key](secrets.md#secret-key), and MUST NOT store them, nor anything from which they could be recovered without the secret key.
 
 When a tracked evaluation fails at the evaluation time limit, the runtime MUST trip the breaker of the thing it evaluated, recording the definition and the inputs it was evaluated with.
 A pass of a lifecycle operation evaluates the action the operation runs, including any closure the pass reaches through [`invoke`](../language/action.md#action-invocation).
