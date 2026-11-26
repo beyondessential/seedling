@@ -460,7 +460,13 @@ static LAST_IN_TIME: LazyLock<Mutex<HashMap<(AppName, Thing), InTime>>> =
     LazyLock::new(Mutex::default);
 
 /// Record that `run` of `thing` finished within the limit, and reset its
-/// breaker where it was tripped for another run.
+/// breaker where it was tripped.
+///
+/// A tracked evaluation of a tripped thing with the recorded definition and
+/// inputs fails before it evaluates, so `standing` is `Tripped` here only
+/// for an evaluation that ran untracked and the runtime then adopted, as an
+/// update's does. The runtime has just seen that run finish in time, which
+/// is what the breaker holds against it.
 // spec: LIM#breakers
 pub fn finished_in_time(
     db: &Db,
@@ -474,7 +480,7 @@ pub fn finished_in_time(
         (app.clone(), thing.clone()),
         (run.definition.clone(), run.input_digests(cipher)),
     );
-    if standing == Standing::TrippedForOther
+    if standing != Standing::Clear
         && let Err(e) = reset(db, app, thing)
     {
         tracing::error!(%app, "cannot reset the breaker of {}: {e}", thing.describe());

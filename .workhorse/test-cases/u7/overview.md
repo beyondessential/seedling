@@ -42,6 +42,7 @@
 - [x] A probe reports a tripped handler, and one stopped at the limit, as that handler's error (verifies spec: IMG)
 - [x] A probed action or gate body that invokes an action whose breaker is tripped reports the refusal as its error (verifies spec: IMG, ACN)
 - [x] Clearing an app's faults while its definition's breaker is tripped evaluates the definition again (verifies spec: LIM)
+- [x] An in-time evaluation the runtime adopts resets the definition's breaker, whatever it was tripped for (verifies spec: LIM)
 - [x] A breaker fault about an action names it by `resource_type` and `resource_name`; the definition's names nothing (verifies spec: FLTS)
 - [x] The web UI withholds Install while the definition has run away, and not while only an action has (verifies spec: UI)
 - [x] Deregistering an app discards its breakers, so a new app of the same name starts clear (verifies spec: LIM)

@@ -151,6 +151,23 @@ fn an_in_time_run_with_other_inputs_resets_the_breaker() {
 
 // spec: LIM#breakers
 #[test]
+fn an_in_time_run_of_what_tripped_the_breaker_resets_it() {
+    let (db, cipher) = (Db::open_in_memory().unwrap(), Cipher::for_tests());
+    let tripped = run_with("sha256:a", "x+");
+    trip(&db, &cipher, &app(), &action(), &tripped, 3, &limits()).unwrap();
+
+    // As an update's evaluation does: it ran untracked, so it was not
+    // refused, and the runtime adopted the definition it finished in time.
+    finished_in_time(&db, &cipher, &app(), &action(), &tripped, Standing::Tripped);
+    assert!(runaway_faults(&db).is_empty());
+    assert_eq!(
+        standing(&db, &cipher, &app(), &action(), &tripped),
+        Ok(Standing::Clear)
+    );
+}
+
+// spec: LIM#breakers
+#[test]
 fn clearing_the_fault_resets_the_breaker() {
     let (db, cipher) = (Db::open_in_memory().unwrap(), Cipher::for_tests());
     let run = run_with("sha256:a", "x+");

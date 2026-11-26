@@ -114,6 +114,7 @@ While a breaker is tripped, a tracked evaluation of its thing with the recorded 
 A tracked evaluation of its thing with a different definition or different inputs MUST evaluate as usual.
 If it finishes within the limit, the runtime MUST reset the breaker.
 If it fails at the limit, the runtime MUST record its definition and inputs on the breaker in place of the earlier ones, and the breaker stays tripped.
+Where an evaluation the runtime then adopts as the app's own, as an [update](../interface/apps.md#update) does, finishes within the limit, the runtime MUST reset the definition's breaker whatever it was tripped for.
 
 Runs of a tripped action closure are refused or held back before they start, as [action invocation](../interface/actions.md#invoking-an-action), [opening an app shell](../interface/shells.md#opening-an-app-shell), [`invoke`](../language/action.md#action-invocation), [scheduled actions](../language/action.md#scheduled-actions) and [gate preparation](gates.md#preparation) specify.
 
