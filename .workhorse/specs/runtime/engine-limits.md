@@ -4,7 +4,17 @@ id: LIM
 
 # Script engine limits
 
-Applies to the bounds the [runtime](../overview.md#runtime) places on each evaluation of a BSL script.
+Applies to the bounds the [runtime](../overview.md#runtime) places on each evaluation of a BSL script, and to the breakers that stop it repeating an evaluation that ran out of time.
+
+## Terminology
+
+### Breaker
+
+A record, kept for an app's definition or one of its action closures, of the definition and inputs with which an evaluation of it last exceeded the evaluation time limit, under which the runtime does not evaluate it again with them.
+
+### Tracked evaluation
+
+An evaluation whose outcome trips or resets a [breaker](#breaker), as [breakers](#breakers) specifies.
 
 ## Limits
 
@@ -21,7 +31,7 @@ The runtime MUST bound the resources a single evaluation of a BSL script can con
 | derived values | calls to a [derivation helper](../language/random.md#derivation-helper), and helper results [withheld as derived values](secrets.md#redaction) | 1 000 | `--script-max-derived-values` |
 | regex compiled size | bytes of [patterns compiled](../language/regex.md#compiled-size) | 33 554 432 (32 MiB) | `--script-max-regex-compiled-size` |
 | password hashes | calls to a [password hash helper](../language/random.md#password-hash-helper) | 16 | `--script-max-password-hashes` |
-| evaluation time | whole seconds of [evaluation time](#evaluation-time) | 10 | `--script-max-evaluation-time` |
+| evaluation time | whole seconds of [evaluation time](#measuring-evaluation-time) | 10 | `--script-max-evaluation-time` |
 
 An evaluation that exceeds any limit MUST fail with an error.
 A pattern that would exceed the regex compiled size limit MUST instead raise a script error, as [compiled size](../language/regex.md#compiled-size) specifies.
@@ -43,7 +53,7 @@ The daemon MUST refuse to start with a function call nesting depth of 0.
 > [!NOTE]
 > The runtime keeps what an evaluation derived, and the results it withholds as derived values, for as long as it withholds them from operators, so the derived values limit bounds what one definition can make it hold.
 
-## Evaluation time
+## Measuring evaluation time
 
 An evaluation's evaluation time is the processor time the runtime spends evaluating its script.
 Time the evaluation spends waiting, such as in a method of a [runtime handle](../language/rt.md#runtime-handle), at a [barrier](../language/rt.md#barrier), or while a [shell](../language/action.md#shells) is attached, is not part of it.
@@ -120,5 +130,5 @@ When an app is deregistered, the runtime MUST discard every breaker of the app.
 If the runtime cannot read whether a breaker is tripped, it MUST NOT make a tracked evaluation of the breaker's thing, MUST hold a [`breaker_state_unreadable`](faults.md#app-faults) fault against the thing, and MUST keep trying to read it.
 
 > [!NOTE]
-> Operators write the scripts a host evaluates, so the breaker is there to catch an accident, such as a pattern that is slow on a parameter's value, rather than to defend against a hostile script.
+> A breaker bounds the repeated cost of an accident, such as a pattern that is slow on a parameter's value; it is no defence against a script written to exhaust the host.
 > Tripping on the first runaway means its cost is paid once, rather than on every evaluation that follows with the same inputs.

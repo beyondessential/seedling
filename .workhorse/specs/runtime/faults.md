@@ -139,10 +139,12 @@ A `canopy_offer_absent` fault MUST say when an offer was last live, or that none
 An `evaluation_runaway` fault MUST identify the thing its breaker is for and the generation whose definition tripped it, and MUST give the likely cause.
 It MUST NOT carry the value of any input.
 Its subject MUST name the kind of thing as well as its name, so that an action and a gate of the same name are separate subjects.
-The likely cause MUST be the inputs when the last evaluation of the thing that finished within the [evaluation time limit](engine-limits.md#evaluation-time) had the same definition and different inputs, and the definition when that evaluation had the same inputs and a different definition.
+The likely cause is judged against the last evaluation of the thing that finished within the [evaluation time limit](engine-limits.md#measuring-evaluation-time).
+The fault MUST give the inputs as the likely cause when that evaluation had the same definition and different inputs.
+The fault MUST give the definition as the likely cause when that evaluation had the same inputs and a different definition.
 Otherwise, including when the runtime holds no record of such an evaluation, the fault MUST say that the likely cause is unknown.
 Where the likely cause is the inputs, the fault MUST name each input that differs, such as a parameter by its name or the app seed, and never its value.
-The runtime MAY hold the record of the last evaluation that finished within the limit in memory only.
+The runtime need not keep its record of the last evaluation that finished within the limit across a runtime restart.
 
 An evaluation of the app's definition that fails at the evaluation time limit, or that a tripped [breaker](engine-limits.md#breakers) fails, MUST file `evaluation_runaway` in place of `script_error`, and MUST neither file nor clear `script_error`.
 

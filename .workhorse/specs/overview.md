@@ -302,3 +302,8 @@ Defined in [INFRA](runtime/infrastructure.md#host-prefix).
 
 A record of a condition on a host that needs an operator's attention.
 Defined in [FLT](runtime/faults.md#fault).
+
+### Breaker
+
+A record under which the runtime does not evaluate again a script that ran out of evaluation time with the same definition and inputs.
+Defined in [LIM](runtime/engine-limits.md#breaker).

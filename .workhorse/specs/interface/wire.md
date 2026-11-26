@@ -115,7 +115,7 @@ Wherever a message names a [resource type](../language/overview.md#resource-type
 | `already_queued` | a lifecycle operation is already queued for the app |
 | `requirements_invalid` | the request cannot be parsed, or its actor or parameters are missing, malformed or out of range; `message` names each offending field |
 | `script_error` | a definition failed to parse or evaluate; `message` gives the error |
-| `evaluation_runaway` | an evaluation failed at the [evaluation time limit](../runtime/engine-limits.md#evaluation-time), or its [breaker](../runtime/engine-limits.md#breakers) is tripped; `message` gives the thing evaluated and the likely cause |
+| `evaluation_runaway` | an evaluation failed at the [evaluation time limit](../runtime/engine-limits.md#measuring-evaluation-time), or its [breaker](../runtime/engine-limits.md#breakers) is tripped; `message` gives the thing evaluated and the likely cause |
 | `validation_failed` | a [parameter validator](params.md#validation) rejected the proposed values; `message` names each rejecting parameter and its reason |
 | `bundle_invalid` | a definition bundle breaks the [bundle rules](definitions.md#bundle-rules); `message` names the offending path or field |
 | `unsupported_seedling` | a definition does not [support](definitions.md#seedling-version-support) the running Seedling version |
