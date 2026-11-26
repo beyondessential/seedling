@@ -626,7 +626,9 @@ impl AppRegistry {
             // spec: LIM#breakers
             let run = breakers::Run::new(bundle.hash(), &stored, Some(&seed), limits);
             let (app, raw_error) =
-                match breakers::consult(db, cipher, &name, &breakers::Thing::Definition, &run) {
+                match breakers::consult(db, cipher, &name, &breakers::Thing::Definition, || {
+                    run.clone()
+                }) {
                     Err(refusal) => (
                         App::with_bundle(Arc::clone(&bundle)),
                         Some(ScriptError::from(refusal)),
@@ -901,7 +903,9 @@ pub fn reload(
     let run = breakers::Run::new(bundle.hash(), params, Some(&seed), limits);
     let standing = {
         let (name, cipher, run) = (name.clone(), Arc::clone(cipher), run.clone());
-        db.call(move |db| breakers::consult(db, &cipher, &name, &breakers::Thing::Definition, &run))
+        db.call(move |db| {
+            breakers::consult(db, &cipher, &name, &breakers::Thing::Definition, || run)
+        })
     };
     let outcome = match standing {
         Err(refusal) => registry

@@ -84,6 +84,35 @@ pub struct ProbeBounds<'a> {
     pub tripped: breakers::Tripped,
 }
 
+/// What every handler of one probe is evaluated with, before its own params
+/// or the gate's last success.
+///
+/// Assembling it reads the app's stored parameters and host constants, so a
+/// probe builds it once rather than once per handler.
+struct Base<'a> {
+    run: breakers::Run,
+    bounds: &'a ProbeBounds<'a>,
+}
+
+impl<'a> Base<'a> {
+    fn of(app: &App, bounds: &'a ProbeBounds<'a>) -> Self {
+        Base {
+            run: breakers::Run::of_app(app, bounds.limits),
+            bounds,
+        }
+    }
+
+    /// Why `thing` is not evaluated with the base plus `inputs`, or `None`
+    /// to evaluate it.
+    fn tripped(
+        &self,
+        thing: &breakers::Thing,
+        inputs: impl FnOnce(breakers::Run) -> breakers::Run,
+    ) -> Option<String> {
+        (self.bounds.tripped)(thing, inputs(self.run.clone()))
+    }
+}
+
 #[cfg(test)]
 impl<'a> ProbeBounds<'a> {
     /// Bounds that find no breaker tripped.
@@ -139,6 +168,7 @@ pub fn probe_gate_body(
     // body share a budget, which the starts within them join.
     let _evaluation = crate::evaluation::Evaluation::start(bounds.limits);
     let captured = capture(engine, script_ast, app, bounds.limits)?;
+    let base = Base::of(app, bounds);
     match captured.gates.get(gate) {
         Some(Some(body)) => probe_gate_closure(
             engine,
@@ -149,7 +179,7 @@ pub fn probe_gate_body(
             gate,
             body.clone(),
             last,
-            bounds,
+            &base,
         )
         .map_err(ScriptError::failed),
         Some(None) => Ok(HandlerProbe {
@@ -179,13 +209,13 @@ fn probe_gate_closure(
     gate: &GateName,
     body: FnPtr,
     last: Option<&App>,
-    bounds: &ProbeBounds<'_>,
+    base: &Base<'_>,
 ) -> Result<HandlerProbe, String> {
     let arity = closure_arity(script_ast, &body)
         .ok_or_else(|| format!("the body of gate '{gate}' cannot be called"))?;
     // spec: IMG#image-discovery
-    let run = breakers::Run::of_app(app, bounds.limits).with_last_success(last);
-    if let Some(why) = (bounds.tripped)(&breakers::Thing::Gate(gate.clone()), run) {
+    let thing = breakers::Thing::Gate(gate.clone());
+    if let Some(why) = base.tripped(&thing, |run| run.with_last_success(last)) {
         return Ok(HandlerProbe {
             name: gate.as_str().to_owned(),
             kind: HandlerKind::Gate,
@@ -207,7 +237,7 @@ fn probe_gate_closure(
             arity,
             last: last.map_or(Dynamic::UNIT, |last| Dynamic::from(last.clone())),
         },
-        bounds,
+        base,
     ))
 }
 
@@ -233,6 +263,7 @@ pub fn probe_app(
     // itself must not fail; if it does, the caller can surface that as an
     // app-level script_error fault and there's nothing to probe.
     let captured = capture(engine, script_ast, app, bounds.limits)?;
+    let base = Base::of(app, bounds);
 
     // Build the per-handler probe list in declaration order from the def.
     let def = app.def.load_full();
@@ -279,7 +310,7 @@ pub fn probe_app(
             closure,
             &param_schema,
             request,
-            bounds,
+            &base,
         );
         results.push(probe_result);
     }
@@ -297,7 +328,7 @@ pub fn probe_app(
                 name,
                 body.clone(),
                 last.as_ref(),
-                bounds,
+                &base,
             )
         });
         results.push(probed.unwrap_or_else(|error| HandlerProbe {
@@ -337,7 +368,7 @@ fn probe_handler(
     closure: FnPtr,
     schema: &BTreeMap<ParamName, ParamDef>,
     request: &ProbeRequest,
-    bounds: &ProbeBounds<'_>,
+    base: &Base<'_>,
 ) -> HandlerProbe {
     // spec: IMG#probe-parameters
     let supplied = request
@@ -382,17 +413,16 @@ fn probe_handler(
             .ok()
             .map(breakers::Thing::Action),
     };
-    if let Some(thing) = thing {
-        let run = breakers::Run::of_app(app, bounds.limits).with_params(&resolved_params, schema);
-        if let Some(why) = (bounds.tripped)(&thing, run) {
-            return HandlerProbe {
-                name: handler_name.to_owned(),
-                kind,
-                images: BTreeSet::new(),
-                error: Some(why),
-                skipped_reason: None,
-            };
-        }
+    if let Some(thing) = thing
+        && let Some(why) = base.tripped(&thing, |run| run.with_params(&resolved_params, schema))
+    {
+        return HandlerProbe {
+            name: handler_name.to_owned(),
+            kind,
+            images: BTreeSet::new(),
+            error: Some(why),
+            skipped_reason: None,
+        };
     }
     let call = match kind {
         HandlerKind::Shell => ProbeCall::Shell(param_map),
@@ -408,7 +438,7 @@ fn probe_handler(
         kind,
         closure,
         call,
-        bounds,
+        base,
     )
 }
 
@@ -439,9 +469,9 @@ fn run_probe(
     kind: HandlerKind,
     closure: FnPtr,
     call: ProbeCall,
-    bounds: &ProbeBounds<'_>,
+    base: &Base<'_>,
 ) -> HandlerProbe {
-    let limits = bounds.limits;
+    let limits = base.bounds.limits;
     // Fresh probe buffer per handler. Shared across rt.* calls through the
     // ReplayContext and into Started's check_barrier.
     let images: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
@@ -524,8 +554,8 @@ fn run_probe(
         // spec: IMG#image-discovery
         // An invoked action is refused while its breaker is tripped, as in a run.
         let _invokes = breakers::InvokesGuard::enter(
-            breakers::Run::of_app(app, limits),
-            std::sync::Arc::clone(&bounds.tripped),
+            base.run.clone(),
+            std::sync::Arc::clone(&base.bounds.tripped),
         );
         // spec: LIM#measuring-evaluation-time
         let evaluation = crate::evaluation::Evaluation::start(limits);

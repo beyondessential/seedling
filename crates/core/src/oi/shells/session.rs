@@ -255,7 +255,7 @@ pub(crate) async fn open_shell_session(
         let (name, cipher) = (app_name.clone(), Arc::clone(&state.cipher));
         if let Err(refusal) = state
             .db
-            .call(move |db| breakers::consult(db, &cipher, &name, &thing, &run))
+            .call(move |db| breakers::consult(db, &cipher, &name, &thing, || run))
         {
             let e = crate::oi::handler::actions::refusal_error(refusal);
             reject(&mut send, error_code_name(e.code), e.message).await;
@@ -817,7 +817,7 @@ pub(super) async fn run_app_shell(
                 thing.clone(),
                 run.clone(),
             );
-            match db.call(move |db| breakers::consult(db, &cipher, &name, &checked, &run)) {
+            match db.call(move |db| breakers::consult(db, &cipher, &name, &checked, || run)) {
                 Ok(standing) => standing,
                 Err(refusal) => return ScriptEnd::Failed(refusal.message().to_owned()),
             }

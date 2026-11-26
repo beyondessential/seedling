@@ -533,7 +533,7 @@ pub(crate) fn run_operation_loop(
             run.clone(),
         );
         match db
-            .call(move |db| crate::runtime::breakers::consult(db, &cipher, &name, &checked, &run))
+            .call(move |db| crate::runtime::breakers::consult(db, &cipher, &name, &checked, || run))
         {
             Ok(s) => standing = Some(s),
             Err(refusal) => return OperationEnd::Failed(refusal.message().to_owned()),

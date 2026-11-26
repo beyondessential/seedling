@@ -255,44 +255,51 @@ pub enum Standing {
     Tripped,
 }
 
-/// Where `thing`'s breaker stands for `run`, or why that cannot be read.
+/// Where `thing`'s breaker stands for the run `run` builds, or why that
+/// cannot be read.
 ///
 /// A failed read is never taken for a clear breaker.
+///
+/// The run is built only where the breaker's fault is active, which is the
+/// uncommon answer: assembling a run reads the app's stored parameters and
+/// host constants, and a breaker with no fault needs none of them.
 // spec: LIM#breakers
 fn read_standing(
     db: &Db,
     cipher: &Cipher,
     app: &AppName,
     thing: &Thing,
-    run: &Run,
+    run: impl FnOnce() -> Run,
 ) -> Result<Standing, String> {
     let subject = thing.subject();
     let active: bool = db
         .conn
-        .query_row(
+        .prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM faults
              WHERE app = ?1 AND kind = ?2 AND subject = ?3 AND cleared_at IS NULL)",
-            rusqlite::params![app, EVALUATION_RUNAWAY, subject],
-            |row| row.get(0),
         )
+        .and_then(|mut stmt| {
+            stmt.query_row(rusqlite::params![app, EVALUATION_RUNAWAY, subject], |row| {
+                row.get(0)
+            })
+        })
         .map_err(|e| format!("cannot read the breaker's fault: {e}"))?;
     if !active {
         return Ok(Standing::Clear);
     }
     let recorded: Option<Vec<u8>> = db
         .conn
-        .query_row(
-            "SELECT digest FROM breakers WHERE app = ?1 AND subject = ?2",
-            rusqlite::params![app, subject],
-            |row| row.get(0),
-        )
-        .optional()
+        .prepare_cached("SELECT digest FROM breakers WHERE app = ?1 AND subject = ?2")
+        .and_then(|mut stmt| {
+            stmt.query_row(rusqlite::params![app, subject], |row| row.get(0))
+                .optional()
+        })
         .map_err(|e| format!("cannot read the breaker: {e}"))?;
     let recorded =
         recorded.ok_or_else(|| "the breaker's fault is active but it has no record".to_owned())?;
     let recorded = KeyDigest::from_bytes(&recorded)
         .ok_or_else(|| "the breaker's record holds no digest".to_owned())?;
-    Ok(if recorded == run.digest(cipher)? {
+    Ok(if recorded == run().digest(cipher)? {
         Standing::Tripped
     } else {
         Standing::TrippedForOther
@@ -309,7 +316,7 @@ pub fn standing(
     cipher: &Cipher,
     app: &AppName,
     thing: &Thing,
-    run: &Run,
+    run: impl FnOnce() -> Run,
 ) -> Result<Standing, String> {
     let key = FaultKey::new(app, BREAKER_STATE_UNREADABLE, thing.subject());
     match read_standing(db, cipher, app, thing, run) {
@@ -374,7 +381,7 @@ pub fn consult(
     cipher: &Cipher,
     app: &AppName,
     thing: &Thing,
-    run: &Run,
+    run: impl FnOnce() -> Run,
 ) -> Result<Standing, Refusal> {
     match standing(db, cipher, app, thing, run) {
         Ok(Standing::Tripped) => Err(Refusal::Tripped(tripped_message(thing))),
@@ -660,7 +667,7 @@ pub fn consulting(
     let app = app.clone();
     std::sync::Arc::new(move |thing, run| {
         let (app, cipher, checked) = (app.clone(), std::sync::Arc::clone(&cipher), thing.clone());
-        db.call(move |db| consult(db, &cipher, &app, &checked, &run))
+        db.call(move |db| consult(db, &cipher, &app, &checked, || run))
             .err()
             .map(|refusal| refusal.message().to_owned())
     })

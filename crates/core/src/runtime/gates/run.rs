@@ -403,7 +403,7 @@ impl Run<'_> {
             let (n, cipher) = (name.clone(), Arc::clone(&state.cipher));
             state
                 .db
-                .call(move |db| breakers::consult(db, &cipher, &n, &thing, &run))
+                .call(move |db| breakers::consult(db, &cipher, &n, &thing, || run))
                 .map_err(|refusal| Stopped::Failed(refusal.message().to_owned()))?;
         }
 

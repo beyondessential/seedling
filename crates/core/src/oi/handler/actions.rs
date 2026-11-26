@@ -168,7 +168,7 @@ pub(crate) fn breaker_refusal(
     let (name, cipher) = (app.clone(), Arc::clone(&state.cipher));
     state
         .db
-        .call(move |db| breakers::consult(db, &cipher, &name, &thing, &run))
+        .call(move |db| breakers::consult(db, &cipher, &name, &thing, || run))
         .map(drop)
         .map_err(refusal_error)
 }
