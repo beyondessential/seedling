@@ -8,6 +8,7 @@ pub mod apps;
 pub mod audit;
 pub mod autonomous_ops;
 pub mod barrier;
+pub mod breakers;
 pub mod canopy;
 pub mod db;
 pub mod definition;

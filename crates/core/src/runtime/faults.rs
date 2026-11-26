@@ -508,12 +508,25 @@ pub const WITHHOLDING_KINDS: [&str; 6] = [
     "gate_state_unreadable",
 ];
 
+/// Whether an active fault of `kind` about `subject` is a withholding fault:
+/// one of [`WITHHOLDING_KINDS`], or a breaker's fault about the app's
+/// definition or a gate's body.
+// spec: FLT#withholding-faults
+pub fn withholds(kind: &str, subject: &str) -> bool {
+    use crate::runtime::breakers;
+    if WITHHOLDING_KINDS.contains(&kind) {
+        return true;
+    }
+    (kind == breakers::EVALUATION_RUNAWAY || kind == breakers::BREAKER_STATE_UNREADABLE)
+        && breakers::Thing::from_subject(subject).is_some_and(|thing| thing.withholds())
+}
+
 /// What an app's active faults come to for its status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FaultStanding {
     /// How many faults are active against the app.
     pub active: i64,
-    /// Whether any of them is a [withholding fault](WITHHOLDING_KINDS).
+    /// Whether any of them is a [withholding fault](withholds).
     pub withholding: bool,
 }
 
@@ -521,26 +534,21 @@ pub fn fault_standing(
     db: &crate::runtime::db::Db,
     app: &AppName,
 ) -> rusqlite::Result<FaultStanding> {
-    // One placeholder for each kind, after the app's.
-    let placeholders = (2..2 + WITHHOLDING_KINDS.len())
-        .map(|n| format!("?{n}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let (active, withholding): (i64, i64) = db.conn.query_row(
-        &format!(
-            "SELECT COUNT(*),
-                    COALESCE(SUM(kind IN ({placeholders})), 0)
-             FROM faults WHERE app = ?1 AND cleared_at IS NULL"
-        ),
-        rusqlite::params_from_iter(
-            std::iter::once(app as &dyn rusqlite::ToSql)
-                .chain(WITHHOLDING_KINDS.iter().map(|k| k as &dyn rusqlite::ToSql)),
-        ),
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
+    let mut stmt = db
+        .conn
+        .prepare_cached("SELECT kind, subject FROM faults WHERE app = ?1 AND cleared_at IS NULL")?;
+    let mut active = 0;
+    let mut withholding = false;
+    for row in stmt.query_map([app], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (kind, subject) = row?;
+        active += 1;
+        withholding |= withholds(&kind, &subject);
+    }
     Ok(FaultStanding {
         active,
-        withholding: withholding > 0,
+        withholding,
     })
 }
 
