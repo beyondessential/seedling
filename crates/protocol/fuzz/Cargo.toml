@@ -24,8 +24,3 @@ bench = false
 # Detach from the parent workspace: a libfuzzer-sys binary only links under
 # `cargo fuzz`, so it must not be pulled into `cargo build --workspace`.
 [workspace]
-
-# Mirror the root workspace's smartstring pin so the detached workspace
-# resolves the dependency graph identically.
-[patch.crates-io]
-smartstring = { git = "https://github.com/bodil/smartstring", rev = "refs/pull/34/head" }

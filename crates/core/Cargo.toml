@@ -21,7 +21,7 @@ rand.workspace = true
 reqwest.workspace = true
 # A commit on main: 1.27.0 has an aliasing UB regression whose fix is listed
 # for 1.27.1. Switch to `=1.27.1` from crates.io once it is published.
-rhai = { git = "https://github.com/rhaiscript/rhai", rev = "f66a4d15153cfc124ade4b24cee50839ae15450d", features = ["internals", "metadata", "no_time"] }
+rhai = { git = "https://github.com/rhaiscript/rhai", rev = "f66a4d15153cfc124ade4b24cee50839ae15450d", features = ["compact_str", "internals", "metadata", "no_time"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 rustls.workspace = true
 rustls-pki-types.workspace = true
