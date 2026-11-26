@@ -1311,6 +1311,7 @@ const SPINNING_SCRIPT: &str = r#"
     app.on_action("nested", |rt, _p| { app.action("spin").invoke(); });
     app.on_action("quick", |rt, _p| {});
     app.on_action("calls-quick", |rt, _p| { app.action("quick").invoke(); });
+    app.gate("spin").key(1).run(|rt, last| { loop {} });
 "#;
 
 fn spinning_limits() -> crate::ScriptLimits {
@@ -1350,6 +1351,27 @@ fn run_as(
     current: u64,
     operation_id: &str,
 ) -> OperationEnd {
+    run_target(
+        app,
+        ActionName::new(name).unwrap().into(),
+        None,
+        db,
+        cipher,
+        current,
+        operation_id,
+    )
+}
+
+/// As [`run_as`], for any target, with `gate` the input of a gate body.
+fn run_target(
+    app: &App,
+    target: OperationTarget,
+    gate: Option<GateInput<'_>>,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    current: u64,
+    operation_id: &str,
+) -> OperationEnd {
     let mut registry = crate::runtime::apps::AppRegistry::new();
     registry
         .register(
@@ -1364,7 +1386,7 @@ fn run_as(
     let tx = new_event_channel();
     let op_ctx = tx.operation(
         AppName::new("demo").unwrap(),
-        ActionName::new(name).unwrap().into(),
+        target,
         operation_id.to_owned(),
         1,
         None,
@@ -1387,7 +1409,7 @@ fn run_as(
         None,
         None,
         None,
-        None,
+        gate,
         Persisted::No,
     )
 }
@@ -1494,4 +1516,24 @@ fn a_replayed_invoke_of_an_action_since_tripped_is_not_checked() {
 
     let why = failure_of(run_at(&app, "calls-quick", &db, &cipher, 1));
     assert!(why.contains("not evaluated again"), "{why}");
+}
+
+// spec: LIM#breakers
+// spec: LIM#measuring-evaluation-time
+#[test]
+fn a_gate_body_that_runs_away_trips_the_gates_breaker() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+
+    let why = failure_of(run_target(
+        &app,
+        OperationTarget::Gate(GateName::new("spin").unwrap()),
+        Some(GateInput { last: None }),
+        &db,
+        &cipher,
+        1,
+        &uuid::Uuid::new_v4().to_string(),
+    ));
+    assert!(why.contains("evaluation time limit"), "{why}");
+    assert_eq!(runaway_subjects(&db), vec!["gate:spin".to_owned()]);
 }

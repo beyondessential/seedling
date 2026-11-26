@@ -10,7 +10,7 @@ use super::{
     },
 };
 use crate::{
-    oi::test_support::{TestOi, loopback},
+    oi::test_support::{TestOi, loopback, runaway_limits},
     runtime::{
         apps::DynamicSlot,
         barrier::shell::{ShellExecTarget, ShellExit, ShellHost},
@@ -97,9 +97,20 @@ fn run_shell_session(
     stop_after: Option<std::time::Duration>,
     setup: impl FnOnce(&TestOi),
 ) -> ShellRan {
+    run_shell_on(TestOi::new(), script, params, host, stop_after, setup)
+}
+
+/// As [`run_shell_session`], on `oi`.
+fn run_shell_on(
+    oi: TestOi,
+    script: &str,
+    params: serde_json::Value,
+    host: &Arc<FakeHost>,
+    stop_after: Option<std::time::Duration>,
+    setup: impl FnOnce(&TestOi),
+) -> ShellRan {
     use seedling_protocol::names::ShellName;
 
-    let oi = TestOi::new();
     oi.call(
         "/apps/create",
         serde_json::json!({ "app": "demo", "script": script }),
@@ -953,4 +964,36 @@ fn a_shell_is_not_opened_with_params_its_breaker_is_tripped_for() {
     let (refused, message) = open_refusal(&oi, submitted);
     assert_eq!(refused, "evaluation_runaway", "{message}");
     assert!(message.contains("shell `tools`"), "{message}");
+}
+
+// spec: LIM#breakers
+// spec: LIM#measuring-evaluation-time
+#[test]
+fn a_shell_run_that_runs_away_trips_the_shells_breaker() {
+    let script = format!(r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{ loop {{}} }});"#);
+    let host = FakeHost::answering(Ok(ShellExit::exited(0)));
+    let ran = run_shell_on(
+        TestOi::with_script_limits(runaway_limits()),
+        &script,
+        serde_json::json!({}),
+        &host,
+        None,
+        |_| {},
+    );
+    let reason = ran.outcome.reason.unwrap_or_default();
+    assert!(reason.contains("evaluation time limit"), "{reason}");
+    let runaways: Vec<_> = ran
+        .oi
+        .call("/faults/list", serde_json::json!({ "app": "demo" }))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "evaluation_runaway")
+        .map(|f| (f["resource_type"].clone(), f["resource_name"].clone()))
+        .collect();
+    assert_eq!(
+        runaways,
+        vec![(serde_json::json!("shell"), serde_json::json!("tools"))]
+    );
 }
