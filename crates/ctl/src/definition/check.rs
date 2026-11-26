@@ -21,7 +21,7 @@ use seedling_core::{
         },
         seeds::AppSeed,
     },
-    sysconst::{self, SystemFacts},
+    sysconst::{self, SystemFacts, Undetermined},
 };
 use seedling_protocol::names::AppName;
 use semver::Version;
@@ -264,6 +264,7 @@ pub(super) fn host_constants(set: &[String]) -> Result<SystemFacts, String> {
         node_name: Ok(String::new()),
         cpu_architecture: std::env::consts::ARCH.to_owned(),
         timezone: "UTC".to_owned(),
+        undetermined: Undetermined::FailsRead,
     };
     let mut seen = Vec::new();
     for pair in set {

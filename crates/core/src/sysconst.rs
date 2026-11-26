@@ -33,6 +33,36 @@ pub struct SystemFacts {
     /// IANA timezone name of the host (e.g. `Pacific/Auckland`); `UTC` while
     /// the host's local timezone is undetermined.
     pub timezone: String,
+    /// What an undetermined memory or node name does to an evaluation.
+    pub undetermined: Undetermined,
+}
+
+/// What an undetermined host constant that has no stand-in value does to an
+/// evaluation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Undetermined {
+    /// The evaluation fails before the script runs, as the runtime has it.
+    #[default]
+    FailsEvaluation,
+    /// The constant is left out of the scope, and the script fails where it
+    /// reads it, as a definition check has it.
+    FailsRead,
+}
+
+/// The host constants that have no stand-in value while undetermined.
+pub const UNDETERMINABLE: [&str; 2] = ["AVAILABLE_MEMORY", "NODE_NAME"];
+
+impl SystemFacts {
+    /// Why the host constant `name` has no value, where it is one of
+    /// [`UNDETERMINABLE`] and is undetermined.
+    pub fn why_undetermined(&self, name: &str) -> Option<String> {
+        let why = match name {
+            "AVAILABLE_MEMORY" => self.available_memory.as_ref().err(),
+            "NODE_NAME" => self.node_name.as_ref().err(),
+            _ => None,
+        }?;
+        Some(format!("{name} cannot be determined: {why}"))
+    }
 }
 
 impl Default for SystemFacts {
@@ -51,6 +81,7 @@ impl Default for SystemFacts {
             node_name: Ok(String::new()),
             cpu_architecture: std::env::consts::ARCH.to_owned(),
             timezone: "UTC".to_owned(),
+            undetermined: Undetermined::FailsEvaluation,
         }
     }
 }

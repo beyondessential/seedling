@@ -8,13 +8,14 @@ ctl="${1:-target/debug/seedling-ctl}"
 failed=0
 
 for def in apps/*; do
-    args=(--const AVAILABLE_MEMORY=2147483648)
+    args=()
     case "$def" in
         apps/postgres.seed.rhai)
             args+=(--set version=18.3 --set password=correct-horse-battery-staple-9)
+            args+=(--const AVAILABLE_MEMORY=2147483648)
             ;;
     esac
-    "$ctl" definitions check "$def" "${args[@]}" || failed=1
+    "$ctl" definitions check "$def" ${args[@]+"${args[@]}"} || failed=1
 done
 
 exit "$failed"

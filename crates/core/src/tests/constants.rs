@@ -417,6 +417,23 @@ fn undetermined_memory_fails_the_evaluation() {
     assert!(err.contains("AVAILABLE_MEMORY"), "{err}");
 }
 
+// spec: CLI#check-host-constants
+#[test]
+fn undetermined_memory_is_left_out_where_only_a_read_fails() {
+    let undetermined = crate::sysconst::SystemFacts {
+        available_memory: Err("no meminfo".to_owned()),
+        undetermined: crate::sysconst::Undetermined::FailsRead,
+        ..facts()
+    };
+    let (scope, _app) =
+        crate::defs::scope_with(&undetermined, Default::default()).expect("the scope builds");
+    assert!(!scope.contains("AVAILABLE_MEMORY"));
+    assert_eq!(
+        scope.get_value::<String>("NODE_NAME").as_deref(),
+        Some("host")
+    );
+}
+
 // spec: CONST#host-constants
 #[test]
 fn an_undetermined_node_name_fails_the_evaluation() {

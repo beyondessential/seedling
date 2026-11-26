@@ -5,8 +5,6 @@ use std::{path::Path, process::Command};
 
 use serde_json::{Value, json};
 
-const MEMORY: &str = "--const=AVAILABLE_MEMORY=2147483648";
-
 struct Run {
     status: i32,
     stdout: String,
@@ -50,7 +48,7 @@ fn dir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
 #[test]
 fn a_definition_that_evaluates_passes_silently() {
     let dir = dir_with(&[("web.seed.rhai", "app.description(\"web\");\n")]);
-    let run = check(dir.path(), &["web.seed.rhai", MEMORY]);
+    let run = check(dir.path(), &["web.seed.rhai"]);
     assert_eq!(run.status, 0, "{}", run.stderr);
     assert_eq!(run.stdout, "");
     assert_eq!(run.stderr, "");
@@ -60,7 +58,7 @@ fn a_definition_that_evaluates_passes_silently() {
 #[test]
 fn a_passing_check_prints_an_empty_list_as_json() {
     let dir = dir_with(&[("web.seed.rhai", "app.description(\"web\");\n")]);
-    let run = check(dir.path(), &["web.seed.rhai", MEMORY, "--json"]);
+    let run = check(dir.path(), &["web.seed.rhai", "--json"]);
     assert_eq!(run.status, 0, "{}", run.stderr);
     assert_eq!(
         serde_json::from_str::<Value>(&run.stdout).unwrap(),
@@ -75,7 +73,7 @@ fn a_script_error_in_a_file_source_lies_at_the_path_given() {
         "apps/broken.seed.rhai",
         "let a = 1;\nlet b = 2;\nthrow \"broken\";\n",
     )]);
-    let run = check(dir.path(), &["apps/broken.seed.rhai", MEMORY]);
+    let run = check(dir.path(), &["apps/broken.seed.rhai"]);
     assert_eq!(run.status, 1);
     assert!(
         run.stderr.starts_with("apps/broken.seed.rhai:3: "),
@@ -88,7 +86,7 @@ fn a_script_error_in_a_file_source_lies_at_the_path_given() {
 #[test]
 fn a_script_error_as_json_names_its_kind_file_and_line() {
     let dir = dir_with(&[("broken.seed.rhai", "\n\nthrow \"broken\";\n")]);
-    let run = check(dir.path(), &["broken.seed.rhai", MEMORY, "--json"]);
+    let run = check(dir.path(), &["broken.seed.rhai", "--json"]);
     assert_eq!(run.status, 1);
     let errors = json_errors(&run);
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -111,7 +109,7 @@ fn a_script_error_in_a_folder_lies_at_its_own_file_and_line() {
         ("def/first.rhai", "let a = 1;\nlet b = 2;\n"),
         ("def/lib/db.rhai", "let c = 3;\n\nthrow \"broken\";\n"),
     ]);
-    let run = check(dir.path(), &["def", MEMORY]);
+    let run = check(dir.path(), &["def"]);
     assert_eq!(run.status, 1);
     let expected = Path::new("def").join("lib").join("db.rhai");
     assert!(
@@ -137,7 +135,7 @@ fn a_script_error_in_an_included_file_lies_at_its_source() {
         ),
     ]);
     std::fs::create_dir(dir.path().join("repo/.git")).unwrap();
-    let run = check(dir.path(), &["repo/apps/def", MEMORY]);
+    let run = check(dir.path(), &["repo/apps/def"]);
     assert_eq!(run.status, 1);
     let expected = Path::new("repo/apps").join("shared").join("common.rhai");
     assert!(
@@ -155,7 +153,7 @@ fn an_error_raised_in_a_function_lies_where_it_was_raised() {
     script.push_str(&"\n".repeat(36));
     script.push_str("fail();\n");
     let dir = dir_with(&[("f.seed.rhai", &script)]);
-    let run = check(dir.path(), &["f.seed.rhai", MEMORY]);
+    let run = check(dir.path(), &["f.seed.rhai"]);
     assert_eq!(run.status, 1);
     assert!(run.stderr.starts_with("f.seed.rhai:2: "), "{}", run.stderr);
 }
@@ -168,7 +166,7 @@ fn the_version_is_checked_before_any_other_field() {
         ("def/seedling.toml", "seedling = \">=999\"\nunknown = 1\n"),
         ("def/app.seed.rhai", ""),
     ]);
-    let run = check(dir.path(), &["def", MEMORY, "--json"]);
+    let run = check(dir.path(), &["def", "--json"]);
     assert_eq!(run.status, 1);
     let errors = json_errors(&run);
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -187,7 +185,7 @@ fn a_bundle_naming_a_missing_script_file_is_not_evaluated() {
         ("def/seedling.toml", "script = [\"missing.rhai\"]\n"),
         ("def/app.seed.rhai", "throw \"evaluated\";\n"),
     ]);
-    let run = check(dir.path(), &["def", MEMORY, "--json"]);
+    let run = check(dir.path(), &["def", "--json"]);
     assert_eq!(run.status, 1);
     let errors = json_errors(&run);
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -208,7 +206,7 @@ fn an_include_naming_nothing_is_a_source_error_in_the_metadata_file() {
         ("def/seedling.toml", "[include]\n\"lib\" = \"../nowhere\"\n"),
         ("def/app.seed.rhai", ""),
     ]);
-    let run = check(dir.path(), &["def", MEMORY, "--json"]);
+    let run = check(dir.path(), &["def", "--json"]);
     assert_eq!(run.status, 1);
     let errors = json_errors(&run);
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -222,7 +220,7 @@ fn an_include_naming_nothing_is_a_source_error_in_the_metadata_file() {
 #[test]
 fn a_lone_metadata_file_is_a_source_error() {
     let dir = dir_with(&[("seedling.toml", "")]);
-    let run = check(dir.path(), &["seedling.toml", MEMORY, "--json"]);
+    let run = check(dir.path(), &["seedling.toml", "--json"]);
     assert_eq!(run.status, 1);
     assert_eq!(json_errors(&run)[0]["kind"], "source");
 }
@@ -234,18 +232,15 @@ fn a_script_branching_on_a_sample_value_fails_only_with_it() {
         "m.seed.rhai",
         "let mode = app.param(\"mode\").required(false);\nif mode.is_set() && mode.value() == \"cluster\" { throw \"no clusters\"; }\n",
     )]);
-    assert_eq!(check(dir.path(), &["m.seed.rhai", MEMORY]).status, 0);
-    let run = check(
-        dir.path(),
-        &["m.seed.rhai", MEMORY, "--set", "mode=cluster"],
-    );
+    assert_eq!(check(dir.path(), &["m.seed.rhai"]).status, 0);
+    let run = check(dir.path(), &["m.seed.rhai", "--set", "mode=cluster"]);
     assert_eq!(run.status, 1);
     assert!(run.stderr.contains("no clusters"), "{}", run.stderr);
 }
 
 fn rejections(script: &str, sets: &[&str]) -> Vec<Value> {
     let dir = dir_with(&[("v.seed.rhai", script)]);
-    let mut args = vec!["v.seed.rhai", MEMORY, "--json"];
+    let mut args = vec!["v.seed.rhai", "--json"];
     for set in sets {
         args.extend(["--set", set]);
     }
@@ -319,7 +314,7 @@ fn a_sample_value_is_split_at_the_first_equals() {
         "u.seed.rhai",
         "let url = app.param(\"url\");\nif url.value() != \"a=b\" { throw url.value(); }\n",
     )]);
-    let run = check(dir.path(), &["u.seed.rhai", MEMORY, "--set", "url=a=b"]);
+    let run = check(dir.path(), &["u.seed.rhai", "--set", "url=a=b"]);
     assert_eq!(run.status, 0, "{}", run.stderr);
 }
 
@@ -332,7 +327,7 @@ fn a_bad_sample_value_option_checks_nothing() {
         &["--set", "mode"][..],
         &["--set", "a=1", "--set", "a=2"][..],
     ] {
-        let mut all = vec!["x.seed.rhai", MEMORY, "--json"];
+        let mut all = vec!["x.seed.rhai", "--json"];
         all.extend_from_slice(args);
         let run = check(dir.path(), &all);
         assert_eq!(run.status, 2, "{args:?}");
@@ -349,7 +344,7 @@ fn host_constants_take_their_check_defaults() {
         "c.seed.rhai",
         "if TIMEZONE != \"UTC\" || NODE_NAME != \"\" || HOST_HAS_IPV4 || HOST_HAS_IPV6 || NAT64_ACTIVE || HAS_SNAPSHOTS { throw \"wrong defaults\"; }\nif AVAILABLE_THREADS < 1 || CPU_ARCHITECTURE == \"\" { throw \"no machine values\"; }\n",
     )]);
-    let run = check(dir.path(), &["c.seed.rhai", MEMORY]);
+    let run = check(dir.path(), &["c.seed.rhai"]);
     assert_eq!(run.status, 0, "{}", run.stderr);
 }
 
@@ -364,7 +359,8 @@ fn host_constants_take_the_values_given() {
         dir.path(),
         &[
             "c.seed.rhai",
-            MEMORY,
+            "--const",
+            "AVAILABLE_MEMORY=2147483648",
             "--const",
             "CPU_ARCHITECTURE=aarch64",
             "--const",
@@ -413,12 +409,67 @@ fn a_bad_host_constant_checks_nothing() {
 
 // spec: CLI#check-host-constants
 #[test]
-fn undetermined_memory_fails_the_evaluation() {
-    let dir = dir_with(&[("m.seed.rhai", "let m = AVAILABLE_MEMORY;\n")]);
+fn undetermined_memory_fails_where_it_is_read() {
+    let dir = dir_with(&[("m.seed.rhai", "let a = 1;\nlet m = AVAILABLE_MEMORY;\n")]);
     let run = check(dir.path(), &["m.seed.rhai", "--json"]);
     assert_eq!(run.status, 1);
-    assert_eq!(json_errors(&run)[0]["kind"], "script");
-    assert_eq!(check(dir.path(), &["m.seed.rhai", MEMORY]).status, 0);
+    let errors = json_errors(&run);
+    assert_eq!(errors[0]["kind"], "script");
+    assert_eq!(errors[0]["line"], 2);
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("AVAILABLE_MEMORY cannot be determined"),
+        "{errors:?}"
+    );
+    let given = check(
+        dir.path(),
+        &["m.seed.rhai", "--const", "AVAILABLE_MEMORY=2147483648"],
+    );
+    assert_eq!(given.status, 0, "{}", given.stderr);
+}
+
+// spec: CLI#check-host-constants
+#[test]
+fn undetermined_memory_fails_where_a_closure_captures_it() {
+    let dir = dir_with(&[("m.seed.rhai", "let a = 1;\nlet f = || AVAILABLE_MEMORY;\n")]);
+    let run = check(dir.path(), &["m.seed.rhai", "--json"]);
+    assert_eq!(run.status, 1);
+    assert_eq!(json_errors(&run)[0]["line"], 2);
+}
+
+// spec: CLI#check-host-constants
+#[test]
+fn undetermined_memory_read_in_a_function_fails_as_it_would_when_given() {
+    let dir = dir_with(&[(
+        "m.seed.rhai",
+        "fn half() {\n    AVAILABLE_MEMORY / 2\n}\nlet h = half();\n",
+    )]);
+    let undetermined = check(dir.path(), &["m.seed.rhai", "--json"]);
+    let given = check(
+        dir.path(),
+        &[
+            "m.seed.rhai",
+            "--json",
+            "--const",
+            "AVAILABLE_MEMORY=2147483648",
+        ],
+    );
+    assert_eq!(undetermined.status, 1);
+    assert_eq!(json_errors(&undetermined), json_errors(&given));
+    assert_eq!(json_errors(&undetermined)[0]["line"], 2);
+}
+
+// spec: CLI#check-host-constants
+#[test]
+fn undetermined_memory_left_unread_passes() {
+    let dir = dir_with(&[(
+        "m.seed.rhai",
+        "if false { let m = AVAILABLE_MEMORY; }\nlet AVAILABLE_MEMORY = 5;\nlet m = AVAILABLE_MEMORY;\n",
+    )]);
+    let run = check(dir.path(), &["m.seed.rhai"]);
+    assert_eq!(run.status, 0, "{}", run.stderr);
 }
 
 // spec: CLI#definition-checks
@@ -429,11 +480,11 @@ fn the_engine_limits_are_the_daemons() {
         "loop.seed.rhai",
         "let n = 0;\nwhile n < 200000 { n += 1; }\n",
     )]);
-    assert_eq!(check(dir.path(), &["loop.seed.rhai", MEMORY]).status, 1);
+    assert_eq!(check(dir.path(), &["loop.seed.rhai"]).status, 1);
     assert_eq!(
         check(
             dir.path(),
-            &["loop.seed.rhai", MEMORY, "--script-max-operations", "0"]
+            &["loop.seed.rhai", "--script-max-operations", "0"]
         )
         .status,
         0
@@ -441,7 +492,7 @@ fn the_engine_limits_are_the_daemons() {
     assert_eq!(
         check(
             dir.path(),
-            &["loop.seed.rhai", MEMORY, "--script-max-call-depth", "0"]
+            &["loop.seed.rhai", "--script-max-call-depth", "0"]
         )
         .status,
         2
@@ -455,7 +506,7 @@ fn no_gate_or_action_closure_runs() {
         "g.seed.rhai",
         "app.gate(\"migrate\").run(|rt| { throw \"gate ran\"; });\napp.on_action(\"deploy\", |rt, p| { throw \"action ran\"; }, #{});\n",
     )]);
-    let run = check(dir.path(), &["g.seed.rhai", MEMORY]);
+    let run = check(dir.path(), &["g.seed.rhai"]);
     assert_eq!(run.status, 0, "{}", run.stderr);
 }
 
@@ -487,7 +538,7 @@ fn a_folder_evaluates_its_script_files_in_order() {
             "if first != 1 { throw \"out of order\"; }\n",
         ),
     ]);
-    let run = check(dir.path(), &["def", MEMORY]);
+    let run = check(dir.path(), &["def"]);
     assert_eq!(run.status, 0, "{}", run.stderr);
 }
 
@@ -506,7 +557,7 @@ fn an_included_script_is_evaluated() {
         ("repo/apps/shared/common.rhai", "let common = 2;\n"),
     ]);
     std::fs::create_dir(dir.path().join("repo/.git")).unwrap();
-    let run = check(dir.path(), &["repo/apps/def", MEMORY]);
+    let run = check(dir.path(), &["repo/apps/def"]);
     assert_eq!(run.status, 0, "{}", run.stderr);
 }
 
@@ -524,7 +575,7 @@ fn a_syntax_error_lies_at_its_own_file_and_line() {
         ("def/first.rhai", "let b = 2;\nlet c = 3;\n"),
         ("def/second.rhai", &second),
     ]);
-    let run = check(dir.path(), &["def", MEMORY, "--json"]);
+    let run = check(dir.path(), &["def", "--json"]);
     assert_eq!(run.status, 1);
     let errors = json_errors(&run);
     assert_eq!(errors[0]["kind"], "script");
@@ -541,7 +592,7 @@ fn a_metadata_table_holding_nan_lies_in_the_metadata_file() {
         ("def/seedling.toml", "[metadata]\nratio = nan\n"),
         ("def/app.seed.rhai", ""),
     ]);
-    let run = check(dir.path(), &["def", MEMORY, "--json"]);
+    let run = check(dir.path(), &["def", "--json"]);
     assert_eq!(run.status, 1);
     let errors = json_errors(&run);
     assert_eq!(errors[0]["kind"], "bundle");
@@ -553,7 +604,7 @@ fn a_metadata_table_holding_nan_lies_in_the_metadata_file() {
 #[test]
 fn an_import_that_never_runs_is_a_script_error() {
     let dir = dir_with(&[("i.seed.rhai", "if false { import \"x\" as x; }\n")]);
-    let run = check(dir.path(), &["i.seed.rhai", MEMORY, "--json"]);
+    let run = check(dir.path(), &["i.seed.rhai", "--json"]);
     assert_eq!(run.status, 1);
     assert_eq!(json_errors(&run)[0]["kind"], "script");
 }
@@ -565,10 +616,7 @@ fn a_script_error_hides_the_sample_values_validators_would_reject() {
         "s.seed.rhai",
         "app.param(\"alpha\").required(false).validate(|v, all| { throw \"rejected\"; });\nthrow \"broken\";\n",
     )]);
-    let run = check(
-        dir.path(),
-        &["s.seed.rhai", MEMORY, "--json", "--set", "alpha=x"],
-    );
+    let run = check(dir.path(), &["s.seed.rhai", "--json", "--set", "alpha=x"]);
     assert_eq!(run.status, 1);
     let errors = json_errors(&run);
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -580,11 +628,11 @@ fn a_script_error_hides_the_sample_values_validators_would_reject() {
 #[test]
 fn the_operation_limit_can_be_tightened() {
     let dir = dir_with(&[("loop.seed.rhai", "let n = 0;\nwhile n < 5000 { n += 1; }\n")]);
-    assert_eq!(check(dir.path(), &["loop.seed.rhai", MEMORY]).status, 0);
+    assert_eq!(check(dir.path(), &["loop.seed.rhai"]).status, 0);
     assert_eq!(
         check(
             dir.path(),
-            &["loop.seed.rhai", MEMORY, "--script-max-operations", "1000"]
+            &["loop.seed.rhai", "--script-max-operations", "1000"]
         )
         .status,
         1
@@ -629,6 +677,6 @@ fn an_action_using_the_runtime_needs_no_container_engine() {
         "a.seed.rhai",
         "app.on_action(\"deploy\", |rt, p| { rt.start(app.job().image(\"example\").command(IDLE_CMD)); }, #{});\n",
     )]);
-    let run = check(dir.path(), &["a.seed.rhai", MEMORY]);
+    let run = check(dir.path(), &["a.seed.rhai"]);
     assert_eq!(run.status, 0, "{}", run.stderr);
 }

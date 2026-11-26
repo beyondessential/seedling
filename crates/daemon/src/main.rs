@@ -363,6 +363,7 @@ async fn main() {
         timezone: timezone_fact
             .determined()
             .unwrap_or_else(|| "UTC".to_owned()),
+        undetermined: seedling_core::sysconst::Undetermined::FailsEvaluation,
     });
 
     // spec: NAT64#dns64

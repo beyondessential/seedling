@@ -156,25 +156,36 @@ pub fn register(engine: &mut Engine) {
     // spec: COL#coercion
     engine.register_fn("col", collection::col);
 
-    // spec: APP#the-app-variable
-    // A closure captures a scope variable as one shared cell, and a method
-    // chain holds a lock on a shared root for its whole length, so a closure
-    // invoked from `app.action(..).invoke(..)` would find `app` locked. Rhai
-    // never shares a resolved variable, so each closure captures its own copy
-    // of the handle; every copy holds the same app.
     #[expect(
         deprecated,
         reason = "Rhai marks on_var deprecated only to flag it as volatile"
     )]
-    engine.on_var(|name, _, ctx| {
-        if name != "app" {
-            return Ok(None);
-        }
-        Ok(ctx
+    engine.on_var(|name, _, ctx| match name {
+        // spec: APP#the-app-variable
+        // A closure captures a scope variable as one shared cell, and a method
+        // chain holds a lock on a shared root for its whole length, so a
+        // closure invoked from `app.action(..).invoke(..)` would find `app`
+        // locked. Rhai never shares a resolved variable, so each closure
+        // captures its own copy of the handle; every copy holds the same app.
+        "app" => Ok(ctx
             .scope()
             .get(name)
             .filter(|value| value.is::<app::App>())
-            .cloned())
+            .cloned()),
+        // spec: CLI#check-host-constants
+        // A constant `scope` left out as undetermined fails where it is read,
+        // unless the script declared a variable of its own by that name. A
+        // function body never sees the script's scope, so a read there fails
+        // as it would with the constant in place.
+        _ if ctx.call_level() == 0
+            && crate::sysconst::UNDETERMINABLE.contains(&name)
+            && !ctx.scope().contains(name) =>
+        {
+            crate::sysconst::get()
+                .why_undetermined(name)
+                .map_or(Ok(None), |why| Err(why.into()))
+        }
+        _ => Ok(None),
     });
 
     // spec: STD#the-std-module
@@ -264,14 +275,13 @@ pub(crate) fn scope_with(
     // spec: CONST#host-constants
     // Undetermined memory or host name fails the evaluation rather than
     // standing in a value the script would plan around.
-    let available_memory = facts
-        .available_memory
-        .clone()
-        .map_err(|why| format!("AVAILABLE_MEMORY cannot be determined: {why}"))?;
-    let node_name = facts
-        .node_name
-        .clone()
-        .map_err(|why| format!("NODE_NAME cannot be determined: {why}"))?;
+    if facts.undetermined == crate::sysconst::Undetermined::FailsEvaluation
+        && let Some(why) = crate::sysconst::UNDETERMINABLE
+            .iter()
+            .find_map(|name| facts.why_undetermined(name))
+    {
+        return Err(why);
+    }
 
     let mut scope = Scope::new();
 
@@ -279,7 +289,9 @@ pub(crate) fn scope_with(
     scope.push_constant("AVAILABLE_THREADS", facts.available_threads.unwrap_or(1));
 
     // spec: CONST#host-constants
-    scope.push_constant("AVAILABLE_MEMORY", available_memory);
+    if let Ok(memory) = facts.available_memory {
+        scope.push_constant("AVAILABLE_MEMORY", memory);
+    }
 
     // spec: CONST#host-constants
     scope.push_constant("CPU_ARCHITECTURE", facts.cpu_architecture.clone());
@@ -297,7 +309,9 @@ pub(crate) fn scope_with(
     scope.push_constant("HAS_SNAPSHOTS", facts.has_snapshots);
 
     // spec: CONST#host-constants
-    scope.push_constant("NODE_NAME", node_name);
+    if let Ok(name) = &facts.node_name {
+        scope.push_constant("NODE_NAME", name.clone());
+    }
 
     // spec: CONST#host-constants
     scope.push_constant("TIMEZONE", facts.timezone.clone());
