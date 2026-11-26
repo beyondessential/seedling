@@ -164,7 +164,7 @@ Each entry of `/apps/list` reports a `has_stopped_resources` member, true when a
 | `gate` | string | yes | the gate's name |
 
 The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no gate of that name.
-It MUST refuse it with `not_installed` unless the app is `Installed`, and with `script_error` while the app has an active `script_error` fault.
+It MUST refuse it with `not_installed` unless the app is `Installed`, with `script_error` while the app has an active `script_error` fault, and with `evaluation_runaway` while it has an active `evaluation_runaway` fault with an empty subject.
 It MUST refuse it with `requirements_invalid` while any of the gate's [targets](../language/gate.md#start-order) is not ready, with a `message` naming each such target.
 It MUST refuse it with `operation_in_progress` while an operation for the app is running or a change to the app is being applied, and with `already_queued` while an operation for the app is queued.
 

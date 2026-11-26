@@ -39,6 +39,7 @@ The server MUST reject the request with `not_installed` unless the app's [instal
 The server MUST reject a request naming a shell the app does not declare with `not_found`.
 A `params` key ending in `_volume` or `_filename` is [reserved](../language/action.md#param-delivery), and the server MUST reject a request carrying one with `requirements_invalid`.
 Where the shell declares parameters, the server MUST validate `params` and fill in defaults as for [action parameters](actions.md#action-parameters).
+If the shell handler's [breaker](../runtime/engine-limits.md#breakers) is tripped for the inputs the session would evaluate it with, the server MUST reject the request with `evaluation_runaway`.
 
 On success the handshake response's result is:
 

@@ -78,6 +78,7 @@ A `Regex` MUST be taken as its [pattern](regex.md#compiling-a-pattern).
 
 Before running the closure, the runtime MUST validate `params` against the action's param schema exactly as it validates an operator's invocation of the action.
 If validation fails, `invoke` MUST throw without running the closure.
+If the invoked action's [breaker](../runtime/engine-limits.md#breakers) is tripped for the inputs `invoke` would evaluate it with, `invoke` MUST throw without running the closure.
 
 An exception the invoked closure throws MUST propagate to the caller of `invoke`.
 
@@ -344,6 +345,7 @@ An `expr` that is not a valid [schedule expression](#schedule-expressions) MUST 
 Each time a schedule comes due, the runtime MUST run its action as [scheduled actions](../runtime/scheduled-actions.md) specify.
 The runtime MUST validate a scheduled run against the action's [param schema](#param-schemas) as an invocation that supplies no params, so that each declared param takes its `default_value`.
 If that validation fails, the runtime MUST NOT run the closure, and MUST file a [`schedule_params_invalid`](../runtime/faults.md#app-faults) fault.
+If the action's [breaker](../runtime/engine-limits.md#breakers) is tripped for the run's inputs, the runtime MUST NOT run the closure, and MUST NOT file a further fault.
 
 ### Schedule expressions
 

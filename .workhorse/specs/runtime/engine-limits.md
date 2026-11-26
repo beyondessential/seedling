@@ -60,9 +60,23 @@ An evaluation that returns having exceeded the limit MUST fail all the same.
 
 The runtime MUST keep a breaker for each thing of an app it evaluates: the app's definition, each action handler, each shell handler, each gate body, and each parameter's validator.
 
+A thing's inputs are the app's [host constants](../language/constants.md#host-constants), its [app seed](secrets.md#app-seed) and the running Seedling version, together with the inputs below.
+
+| thing | inputs |
+| --- | --- |
+| definition | the app's parameter values |
+| action handler | the app's parameter values, and the params of the invocation once defaults are filled in |
+| shell handler | the app's parameter values, and the params of the session once defaults are filled in |
+| gate body | the app's parameter values, and the `last` the body is passed |
+| parameter validator | the proposed parameter values |
+
+> [!NOTE]
+> The running Seedling version is an input because a release can change how long the same script takes, such as through a different regex engine.
+
 When an evaluation fails at the evaluation time limit, the runtime MUST trip the breaker of the thing evaluated, recording the definition and the inputs it was evaluated with.
 While a breaker is tripped, an evaluation of its thing with the recorded definition and inputs MUST fail at once, without evaluating any part of the script.
 An evaluation of its thing with a different definition or different inputs MUST reset the breaker and evaluate as usual.
+A request that would evaluate an action or shell handler whose breaker is tripped for its inputs MUST be refused before any lifecycle operation or shell session starts, as [action invocation](../interface/actions.md#invoking-an-action), [opening an app shell](../interface/shells.md#opening-an-app-shell), [`invoke`](../language/action.md#action-invocation) and [scheduled actions](../language/action.md#scheduled-actions) specify.
 
 The runtime MUST reset a breaker when an operator clears its [`evaluation_runaway`](faults.md#app-faults) fault, and MUST discard every breaker of an app when the app is deregistered.
 The runtime MUST persist a tripped breaker, so that a runtime restart does not reset it.
