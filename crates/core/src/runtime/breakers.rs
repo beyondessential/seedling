@@ -345,10 +345,18 @@ pub fn trip(
 ) -> Result<(), String> {
     let subject = thing.subject();
     let digest = run.digest(cipher)?;
-    // The record is written before the fault, so the breaker is tripped, at
-    // the fault, only once it records what tripped it.
-    db.conn
-        .execute(
+    let description = format!(
+        "{} ran past the evaluation time limit of {}s at generation {generation}, and is not \
+         evaluated again with the same definition and inputs; {}",
+        thing.describe(),
+        limits.max_evaluation_time,
+        likely_cause(cipher, app, thing, run),
+    );
+    // A breaker is tripped exactly while its fault is active, so the record
+    // and the fault land together or not at all: a record left without its
+    // fault reads as clear, and the runaway is paid again.
+    db.atomically(|db| {
+        db.conn.execute(
             "INSERT INTO breakers (app, subject, digest, generation, tripped_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (app, subject) DO UPDATE SET
@@ -362,23 +370,15 @@ pub fn trip(
                 generation as i64,
                 Timestamp::now().to_string()
             ],
-        )
-        .map_err(|e| format!("cannot record the breaker: {e}"))?;
-    let description = format!(
-        "{} ran past the evaluation time limit of {}s at generation {generation}, and is not \
-         evaluated again with the same definition and inputs; {}",
-        thing.describe(),
-        limits.max_evaluation_time,
-        likely_cause(cipher, app, thing, run),
-    );
+        )?;
+        let key = FaultKey::new(app, EVALUATION_RUNAWAY, subject.clone());
+        if !faults::file_once(db, &key, &thing.fault_meta(), &description)? {
+            faults::update_description(db, &key, &description)?;
+        }
+        Ok(())
+    })
+    .map_err(|e| format!("cannot trip the breaker of {}: {e}", thing.describe()))?;
     tracing::error!(%app, "{description}");
-    let key = FaultKey::new(app, EVALUATION_RUNAWAY, subject);
-    let filed = faults::file_once(db, &key, &thing.fault_meta(), &description)
-        .map_err(|e| format!("cannot file {EVALUATION_RUNAWAY}: {e}"))?;
-    if !filed {
-        faults::update_description(db, &key, &description)
-            .map_err(|e| format!("cannot update {EVALUATION_RUNAWAY}: {e}"))?;
-    }
     Ok(())
 }
 
@@ -386,19 +386,23 @@ pub fn trip(
 /// finished within the limit.
 // spec: LIM#breakers
 pub fn reset(db: &Db, app: &AppName, thing: &Thing) -> Result<(), String> {
-    let key = FaultKey::new(app, EVALUATION_RUNAWAY, thing.subject());
-    faults::clear_fault_by_key(db, &key).map_err(|e| format!("cannot reset the breaker: {e}"))?;
-    forget_row(db, app, &thing.subject())
+    let subject = thing.subject();
+    // Cleared and forgotten together, for the same reason they are recorded
+    // and filed together.
+    db.atomically(|db| {
+        faults::clear_fault_by_key(db, &FaultKey::new(app, EVALUATION_RUNAWAY, subject.clone()))?;
+        forget_row(db, app, &subject)
+    })
+    .map_err(|e| format!("cannot reset the breaker of {}: {e}", thing.describe()))
 }
 
-fn forget_row(db: &Db, app: &AppName, subject: &str) -> Result<(), String> {
+fn forget_row(db: &Db, app: &AppName, subject: &str) -> rusqlite::Result<()> {
     db.conn
         .execute(
             "DELETE FROM breakers WHERE app = ?1 AND subject = ?2",
             rusqlite::params![app, subject],
         )
         .map(drop)
-        .map_err(|e| format!("cannot forget the breaker: {e}"))
 }
 
 /// Reset the breaker of every action closure `declared` no longer holds, and
@@ -424,9 +428,11 @@ pub fn reset_undeclared(
         .map_err(|e| format!("cannot read {kind} faults: {e}"))?;
         for record in active {
             if Thing::from_subject(&record.subject).is_some_and(|thing| !still(&thing)) {
-                faults::clear_fault(db, &record.id, app)
-                    .map_err(|e| format!("cannot clear {kind}: {e}"))?;
-                forget_row(db, app, &record.subject)?;
+                db.atomically(|db| {
+                    faults::clear_fault(db, &record.id, app)?;
+                    forget_row(db, app, &record.subject)
+                })
+                .map_err(|e| format!("cannot clear {kind}: {e}"))?;
             }
         }
     }
