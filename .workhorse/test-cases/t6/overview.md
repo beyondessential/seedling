@@ -4,7 +4,7 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 
 ## Sources
 
-- [x] Check `apps/postgres.seed.rhai` as a file source, with `--set` values for its required parameters and `--const AVAILABLE_MEMORY`: exits 0 with no output (verifies spec: CLI#definition-checks)
+- [x] Check `apps/postgres.seed.rhai` as a file source, with `--set` values for its required parameters and `--const AVAILABLE_MEMORY`, since it reads it: exits 0 with no output (verifies spec: CLI#definition-checks)
 - [x] Check a folder holding `seedling.toml` with a two-file `script` list: both files are evaluated in order, exits 0 (verifies spec: CLI#definition-checks)
 - [ ] Check a folder with a `.git` directory and a `.seedignore` excluding a scratch file that holds invalid UTF-8: the excluded paths play no part, exits 0 (verifies spec: CLI#definition-folders)
 - [ ] Check a folder holding a symlink not left out by `.seedignore`: error names the symlink, nothing is evaluated (verifies spec: CLI#definition-folders)
@@ -50,7 +50,10 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 - [x] `--const CPU_ARCHITECTURE=aarch64 --const AVAILABLE_MEMORY=2147483648 --const HOST_HAS_IPV6=true --const TIMEZONE=Pacific/Auckland`: the script sees each value (verifies spec: CLI#check-host-constants)
 - [x] `--const AVAILABLE_THREADS=0`, `--const AVAILABLE_MEMORY=lots`, `--const HOST_HAS_IPV4=yes`, `--const CPU_ARCHITECTURE=`, `--const TIMEZONE=Mars/Olympus`: each exits 2 and evaluates nothing (verifies spec: CLI#check-host-constants)
 - [x] `--const IDLE_CMD=x`, `--const NOT_A_CONSTANT=1`, and the same constant given twice: each exits 2 (verifies spec: CLI#check-host-constants)
-- [ ] On each of the Linux, macOS and Windows builds, a script that reads `AVAILABLE_MEMORY`: with no `--const` the evaluation fails as a `script` error; with `--const AVAILABLE_MEMORY=2147483648` it passes (verifies spec: CLI#check-host-constants, CONST#host-constants)
+- [ ] On each of the Linux, macOS and Windows builds, a script that reads `AVAILABLE_MEMORY`: with no `--const` the evaluation fails as a `script` error at the line that reads it; with `--const AVAILABLE_MEMORY=2147483648` it passes (verifies spec: CLI#check-host-constants)
+- [ ] A script that reads `AVAILABLE_MEMORY` only inside a function it calls: with no `--const`, the `script` error lies at the line in the function that reads it (verifies spec: CLI#check-host-constants)
+- [ ] A script that never reads `AVAILABLE_MEMORY`, or reads it only in a branch not taken: with no `--const` it passes (verifies spec: CLI#check-host-constants)
+- [ ] A script that declares its own `AVAILABLE_MEMORY` variable and reads it: with no `--const` it passes (verifies spec: CLI#check-host-constants)
 - [ ] On the macOS and Windows builds, a script that prints `AVAILABLE_THREADS` and `CPU_ARCHITECTURE` into a throw: both are the machine's own values (verifies spec: CLI#check-host-constants)
 
 ## Engine limits

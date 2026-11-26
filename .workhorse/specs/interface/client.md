@@ -290,12 +290,13 @@ The CLI MUST read `value` as the constant's type: a decimal integer for an integ
 
 The CLI MUST report an error and check nothing when `NAME` is not a host constant, when the same constant is set more than once, or when `value` is not of the constant's type or breaks the rules [host constants](../language/constants.md#host-constants) give for it.
 A `TIMEZONE` value MUST be an [IANA time zone name](../language/constants.md#borrowed-terms).
-Where a default no option sets is undetermined, the CLI MUST treat it as the runtime does, so that an undetermined `AVAILABLE_MEMORY` fails the evaluation.
+While `AVAILABLE_MEMORY` is undetermined, the evaluation MUST fail where the script reads it, with a `script` error at the expression that reads it.
 
 > [!NOTE]
 > A definition that branches on the host is checked for each kind of host it will run on by running the check once per kind, such as with `--const CPU_ARCHITECTURE=aarch64`.
 >
 > Reading the memory a runtime would see is part of the Linux runtime, which the CLI does not carry, so a check of a definition that reads `AVAILABLE_MEMORY` gives it with `--const` on every platform.
+> Failing at the read, where the runtime fails the whole evaluation, lets a definition that never reads it be checked with no options, and points at the line that needs the value.
 
 ## Registry tags
 
