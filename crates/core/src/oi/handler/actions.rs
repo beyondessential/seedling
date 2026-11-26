@@ -164,20 +164,22 @@ pub(crate) fn breaker_refusal(
     thing: crate::runtime::breakers::Thing,
     run: crate::runtime::breakers::Run,
 ) -> Result<(), OiError> {
-    use crate::runtime::breakers::{self, Standing};
-    let (name, cipher, checked) = (app.clone(), Arc::clone(&state.cipher), thing.clone());
-    match state
+    use crate::runtime::breakers;
+    let (name, cipher) = (app.clone(), Arc::clone(&state.cipher));
+    state
         .db
-        .call(move |db| breakers::standing(db, &cipher, &name, &checked, &run))
-    {
-        Ok(Standing::Tripped) => Err(OiError::new(
-            ErrorCode::EvaluationRunaway,
-            breakers::tripped_message(&thing),
-        )),
-        Ok(Standing::Clear | Standing::TrippedForOther) => Ok(()),
-        Err(why) => Err(OiError::internal(breakers::unreadable_message(
-            &thing, &why,
-        ))),
+        .call(move |db| breakers::consult(db, &cipher, &name, &thing, &run))
+        .map(drop)
+        .map_err(refusal_error)
+}
+
+/// The error a request refused by a breaker fails with.
+// spec: WIRE#error-codes
+pub(crate) fn refusal_error(refusal: crate::runtime::breakers::Refusal) -> OiError {
+    use crate::runtime::breakers::Refusal;
+    match refusal {
+        Refusal::Tripped(why) => OiError::new(ErrorCode::EvaluationRunaway, why),
+        Refusal::Unreadable(why) => OiError::internal(why),
     }
 }
 

@@ -131,6 +131,18 @@ impl std::fmt::Display for ScriptError {
 
 impl std::error::Error for ScriptError {}
 
+/// A definition a breaker refused is a definition that failed to evaluate,
+/// under the kind the refusal gives.
+// spec: LIM#breakers
+impl From<breakers::Refusal> for ScriptError {
+    fn from(refusal: breakers::Refusal) -> Self {
+        match refusal {
+            breakers::Refusal::Tripped(why) => Self::Runaway(why),
+            breakers::Refusal::Unreadable(why) => Self::BreakerUnreadable(why),
+        }
+    }
+}
+
 /// What [`AppRegistry::reload`] did to the registry.
 ///
 /// `evaluate_script` always returns an `App`, populated up to wherever the
@@ -614,18 +626,10 @@ impl AppRegistry {
             // spec: LIM#breakers
             let run = breakers::Run::new(bundle.hash(), &stored, Some(&seed), limits);
             let (app, raw_error) =
-                match breakers::standing(db, cipher, &name, &breakers::Thing::Definition, &run) {
-                    Ok(breakers::Standing::Tripped) => (
+                match breakers::consult(db, cipher, &name, &breakers::Thing::Definition, &run) {
+                    Err(refusal) => (
                         App::with_bundle(Arc::clone(&bundle)),
-                        Some(ScriptError::Runaway(breakers::tripped_message(
-                            &breakers::Thing::Definition,
-                        ))),
-                    ),
-                    Err(why) => (
-                        App::with_bundle(Arc::clone(&bundle)),
-                        Some(ScriptError::BreakerUnreadable(
-                            breakers::unreadable_message(&breakers::Thing::Definition, &why),
-                        )),
+                        Some(ScriptError::from(refusal)),
                     ),
                     Ok(standing) => {
                         let (app, raw_error) = evaluate(&name, &bundle, &stored, &seed, limits);
@@ -897,22 +901,12 @@ pub fn reload(
     let run = breakers::Run::new(bundle.hash(), params, Some(&seed), limits);
     let standing = {
         let (name, cipher, run) = (name.clone(), Arc::clone(cipher), run.clone());
-        db.call(move |db| {
-            breakers::standing(db, &cipher, &name, &breakers::Thing::Definition, &run)
-        })
+        db.call(move |db| breakers::consult(db, &cipher, &name, &breakers::Thing::Definition, &run))
     };
     let outcome = match standing {
-        Ok(breakers::Standing::Tripped) => registry.write().keep_previous(
-            name,
-            ScriptError::Runaway(breakers::tripped_message(&breakers::Thing::Definition)),
-        ),
-        Err(why) => registry.write().keep_previous(
-            name,
-            ScriptError::BreakerUnreadable(breakers::unreadable_message(
-                &breakers::Thing::Definition,
-                &why,
-            )),
-        ),
+        Err(refusal) => registry
+            .write()
+            .keep_previous(name, ScriptError::from(refusal)),
         Ok(standing) => {
             let outcome = registry.write().reevaluate(name, params, limits);
             let error = match &outcome {

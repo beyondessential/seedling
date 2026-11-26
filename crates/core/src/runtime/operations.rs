@@ -529,17 +529,10 @@ pub(crate) fn run_operation_loop(
             run.clone(),
         );
         match db
-            .call(move |db| crate::runtime::breakers::standing(db, &cipher, &name, &checked, &run))
+            .call(move |db| crate::runtime::breakers::consult(db, &cipher, &name, &checked, &run))
         {
-            Ok(crate::runtime::breakers::Standing::Tripped) => {
-                return OperationEnd::Failed(crate::runtime::breakers::tripped_message(&thing));
-            }
             Ok(s) => standing = Some(s),
-            Err(why) => {
-                return OperationEnd::Failed(crate::runtime::breakers::unreadable_message(
-                    &thing, &why,
-                ));
-            }
+            Err(refusal) => return OperationEnd::Failed(refusal.message().to_owned()),
         }
     }
 
@@ -612,36 +605,29 @@ pub(crate) fn run_operation_loop(
             let why = crate::evaluation::out_of_time_message(script_limits);
             tracing::error!(app = %app_name, operation = %target, "operation failed: {why}");
             if tracked() {
-                let (name, cipher, thing, run, generation, limits) = (
-                    app_name.clone(),
-                    Arc::clone(&cipher),
-                    thing.clone(),
-                    run.clone(),
-                    op_ctx.operation_generation,
-                    script_limits.clone(),
+                crate::runtime::breakers::record_outcome(
+                    &db,
+                    &cipher,
+                    app_name,
+                    &thing,
+                    &run,
+                    crate::runtime::breakers::Outcome::RanOut {
+                        generation: op_ctx.operation_generation,
+                        limits: script_limits.clone(),
+                    },
                 );
-                if let Err(e) = db.call(move |db| {
-                    crate::runtime::breakers::trip(
-                        db, &cipher, &name, &thing, &run, generation, &limits,
-                    )
-                }) {
-                    tracing::error!(app = %app_name, operation = %target, "cannot trip the breaker: {e}");
-                }
             }
             return OperationEnd::Failed(why);
         }
         if let Some(standing) = standing.take() {
-            let (name, cipher, thing, run) = (
-                app_name.clone(),
-                Arc::clone(&cipher),
-                thing.clone(),
-                run.clone(),
+            crate::runtime::breakers::record_outcome(
+                &db,
+                &cipher,
+                app_name,
+                &thing,
+                &run,
+                crate::runtime::breakers::Outcome::InTime(standing),
             );
-            db.call(move |db| {
-                crate::runtime::breakers::finished_in_time(
-                    db, &cipher, &name, &thing, &run, standing,
-                );
-            });
         }
         match result {
             OperationResult::Completed => return OperationEnd::Completed,

@@ -330,6 +330,103 @@ pub fn standing(
     }
 }
 
+/// Why an evaluation of a thing does not go ahead.
+///
+/// Each entry point reports a refusal in its own shape, so the message is
+/// written once here and the kind says which code to report it under.
+// spec: LIM#breakers
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// The thing's breaker is tripped for the definition and inputs it
+    /// would be evaluated with.
+    Tripped(String),
+    /// Whether the thing's breaker is tripped cannot be read, so it is not
+    /// evaluated either.
+    Unreadable(String),
+}
+
+impl Refusal {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Tripped(m) | Self::Unreadable(m) => m,
+        }
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+/// Where `thing`'s breaker stands for `run`, or why `run` does not go ahead.
+///
+/// A breaker tripped for another definition or other inputs is no refusal:
+/// that run evaluates as usual, and resets the breaker if it finishes in
+/// time, so the standing comes back for the caller to hand to
+/// [`finished_in_time`].
+// spec: LIM#breakers
+pub fn consult(
+    db: &Db,
+    cipher: &Cipher,
+    app: &AppName,
+    thing: &Thing,
+    run: &Run,
+) -> Result<Standing, Refusal> {
+    match standing(db, cipher, app, thing, run) {
+        Ok(Standing::Tripped) => Err(Refusal::Tripped(tripped_message(thing))),
+        Ok(standing) => Ok(standing),
+        Err(why) => Err(Refusal::Unreadable(unreadable_message(thing, &why))),
+    }
+}
+
+/// How a tracked evaluation ended, for [`record_outcome`].
+pub enum Outcome {
+    /// It ran past the limit, at this generation.
+    RanOut {
+        generation: u64,
+        limits: crate::ScriptLimits,
+    },
+    /// It finished within the limit, with the breaker as it stood when the
+    /// evaluation began.
+    InTime(Standing),
+}
+
+/// Record how a tracked evaluation of `thing` with `run` ended.
+///
+/// Failing to record is logged and nothing more: the evaluation's own
+/// outcome stands whether or not the breaker took it, and a trip that did
+/// not land leaves the runaway to be paid again rather than a run refused
+/// for a reason no operator can see.
+// spec: LIM#breakers
+pub fn record_outcome(
+    db: &crate::runtime::db::DbHandle,
+    cipher: &std::sync::Arc<Cipher>,
+    app: &AppName,
+    thing: &Thing,
+    run: &Run,
+    outcome: Outcome,
+) {
+    let (name, cipher, checked, run) = (
+        app.clone(),
+        std::sync::Arc::clone(cipher),
+        thing.clone(),
+        run.clone(),
+    );
+    match outcome {
+        Outcome::RanOut { generation, limits } => {
+            if let Err(e) =
+                db.call(move |db| trip(db, &cipher, &name, &checked, &run, generation, &limits))
+            {
+                tracing::error!(%app, "{e}");
+            }
+        }
+        Outcome::InTime(standing) => {
+            db.call(move |db| finished_in_time(db, &cipher, &name, &checked, &run, standing));
+        }
+    }
+}
+
 /// Trip `thing`'s breaker for `run`, which ran past the limit at
 /// `generation`, recording its definition and inputs in place of any it
 /// held, and file its fault.
@@ -532,11 +629,9 @@ pub fn consulting(
     let app = app.clone();
     std::sync::Arc::new(move |thing, run| {
         let (app, cipher, checked) = (app.clone(), std::sync::Arc::clone(&cipher), thing.clone());
-        match db.call(move |db| standing(db, &cipher, &app, &checked, &run)) {
-            Ok(Standing::Tripped) => Some(tripped_message(thing)),
-            Ok(_) => None,
-            Err(why) => Some(unreadable_message(thing, &why)),
-        }
+        db.call(move |db| consult(db, &cipher, &app, &checked, &run))
+            .err()
+            .map(|refusal| refusal.message().to_owned())
     })
 }
 

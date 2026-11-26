@@ -397,22 +397,14 @@ impl Run<'_> {
         // spec: GRUN#preparation
         // spec: LIM#breakers
         if gate_def.has_body {
-            use crate::runtime::breakers::{self, Standing, Thing};
+            use crate::runtime::breakers::{self, Thing};
             let thing = Thing::Gate(gate.clone());
             let run = breakers::Run::of_app(app, &state.script_limits).with_last_success(last);
-            let (n, cipher, checked) = (name.clone(), Arc::clone(&state.cipher), thing.clone());
-            match state
+            let (n, cipher) = (name.clone(), Arc::clone(&state.cipher));
+            state
                 .db
-                .call(move |db| breakers::standing(db, &cipher, &n, &checked, &run))
-            {
-                Ok(Standing::Tripped) => {
-                    return Err(Stopped::Failed(breakers::tripped_message(&thing)));
-                }
-                Ok(Standing::Clear | Standing::TrippedForOther) => {}
-                Err(why) => {
-                    return Err(Stopped::Failed(breakers::unreadable_message(&thing, &why)));
-                }
-            }
+                .call(move |db| breakers::consult(db, &cipher, &n, &thing, &run))
+                .map_err(|refusal| Stopped::Failed(refusal.message().to_owned()))?;
         }
 
         let images = self.images(app, def, gate_def, last).await?;

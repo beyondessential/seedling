@@ -252,19 +252,13 @@ pub(crate) async fn open_shell_session(
         let thing = Thing::Shell(shell_name.clone());
         let run = breakers::Run::of_app(&app, &state.script_limits)
             .with_params(&validated_params, &shell_params_schema);
-        let (name, cipher, checked) = (app_name.clone(), Arc::clone(&state.cipher), thing.clone());
-        let refusal = match state
+        let (name, cipher) = (app_name.clone(), Arc::clone(&state.cipher));
+        if let Err(refusal) = state
             .db
-            .call(move |db| breakers::standing(db, &cipher, &name, &checked, &run))
+            .call(move |db| breakers::consult(db, &cipher, &name, &thing, &run))
         {
-            Ok(breakers::Standing::Tripped) => {
-                Some(("evaluation_runaway", breakers::tripped_message(&thing)))
-            }
-            Ok(_) => None,
-            Err(why) => Some(("internal", breakers::unreadable_message(&thing, &why))),
-        };
-        if let Some((code, message)) = refusal {
-            reject(&mut send, code, message).await;
+            let e = crate::oi::handler::actions::refusal_error(refusal);
+            reject(&mut send, error_code_name(e.code), e.message).await;
             return;
         }
     }
@@ -821,12 +815,9 @@ pub(super) async fn run_app_shell(
                 thing.clone(),
                 run.clone(),
             );
-            match db.call(move |db| breakers::standing(db, &cipher, &name, &checked, &run)) {
-                Ok(breakers::Standing::Tripped) => {
-                    return ScriptEnd::Failed(breakers::tripped_message(&thing));
-                }
+            match db.call(move |db| breakers::consult(db, &cipher, &name, &checked, &run)) {
                 Ok(standing) => standing,
-                Err(why) => return ScriptEnd::Failed(breakers::unreadable_message(&thing, &why)),
+                Err(refusal) => return ScriptEnd::Failed(refusal.message().to_owned()),
             }
         };
         let mut ran_out = false;
@@ -913,25 +904,21 @@ pub(super) async fn run_app_shell(
                     app = %app_name_for_task, shell = %shell_name_for_task,
                     "shell closure failed: {why}"
                 );
-                let (name, cipher, thing, run, limits) = (
-                    app_name_for_task.clone(),
-                    Arc::clone(&cipher),
-                    thing.clone(),
-                    run.clone(),
-                    script_limits.clone(),
-                );
                 let generation = apps
                     .read()
                     .get(app_name_for_task.as_str())
                     .map_or(0, |e| e.current_generation);
-                if let Err(e) = db.call(move |db| {
-                    breakers::trip(db, &cipher, &name, &thing, &run, generation, &limits)
-                }) {
-                    tracing::error!(
-                        app = %app_name_for_task, shell = %shell_name_for_task,
-                        "cannot trip the breaker: {e}"
-                    );
-                }
+                breakers::record_outcome(
+                    &db,
+                    &cipher,
+                    &app_name_for_task,
+                    &thing,
+                    &run,
+                    breakers::Outcome::RanOut {
+                        generation,
+                        limits: script_limits.clone(),
+                    },
+                );
                 ran_out = true;
                 break ScriptEnd::Failed(format!("the shell's script failed: {why}"));
             }
@@ -956,15 +943,14 @@ pub(super) async fn run_app_shell(
         // The run is over, and it is the whole run that finished within the
         // limit; a pass that returns is only part of one.
         if !ran_out {
-            let (name, cipher, thing, run) = (
-                app_name_for_task.clone(),
-                Arc::clone(&cipher),
-                thing.clone(),
-                run.clone(),
+            breakers::record_outcome(
+                &db,
+                &cipher,
+                &app_name_for_task,
+                &thing,
+                &run,
+                breakers::Outcome::InTime(standing),
             );
-            db.call(move |db| {
-                breakers::finished_in_time(db, &cipher, &name, &thing, &run, standing);
-            });
         }
 
         clear_shell_attach_ctx();
