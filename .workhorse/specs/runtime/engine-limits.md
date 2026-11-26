@@ -95,9 +95,9 @@ Its inputs are the app's [host constants](../language/constants.md#host-constant
 | thing | inputs |
 | --- | --- |
 | definition | the app's stored parameter values |
-| an action's closure | the app's stored parameter values, and the params of the invocation once validated and filled in from defaults, each in its [canonical form](../language/action.md#kind-parsers), leaving out [reserved keys](../language/action.md#param-delivery) |
+| an action's closure | the app's stored parameter values, and the params of the invocation once validated and filled in from defaults, each in its [canonical form](../language/action.md#kind-parsers), leaving out [volume params](../language/action.md#volume-params) and [reserved keys](../language/action.md#param-delivery) |
 | a shell's closure | the app's stored parameter values, and the params of the session, taken as for an action |
-| a gate's body | the app's stored parameter values, and the generation of the gate's last success that the body's `last` reflects, if any |
+| a gate's body | the app's stored parameter values, and the definition and parameter values of the gate's last success that the body's `last` reflects, if any |
 
 > [!NOTE]
 > The running Seedling version is an input because a release can change how long the same script takes, such as through a different regex engine, and the limit in force is one so that an operator who raises or removes it can run again what it stopped.
