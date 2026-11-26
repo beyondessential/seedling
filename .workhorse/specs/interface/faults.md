@@ -26,6 +26,7 @@ For a fault about a resource instance, they MUST give the instance's resource [t
 For a fault about an app's ingress, `resource_type` MUST be `ingress`, `resource_name` MUST be the ingress's name, and `instance_id` MUST be `null`.
 For a fault about an app's service as a whole, `resource_type` MUST be `service`, `resource_name` MUST be the service's name, and `instance_id` MUST be `null`.
 For a fault about a site ingress or a site service, `resource_type` MUST be `site_ingress` or `site_service`, `resource_name` MUST be its name, and `instance_id` MUST be `null`.
+For a fault about the [breaker](../runtime/engine-limits.md#breakers) of an action, a shell or a gate's body, `resource_type` MUST be `action`, `shell` or `gate`, `resource_name` MUST be the action's, shell's or gate's name, and `instance_id` MUST be `null`.
 For any other fault, all three MUST be `null`, and its `description` SHOULD name its subject.
 
 ## Listing faults
