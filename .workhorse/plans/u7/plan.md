@@ -40,7 +40,7 @@ Specs: LIM (`runtime/engine-limits.md`, measuring evaluation time and breakers),
 - [x] Operation passes (`operations.rs::run_operation_loop`): treat a pass as tracked only when the operation's generation is the app's current one; check the action's breaker before the first pass; trip the operation's own action on a runaway, including one inside `invoke`; reset on an in-time pass with a different digest.
 - [x] Gate body runs (`gates/run.rs`): tracked as for operations, with the gate's last-success generation as an input.
 - [x] Shell sessions: tracked against the current app; check before the closure runs, trip on a runaway, reset on an in-time run with a different digest.
-- [ ] Tests beside `runtime/operations/tests.rs`, `gates/run/tests.rs` and `oi/shells/tests.rs`: a runaway trips the right breaker; a pass at an older generation stops but leaves no breaker; a later in-time run with different params resets it. Action passes and the definition are covered; shell runs and gate body runs are not.
+- [x] Tests beside `runtime/operations/tests.rs`, `gates/run/tests.rs` and `oi/shells/tests.rs`: a runaway trips the right breaker; a pass at an older generation stops but leaves no breaker; a later in-time run with different params resets it.
 
 ## Refusals and skips
 
@@ -52,14 +52,14 @@ Specs: LIM (`runtime/engine-limits.md`, measuring evaluation time and breakers),
 - [x] Scheduled fires (`runtime/schedules.rs::check_due_schedules`): when the action's breaker is tripped for the run's definition and inputs, stamp the fire and skip it without a further fault.
 - [x] Gate preparation (`gates/run.rs::prepare`): fail with nothing stopped when the body's breaker is tripped or unreadable, and when the preparation probe is stopped at the limit.
 - [x] Probes (`runtime/probe.rs`): report a tripped breaker, and a stop at the limit, as the handler's error; never trip or reset.
-- [ ] Tests for each refusal beside the existing `script_error` refusal tests (`oi/handler/apps/tests.rs`, `oi/handler/gates/tests.rs`, actions, shells, schedules, probe). Actions, gate-run requests, schedules, probes and `invoke` are covered; shell opening, gate preparation and a replayed `invoke` are not.
+- [x] Tests for each refusal beside the existing `script_error` refusal tests (`oi/handler/apps/tests.rs`, `oi/handler/gates/tests.rs`, actions, shells, schedules, probe), and a replayed `invoke` that is not checked.
 
 ## Fault lifecycle
 
 - [x] Withholding: replace the kind-only `WITHHOLDING_KINDS` check in `runtime/faults.rs` with one that counts `evaluation_runaway` and `breaker_state_unreadable` only for the definition or a gate subject; extend `only_a_withholding_fault_faults_the_app`.
 - [x] `/faults/clear` (`oi/handler/faults.rs`): reset the breaker of each cleared `evaluation_runaway` in the same transaction, then re-evaluate the definition when its breaker was among them.
 - [x] After each in-time definition evaluation, reset the breakers (and clear the faults) of closures the definition no longer declares; discard every breaker on deregistration.
-- [ ] Tests: clearing an unrelated fault re-arms every breaker; clearing the definition's fault re-evaluates; renaming an action clears its fault. Clearing and an undeclared closure are covered at the store; the re-evaluation on clear, and `/apps/update` or a validator running away, need a `TestOi` built with short limits.
+- [x] Tests: clearing an unrelated fault re-arms every breaker; clearing the definition's fault re-evaluates; renaming an action clears its fault; `/apps/update` and a validator running away, through a `TestOi` built with short limits.
 
 ## Interface reporting
 
