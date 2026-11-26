@@ -43,7 +43,7 @@ Hostnames default to `<demo>.demo.internal`: `.internal` is reserved for private
 ## Images
 
 Demos use well-known public images pinned by tag (e.g. `traefik/whoami` for HTTP echo, a small base image running `socat` for TCP/UDP echo).
-Check each supports what its route needs, h2c in particular, before relying on it.
+Check each supports what its route needs before relying on it. `traefik/whoami` v1.12.0 serves prior-knowledge h2c on its plaintext listener (Go's `SetUnencryptedHTTP2`), so it backs the cleartext HTTP/2 route.
 No demo image is built or published from this repo.
 
 ## Demos as test fixtures
