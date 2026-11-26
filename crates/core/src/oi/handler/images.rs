@@ -480,7 +480,8 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
             ),
         },
     )
-    .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
+    // spec: WIRE#error-codes
+    .map_err(|e| super::apps::evaluation_error("probe failed: ", &e))?;
 
     let per_handler: Vec<Value> = response
         .per_handler

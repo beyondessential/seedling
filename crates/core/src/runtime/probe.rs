@@ -22,6 +22,7 @@ use crate::{
     runtime::{
         InstanceRegistry,
         action_params::apply_schema,
+        apps::ScriptError,
         barrier::{
             CancelToken, OperationId, ReplayContext,
             oracle::TestWorldOracle,
@@ -100,14 +101,16 @@ fn capture(
     script_ast: &AST,
     app: &App,
     limits: &crate::ScriptLimits,
-) -> Result<crate::defs::app::ClosureCapture, String> {
+) -> Result<crate::defs::app::ClosureCapture, ScriptError> {
     // spec: LIM#measuring-evaluation-time
     let evaluation = crate::evaluation::Evaluation::start(limits);
     let captured = capture_closures(engine, script_ast, app);
     if evaluation.exceeded() {
-        return Err(crate::evaluation::out_of_time_message(limits));
+        return Err(ScriptError::Runaway(
+            crate::evaluation::out_of_time_message(limits),
+        ));
     }
-    captured.map_err(|e| format!("script evaluation failed: {e}"))
+    captured.map_err(|e| ScriptError::failed(format!("script evaluation failed: {e}")))
 }
 
 #[derive(Debug, Default, Clone)]
@@ -130,7 +133,7 @@ pub fn probe_gate_body(
     gate: &GateName,
     last: Option<&App>,
     bounds: &ProbeBounds<'_>,
-) -> Result<HandlerProbe, String> {
+) -> Result<HandlerProbe, ScriptError> {
     let captured = capture(engine, script_ast, app, bounds.limits)?;
     match captured.gates.get(gate) {
         Some(Some(body)) => probe_gate_closure(
@@ -143,7 +146,8 @@ pub fn probe_gate_body(
             body.clone(),
             last,
             bounds,
-        ),
+        )
+        .map_err(ScriptError::failed),
         Some(None) => Ok(HandlerProbe {
             name: gate.as_str().to_owned(),
             kind: HandlerKind::Gate,
@@ -151,7 +155,9 @@ pub fn probe_gate_body(
             error: None,
             skipped_reason: None,
         }),
-        None => Err(format!("gate '{gate}' is not declared")),
+        None => Err(ScriptError::failed(format!(
+            "gate '{gate}' is not declared"
+        ))),
     }
 }
 
@@ -213,7 +219,7 @@ pub fn probe_app(
     request: &ProbeRequest,
     last_of: &dyn Fn(&GateName) -> Result<Option<App>, String>,
     bounds: &ProbeBounds<'_>,
-) -> Result<ProbeResponse, String> {
+) -> Result<ProbeResponse, ScriptError> {
     // Re-run the script to capture every registered closure. The script
     // itself must not fail; if it does, the caller can surface that as an
     // app-level script_error fault and there's nothing to probe.
@@ -616,7 +622,7 @@ mod tests {
         app: &App,
         registry: Arc<dyn InstanceRegistry>,
         request: &ProbeRequest,
-    ) -> Result<ProbeResponse, String> {
+    ) -> Result<ProbeResponse, ScriptError> {
         probe_app(
             engine,
             ast,
@@ -707,6 +713,34 @@ mod tests {
                 .unwrap_or_default();
             assert!(error.contains("tripped"), "{name}: {error}");
         }
+    }
+
+    // spec: WIRE#error-codes
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn a_probe_whose_capture_runs_past_the_limit_fails_as_a_runaway() {
+        let limits = crate::ScriptLimits {
+            max_operations: 0,
+            max_evaluation_time: 1,
+            ..crate::ScriptLimits::default()
+        };
+        let (engine, _scope, app) =
+            crate::setup_language(&limits, Default::default()).expect("the scope builds");
+        // Recovering the closures re-runs the script's own top level, so a
+        // definition that runs away there runs away in the probe.
+        let ast = crate::defs::compile(&engine, "loop {}").expect("compile");
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let failure = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds::unconsulted(&limits),
+        )
+        .expect_err("the capture runs away");
+        assert!(failure.is_runaway(), "{failure:?}");
     }
 
     // spec: IMG#image-discovery

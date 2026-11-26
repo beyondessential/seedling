@@ -460,7 +460,8 @@ impl Run<'_> {
                 Arc::clone(&self.state.cipher),
             );
             let probed = tokio::task::spawn_blocking(move || {
-                let (engine, _scope, ast) = language_for(&app, &limits)?;
+                let (engine, _scope, ast) = language_for(&app, &limits)
+                    .map_err(crate::runtime::apps::ScriptError::failed)?;
                 let registry: Arc<dyn crate::runtime::InstanceRegistry> =
                     Arc::new(DbInstanceRegistry::new(db));
                 // spec: GRUN#preparation

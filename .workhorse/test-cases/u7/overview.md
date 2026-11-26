@@ -40,6 +40,7 @@
 - [x] A gate run fails with nothing stopped when its body's breaker is tripped (verifies spec: GRUN)
 - [x] An operator gate-run request is refused with `evaluation_runaway` while the body's breaker is tripped for the run (verifies spec: CTL)
 - [x] A probe reports a tripped handler, and one stopped at the limit, as that handler's error (verifies spec: IMG)
+- [x] A probe whose capture runs past the limit fails the request with `evaluation_runaway`, not `script_error` (verifies spec: WIRE)
 - [x] A probed action or gate body that invokes an action whose breaker is tripped reports the refusal as its error (verifies spec: IMG, ACN)
 - [x] Clearing an app's faults while its definition's breaker is tripped evaluates the definition again (verifies spec: LIM)
 - [x] An in-time evaluation the runtime adopts resets the definition's breaker, whatever it was tripped for (verifies spec: LIM)
