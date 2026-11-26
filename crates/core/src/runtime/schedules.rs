@@ -519,6 +519,72 @@ mod tests {
         assert!(fired[0].accepted);
     }
 
+    // spec: ACN#scheduled-actions
+    // spec: SCHED#fire-times
+    #[test]
+    fn a_run_its_actions_breaker_holds_back_is_skipped_and_stamped() {
+        let db = Db::open_in_memory().unwrap();
+        let pairs = vec![(action_name("backup"), "* * * * *".to_owned())];
+        db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
+        db::upsert_schedule_fired(
+            &db,
+            &app_name("myapp"),
+            &action_name("backup"),
+            "* * * * *",
+            "2026-04-18T12:00:00Z",
+        )
+        .unwrap();
+
+        let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
+        let mut scheduler = Scheduler::new();
+        let tripped = |_: &Db, _: &AppName, _: &ActionName, _: &ParamMap| {
+            Ok(crate::runtime::breakers::Standing::Tripped)
+        };
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &tripped, &|_| {
+            Some((1, installed(), no_schemas()))
+        });
+        assert!(fired.is_empty());
+        assert!(
+            faults::list_active_faults(&db, Some(&app_name("myapp")))
+                .unwrap()
+                .is_empty(),
+            "no further fault is filed"
+        );
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
+            Some((1, installed(), no_schemas()))
+        });
+        assert!(fired.is_empty(), "the skipped run is accounted for");
+    }
+
+    // spec: SCHED#firing
+    #[test]
+    fn a_breaker_that_cannot_be_read_leaves_the_run_due() {
+        let db = Db::open_in_memory().unwrap();
+        let pairs = vec![(action_name("backup"), "* * * * *".to_owned())];
+        db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
+        db::upsert_schedule_fired(
+            &db,
+            &app_name("myapp"),
+            &action_name("backup"),
+            "* * * * *",
+            "2026-04-18T12:00:00Z",
+        )
+        .unwrap();
+
+        let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
+        let mut scheduler = Scheduler::new();
+        let unreadable =
+            |_: &Db, _: &AppName, _: &ActionName, _: &ParamMap| Err("no table".to_owned());
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &unreadable, &|_| {
+            Some((1, installed(), no_schemas()))
+        });
+        assert!(fired.is_empty());
+        let fired = check_due_schedules(&db, &mut scheduler, now, &limits(), &no_breakers, &|_| {
+            Some((1, installed(), no_schemas()))
+        });
+        assert_eq!(fired.len(), 1, "the run stayed due");
+    }
+
     // spec: SCHED#firing
     #[test]
     fn a_last_fire_time_that_cannot_be_parsed_is_not_never_fired() {

@@ -368,6 +368,64 @@ mod tests {
         assert_eq!(code, "requirements_invalid");
     }
 
+    // spec: ACI#invoking-an-action
+    // spec: LIM#breakers
+    #[test]
+    fn an_action_whose_breaker_is_tripped_for_the_invocation_is_refused() {
+        use crate::runtime::breakers::{self, Run, Thing};
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({
+                "app": "demo",
+                "script": r#"
+                    app.deployment("web").image("docker.io/library/nginx:1.29");
+                    app.on_action("search", |rt, p| {});
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let run = {
+            let reg = oi.state.registry.read();
+            let mut tripped = serde_json::Map::new();
+            tripped.insert("pattern".into(), json!("(a+)+b"));
+            Run::of_app(&reg.get("demo").unwrap().app, &oi.state.script_limits)
+                .with_params(&ParamMap::from_values(tripped), &BTreeMap::new())
+        };
+        let cipher = Arc::clone(&oi.state.cipher);
+        let limits = oi.state.script_limits.clone();
+        oi.state
+            .db
+            .call(move |db| {
+                breakers::trip(
+                    db,
+                    &cipher,
+                    &AppName::new_unchecked("demo"),
+                    &Thing::Action(ActionName::new_unchecked("search")),
+                    &run,
+                    1,
+                    &limits,
+                )
+            })
+            .unwrap();
+
+        let (code, _) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "search", "params": { "pattern": "(a+)+b" } }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "evaluation_runaway");
+        let result = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "search", "params": { "pattern": "ab" } }),
+            )
+            .expect("other params are not held back");
+        assert_eq!(result["schedule"], "accepted");
+    }
+
     // spec: ACN#shells
     #[test]
     fn an_action_that_shares_a_shells_name_can_be_invoked() {

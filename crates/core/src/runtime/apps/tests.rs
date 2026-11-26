@@ -808,6 +808,74 @@ fn a_reload_that_moves_a_deployments_bounds_clamps_its_stored_scale() {
     assert_eq!(stored, Some(4), "lowered to the new upper bound");
 }
 
+// spec: LIM#breakers
+// spec: FLT#app-faults
+#[test]
+fn a_definition_that_runs_away_trips_its_breaker_until_its_inputs_change() {
+    let script = r#"
+        let spin = app.param("spin");
+        if spin.is_set() && spin.value() == "yes" { loop {} }
+        app.deployment("api").image("ghcr.io/acme/api:1.0");
+    "#;
+    let limits = crate::ScriptLimits {
+        max_operations: 0,
+        max_evaluation_time: 1,
+        ..crate::ScriptLimits::default()
+    };
+    let registry = RwLock::new(AppRegistry::new());
+    registry
+        .write()
+        .register(
+            app("myapp"),
+            bundle_of(script),
+            Source::unknown_push(),
+            Arc::new(Notify::new()),
+            &limits,
+        )
+        .unwrap();
+    let db = crate::runtime::db::DbHandle::from_db(Db::open_in_memory().expect("open"));
+    let cipher = Arc::new(crate::runtime::secrets::Cipher::for_tests());
+    let spinning = BTreeMap::from([("spin".to_owned(), "yes".to_owned())]);
+    let kinds = || {
+        db.call(|db| crate::runtime::faults::list_active_faults(db, Some(&app("myapp"))))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.kind)
+            .collect::<Vec<_>>()
+    };
+
+    let outcome = reload(&registry, &db, &cipher, &app("myapp"), &spinning, &limits);
+    assert!(
+        matches!(
+            outcome,
+            ReloadOutcome::KeptPrevious(ScriptError::Runaway(_))
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(kinds(), vec!["evaluation_runaway".to_owned()]);
+
+    // The same definition and inputs are not evaluated again.
+    let started = cpu_time::ThreadTime::now();
+    let outcome = reload(&registry, &db, &cipher, &app("myapp"), &spinning, &limits);
+    assert!(matches!(
+        outcome,
+        ReloadOutcome::KeptPrevious(ScriptError::Runaway(_))
+    ));
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+
+    // Other inputs evaluate as usual, and finishing in time resets it.
+    let outcome = reload(
+        &registry,
+        &db,
+        &cipher,
+        &app("myapp"),
+        &BTreeMap::new(),
+        &limits,
+    );
+    assert!(outcome.is_applied(), "{outcome:?}");
+    assert!(kinds().is_empty(), "{:?}", kinds());
+}
+
 // spec: APPS#update
 #[test]
 fn reload_of_unknown_app_is_noop() {
