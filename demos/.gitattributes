@@ -1,0 +1,3 @@
+# A demo is pushed as the bytes its files hold, so they are checked out
+# unconverted, and a demo reads the same on every platform.
+* -text
