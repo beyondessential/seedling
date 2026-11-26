@@ -809,12 +809,12 @@ pub(super) async fn run_app_shell(
             });
         }
         // spec: LIM#breakers
-        // A session runs against the app's current definition, so each of
-        // its passes is tracked.
+        // A session runs against the app's current definition, so its run of
+        // the closure is tracked.
         use crate::runtime::breakers::{self, Thing};
         let thing = Thing::Shell(shell_name_for_task.clone());
         let run = run_for_task;
-        let mut standing = {
+        let standing = {
             let (name, cipher, checked, run) = (
                 app_name_for_task.clone(),
                 Arc::clone(&cipher),
@@ -825,10 +825,11 @@ pub(super) async fn run_app_shell(
                 Ok(breakers::Standing::Tripped) => {
                     return ScriptEnd::Failed(breakers::tripped_message(&thing));
                 }
-                Ok(standing) => Some(standing),
+                Ok(standing) => standing,
                 Err(why) => return ScriptEnd::Failed(breakers::unreadable_message(&thing, &why)),
             }
         };
+        let mut ran_out = false;
         // spec: ACN#action-invocation
         let _invokes = breakers::InvokesGuard::enter(
             breakers::Run::of_app(&app, &script_limits),
@@ -840,6 +841,12 @@ pub(super) async fn run_app_shell(
             progress: progress_for_task,
         });
 
+        // spec: LIM#measuring-evaluation-time
+        // The whole run of the closure is one evaluation, however many passes
+        // it takes: the time it spends suspended, or with its shell attached,
+        // is not processor time, so one budget covers the run and a closure
+        // cannot shed what it has spent by suspending.
+        let evaluation = crate::evaluation::Evaluation::start(&script_limits);
         let end = loop {
             // spec: RT#resources-a-gate-holds
             // What gates keep from the closure is read for each pass, as an
@@ -866,8 +873,6 @@ pub(super) async fn run_app_shell(
                     )
                 })
             };
-            // spec: LIM#measuring-evaluation-time
-            let evaluation = crate::evaluation::Evaluation::start(&script_limits);
             let result = run_operation(
                 OperationContext {
                     engine: &engine,
@@ -902,9 +907,7 @@ pub(super) async fn run_app_shell(
             );
             // spec: LIM#measuring-evaluation-time
             // spec: LIM#breakers
-            let ran_out = evaluation.exceeded();
-            drop(evaluation);
-            if ran_out {
+            if evaluation.exceeded() {
                 let why = crate::evaluation::out_of_time_message(&script_limits);
                 tracing::error!(
                     app = %app_name_for_task, shell = %shell_name_for_task,
@@ -929,18 +932,8 @@ pub(super) async fn run_app_shell(
                         "cannot trip the breaker: {e}"
                     );
                 }
+                ran_out = true;
                 break ScriptEnd::Failed(format!("the shell's script failed: {why}"));
-            }
-            if let Some(standing) = standing.take() {
-                let (name, cipher, thing, run) = (
-                    app_name_for_task.clone(),
-                    Arc::clone(&cipher),
-                    thing.clone(),
-                    run.clone(),
-                );
-                db.call(move |db| {
-                    breakers::finished_in_time(db, &cipher, &name, &thing, &run, standing);
-                });
             }
             match result {
                 OperationResult::Completed => break ScriptEnd::Completed,
@@ -958,6 +951,21 @@ pub(super) async fn run_app_shell(
                 OperationResult::Suspended(_) => cancel.wait_for(Duration::from_secs(2)),
             }
         };
+        drop(evaluation);
+        // spec: LIM#breakers
+        // The run is over, and it is the whole run that finished within the
+        // limit; a pass that returns is only part of one.
+        if !ran_out {
+            let (name, cipher, thing, run) = (
+                app_name_for_task.clone(),
+                Arc::clone(&cipher),
+                thing.clone(),
+                run.clone(),
+            );
+            db.call(move |db| {
+                breakers::finished_in_time(db, &cipher, &name, &thing, &run, standing);
+            });
+        }
 
         clear_shell_attach_ctx();
         end
