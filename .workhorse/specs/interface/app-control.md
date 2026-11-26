@@ -80,7 +80,7 @@ The server MUST reply once the new seed is persisted, without waiting for the ap
 The result is `{}`.
 On success the server MUST emit an `AppSeedRotated` event.
 
-If the app's definition fails to evaluate against the new seed, the server MUST still keep the new seed, and the failure is reported as a [`script_error`](../runtime/faults.md#app-faults) fault.
+If the app's definition fails to evaluate against the new seed, the server MUST still keep the new seed, and the failure is reported as a [`script_error`](../runtime/faults.md#app-faults) fault, or as an [`evaluation_runaway`](../runtime/faults.md#app-faults) fault where the evaluation fails at the [evaluation time limit](../runtime/engine-limits.md#evaluation-time).
 
 ## Deployment restart
 

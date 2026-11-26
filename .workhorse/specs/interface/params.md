@@ -72,7 +72,7 @@ It MUST then store every value the request sets, remove every value it unsets, a
 Once the change is durable, it MUST emit a `ParamsChanged` [event](events.md#app-events).
 
 The server MUST then evaluate the app's definition with its new values.
-If the evaluation fails, the server MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against the app, and the request still succeeds.
+If the evaluation fails, the server MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against the app, or an [`evaluation_runaway`](../runtime/faults.md#app-faults) fault where the evaluation fails at the [evaluation time limit](../runtime/engine-limits.md#evaluation-time), and the request still succeeds.
 
 A change that moves the key of one of the app's [gates](../language/gate.md) leaves it unsatisfied, and the runtime runs it as [gate runs](../runtime/gates.md) specify.
 
@@ -108,7 +108,7 @@ The result has these members.
 | `diff` | array | one entry per resource added, removed or modified |
 | `gates_would_run` | array of strings | where the app is installed, in ascending order, the names of the gates the evaluated definition declares that would be [unsatisfied](../runtime/gates.md#gate-state) under it and the proposed values |
 | `errors` | array of strings | the parse or evaluation errors, if the evaluated definition fails to parse or evaluate |
-| `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose kind check or validator rejects the proposed values |
+| `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose kind check or validator rejects the proposed values, or whose validator is stopped at the [evaluation time limit](../runtime/engine-limits.md#evaluation-time), with a `reason` saying so |
 
 If the evaluated definition fails to parse or evaluate, the result MUST carry `errors` and no other member.
 Otherwise `errors` MUST be empty.
