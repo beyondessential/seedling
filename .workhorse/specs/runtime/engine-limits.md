@@ -21,7 +21,7 @@ The runtime MUST bound the resources a single evaluation of a BSL script can con
 | derived values | calls to a [derivation helper](../language/random.md#derivation-helper), and helper results [withheld as derived values](secrets.md#redaction) | 1 000 | `--script-max-derived-values` |
 | regex compiled size | bytes of [patterns compiled](../language/regex.md#compiled-size) | 33 554 432 (32 MiB) | `--script-max-regex-compiled-size` |
 | password hashes | calls to a [password hash helper](../language/random.md#password-hash-helper) | 16 | `--script-max-password-hashes` |
-| evaluation time | seconds of [evaluation time](#evaluation-time) | 10 | `--script-max-evaluation-time` |
+| evaluation time | whole seconds of [evaluation time](#evaluation-time) | 10 | `--script-max-evaluation-time` |
 
 An evaluation that exceeds any limit MUST fail with an error.
 A pattern that would exceed the regex compiled size limit MUST instead raise a script error, as [compiled size](../language/regex.md#compiled-size) specifies.
@@ -45,16 +45,25 @@ The daemon MUST refuse to start with a function call nesting depth of 0.
 
 ## Evaluation time
 
-An evaluation's evaluation time is the time the runtime spends evaluating it, excluding any time the evaluation spends paused in a method of a [runtime handle](../language/rt.md#runtime-handle).
+An evaluation's evaluation time is the processor time the runtime spends evaluating its script.
+Time the evaluation spends waiting, such as in a method of a [runtime handle](../language/rt.md#runtime-handle), at a [barrier](../language/rt.md#barrier), or while a [shell](../language/action.md#shells) is attached, is not part of it.
 
-The runtime MUST stop an evaluation whose evaluation time exceeds the evaluation time limit, at the next operation it reaches.
+Each of these is one evaluation:
+
+- an evaluation of an app's definition;
+- a pass of a lifecycle operation over its action closure, together with the evaluation of the definition the pass begins with, as [replay](suspension.md#replay) specifies;
+- a run of a shell's closure in a shell session;
+- a call of a parameter's [validator](../language/parameter.md#validators).
+
+The runtime MUST stop an evaluation whose evaluation time exceeds the evaluation time limit, at the next of the operations the operations per evaluation limit counts.
 An evaluation that returns having exceeded the limit MUST fail all the same.
+An evaluation stopped at the limit fails to evaluate, and a request that reports such failures in its result rather than refusing, such as [change planning](../interface/params.md#change-planning) or a [template preview](../interface/templates.md#preview), MUST report it there.
 
 > [!NOTE]
 > A single call into a function the runtime provides, such as one regex search, runs to its end before the evaluation can be stopped.
 
 > [!NOTE]
-> Time paused in a runtime handle method is time the script waits on the host, such as for a command to finish, and is no measure of the script itself.
+> Processor time leaves out the time a script waits on the host or an operator, such as for a command to finish, and the time other work on a busy host takes from it, neither of which measures the script itself.
 
 ## Breakers
 
