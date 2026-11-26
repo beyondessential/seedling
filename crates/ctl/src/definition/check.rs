@@ -3,6 +3,7 @@
 
 use std::{
     collections::BTreeMap,
+    fmt::Write as _,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -120,14 +121,28 @@ impl std::fmt::Display for CheckError {
     // spec: CLI#check-results
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(file) = &self.file {
-            f.write_str(file)?;
+            write_escaped(f, file)?;
             if let Some(line) = self.line {
                 write!(f, ":{line}")?;
             }
             f.write_str(": ")?;
         }
-        f.write_str(&self.message)
+        write_escaped(f, &self.message)
     }
+}
+
+/// Write `text` with each control character escaped, so that it holds to
+/// one line.
+// spec: CLI#check-results
+fn write_escaped(f: &mut std::fmt::Formatter<'_>, text: &str) -> std::fmt::Result {
+    for c in text.chars() {
+        if c.is_control() {
+            write!(f, "{}", c.escape_default())?;
+        } else {
+            f.write_char(c)?;
+        }
+    }
+    Ok(())
 }
 
 /// Where the files of the bundle being checked were read from, which an

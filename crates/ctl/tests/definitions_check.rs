@@ -182,6 +182,34 @@ fn an_included_file_through_a_symlinked_folder_lies_at_its_source() {
 
 // spec: CLI#check-results
 #[test]
+fn an_error_is_printed_on_one_line_with_its_control_characters_escaped() {
+    let dir = dir_with(&[(
+        "t.seed.rhai",
+        "throw \"first\\n::add-mask::x\\n\\x1b[31mred\";\n",
+    )]);
+    let run = check(dir.path(), &["t.seed.rhai"]);
+    assert_eq!(run.status, 1);
+    assert_eq!(run.stderr.lines().count(), 1, "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("first\\n::add-mask::x\\n\\u{1b}[31mred"),
+        "{}",
+        run.stderr
+    );
+
+    let run = check(dir.path(), &["t.seed.rhai", "--json"]);
+    assert!(
+        json_errors(&run)[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("first\n::add-mask::x\n\u{1b}[31mred"),
+        "{}",
+        run.stdout
+    );
+}
+
+// spec: CLI#check-results
+#[test]
 fn an_error_raised_in_a_function_lies_where_it_was_raised() {
     let mut script = String::from("fn fail() {\n    throw \"broken\";\n}\n");
     script.push_str(&"\n".repeat(36));

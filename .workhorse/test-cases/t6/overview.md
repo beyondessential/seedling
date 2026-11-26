@@ -81,6 +81,7 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 - [x] `--json` with two rejected sample values: two `validation` objects, each with `parameter` set and `file` and `line` null (verifies spec: CLI#check-results)
 - [x] `--json --set novalue`: stdout empty, error on stderr, exits 2 (verifies spec: CLI#check-results)
 - [ ] A GitHub Actions job running the check on a broken folder shows an inline annotation on the failing line
+- [x] A thrown message holding line breaks, a `::` workflow command and an escape sequence: printed on one line with each control character escaped; `--json` carries it as thrown (verifies spec: CLI#check-results)
 
 ## Parity and CI
 

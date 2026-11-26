@@ -1036,7 +1036,7 @@ It takes any source `apps create` takes, including `--ref`, which it fetches its
 - `--const NAME=value` sets a host constant. Otherwise `NODE_NAME` is empty, `TIMEZONE` is `UTC`, the egress, NAT64 and snapshot constants are `false`, and `AVAILABLE_THREADS` and `CPU_ARCHITECTURE` are the machine's own. `AVAILABLE_MEMORY` has no default, so a script that reads it fails at that line until it is given.
 - The daemon's `--script-max-*` options set the engine limits, with the daemon's defaults.
 
-Each error is printed to standard error as `file:line: message`, naming the file the CLI read: for an included file, its source. `--json` prints `{"errors": [...]}` to standard output instead, each error with its `kind` (`source`, `version`, `bundle`, `script` or `validation`), `message`, `file`, `line` and, for a rejected value, `parameter`. The check exits 1 when it fails, and 2, having checked nothing, when an option is wrong.
+Each error is printed to standard error as `file:line: message`, naming the file the CLI read: for an included file, its source. An error takes one line, with any line break or other control character in it escaped. `--json` prints `{"errors": [...]}` to standard output instead, each error with its `kind` (`source`, `version`, `bundle`, `script` or `validation`), `message`, `file`, `line` and, for a rejected value, `parameter`. The check exits 1 when it fails, and 2, having checked nothing, when an option is wrong.
 
 ## Running a command inside a container: `rt.exec`
 
