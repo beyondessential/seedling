@@ -1304,3 +1304,146 @@ fn a_failure_masks_a_helper_result_computed_from_a_value_the_operation_derived()
     let thrown = derived_on_replay(&seed, r#"`hex=${std::encode_hex(id)};`"#);
     assert!(thrown.contains("hex=<redacted>;"), "{thrown}");
 }
+
+const SPINNING_SCRIPT: &str = r#"
+    app.deployment("web").image("docker.io/library/nginx:1");
+    app.on_action("spin", |rt, _p| { loop {} });
+    app.on_action("nested", |rt, _p| { app.action("spin").invoke(); });
+"#;
+
+fn spinning_limits() -> crate::ScriptLimits {
+    crate::ScriptLimits {
+        max_operations: 0,
+        max_evaluation_time: 1,
+        ..crate::ScriptLimits::default()
+    }
+}
+
+/// Run action `name` of an app whose current generation is `current`, as an
+/// operation at generation 1, under limits that stop a runaway in a second.
+fn run_at(
+    app: &App,
+    name: &str,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    current: u64,
+) -> OperationEnd {
+    let mut registry = crate::runtime::apps::AppRegistry::new();
+    registry
+        .register(
+            AppName::new("demo").unwrap(),
+            Arc::clone(&app.bundle),
+            crate::runtime::definition::Source::unknown_push(),
+            Arc::new(Notify::new()),
+            &crate::ScriptLimits::default(),
+        )
+        .unwrap();
+    registry.get_mut("demo").unwrap().current_generation = current;
+    let tx = new_event_channel();
+    let op_ctx = tx.operation(
+        AppName::new("demo").unwrap(),
+        ActionName::new(name).unwrap().into(),
+        &uuid::Uuid::new_v4().to_string(),
+        1,
+        None,
+    );
+    super::run_operation_loop(
+        app,
+        db.clone(),
+        Ok(BoundParams {
+            params: crate::runtime::param_map::ParamMap::default(),
+            bindings: HashMap::new(),
+        }),
+        Arc::new(RwLock::new(None)),
+        Arc::new(Notify::new()),
+        &op_ctx,
+        &spinning_limits(),
+        Arc::clone(cipher),
+        &crate::runtime::gates::GateRuntime::new(),
+        &RwLock::new(registry),
+        Arc::new(CancelToken::new()),
+        None,
+        None,
+        None,
+        None,
+        Persisted::No,
+    )
+}
+
+fn spinning_db() -> DbHandle {
+    let db = DbHandle::open_in_memory().unwrap();
+    db.call(|db| {
+        generations::register_script(db, &AppName::new("demo").unwrap(), SPINNING_SCRIPT).unwrap()
+    });
+    db
+}
+
+fn runaway_subjects(db: &DbHandle) -> Vec<String> {
+    db.call(|db| faults::list_active_faults(db, Some(&AppName::new("demo").unwrap())))
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.kind == crate::runtime::breakers::EVALUATION_RUNAWAY)
+        .map(|f| f.subject)
+        .collect()
+}
+
+// spec: LIM#breakers
+// spec: LIM#measuring-evaluation-time
+#[test]
+fn an_action_pass_that_runs_away_trips_the_actions_breaker() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+
+    let why = failure_of(run_at(&app, "spin", &db, &cipher, 1));
+    assert!(why.contains("evaluation time limit"), "{why}");
+    assert_eq!(runaway_subjects(&db), vec!["action:spin".to_owned()]);
+
+    let started = cpu_time::ThreadTime::now();
+    let why = failure_of(run_at(&app, "spin", &db, &cipher, 1));
+    assert!(why.contains("not evaluated again"), "{why}");
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+}
+
+// spec: LIM#breakers
+#[test]
+fn a_pass_at_an_earlier_generation_is_stopped_but_trips_nothing() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+
+    let why = failure_of(run_at(&app, "spin", &db, &cipher, 2));
+    assert!(why.contains("evaluation time limit"), "{why}");
+    assert!(runaway_subjects(&db).is_empty());
+}
+
+// spec: ACN#action-invocation
+// spec: LIM#breakers
+#[test]
+fn invoking_an_action_tripped_for_its_params_throws() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+    let run = crate::runtime::breakers::Run::of_app(&app, &spinning_limits()).with_params(
+        &crate::runtime::param_map::ParamMap::default(),
+        &Default::default(),
+    );
+    let tripping = Arc::clone(&cipher);
+    db.call(move |db| {
+        crate::runtime::breakers::trip(
+            db,
+            &tripping,
+            &AppName::new("demo").unwrap(),
+            &crate::runtime::breakers::Thing::Action(ActionName::new("spin").unwrap()),
+            &run,
+            1,
+            &spinning_limits(),
+        )
+    })
+    .unwrap();
+
+    let started = cpu_time::ThreadTime::now();
+    let why = failure_of(run_at(&app, "nested", &db, &cipher, 1));
+    assert!(
+        why.contains("Action.invoke") && why.contains("not evaluated again"),
+        "{why}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+}

@@ -520,3 +520,45 @@ fn a_plan_does_not_fold_an_unreadable_gate_record_into_an_answer() {
         .unwrap_err();
     assert_eq!(code, "internal");
 }
+
+// spec: CTL#gate-runs
+// spec: LIM#breakers
+#[test]
+fn a_gate_run_is_refused_while_its_bodys_breaker_is_tripped_for_the_run() {
+    use crate::runtime::breakers::{self, Run, Thing};
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("api").image("docker.io/library/nginx:1.29");
+                app.gate("migrate").key(1).run(|rt, last| {});
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+    let run_of_body = {
+        let reg = oi.state.registry.read();
+        Run::of_app(&reg.get("demo").unwrap().app, &oi.state.script_limits).with_last_success(None)
+    };
+    let cipher = std::sync::Arc::clone(&oi.state.cipher);
+    let limits = oi.state.script_limits.clone();
+    oi.state
+        .db
+        .call(move |db| {
+            breakers::trip(
+                db,
+                &cipher,
+                &AppName::new_unchecked("demo"),
+                &Thing::Gate(GateName::new_unchecked("migrate")),
+                &run_of_body,
+                1,
+                &limits,
+            )
+        })
+        .unwrap();
+    let (code, _) = run(&oi, "migrate").unwrap_err();
+    assert_eq!(code, "evaluation_runaway");
+}
