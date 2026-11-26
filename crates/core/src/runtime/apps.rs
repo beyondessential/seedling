@@ -953,6 +953,27 @@ pub fn reload(
     outcome
 }
 
+/// Record that an evaluation of `name`'s definition that the runtime has
+/// adopted as the app's own finished within the limit.
+///
+/// Its breaker resets whatever it was tripped for, so where it stood is not
+/// read: a read that failed would otherwise leave the old definition's fault
+/// active over a definition the runtime has just evaluated in time, holding
+/// back an app the server would itself accept requests for.
+// spec: LIM#breakers
+pub fn record_adopted_definition(
+    db: &Db,
+    cipher: &Cipher,
+    name: &AppName,
+    run: &breakers::Run,
+    declared: &crate::defs::app::AppDef,
+) {
+    breakers::adopted_in_time(db, cipher, name, &breakers::Thing::Definition, run);
+    if let Err(e) = breakers::reset_undeclared(db, name, declared) {
+        tracing::error!(app = %name, "cannot reset breakers of undeclared closures: {e}");
+    }
+}
+
 /// Record how a tracked evaluation of `name`'s definition with `run` ended:
 /// trip its breaker where it ran past the limit, and otherwise note that it
 /// finished in time, resetting its breaker where it was tripped for another

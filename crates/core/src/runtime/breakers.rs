@@ -593,6 +593,17 @@ pub fn finished_in_time(
     }
 }
 
+/// Record that an evaluation of `thing` the runtime has adopted as the
+/// app's own finished within the limit, resetting its breaker whatever it
+/// was tripped for.
+// spec: LIM#breakers
+pub fn adopted_in_time(db: &Db, cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) {
+    note_in_time(cipher, app, thing, run);
+    if let Err(e) = reset(db, app, thing) {
+        tracing::error!(%app, "{e}");
+    }
+}
+
 /// Hold `run` as the last evaluation of `thing` that finished within the
 /// limit, for a later runaway's likely cause to be judged against. Holds
 /// digests alone, and touches no storage.

@@ -158,7 +158,8 @@ fn an_in_time_run_of_what_tripped_the_breaker_resets_it() {
 
     // As an update's evaluation does: it ran untracked, so it was not
     // refused, and the runtime adopted the definition it finished in time.
-    finished_in_time(&db, &cipher, &app(), &action(), &tripped, Standing::Tripped);
+    // The breaker resets without its standing being read at all.
+    adopted_in_time(&db, &cipher, &app(), &action(), &tripped);
     assert!(runaway_faults(&db).is_empty());
     assert_eq!(
         standing(&db, &cipher, &app(), &action(), &tripped),
