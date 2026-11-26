@@ -7,7 +7,7 @@
 //! engine's progress hook only checks it.
 
 use std::cell::RefCell;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpu_time::ThreadTime;
 
@@ -17,6 +17,9 @@ const OUT_OF_TIME: &str = "evaluation time limit";
 
 struct Running {
     started: Option<ThreadTime>,
+    began: Instant,
+    /// When the processor-time clock was last read.
+    read_at: Instant,
     limit: Option<Duration>,
     exceeded: bool,
 }
@@ -46,10 +49,13 @@ impl Evaluation {
             // spec: LIM#limits
             let limit = (limits.max_evaluation_time > 0)
                 .then(|| Duration::from_secs(limits.max_evaluation_time));
+            let now = Instant::now();
             *running = Some(Running {
                 // A thread whose processor time cannot be read is not timed:
                 // its evaluation is still bounded by the operations limit.
                 started: limit.and_then(|_| ThreadTime::try_now().ok()),
+                began: now,
+                read_at: now,
                 limit,
                 exceeded: false,
             });
@@ -58,11 +64,11 @@ impl Evaluation {
         Self { outermost }
     }
 
-    /// Whether the evaluation has run past the limit, checking now as an
-    /// evaluation that returns is checked.
+    /// Whether the evaluation has run past the limit, reading the clock now
+    /// as an evaluation that returns is checked.
     // spec: LIM#measuring-evaluation-time
     pub fn exceeded(&self) -> bool {
-        check()
+        check(Read::Now)
     }
 }
 
@@ -74,38 +80,59 @@ impl Drop for Evaluation {
     }
 }
 
+/// How close together the hook may read the processor-time clock.
+///
+/// Reading a thread's processor time is a system call on every platform the
+/// daemon runs on, while reading how much time has elapsed is not: that one
+/// is served from the process itself. So the hook reads the elapsed time at
+/// every operation and the processor-time clock only this far apart, which
+/// bounds how far past the limit an evaluation runs however long each of its
+/// operations takes.
+const READ_CLOCK_EVERY: Duration = Duration::from_millis(50);
+
+/// Whether to read the processor-time clock now, or only if it has not been
+/// read for a while.
+#[derive(PartialEq, Eq)]
+enum Read {
+    Now,
+    Spaced,
+}
+
 /// Whether the running evaluation has run past the limit, recording it if so.
 /// No evaluation running has no limit.
-fn check() -> bool {
+fn check(read: Read) -> bool {
     RUNNING.with_borrow_mut(|running| {
         let Some(running) = running else {
             return false;
         };
-        if !running.exceeded
-            && let (Some(started), Some(limit)) = (&running.started, running.limit)
-        {
-            running.exceeded = started.try_elapsed().is_ok_and(|spent| spent > limit);
+        if running.exceeded {
+            return true;
         }
+        let (Some(started), Some(limit)) = (&running.started, running.limit) else {
+            return false;
+        };
+        if read == Read::Spaced {
+            let now = Instant::now();
+            // A thread cannot have spent more processor time than has
+            // elapsed since it began, so until the limit has elapsed there
+            // is nothing the clock could say.
+            if now.duration_since(running.began) <= limit
+                || now.duration_since(running.read_at) < READ_CLOCK_EVERY
+            {
+                return false;
+            }
+            running.read_at = now;
+        }
+        running.exceeded = started.try_elapsed().is_ok_and(|spent| spent > limit);
         running.exceeded
     })
 }
-
-/// How many operations apart the hook reads the clock.
-///
-/// Reading a thread's processor time is a system call on every platform the
-/// daemon runs on, so reading it at each of an evaluation's operations would
-/// cost a part of the time it is there to measure. A limit in whole seconds
-/// is a great many operations, and an evaluation that returns is checked
-/// again, so sampling costs nothing an operator would see.
-const CHECK_EVERY: u64 = 1024;
 
 /// Stop the engine at one of its next operations once the running evaluation
 /// has run past the limit.
 // spec: LIM#measuring-evaluation-time
 pub(crate) fn install(engine: &mut rhai::Engine) {
-    engine.on_progress(|operations| {
-        (operations.is_multiple_of(CHECK_EVERY) && check()).then(|| OUT_OF_TIME.into())
-    });
+    engine.on_progress(|_| check(Read::Spaced).then(|| OUT_OF_TIME.into()));
 }
 
 /// What an evaluation that ran past the limit reports.
