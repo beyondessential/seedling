@@ -13,6 +13,8 @@ pub enum ErrorCode {
     ScriptError,
     // spec: PRM#validation
     ValidationFailed,
+    // spec: WIRE#error-codes
+    EvaluationRunaway,
     // spec: DEFN#bundle-rules
     BundleInvalid,
     // spec: DEFN#seedling-version-support
@@ -80,6 +82,7 @@ mod tests {
             (ErrorCode::RequirementsInvalid, "requirements_invalid"),
             (ErrorCode::ScriptError, "script_error"),
             (ErrorCode::ValidationFailed, "validation_failed"),
+            (ErrorCode::EvaluationRunaway, "evaluation_runaway"),
             (ErrorCode::BundleInvalid, "bundle_invalid"),
             (ErrorCode::UnsupportedSeedling, "unsupported_seedling"),
             (ErrorCode::FetchFailed, "fetch_failed"),

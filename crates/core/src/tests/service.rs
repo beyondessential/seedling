@@ -285,8 +285,8 @@ fn a_route_resolving_to_a_spinning_balance_fails_evaluation_naming_the_route() {
         web.route("/api").balance(#{ try_duration: "3s" });"#,
     ] {
         let err = evaluate(script).expect("the definition fails to evaluate");
-        assert!(err.message.contains("route `/"), "names the route: {err}");
-        assert!(err.message.contains("'web'"), "names the service: {err}");
+        assert!(err.message().contains("route `/"), "names the route: {err}");
+        assert!(err.message().contains("'web'"), "names the service: {err}");
     }
 }
 

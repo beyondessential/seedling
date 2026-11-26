@@ -1835,6 +1835,21 @@ fn named_volumes(def: &crate::defs::app::AppDef) -> Vec<String> {
 }
 
 pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -> OiError {
+    // spec: PARAM#validators
+    // spec: WIRE#error-codes
+    // A validator that ran out of time neither accepted nor rejected its
+    // value, so the request fails for that rather than for validation.
+    let runaway: Vec<String> = rejections
+        .iter()
+        .filter(|r| r.runaway)
+        .map(|r| format!("{}: {}", r.name, r.reason))
+        .collect();
+    if !runaway.is_empty() {
+        return OiError::new(
+            ErrorCode::EvaluationRunaway,
+            format!("a validator ran out of time: {}", runaway.join("; ")),
+        );
+    }
     let detail: Vec<String> = rejections
         .iter()
         .map(|r| format!("{}: {}", r.name, r.reason))
@@ -1843,6 +1858,17 @@ pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -
         ErrorCode::ValidationFailed,
         format!("rejected by validation: {}", detail.join("; ")),
     )
+}
+
+/// The error a request fails with when an evaluation it made fails.
+// spec: WIRE#error-codes
+pub(crate) fn evaluation_error(context: &str, e: &crate::runtime::apps::ScriptError) -> OiError {
+    let code = if e.is_runaway() {
+        ErrorCode::EvaluationRunaway
+    } else {
+        ErrorCode::ScriptError
+    };
+    OiError::new(code, format!("{context}{e}"))
 }
 
 // spec: APPS#update
@@ -1905,7 +1931,7 @@ pub(crate) fn update_app(
         &seed,
         &state.script_limits,
     );
-    let rejections = evaluation.map_err(|e| OiError::new(ErrorCode::ScriptError, e.to_string()))?;
+    let rejections = evaluation.map_err(|e| evaluation_error("", &e))?;
     if !rejections.is_empty() {
         return Err(validation_error(&rejections));
     }

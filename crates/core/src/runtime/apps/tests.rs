@@ -1010,7 +1010,7 @@ fn a_script_error_lies_at_its_own_file_and_line() {
         ("first.rhai", "let a = 1;\nlet b = 2;\n"),
         ("second.rhai", "let c = 3;\nthrow \"broken\";\n"),
     ]);
-    assert_eq!(err.at, Some(("second.rhai".to_owned(), 2)), "{err}");
+    assert_eq!(err.at(), Some(&("second.rhai".to_owned(), 2)), "{err}");
 }
 
 // spec: CLI#check-results
@@ -1020,7 +1020,7 @@ fn a_script_error_in_a_function_lies_where_it_was_raised() {
         "app.seed.rhai",
         "fn fail() {\n    throw \"broken\";\n}\n\nfail();\n",
     )]);
-    assert_eq!(err.at, Some(("app.seed.rhai".to_owned(), 2)), "{err}");
+    assert_eq!(err.at(), Some(&("app.seed.rhai".to_owned(), 2)), "{err}");
 }
 
 // spec: CLI#check-results
@@ -1039,12 +1039,12 @@ fn an_error_with_no_position_in_a_function_is_not_placed_at_its_call() {
         rhai::Position::new(2, 1),
     );
     let err = ScriptError::raised(bundle.script().unwrap(), &e);
-    assert_eq!(err.at, None, "{err}");
+    assert_eq!(err.at(), None, "{err}");
 }
 
 // spec: CLI#check-results
 #[test]
 fn a_syntax_error_lies_at_its_line() {
     let err = script_error_at(&[("app.seed.rhai", "let a = 1;\nlet = ;\n")]);
-    assert_eq!(err.at, Some(("app.seed.rhai".to_owned(), 2)), "{err}");
+    assert_eq!(err.at(), Some(&("app.seed.rhai".to_owned(), 2)), "{err}");
 }

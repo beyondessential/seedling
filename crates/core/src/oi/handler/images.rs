@@ -424,9 +424,10 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         );
         // spec: IMGM#image-discovery
         if let Some(e) = err {
-            return Err(OiError::script_error(format!(
-                "proposed script failed to evaluate: {e}"
-            )));
+            return Err(super::apps::evaluation_error(
+                "proposed script failed to evaluate: ",
+                &e,
+            ));
         }
         proposed_app
     } else {

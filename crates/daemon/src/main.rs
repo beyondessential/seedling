@@ -1619,8 +1619,11 @@ mod tests {
             "0",
             "--script-max-regex-compiled-size",
             "0",
+            "--script-max-evaluation-time",
+            "0",
         ])
         .unwrap();
+        assert_eq!(args.script_limits.max_evaluation_time, 0);
         assert_eq!(args.script_limits.max_operations, 0);
         assert_eq!(args.script_limits.max_password_hashes, 0);
         assert_eq!(args.script_limits.max_regex_compiled_size, 0);
