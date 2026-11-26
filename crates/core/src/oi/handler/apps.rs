@@ -2061,11 +2061,18 @@ pub(crate) fn update_app(
         );
         state.db.call(move |db| {
             use crate::runtime::breakers::{self, Thing};
-            let standing = breakers::standing(db, &cipher, &name, &Thing::Definition, &run)
-                .unwrap_or(breakers::Standing::TrippedForOther);
-            crate::runtime::apps::record_definition_outcome(
-                db, &cipher, &name, &run, standing, generation, None, &declared, &limits,
-            );
+            // A state that cannot be read is not a state: recording an
+            // outcome against it would reset a breaker on a read that never
+            // succeeded. The unreadable fault standing() held says why.
+            match breakers::standing(db, &cipher, &name, &Thing::Definition, &run) {
+                Ok(standing) => crate::runtime::apps::record_definition_outcome(
+                    db, &cipher, &name, &run, standing, generation, None, &declared, &limits,
+                ),
+                Err(why) => tracing::error!(
+                    app = %name,
+                    "cannot read the definition's breaker, so the update's outcome goes unrecorded: {why}"
+                ),
+            }
         });
     }
 
