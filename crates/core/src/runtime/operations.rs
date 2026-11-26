@@ -487,6 +487,49 @@ pub(crate) fn run_operation_loop(
         });
     }
 
+    // spec: LIM#breakers
+    // Only a pass at the app's current generation is tracked; one at an
+    // earlier generation is stopped at the limit all the same.
+    let thing = match (&gate, target.gate(), target.action()) {
+        (Some(_), Some(name), _) => crate::runtime::breakers::Thing::Gate(name.clone()),
+        (_, _, Some(name)) => crate::runtime::breakers::Thing::Action(name.clone()),
+        _ => unreachable!("an operation runs an action or a gate's body"),
+    };
+    let run = {
+        let run = crate::runtime::breakers::Run::of_app(app, script_limits);
+        match &gate {
+            Some(input) => run.with_last_success(input.last),
+            None => run.with_params(&params),
+        }
+    };
+    let tracked = || {
+        apps.read()
+            .get(app_name.as_str())
+            .is_some_and(|e| e.current_generation == op_ctx.operation_generation)
+    };
+    let mut standing = None;
+    if tracked() {
+        let (name, cipher, checked, run) = (
+            app_name.clone(),
+            Arc::clone(&cipher),
+            thing.clone(),
+            run.clone(),
+        );
+        match db
+            .call(move |db| crate::runtime::breakers::standing(db, &cipher, &name, &checked, &run))
+        {
+            Ok(crate::runtime::breakers::Standing::Tripped) => {
+                return OperationEnd::Failed(crate::runtime::breakers::tripped_message(&thing));
+            }
+            Ok(s) => standing = Some(s),
+            Err(why) => {
+                return OperationEnd::Failed(crate::runtime::breakers::unreadable_message(
+                    &thing, &why,
+                ));
+            }
+        }
+    }
+
     loop {
         // spec: RT#resources-a-gate-holds
         // What gates keep from the closure is read for each pass, so a pass
@@ -513,6 +556,9 @@ pub(crate) fn run_operation_loop(
                 )
             })
         };
+        // spec: LIM#measuring-evaluation-time
+        // A pass is one evaluation, the definition it begins with included.
+        let evaluation = crate::evaluation::Evaluation::start(script_limits);
         let result = run_operation(
             OperationContext {
                 engine: &engine,
@@ -545,6 +591,45 @@ pub(crate) fn run_operation_loop(
             },
             &mut scope,
         );
+        // spec: LIM#measuring-evaluation-time
+        // spec: LIM#breakers
+        let ran_out = evaluation.exceeded();
+        drop(evaluation);
+        if ran_out {
+            let why = crate::evaluation::out_of_time_message(script_limits);
+            tracing::error!(app = %app_name, operation = %target, "operation failed: {why}");
+            if tracked() {
+                let (name, cipher, thing, run, generation, limits) = (
+                    app_name.clone(),
+                    Arc::clone(&cipher),
+                    thing.clone(),
+                    run.clone(),
+                    op_ctx.operation_generation,
+                    script_limits.clone(),
+                );
+                if let Err(e) = db.call(move |db| {
+                    crate::runtime::breakers::trip(
+                        db, &cipher, &name, &thing, &run, generation, &limits,
+                    )
+                }) {
+                    tracing::error!(app = %app_name, operation = %target, "cannot trip the breaker: {e}");
+                }
+            }
+            return OperationEnd::Failed(why);
+        }
+        if let Some(standing) = standing.take() {
+            let (name, cipher, thing, run) = (
+                app_name.clone(),
+                Arc::clone(&cipher),
+                thing.clone(),
+                run.clone(),
+            );
+            db.call(move |db| {
+                crate::runtime::breakers::finished_in_time(
+                    db, &cipher, &name, &thing, &run, standing,
+                );
+            });
+        }
         match result {
             OperationResult::Completed => return OperationEnd::Completed,
             OperationResult::Failed(e) => {

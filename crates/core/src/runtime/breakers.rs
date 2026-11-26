@@ -154,16 +154,18 @@ impl Run {
         self
     }
 
-    /// Add the generation of a gate's last success, which its body's `last`
-    /// reflects.
-    pub fn with_last_success(mut self, generation: Option<u64>) -> Self {
-        let value = generation
-            .map(|g| g.to_be_bytes().to_vec())
+    /// Add the app a gate's body is passed as `last`: the definition and
+    /// values of the gate's last success, or none.
+    pub fn with_last_success(mut self, last: Option<&crate::defs::app::App>) -> Self {
+        let value = last
+            .map(|last| {
+                serde_json::json!([last.bundle.hash(), *last.stored.lock()])
+                    .to_string()
+                    .into_bytes()
+            })
             .unwrap_or_default();
-        self.inputs.insert(
-            "the generation of the gate's last success".to_owned(),
-            value,
-        );
+        self.inputs
+            .insert("the gate's last success".to_owned(), value);
         self
     }
 

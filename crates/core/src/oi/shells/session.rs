@@ -182,6 +182,10 @@ pub(crate) async fn open_shell_session(
         if !matches!(*entry.phase.lock(), AppPhase::Installed) {
             return Err(("not_installed", format!("app is not installed: {app_name}")));
         }
+        // spec: SHL#opening-an-app-shell
+        if let Err(e) = crate::oi::handler::definition_refusal(&app_name, &entry.script_error) {
+            return Err((error_code_name(e.code), e.message));
+        }
         let shell_params_schema = {
             let def = entry.app.def.load();
             match def.shells.get(&shell_name) {
@@ -240,6 +244,29 @@ pub(crate) async fn open_shell_session(
                 return;
             }
         };
+
+    // spec: SHL#opening-an-app-shell
+    // spec: LIM#breakers
+    {
+        use crate::runtime::breakers::{self, Thing};
+        let thing = Thing::Shell(shell_name.clone());
+        let run = breakers::Run::of_app(&app, &state.script_limits).with_params(&validated_params);
+        let (name, cipher, checked) = (app_name.clone(), Arc::clone(&state.cipher), thing.clone());
+        let refusal = match state
+            .db
+            .call(move |db| breakers::standing(db, &cipher, &name, &checked, &run))
+        {
+            Ok(breakers::Standing::Tripped) => {
+                Some(("evaluation_runaway", breakers::tripped_message(&thing)))
+            }
+            Ok(_) => None,
+            Err(why) => Some(("internal", breakers::unreadable_message(&thing, &why))),
+        };
+        if let Some((code, message)) = refusal {
+            reject(&mut send, code, message).await;
+            return;
+        }
+    }
 
     // spec: WIRE#shell-sessions
     let (stdout_send, stdout_stream_id) = match conn.open_uni().await {
@@ -625,6 +652,16 @@ pub(super) fn session_outcome(
     clippy::too_many_arguments,
     reason = "a shell session's whole state, each piece of which the run uses"
 )]
+/// The wire name of `code`.
+fn error_code_name(code: seedling_protocol::error::ErrorCode) -> &'static str {
+    use seedling_protocol::error::ErrorCode;
+    match code {
+        ErrorCode::ScriptError => "script_error",
+        ErrorCode::EvaluationRunaway => "evaluation_runaway",
+        _ => "internal",
+    }
+}
+
 pub(super) async fn run_app_shell(
     state: &OiState,
     app: App,
@@ -767,6 +804,27 @@ pub(super) async fn run_app_shell(
                     .is_some_and(|p| p.is_secret())
             });
         }
+        // spec: LIM#breakers
+        // A session runs against the app's current definition, so each of
+        // its passes is tracked.
+        use crate::runtime::breakers::{self, Thing};
+        let thing = Thing::Shell(shell_name_for_task.clone());
+        let run = breakers::Run::of_app(&app, &script_limits).with_params(&validated_params);
+        let mut standing = {
+            let (name, cipher, checked, run) = (
+                app_name_for_task.clone(),
+                Arc::clone(&cipher),
+                thing.clone(),
+                run.clone(),
+            );
+            match db.call(move |db| breakers::standing(db, &cipher, &name, &checked, &run)) {
+                Ok(breakers::Standing::Tripped) => {
+                    return ScriptEnd::Failed(breakers::tripped_message(&thing));
+                }
+                Ok(standing) => Some(standing),
+                Err(why) => return ScriptEnd::Failed(breakers::unreadable_message(&thing, &why)),
+            }
+        };
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,
@@ -799,6 +857,8 @@ pub(super) async fn run_app_shell(
                     )
                 })
             };
+            // spec: LIM#measuring-evaluation-time
+            let evaluation = crate::evaluation::Evaluation::start(&script_limits);
             let result = run_operation(
                 OperationContext {
                     engine: &engine,
@@ -831,6 +891,48 @@ pub(super) async fn run_app_shell(
                 },
                 &mut scope,
             );
+            // spec: LIM#measuring-evaluation-time
+            // spec: LIM#breakers
+            let ran_out = evaluation.exceeded();
+            drop(evaluation);
+            if ran_out {
+                let why = crate::evaluation::out_of_time_message(&script_limits);
+                tracing::error!(
+                    app = %app_name_for_task, shell = %shell_name_for_task,
+                    "shell closure failed: {why}"
+                );
+                let (name, cipher, thing, run, limits) = (
+                    app_name_for_task.clone(),
+                    Arc::clone(&cipher),
+                    thing.clone(),
+                    run.clone(),
+                    script_limits.clone(),
+                );
+                let generation = apps
+                    .read()
+                    .get(app_name_for_task.as_str())
+                    .map_or(0, |e| e.current_generation);
+                if let Err(e) = db.call(move |db| {
+                    breakers::trip(db, &cipher, &name, &thing, &run, generation, &limits)
+                }) {
+                    tracing::error!(
+                        app = %app_name_for_task, shell = %shell_name_for_task,
+                        "cannot trip the breaker: {e}"
+                    );
+                }
+                break ScriptEnd::Failed(format!("the shell's script failed: {why}"));
+            }
+            if let Some(standing) = standing.take() {
+                let (name, cipher, thing, run) = (
+                    app_name_for_task.clone(),
+                    Arc::clone(&cipher),
+                    thing.clone(),
+                    run.clone(),
+                );
+                db.call(move |db| {
+                    breakers::finished_in_time(db, &cipher, &name, &thing, &run, standing);
+                });
+            }
             match result {
                 OperationResult::Completed => break ScriptEnd::Completed,
                 OperationResult::Failed(e) => {
