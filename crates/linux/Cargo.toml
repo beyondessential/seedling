@@ -14,7 +14,7 @@ ipnet.workspace = true
 jiff.workspace = true
 libc = "0.2.191"
 nftables = { version = "0.6.3", features = ["tokio"] }
-nix = { version = "0.31.3", features = ["signal", "term"] }
+nix = { version = "0.32.0", features = ["signal", "term"] }
 podman-rest-client = { version = "0.13.0", default-features = false, features = ["uds", "v5"] }
 rtnetlink = "0.24.0"
 rustix = { version = "1.1.6", features = ["fs"] }
@@ -24,9 +24,9 @@ snafu.workspace = true
 systemd = "0.11.1"
 tokio.workspace = true
 tracing.workspace = true
-zbus = { version = "6.2.1", features = ["tokio"] }
+zbus = { version = "6.3.0", features = ["tokio"] }
 
 [dev-dependencies]
-bytes = "1.12.1"
+bytes = "1.12.2"
 http = "1.5.0"
 tempfile = "3.27.0"

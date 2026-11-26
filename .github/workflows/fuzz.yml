@@ -20,7 +20,7 @@ jobs:
         run: |
           rustup toolchain install --profile minimal --no-self-update nightly
           rustup default nightly
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.6
         with:
           tool: cargo-fuzz
       - name: Seed the lockfile from the workspace

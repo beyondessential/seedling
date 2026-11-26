@@ -59,6 +59,20 @@ pub fn parse_cron_expr(
     cronexpr::parse_crontab_with(expr, opts)
 }
 
+/// The first fire time of `crontab` strictly after `after`.
+///
+/// cronexpr speaks its own jiff major version, so timestamps cross into and
+/// out of it as nanoseconds since the epoch.
+pub fn next_cron_fire(
+    crontab: &cronexpr::Crontab,
+    after: jiff::Timestamp,
+) -> Result<jiff::Timestamp, String> {
+    let start = cronexpr::MakeTimestamp::from_nanosecond(after.as_nanosecond())
+        .map_err(|e| e.to_string())?;
+    let next = crontab.find_next(start).map_err(|e| e.to_string())?;
+    jiff::Timestamp::from_nanosecond(next.timestamp().as_nanosecond()).map_err(|e| e.to_string())
+}
+
 fn cron_parse_options(app_name: &AppName, action_name: &ActionName) -> cronexpr::ParseOptions {
     let mut opts = cronexpr::ParseOptions::default();
     opts.fallback_timezone_option = cronexpr::FallbackTimezoneOption::System;

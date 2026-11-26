@@ -901,7 +901,7 @@ fn parse_rfc3339(s: &str) -> Option<SystemTime> {
     if ts.as_second() < 0 {
         return None;
     }
-    Some(SystemTime::from(ts))
+    SystemTime::try_from(ts).ok()
 }
 
 fn build_filters(filter: &ContainerFilter<'_>) -> Option<String> {
