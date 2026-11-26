@@ -90,11 +90,22 @@ fn check() -> bool {
     })
 }
 
-/// Stop the engine at its next operation once the running evaluation has run
-/// past the limit.
+/// How many operations apart the hook reads the clock.
+///
+/// Reading a thread's processor time is a system call on every platform the
+/// daemon runs on, so reading it at each of an evaluation's operations would
+/// cost a part of the time it is there to measure. A limit in whole seconds
+/// is a great many operations, and an evaluation that returns is checked
+/// again, so sampling costs nothing an operator would see.
+const CHECK_EVERY: u64 = 1024;
+
+/// Stop the engine at one of its next operations once the running evaluation
+/// has run past the limit.
 // spec: LIM#measuring-evaluation-time
 pub(crate) fn install(engine: &mut rhai::Engine) {
-    engine.on_progress(|_| check().then(|| OUT_OF_TIME.into()));
+    engine.on_progress(|operations| {
+        (operations.is_multiple_of(CHECK_EVERY) && check()).then(|| OUT_OF_TIME.into())
+    });
 }
 
 /// What an evaluation that ran past the limit reports.
