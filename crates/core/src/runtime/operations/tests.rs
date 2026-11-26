@@ -1343,7 +1343,7 @@ fn run_at(
     let op_ctx = tx.operation(
         AppName::new("demo").unwrap(),
         ActionName::new(name).unwrap().into(),
-        &uuid::Uuid::new_v4().to_string(),
+        uuid::Uuid::new_v4().to_string(),
         1,
         None,
     );
