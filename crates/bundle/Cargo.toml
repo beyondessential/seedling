@@ -7,7 +7,7 @@ description = "Seedling app definition bundles: the bundle rules, content hash a
 
 [dependencies]
 base64 = "0.23.1"
-bytes = "1.12.1"
+bytes = "1.12.2"
 flate2 = "1.1.11"
 seedling-protocol = { path = "../protocol" }
 semver = "1.0.28"
