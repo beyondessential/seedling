@@ -57,6 +57,7 @@ fn folders_skip_vcs_metadata_and_seedignored_paths() {
 
 // spec: CLI#definition-folders
 #[test]
+#[cfg(unix)]
 fn a_symlink_is_reported_and_nothing_is_read() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "app.seed.rhai", b"app;");
@@ -105,14 +106,20 @@ fn a_lone_file_is_a_bundle_holding_it_under_its_own_name() {
 
 // spec: CLI#definition-sources
 #[test]
-fn a_lone_seedling_toml_or_a_non_utf8_name_is_refused() {
-    use std::os::unix::ffi::OsStrExt;
-
+fn a_lone_seedling_toml_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "seedling.toml", b"");
     let err = read_lone_file(&dir.path().join("seedling.toml")).unwrap_err();
     assert!(err.contains("seedling.toml"), "{err}");
+}
 
+// spec: CLI#definition-sources
+#[test]
+#[cfg(unix)]
+fn a_non_utf8_name_is_refused() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = tempfile::tempdir().unwrap();
     let odd = dir
         .path()
         .join(std::ffi::OsStr::from_bytes(b"app-\xff.rhai"));
@@ -337,6 +344,7 @@ fn an_out_of_bounds_source_is_never_read() {
 
 // spec: CLI#include-assembly
 #[test]
+#[cfg(unix)]
 fn a_symlink_below_the_boundary_is_refused_and_one_above_it_is_not() {
     let dir = repo(".git", "lib/db.seed.rhai", "../linked/db.seed.rhai");
     std::os::unix::fs::symlink(
