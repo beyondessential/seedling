@@ -50,14 +50,18 @@ The runtime MUST list each exported service to operators, with its export descri
 ## External services
 
 `app.external_service(name: string)` MUST return an `ExternalService` for the named external service.
-An `ExternalService` MUST offer the methods `port`, `http`, `balance` and `description`, with the meanings they have on a `Service`.
+An `ExternalService` MUST offer the methods `port` and `description`, with the meanings they have on a `Service`.
 A script MAY [mount](pod.md#service-mounts) an external service's ports as for any service.
 Binding a pod to an external service throws, as [port bindings](pod.md#port-bindings) specifies.
+
+> [!NOTE]
+> An external service takes no [HTTP service](http-service.md) view, so no routes, redirects or proxy settings.
+> Its traffic reaches the mapped endpoint through a mount, which passes connections through without an HTTP proxy in the path, and no ingress can be declared on it, so there is nothing such settings could act on.
 
 The runtime MUST route traffic for an external service to the endpoint an operator has mapped to it.
 An external service with no mapping has no target.
 Changes to the mapping are specified in [external service mappings](../runtime/site-resources.md#external-mappings).
 
 In the [action context](app.md#action-context), `app.external_service(name)` MUST return a reference to the static external service of that name, and MUST throw if there is none, as for every [named resource](app.md#named-resources).
-The reference is immutable like every static resource, so `description`, `balance` and `http` MUST throw on it.
+The reference is immutable like every static resource, so `description` MUST throw on it.
 The external services an app declares are therefore exactly those its static context declares.

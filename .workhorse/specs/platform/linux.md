@@ -160,8 +160,12 @@ A globally routable IPv6 address MUST be one within `2000::/3`.
 
 ## Idle command
 
-On Linux, [`IDLE_CMD`](../language/constants.md#idle-command) MUST be `["sleep", "infinity"]`.
-A container using it needs an image whose `sleep` accepts `infinity`.
+On Linux, [`IDLE_CMD`](../language/constants.md#idle-command) MUST be `["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]`.
+A container using it needs an image with a POSIX shell and a `sleep` that accepts `infinity`.
+
+> [!NOTE]
+> A container's main process gets no default handling of the stop signal, so a bare `sleep` would ignore it and every stop would wait out the stop timeout.
+> The shell exits on the stop signal instead.
 
 ## Per-user state
 

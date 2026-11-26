@@ -136,7 +136,7 @@ impl CustomType for Service {
                         .ports
                         .insert(port.get());
                     Ok(HttpService {
-                        service: this.clone().into(),
+                        service: this.clone(),
                         port,
                     })
                 },
@@ -153,7 +153,7 @@ impl CustomType for Service {
                         .ports
                         .insert(port.get());
                     Ok(HttpService {
-                        service: this.clone().into(),
+                        service: this.clone(),
                         port,
                     })
                 },
@@ -215,8 +215,7 @@ impl CustomType for Service {
 /// Register an ingress on `service`. Shared between `Service::ingress`
 /// and `HttpService::ingress` so both surfaces produce the same
 /// validation, identity, conflict semantics, and resource-tree side
-/// effects. The `HttpService` route just picks the underlying
-/// `Service` out of its `BoundService` and calls this.
+/// effects. The `HttpService` route passes the Service it views.
 // spec: ING#declaration
 // spec: ING#identity-within-an-app
 pub(crate) fn declare_ingress(
@@ -267,7 +266,7 @@ pub(crate) fn declare_ingress(
     Ok(ingress)
 }
 
-// Reference-to-a-service carried by pod bindings. It's either an app's own
+// Reference-to-a-service carried by a Service Port. It's either an app's own
 // `Service` (declared in the same script) or an `ExternalService` slot whose
 // concrete target is supplied by the operator at runtime via
 // `external_service_mappings`. Downstream consumers should normally go
@@ -292,24 +291,14 @@ impl BoundService {
     }
 }
 
-impl BoundService {
+impl Service {
     /// Mutate the service-wide balancing settings behind this view.
     fn with_balance<R>(
-        &mut self,
+        &self,
         f: impl FnOnce(&mut BalanceSettings) -> R,
     ) -> Result<R, Box<EvalAltResult>> {
-        match self {
-            Self::App(s) => {
-                s.ensure_unfrozen()?;
-                let mut def = s.def.lock();
-                Ok(f(&mut def.balance))
-            }
-            Self::External(e) => {
-                e.ensure_unfrozen()?;
-                let mut def = e.def.lock();
-                Ok(f(&mut def.balance))
-            }
-        }
+        self.ensure_unfrozen()?;
+        Ok(f(&mut self.def.lock().balance))
     }
 
     /// Record that the service is served through `prefix`, without disturbing
@@ -319,29 +308,24 @@ impl BoundService {
     /// builders: `route()` has always been callable on a service captured by
     /// an action closure, and noting that a prefix exists is not a
     /// configuration change an action should be barred from making.
-    fn register_route(&mut self, prefix: &str) {
-        let record = |def: &mut Option<HttpServiceDef>| {
-            def.get_or_insert_default()
-                .routes
-                .entry(prefix.to_owned())
-                .or_default();
-        };
-        match self {
-            Self::App(s) => record(&mut s.def.lock().http),
-            Self::External(e) => record(&mut e.def.lock().http),
-        }
+    fn register_route(&self, prefix: &str) {
+        self.def
+            .lock()
+            .http
+            .get_or_insert_default()
+            .routes
+            .entry(prefix.to_owned())
+            .or_default();
     }
 
     /// Whether `prefix` is declared as a redirect on this service.
     // spec: HTTP#route-redirects
     fn is_redirect(&self, prefix: &str) -> bool {
-        let declared = |def: &Option<HttpServiceDef>| {
-            def.as_ref().is_some_and(|h| h.redirect(prefix).is_some())
-        };
-        match self {
-            Self::App(s) => declared(&s.def.lock().http),
-            Self::External(e) => declared(&e.def.lock().http),
-        }
+        self.def
+            .lock()
+            .http
+            .as_ref()
+            .is_some_and(|h| h.redirect(prefix).is_some())
     }
 
     /// Record that a pod binds `prefix`, refusing one already declared as a
@@ -352,46 +336,31 @@ impl BoundService {
     ///
     /// [`register_route`]: Self::register_route
     // spec: HTTP#route-redirects
-    fn record_binding(&mut self, prefix: &str) -> Result<(), Box<EvalAltResult>> {
-        let service = self.name().to_string();
-        let record = |def: &mut Option<HttpServiceDef>| -> Result<(), Box<EvalAltResult>> {
-            let decl = def
-                .get_or_insert_default()
-                .routes
-                .entry(prefix.to_owned())
-                .or_default();
-            match &mut decl.kind {
-                RouteKind::Proxied { bound } => {
-                    *bound = true;
-                    Ok(())
-                }
-                RouteKind::Redirect(_) => Err(refuse_prefix_serves_both(prefix, &service)),
+    fn record_binding(&self, prefix: &str) -> Result<(), Box<EvalAltResult>> {
+        let mut def = self.def.lock();
+        let decl = def
+            .http
+            .get_or_insert_default()
+            .routes
+            .entry(prefix.to_owned())
+            .or_default();
+        match &mut decl.kind {
+            RouteKind::Proxied { bound } => {
+                *bound = true;
+                Ok(())
             }
-        };
-        match self {
-            Self::App(s) => record(&mut s.def.lock().http),
-            Self::External(e) => record(&mut e.def.lock().http),
+            RouteKind::Redirect(_) => Err(refuse_prefix_serves_both(prefix, self.name.as_str())),
         }
     }
 
-    /// Mutate the `HttpServiceDef` of whichever service backs this view,
-    /// creating it if the app has not called `.http()` yet.
+    /// Mutate the service's `HttpServiceDef`, creating it if the app has not
+    /// called `.http()` yet.
     fn with_http_def<R>(
-        &mut self,
+        &self,
         f: impl FnOnce(&mut HttpServiceDef) -> R,
     ) -> Result<R, Box<EvalAltResult>> {
-        match self {
-            Self::App(s) => {
-                s.ensure_unfrozen()?;
-                let mut def = s.def.lock();
-                Ok(f(def.http.get_or_insert_default()))
-            }
-            Self::External(e) => {
-                e.ensure_unfrozen()?;
-                let mut def = e.def.lock();
-                Ok(f(def.http.get_or_insert_default()))
-            }
-        }
+        self.ensure_unfrozen()?;
+        Ok(f(self.def.lock().http.get_or_insert_default()))
     }
 }
 
@@ -550,7 +519,7 @@ impl ServiceDef {
 
 #[derive(Debug, Clone)]
 pub struct HttpService {
-    pub service: BoundService,
+    pub service: Service,
     pub port: Port,
 }
 
@@ -602,7 +571,7 @@ impl CustomType for HttpService {
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
                     let port = Port::new(port)?;
                     Ok(ServicePort {
-                        service: this.service.clone(),
+                        service: this.service.clone().into(),
                         port,
                     })
                 },
@@ -679,12 +648,7 @@ impl CustomType for HttpService {
                  hostname: &str,
                  port: i64|
                  -> Result<Ingress, Box<EvalAltResult>> {
-                    let BoundService::App(ref mut svc) = this.service else {
-                        return Err("ingress() is only valid on app-declared services; \
-                             external services cannot have ingresses"
-                            .into());
-                    };
-                    declare_ingress(svc, hostname, port)
+                    declare_ingress(&mut this.service, hostname, port)
                 },
             );
     }
@@ -693,7 +657,7 @@ impl CustomType for HttpService {
 impl HttpService {
     /// The `/` route this service is served through when a pod binds the
     /// service itself rather than one of its prefixes.
-    pub(super) fn root_route(mut self) -> HttpServiceRoute {
+    pub(super) fn root_route(self) -> HttpServiceRoute {
         self.service.register_route("/");
         HttpServiceRoute {
             http: self,
@@ -840,9 +804,8 @@ fn compress_decl(enabled: bool) -> CompressDecl {
 impl HttpServiceRoute {
     /// Record that a pod binds this route's prefix.
     // spec: HTTP#route-redirects
-    pub(super) fn record_binding(&mut self) -> Result<(), Box<EvalAltResult>> {
-        let prefix = self.prefix.clone();
-        self.http.service.record_binding(&prefix)
+    pub(super) fn record_binding(&self) -> Result<(), Box<EvalAltResult>> {
+        self.http.service.record_binding(&self.prefix)
     }
 
     /// Record a redirect on this route, refusing the prefixes and the
@@ -862,7 +825,7 @@ impl HttpServiceRoute {
         }
 
         let prefix = self.prefix.clone();
-        let service = self.http.service.name().to_string();
+        let service = self.http.service.name.to_string();
         self.http.service.with_http_def(|d| {
             let decl = d.routes.entry(prefix.clone()).or_default();
             if let RouteKind::Proxied { bound: true } = decl.kind {
@@ -906,20 +869,6 @@ impl HttpServiceRoute {
 pub struct ExternalServiceDef {
     // spec: BSL#descriptions
     pub description: Option<String>,
-    pub http: Option<HttpServiceDef>,
-    // spec: HTTP#balancing
-    pub balance: BalanceSettings,
-}
-
-impl ExternalServiceDef {
-    /// The service-level view resolution works against. Mirrors
-    /// [`ServiceDef::proxy_settings`]: an external-service slot carries the
-    /// same HTTP surface, so a setting added to one belongs to both, and
-    /// gathering them in one place per def is what stops the next one being
-    /// added to only half of them.
-    pub fn proxy_settings(&self) -> ProxySettings {
-        proxy::service_settings(self.http.as_ref(), &self.balance)
-    }
 }
 
 // spec: SVC#external-services
@@ -959,10 +908,9 @@ impl CustomType for ExternalService {
         builder
             .with_name("ExternalService")
             // spec: SVC#external-services
-            // An external-service slot exposes the same port/http surface a
-            // native service does, but the resulting ServicePort/HttpService
-            // carries `BoundService::External`, so the reconciler knows to
-            // resolve the backend via `external_service_mappings`.
+            // The resulting ServicePort carries `BoundService::External`, so
+            // the reconciler knows to resolve the backend via
+            // `external_service_mappings`.
             .with_fn(
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
@@ -971,49 +919,6 @@ impl CustomType for ExternalService {
                         service: this.clone().into(),
                         port,
                     })
-                },
-            )
-            .with_fn(
-                "http",
-                |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
-                    let port = Port::from_u16(80);
-                    this.def
-                        .lock()
-                        .http
-                        .get_or_insert_default()
-                        .ports
-                        .insert(port.get());
-                    Ok(HttpService {
-                        service: this.clone().into(),
-                        port,
-                    })
-                },
-            )
-            .with_fn(
-                "http",
-                |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
-                    let port = Port::new(port)?;
-                    this.def
-                        .lock()
-                        .http
-                        .get_or_insert_default()
-                        .ports
-                        .insert(port.get());
-                    Ok(HttpService {
-                        service: this.clone().into(),
-                        port,
-                    })
-                },
-            )
-            // spec: HTTP#balancing
-            .with_fn(
-                "balance",
-                |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
-                    this.def.lock().balance = proxy::parse_balance(config)?;
-                    Ok(this.clone())
                 },
             )
             // spec: BSL#descriptions

@@ -283,9 +283,6 @@ fn a_route_resolving_to_a_spinning_balance_fails_evaluation_naming_the_route() {
         web.route("/api").balance(#{ interval: "0s", try_duration: "0s" });
         web.balance(#{ interval: "0s", try_duration: "0s" });
         web.route("/api").balance(#{ try_duration: "3s" });"#,
-        r#"let web = app.external_service("web").http(80)
-            .balance(#{ try_duration: "0s", interval: "0s" });
-        web.route("/v1").balance(#{ try_duration: "10s" });"#,
     ] {
         let err = evaluate(script).expect("the definition fails to evaluate");
         assert!(err.0.contains("route `/"), "names the route: {err}");
@@ -740,9 +737,6 @@ fn http_def(app: &defs::app::App, service: &str) -> defs::service::HttpServiceDe
             defs::resource::Resource::Service(s) if *s.name == *service => {
                 s.def.lock().http.clone()
             }
-            defs::resource::Resource::ExternalService(e) if *e.name == *service => {
-                e.def.lock().http.clone()
-            }
             _ => None,
         })
         .expect("service has an http surface")
@@ -803,16 +797,19 @@ fn the_map_form_is_served_exactly_as_it_was_written() {
     assert_eq!(search.target, vec![Literal("/find".into()), Tail, Query]);
 }
 
-// spec: HTTP#route-redirects
+// spec: SVC#external-services
+// Nothing would serve them: a mount forwards an external service's
+// connections untouched, and no ingress can be declared on one.
 #[test]
-fn a_redirect_is_declarable_on_an_external_services_routes() {
-    let app = run_test_script_app(
-        r#"
-        let ext = app.external_service("upstream").http(80);
-        ext.route("/v1/login").redirect("/api/login", 308);
-    "#,
-    );
-    assert_eq!(redirect_of(&app, "upstream", "/v1/login").code, 308);
+fn an_external_service_takes_no_http_view_or_balancing() {
+    for script in [
+        r#"app.external_service("upstream").http();"#,
+        r#"app.external_service("upstream").http(80);"#,
+        r#"app.external_service("upstream").balance(#{ policy: "first" });"#,
+    ] {
+        let err = run_test_script_err(script).to_string();
+        assert!(err.contains("Function not found"), "{script}: {err}");
+    }
 }
 
 // spec: HTTP#route-redirects
@@ -1275,9 +1272,6 @@ fn external_service_static_resolves_in_action() {
 fn external_service_static_is_immutable_in_action() {
     for body in [
         r#"app.external_service("postgres").description("x");"#,
-        r#"app.external_service("postgres").balance(#{ policy: "least_conn" });"#,
-        r#"app.external_service("postgres").http();"#,
-        r#"app.external_service("postgres").http(8080);"#,
         r#"db.description("x");"#,
     ] {
         let source = format!(
@@ -1376,8 +1370,6 @@ fn static_ref_reports_an_undeclared_name_as_missing() {
 #[test]
 fn binding_a_pod_to_an_external_service_throws() {
     for binding in [
-        r#"app.deployment("web").http(8080, ext.http(80).route("/api"))"#,
-        r#"app.deployment("web").http(8080, ext.http(80))"#,
         r#"app.deployment("web").tcp(5432, ext.port(5432))"#,
         r#"app.deployment("web").udp(53, ext.port(53))"#,
     ] {

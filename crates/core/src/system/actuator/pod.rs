@@ -182,21 +182,12 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
             if vol.def.tmpfs {
                 // spec: ACTU#volume-storage
                 // Tmpfs volumes are bind-mounted from a tmpfs-backed host
-                // path under /run/seedling/tmpfs-volumes. Ensure the path
-                // exists and re-apply declared writes every time the volume
-                // is materialised — tmpfs contents do not survive a reboot
-                // (the entire /run/seedling/tmpfs-volumes tree is recreated
-                // by the daemon at startup), and even within a single boot
-                // the directory may have been removed when an earlier
-                // container exited.
-                tokio::fs::create_dir_all(host_path)
-                    .await
-                    .context(super::VolumeWriteSnafu {
-                        path: host_path.clone(),
-                    })?;
-                for (path, contents) in &vol.def.writes {
-                    safe_volume_write(&driver.volume_store, host_path, path, contents).await?;
-                }
+                // path under /run/seedling/tmpfs-volumes. The directory is
+                // gone after a host restart, and an anonymous one after the
+                // instance that used it stopped; whichever start finds it
+                // absent creates and seeds it.
+                super::ensure_tmpfs_volume_dir(&driver.volume_store, host_path, &vol.def.writes)
+                    .await?;
             } else {
                 // spec: ACTU#volume-storage
                 // spec: ACTU#volume-creation-and-seeding
@@ -213,35 +204,63 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                     .await?;
             }
         } else {
-            // Anonymous non-tmpfs volume: managed by the container runtime.
-            let just_created = if !driver
-                .container
-                .volume_exists(&vol.name)
-                .await
-                .context(ContainerSnafu)?
-            {
-                driver
-                    .container
-                    .create_volume(&vol.name, false)
-                    .await
-                    .context(ContainerSnafu)?;
-                true
-            } else {
-                false
-            };
-            if just_created && !vol.def.writes.is_empty() {
-                let mountpoint = driver
-                    .container
-                    .volume_mountpoint(&vol.name)
-                    .await
-                    .context(ContainerSnafu)?;
-                for (path, contents) in &vol.def.writes {
-                    safe_volume_write(&driver.volume_store, &mountpoint, path, contents).await?;
-                }
-            }
+            ensure_anonymous_volume(driver, vol).await?;
         }
     }
     Ok(())
+}
+
+/// Create an anonymous container-runtime volume if it is absent, and seed it
+/// with its declared writes when this call created it.
+///
+/// A volume already present was seeded by whoever created it, and holds what
+/// the containers sharing it wrote since. A seed that fails takes the volume
+/// back out, so the next attempt creates and seeds it afresh rather than
+/// finding it present and never seeding it.
+// spec: ACTU#deployment-and-job-instances
+// spec: ACTU#volume-creation-and-seeding
+async fn ensure_anonymous_volume(
+    driver: &System,
+    vol: &ContainerVolume,
+) -> Result<(), ActuateError> {
+    if driver
+        .container
+        .volume_exists(&vol.name)
+        .await
+        .context(ContainerSnafu)?
+    {
+        return Ok(());
+    }
+    driver
+        .container
+        .create_volume(&vol.name, false)
+        .await
+        .context(ContainerSnafu)?;
+    if vol.def.writes.is_empty() {
+        return Ok(());
+    }
+    let seeded = async {
+        let mountpoint = driver
+            .container
+            .volume_mountpoint(&vol.name)
+            .await
+            .context(ContainerSnafu)?;
+        for (path, contents) in &vol.def.writes {
+            safe_volume_write(&driver.volume_store, &mountpoint, path, contents).await?;
+        }
+        Ok(())
+    }
+    .await;
+    if seeded.is_err()
+        && let Err(cleanup) = driver.container.remove_volume(&vol.name).await
+    {
+        tracing::error!(
+            volume = %vol.name,
+            "seeding failed and the volume it created could not be removed, \
+             so the volume will stay unseeded: {cleanup}"
+        );
+    }
+    seeded
 }
 
 /// Returns the bridge name if a new network was created, `None` if it already existed.
@@ -556,5 +575,76 @@ async fn remove_anonymous_storage(
             .context(ContainerSnafu)
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn system() -> (tempfile::TempDir, Arc<System>) {
+        let data = tempfile::tempdir().unwrap();
+        let (system, _) = System::setup_stubbed(
+            data.path(),
+            Arc::new(crate::system::stub::StubVolumeStorage),
+            Arc::new(crate::system::stub::StubJournal),
+        )
+        .unwrap();
+        (data, system)
+    }
+
+    fn anonymous(writes: &[(&str, &str)]) -> ContainerVolume {
+        ContainerVolume {
+            name: "seedling-anon-op-vol-0".to_owned(),
+            bind_name: None,
+            def: VolumeDef {
+                writes: writes
+                    .iter()
+                    .map(|(p, c)| ((*p).to_owned(), bytes::Bytes::from((*c).to_owned())))
+                    .collect(),
+                ..Default::default()
+            },
+            remove_on_stop: true,
+            host_path: None,
+        }
+    }
+
+    // spec: ACTU#volume-creation-and-seeding
+    #[tokio::test]
+    async fn an_anonymous_volume_is_seeded_by_the_start_that_creates_it_only() {
+        let (_data, system) = system();
+        let vol = anonymous(&[("note", "seed")]);
+
+        ensure_anonymous_volume(&system, &vol).await.unwrap();
+        let note = system
+            .container
+            .volume_mountpoint(&vol.name)
+            .await
+            .unwrap()
+            .join("note");
+        assert_eq!(std::fs::read_to_string(&note).unwrap(), "seed");
+
+        std::fs::write(&note, "a container's own").unwrap();
+        ensure_anonymous_volume(&system, &vol).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&note).unwrap(), "a container's own");
+    }
+
+    // spec: ACTU#volume-creation-and-seeding
+    #[tokio::test]
+    async fn a_failed_seed_takes_the_anonymous_volume_back_out() {
+        let (_data, system) = system();
+        let vol = anonymous(&[("note", "seed"), ("../escape", "elsewhere")]);
+
+        let err = ensure_anonymous_volume(&system, &vol).await.unwrap_err();
+        assert!(
+            matches!(err, ActuateError::VolumePathEscape { .. }),
+            "{err}"
+        );
+        assert!(
+            !system.container.volume_exists(&vol.name).await.unwrap(),
+            "the next start must create and seed afresh"
+        );
     }
 }

@@ -106,12 +106,10 @@ impl PodDef {
             "http",
             move |this: &mut T,
                   port: i64,
-                  mut route: HttpServiceRoute|
+                  route: HttpServiceRoute|
                   -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
-                // spec: POD#port-bindings
-                refuse_external(&route.http.service)?;
                 // spec: HTTP#route-redirects
                 // Refuses a prefix already declared as a redirect, and records
                 // the binding so one declared afterwards is refused too.
@@ -130,11 +128,9 @@ impl PodDef {
             move |this: &mut T, port: i64, service: HttpService| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
-                // spec: POD#port-bindings
-                refuse_external(&service.service)?;
                 // Binding a bare service is binding it at "/", so the service
                 // must learn about that route the same as an explicit one.
-                let mut route = service.root_route();
+                let route = service.root_route();
                 // spec: HTTP#route-redirects
                 route.record_binding()?;
                 ext(this).lock().http_bindings.push(HttpBinding {

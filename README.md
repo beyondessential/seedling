@@ -36,6 +36,6 @@ Documentation is a bit sparse at the moment.
 - [Low-level networking docs](./docs/networking.md)
 - [Comprehensive specifications](./.workhorse/specs/)
 
-## Apps
+## Demos
 
-We have some standard apps in [apps/](./apps/).
+The definitions in [demos/](./demos/) show and exercise Seedling's features, one area each; [its README](./demos/README.md) lists them.

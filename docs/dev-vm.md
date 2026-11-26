@@ -63,27 +63,46 @@ echo "$fp bestool" | sudo tee -a /home/YOU/seedling-data/authorized_keys
 sudo systemctl restart seedling
 ```
 
-## Bringing up the postgres app
+## Bringing up a demo app
 
-The app declares an external `data` volume, so until one is attached the app
-holds an `external_volume_not_mapped` fault (`external volume 'data' is not
-mapped`). Install takes no parameters, so set the app's parameters and attach
-the volume in any order:
+The definitions under [`demos/`](../demos/) exercise Seedling on a dev VM;
+none of them is a production definition. Each installs with no parameters
+set, other than the one `params-tour` requires to show what a required
+parameter looks like, and serves on a hostname under `.demo.internal`, which takes its
+certificate from the proxy's internal CA without any TLS setup. Point that
+hostname at the VM in your `/etc/hosts` to reach it.
+
+`actions-and-gates` walks through gates, actions and shells:
 
 ```bash
-seedling-ctl volumes site create-managed pgdata
-seedling-ctl apps volumes attach postgres data _site/pgdata
-seedling-ctl apps params set postgres version=18.3 password=devpassword
-seedling-ctl apps install postgres
+seedling-ctl apps create actions-and-gates ./demos/actions-and-gates/
+seedling-ctl apps install actions-and-gates
+curl -k https://actions-and-gates.demo.internal/
 ```
-
-Params set through `apps params set` persist across script updates.
 
 The app stays `installing` until every gate it declares has been satisfied at
 once. A gate whose run fails holds a `gate_failed` fault and is retried at a
-growing delay, capped at an hour; `seedling-ctl apps gate run postgres <gate>`
-runs it now, and `apps show postgres` lists each gate's state. A gate whose key
-moves, through `apps params set` or a new definition, runs again on its own.
+growing delay, capped at an hour; `seedling-ctl apps gate run actions-and-gates <gate>`
+runs it now, and `apps show actions-and-gates` lists each gate's state. A gate
+whose key moves, through `apps params set` or a new definition, runs again on
+its own:
+
+```bash
+seedling-ctl apps params set actions-and-gates format=3       # migrate steps the store up
+seedling-ctl apps params set actions-and-gates format=1       # migrate refuses, gate_failed
+seedling-ctl apps params set actions-and-gates greeting=Hello # render reruns, migrate does not
+```
+
+Params set through `apps params set` persist across definition updates.
+Actions and shells take their params as `name=value`, and an action with a
+`volume` param binds a site volume for that run alone:
+
+```bash
+seedling-ctl apps action actions-and-gates note text=hi copies=3
+seedling-ctl volumes site create-managed scratch
+seedling-ctl apps action actions-and-gates export destination=scratch
+seedling-ctl apps shell actions-and-gates store user=root
+```
 
 If the app is wedged some other way, `apps uninstall` then `apps install`
 resets the reconciler's view cleanly; clearing faults alone can leave it

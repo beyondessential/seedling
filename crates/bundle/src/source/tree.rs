@@ -11,7 +11,8 @@ use std::{
 };
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use seedling_bundle::{BUNDLE_FILE_LIMIT, BUNDLE_SIZE_LIMIT, METADATA_FILE};
+
+use crate::{BUNDLE_FILE_LIMIT, BUNDLE_SIZE_LIMIT, METADATA_FILE};
 
 /// Directories version-control systems keep their metadata in.
 pub(super) const VCS_METADATA_DIRS: &[&str] = &[

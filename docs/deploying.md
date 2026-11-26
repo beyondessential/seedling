@@ -134,11 +134,11 @@ the daemon from an OCI registry. Either way the daemon records where it came
 from, shown by `seedling-ctl apps show` and in generation history.
 
 ```bash
-seedling-ctl apps create tamanu ./tamanu.seed.rhai          # a lone script, kept under its own name
-seedling-ctl apps create tamanu ./deploy/seedling/           # a folder, pushed as a bundle
-seedling-ctl apps create tamanu \
-    https://github.com/<org>/<repo>/tree/<branch-or-tag>/deploy/seedling  # downloaded by ctl
-seedling-ctl apps create tamanu --ref ghcr.io/<org>/tamanu-definition:2.12.0  # fetched by the daemon
+seedling-ctl apps create hello-world demos/hello-world/app.seed.rhai  # a lone script, kept under its own name
+seedling-ctl apps create bundle-tour demos/bundle-tour/                # a folder, pushed as a bundle
+seedling-ctl apps create bundle-tour \
+    https://github.com/beyondessential/seedling/tree/main/demos/bundle-tour  # downloaded by ctl
+seedling-ctl apps create bundle-tour --ref ghcr.io/<org>/bundle-tour:1.4.0   # fetched by the daemon
 ```
 
 A folder push leaves out `.git` and `.jj`, and anything its `.seedignore`
@@ -161,8 +161,8 @@ and `--unset name` to change several parameters at once; `apps plan` takes the
 same changes as `--param name=value` and `--unset name`:
 
 ```bash
-seedling-ctl apps plan tamanu --ref ghcr.io/<org>/tamanu-definition:2.13.0 --param version=2.13.0
-seedling-ctl apps update tamanu --ref ghcr.io/<org>/tamanu-definition:2.13.0 --set version=2.13.0
+seedling-ctl apps plan bundle-tour --ref ghcr.io/<org>/bundle-tour:1.5.0 --param hostname=tour.demo.internal
+seedling-ctl apps update bundle-tour --ref ghcr.io/<org>/bundle-tour:1.5.0 --set hostname=tour.demo.internal
 ```
 
 A definition that records the release it was published for in its
@@ -173,24 +173,24 @@ different release.
 
 An update that fails to fetch, breaks the bundle rules, fails to evaluate, or
 is rejected by a parameter validator is refused, and the app keeps running
-what it had. `seedling-ctl apps export tamanu ./out [--generation N]` writes
+what it had. `seedling-ctl apps export bundle-tour ./out [--generation N]` writes
 any generation's bundle back out as a folder.
 
 Parameters that belong together change in one generation, with or without a
 new definition, and each validator sees them together:
 
 ```bash
-seedling-ctl apps params set tamanu host=tamanu.example.org port=8443 --unset legacy-url
+seedling-ctl apps params set actions-and-gates format=3 greeting=Hello --unset hostname
 ```
 
 Neither a parameter change nor an update runs anything by itself. A change that
 moves the key of one of the app's gates leaves the gate unsatisfied, and the
 daemon runs it; `apps plan` lists those gates as `gates_would_run`. To run a
 gate now, whether or not it is satisfied, for example to repeat a migration
-after restoring a database from a backup:
+after restoring its data from a backup:
 
 ```bash
-seedling-ctl apps gate run tamanu migrate
+seedling-ctl apps gate run actions-and-gates migrate
 ```
 
 Every value an app derives from its seed, such as a generated database
@@ -200,10 +200,10 @@ stored password to match. Rotation is refused while an operation runs or is
 queued for the app:
 
 ```bash
-seedling-ctl apps seed rotate tamanu --yes
+seedling-ctl apps seed rotate actions-and-gates --yes
 ```
 
-`apps install tamanu` takes no parameters: set them first with `apps params
+`apps install params-tour` takes no parameters: set them first with `apps params
 set`, or in the same generation as a definition with `apps update --set`.
 
 ### Publishing a definition to a registry
@@ -221,8 +221,8 @@ host would refuse, writes the same bytes for the same bundle, and prints the
 annotation to give the manifest, if any. With [ORAS](https://oras.land):
 
 ```bash
-annotation=$(seedling-ctl definitions pack deploy/seedling definition.tar.gz)
-oras push ghcr.io/<org>/tamanu-definition:2.12.0 \
+annotation=$(seedling-ctl definitions pack demos/bundle-tour definition.tar.gz)
+oras push ghcr.io/<org>/bundle-tour:1.4.0 \
     --artifact-type application/vnd.bes.seedling.definition.v1 \
     ${annotation:+--annotation "$annotation"} \
     definition.tar.gz:application/vnd.bes.seedling.definition.v1.tar+gzip

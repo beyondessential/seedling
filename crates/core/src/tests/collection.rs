@@ -277,7 +277,6 @@ fn collection_size(source: &str) -> usize {
         let api = app.service("api");
         let ext = app.external_service("upstream");
         let web_http = web.http(80);
-        let ext_http = ext.http(80);
     "#,
     );
     let _guard = ActionClosureGuard::new(
@@ -315,7 +314,6 @@ fn col_from_http_service_is_the_service_it_views() {
     assert_eq!(collection_size("col(web_http)"), 1);
     assert_eq!(collection_size("col(web_http).only(web)"), 1);
     assert_eq!(collection_size("col(web_http).only(api)"), 0);
-    assert_eq!(collection_size("col(ext_http).only(ext)"), 1);
 }
 
 // spec: COL#membership

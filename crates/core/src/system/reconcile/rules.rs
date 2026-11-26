@@ -91,7 +91,7 @@ pub(super) fn collect_service_backends(running_pods: &[RunningPod]) -> ServiceBa
         };
 
         for b in &http {
-            let svc_name = b.route.http.service.name().as_str().to_owned();
+            let svc_name = b.route.http.service.name.as_str().to_owned();
             let svc_port = b.route.http.port.get();
             tagged
                 .entry((svc_name, svc_port, ForwardProto::Tcp))

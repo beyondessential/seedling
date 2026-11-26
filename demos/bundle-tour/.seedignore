@@ -1,0 +1,6 @@
+# Read as gitignore patterns, relative to this folder. Matching files stay in
+# the repository but are left out of the bundle seedling-ctl sends, so the
+# script cannot read them and the site does not serve them. A .seedignore in a
+# subfolder applies beneath it, and an included folder honours its own.
+# Included files are placed whatever these patterns say.
+pages/draft.html

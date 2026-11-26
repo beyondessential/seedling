@@ -102,7 +102,7 @@ svc.ingress("dtls.example.com", 5684)
 
 // HttpService.ingress() delegates to the wrapped Service, so chains
 // that flow through .http() can declare ingresses without backing out.
-// The resulting Ingress is bound to the Service. Throws on external services.
+// The resulting Ingress is bound to the Service.
 http_svc.ingress("api.example.com", 443).tls(Terminate.Https, Output.Http1);
 
 // External services are slots; the operator maps them to a concrete endpoint.
@@ -292,7 +292,7 @@ col.select(#{ name_patterns: ["worker-*"] })
 | `HAS_SNAPSHOTS` | bool | Whether volume storage supports copy-on-write snapshots |
 | `NODE_NAME` | string | Identifier of the node running the application; while undetermined every evaluation fails, with a `host_constant_undetermined` fault on `_system` |
 | `TIMEZONE` | string | IANA timezone of the host (e.g. `Pacific/Auckland`); `UTC` while undetermined, with a `timezone_undetermined` fault on `_system` |
-| `IDLE_CMD` | array | A no-op long-running command (`["sleep", "infinity"]`) for containers whose only purpose is to host `rt.exec` calls |
+| `IDLE_CMD` | array | A no-op long-running command, `sleep infinity` under a shell that exits on SIGTERM or SIGINT, for containers whose only purpose is to host `rt.exec` calls |
 
 ### Enum constants
 
@@ -912,7 +912,7 @@ Common signals: `SIGHUP` (reload config — postgres, nginx), `SIGUSR1` (log rot
 
 ## Writing files at action time: `rt.write`
 
-Static `Volume.write(...)` declares files that the runtime materialises into the volume every time it is provisioned. `rt.write(volume, path, contents)` is its action-time sibling: a one-shot write performed during the action, useful for seeding parameter-derived configuration, dropping a marker file, or staging input for a follow-up command:
+Static `Volume.write(...)` declares files that the runtime writes into the volume when it creates it: once for a named volume, whose existing contents are never overwritten, and each time a tmpfs volume's directory is created. `rt.write(volume, path, contents)` is its action-time sibling: a one-shot write performed during the action, useful for seeding parameter-derived configuration, dropping a marker file, or staging input for a follow-up command:
 
 ```rhai
 let cfg = app.volume("config");
@@ -929,7 +929,7 @@ Behaviour:
 - The call throws for an `ExternalVolume` that resolves to nothing, for one whose binding or mapping is read-only, and for a `Volume` declared read-only.
 - Path validation matches static `Volume.write`: absolute, no `..`, must not be the volume root.
 - The call is at-most-once across replays.
-- Unlike static `Volume.write`, contents are NOT reapplied on container restart — `rt.write` is point-in-time. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.
+- Unlike static `Volume.write`, which lands when the volume is created, `rt.write` lands once, when it is called. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.
 - Calling `rt.write` outside an action closure is a script error.
 
 ## Reporting to Canopy: `app.canopy_type`
@@ -937,7 +937,7 @@ Behaviour:
 `app.canopy_type(type)` declares what the app is to Canopy:
 
 ```rhai
-app.canopy_type("tamanu-central");
+app.canopy_type("seedling-demo");
 ```
 
 Seedling then reports the app to Canopy as an application of that type, keyed by the app's name, with its status as health and its faults as detail. A type is lowercase letters and digits in hyphen-separated segments, beginning with a letter; anything else throws. It is declared at the top level only, never inside an action. An app that does not call it is not reported as an application. A type is also what lets Seedling ask Canopy for the certificates of the app's ingress hostnames (see [Deploying](deploying.md#certificates-from-canopy)). See [Deploying](deploying.md#reaching-canopy-through-bestool) for what reporting needs on the host.
@@ -947,7 +947,7 @@ Seedling then reports the app to Canopy as an application of that type, keyed by
 A definition is a *bundle*: a folder holding the script and any files it needs, such as error pages or seed data. A lone script pushed with `seedling-ctl` becomes a bundle holding that file under its own name, with a `seedling.toml` naming it as the script.
 
 ```
-tamanu/
+web/
 ├── seedling.toml        # optional
 ├── app.seed.rhai
 └── pages/
@@ -1002,7 +1002,7 @@ let banner = app.file("banner.txt").text();       // throws if the file is not U
 - Both read the bundle the app was evaluated from, in any context.
 - `volume.write` and `rt.write` accept a `File` as well as a string. `volume.write_dir(path, dir)` writes a whole directory, and may target the volume root.
 
-Bundles are limited to regular files and folders, 2 MiB in total. See [Deploying](deploying.md#app-definitions) for pushing a folder and publishing a bundle to a registry.
+Bundles are limited to regular files and folders, 2 MiB in total. The [bundle-tour demo](../demos/bundle-tour/) uses every field of `seedling.toml`, sidecar files and includes. See [Deploying](deploying.md#app-definitions) for pushing a folder and publishing a bundle to a registry.
 
 ### Sharing files between definitions
 
@@ -1013,6 +1013,8 @@ Sibling definitions in one repository share helpers and sidecars through `[inclu
 - to the repository the folder sits in (the nearest folder above holding `.git` or `.jj`), or to the definition folder itself outside a repository;
 - for a GitHub URL, to that repository at the same commit;
 - never through a symlink, and never into `.git` or `.jj`.
+
+The [bundle-tour](../demos/bundle-tour/) and [bundle-share](../demos/bundle-share/) demos include the same helper script and pages from `demos/shared/`.
 
 An included folder is read like a definition folder, honouring its own `.seedignore`, and may not hold a `seedling.toml`: only the definition folder's own is read. A copy already in the folder must match its source; where the source cannot be reached, as when pushing a folder written by `apps export`, the copy is used as it stands.
 
@@ -1054,7 +1056,7 @@ Discarding the return value is fine if the script doesn't care about the result;
 - Stdout and stderr go to the container's log stream; they are not captured by the script.
 - The call is at-most-once across replays: the recorded exit code is recovered from the action log on replay rather than re-running the command.
 
-The `IDLE_CMD` constant is provided as a sugar for the "container as exec host" pattern: it's `["sleep", "infinity"]`, used as a deployment or job's `command(...)` so the container starts, does nothing, and stays alive while the action runs `rt.exec` against it.
+The `IDLE_CMD` constant is provided as a sugar for the "container as exec host" pattern: it runs `sleep infinity` under a shell that exits on SIGTERM or SIGINT, so the container starts, does nothing, stays alive while the action runs `rt.exec` against it, and stops at once. The image needs a POSIX shell and a `sleep` that accepts `infinity`.
 
 ## Action params with `kind: "volume"`
 

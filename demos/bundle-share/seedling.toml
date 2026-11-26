@@ -1,0 +1,9 @@
+# The metadata file of the bundle-share demo. Its `[include]` table names the
+# same sources in demos/shared as the bundle-tour demo's does, so both bundles
+# carry copies of the same files. The shared helper is listed first in
+# `script` so that app.seed.rhai can use what it defines.
+script = ["lib/static-site.rhai", "app.seed.rhai"]
+
+[include]
+"lib/static-site.rhai" = "../shared/static-site.rhai"
+"shared" = "../shared/www"

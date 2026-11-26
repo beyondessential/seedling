@@ -2,22 +2,20 @@
 //! turning it into the fields a definition request carries.
 
 use std::{
-    collections::BTreeMap,
     io::Write,
     path::{Path, PathBuf},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use seedling_bundle::{Bundle, METADATA_FILE, VERSIONS_ANNOTATION};
+use seedling_bundle::{
+    Bundle, VERSIONS_ANNOTATION,
+    source::{read_folder_definition, read_lone_file},
+};
 use serde_json::{Map, Value, json};
 
-use assembly::{Bounds, assemble, relative, repository_of, source_paths};
 use github::GithubUrl;
-use tree::{Budget, Disk, read_file, read_folder};
 
-mod assembly;
 mod github;
-mod tree;
 
 /// Where a definition comes from.
 // spec: CLI#definition-sources
@@ -112,7 +110,7 @@ impl DefinitionArgs {
             let meta =
                 std::fs::metadata(&path).map_err(|e| format!("cannot read {source}: {e}"))?;
             let files = if meta.is_dir() {
-                read_assembled_folder(&path)?
+                read_folder_definition(&path)?
             } else {
                 read_lone_file(&path)?
             };
@@ -128,52 +126,6 @@ impl DefinitionArgs {
             origin,
         }))
     }
-}
-
-/// Read a definition folder on disk and assemble what it includes from the
-/// repository it sits in.
-// spec: CLI#include-assembly
-pub(super) fn read_assembled_folder(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let folder = path
-        .canonicalize()
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let repository = repository_of(&folder)?;
-    let (boundary, bounds) = match &repository {
-        Some(root) => (root.as_path(), Bounds::Repository(root)),
-        None => (folder.as_path(), Bounds::Folder),
-    };
-    let tree = Disk::new(boundary);
-    let within = relative(&folder, boundary)?;
-    let mut budget = Budget::full();
-    let mut files = read_folder(&tree, &within, &mut budget)?;
-    assemble(&mut files, &tree, &within, bounds, &mut budget)?;
-    Ok(files)
-}
-
-/// Read a lone file as a bundle holding it under its own name, with a
-/// metadata file naming it as the only script file.
-// spec: CLI#definition-sources
-pub(super) fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let name = path
-        .file_name()
-        .ok_or_else(|| format!("{} names no file", path.display()))?
-        .to_str()
-        .ok_or_else(|| format!("{}: the file's name is not valid UTF-8", path.display()))?;
-    if name == METADATA_FILE {
-        return Err(format!(
-            "{}: a lone {METADATA_FILE} is not a definition; push its folder instead",
-            path.display()
-        ));
-    }
-    let contents = read_file(path, &mut Budget::full())?;
-    let metadata = toml::Table::from_iter([(
-        "script".to_owned(),
-        toml::Value::Array(vec![toml::Value::String(name.to_owned())]),
-    )]);
-    Ok(BTreeMap::from([
-        (name.to_owned(), contents),
-        (METADATA_FILE.to_owned(), metadata.to_string().into_bytes()),
-    ]))
 }
 
 #[derive(clap::Subcommand, Debug)]

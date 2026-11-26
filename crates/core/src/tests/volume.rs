@@ -1078,7 +1078,11 @@ fn idle_cmd_constant_usable_as_command() {
     let cmd = pod.lock().container.lock().command.clone();
     assert_eq!(
         cmd,
-        Some(vec!["sleep".to_owned(), "infinity".to_owned()]),
+        Some(vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "trap 'exit 0' TERM INT; sleep infinity & wait".to_owned()
+        ]),
         "IDLE_CMD must wire through to the container command"
     );
 }

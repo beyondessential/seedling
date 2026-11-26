@@ -435,7 +435,7 @@ fn pod_first_port(
     }
     pod.http_bindings
         .iter()
-        .find(|b| b.route.http.service.name().as_str() == service_name)
+        .find(|b| b.route.http.service.name.as_str() == service_name)
         .map(|b| b.route.http.port.get())
 }
 

@@ -233,8 +233,7 @@ impl ServiceProxyDef {
     }
 }
 
-/// The `HttpServiceDef` an app declared for `service_name`, if any. Both the
-/// app's own services and external-service slots can back an HTTP route.
+/// The `HttpServiceDef` an app declared for `service_name`, if any.
 pub(super) fn service_proxy_def(snapshot: &AppDef, service_name: &str) -> ServiceProxyDef {
     let gather = |settings: ProxySettings, http: Option<&HttpServiceDef>| ServiceProxyDef {
         service: settings,
@@ -247,10 +246,6 @@ pub(super) fn service_proxy_def(snapshot: &AppDef, service_name: &str) -> Servic
         .find_map(|r| match r {
             Resource::Service(s) if s.name.as_str() == service_name => {
                 let def = s.def.lock();
-                Some(gather(def.proxy_settings(), def.http.as_ref()))
-            }
-            Resource::ExternalService(e) if e.name.as_str() == service_name => {
-                let def = e.def.lock();
                 Some(gather(def.proxy_settings(), def.http.as_ref()))
             }
             _ => None,
@@ -361,7 +356,7 @@ pub(super) fn collect_http_routes(
         };
 
         for binding in &http_bindings {
-            if binding.route.http.service.name().as_str() != service_name {
+            if binding.route.http.service.name.as_str() != service_name {
                 continue;
             }
             // Only resources whose pods are observed running this tick

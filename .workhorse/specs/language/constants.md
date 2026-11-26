@@ -81,7 +81,7 @@ When an undetermined value of `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `HAS_SNAP
 
 ## Idle command
 
-`IDLE_CMD` is an array of strings which, used as a container's command, starts a process that does nothing and runs until the container is stopped.
+`IDLE_CMD` is an array of strings which, used as a container's command, starts a process that does nothing, runs until the container is stopped, and exits as soon as it is asked to stop.
 The runtime MAY change the array's contents between releases.
 
 > [!NOTE]

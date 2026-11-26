@@ -349,7 +349,7 @@ fn bound_prefixes(app: &AppDef, service_name: &str) -> std::collections::BTreeSe
             _ => continue,
         };
         for binding in &pod.lock().http_bindings {
-            if binding.route.http.service.name().as_str() == service_name {
+            if binding.route.http.service.name.as_str() == service_name {
                 bound.insert(binding.route.prefix.clone());
             }
         }
@@ -566,7 +566,7 @@ impl HttpBinding {
         format!(
             "{} -> {} {}",
             self.pod_port.get(),
-            self.route.http.service.name().as_str(),
+            self.route.http.service.name.as_str(),
             self.route.prefix,
         )
     }

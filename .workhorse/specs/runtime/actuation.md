@@ -37,7 +37,7 @@ The preserved data of a volume the runtime would otherwise have deleted, kept un
 When starting a Deployment or Job instance, the runtime MUST ensure that the instance's pod network exists, ensure that the container image is present on the host, and start the container under process supervision.
 The runtime MUST pull the image if it is not present, as [IMG](images.md#image-pulls) specifies.
 
-Before the container starts, the runtime MUST ensure that each anonymous volume the container mounts exists, and MUST apply that volume's declared file writes to it.
+Before the container starts, the runtime MUST ensure that each anonymous volume the container mounts exists, creating and seeding one it finds absent as [volume creation and seeding](#volume-creation-and-seeding) requires.
 
 When stopping a Deployment or Job instance, the runtime MUST stop the supervised container process.
 Once the process has stopped, the runtime MUST remove the instance's pod network and every anonymous volume created for the instance.
@@ -112,7 +112,7 @@ The runtime MUST NOT stand a container-runtime volume in for a tmpfs volume.
 
 When starting a Volume instance, the runtime MUST create the volume's storage if it does not exist, then apply the volume's declared file writes to it.
 
-Creating a named non-tmpfs volume's storage and applying its declared writes MUST be one step.
+Creating a non-tmpfs volume's storage, named or anonymous, and applying its declared writes MUST be one step.
 The part of the runtime that creates the storage MUST apply the declared writes.
 A part of the runtime that finds the storage already present MUST NOT apply them.
 
@@ -123,6 +123,10 @@ A part of the runtime that finds the storage already present MUST NOT apply them
 Several parts of the runtime MAY find the storage absent at the same moment.
 Exactly one of them MUST create it, and creation MUST report whether this caller created it.
 A caller whose creation did not take effect MUST treat the storage as already present, and MUST NOT report the name being in use as an error.
+A caller that reaches a volume's storage, tmpfs or not, while another is creating it MUST wait until that step has finished before using the storage, and MUST create and seed the storage itself if the step failed and removed it.
+
+> [!NOTE]
+> A container that mounted the storage mid-step would start with declared files missing, and would keep a mount of storage a failed step then removes.
 
 If a declared write fails, the runtime MUST remove storage the same step created, so that the next attempt creates and seeds it from scratch.
 

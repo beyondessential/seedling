@@ -1,0 +1,43 @@
+# The metadata file of the bundle-tour demo. Every field is optional.
+
+# The Seedling versions this definition supports. A host running any other
+# version refuses it when it is installed. `||` separates alternatives, and a
+# version must satisfy every comparator of at least one of them; commas join
+# comparators within one alternative. Each comparator is in Cargo's version
+# requirement syntax: `~0.12` is any 0.12.x release, and `>=0.13.0-rc.1, <0.14`
+# is the 0.13 series. A pre-release such as 0.13.0-rc.2 matches only an
+# alternative that names a pre-release of the same 0.13.0, as the second does;
+# 0.12.1-rc.1 matches neither. Widen this when Seedling moves past 0.13.
+seedling = "~0.12 || >=0.13.0-rc.1, <0.14"
+
+# The script files, concatenated in this order into one script. The first is
+# copied in from demos/shared (see `[include]`), the second reads the metadata
+# table, and the last uses what both define. An error in any of them is
+# reported against that file and its own line.
+script = ["lib/static-site.rhai", "metadata.rhai", "app.seed.rhai"]
+
+# Free-form values for the script, read with `app.metadata()`. Seedling checks
+# and converts them but gives them no meaning. One value of each TOML type;
+# dates and times reach the script as strings.
+[metadata]
+release = "1.4.0"                       # string
+build = 42                              # integer
+coverage = 0.75                         # float; must be finite
+featured = true                         # boolean
+published = 2026-11-26T09:30:00+13:00   # offset date-time
+built = 2026-11-26T09:15:00             # local date-time
+reviewed = 2026-11-25                   # local date
+window = 03:00:00                       # local time
+tags = ["bundle", "metadata", "include"] # array
+origin = { repo = "seedling", folder = "demos/bundle-tour" } # inline table
+
+[metadata.maintainer]                   # table
+name = "Seedling demos"
+contact = "demos@example.invalid"
+
+# Files and folders copied into the bundle from elsewhere in the repository
+# when seedling-ctl reads this folder. Each key is where the copy lands in the
+# bundle, and each value is where it comes from, relative to this folder.
+[include]
+"lib/static-site.rhai" = "../shared/static-site.rhai" # a file
+"shared" = "../shared/www"                             # a folder

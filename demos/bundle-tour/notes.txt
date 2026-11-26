@@ -1,0 +1,12 @@
+Release notes for bundle-tour 1.4.0
+
+This is a sidecar file: a file in the bundle that is not a script.
+The script reads it twice: app.file("notes.txt") writes these bytes into the
+site volume unchanged, and app.file("notes.txt").text() reads them as a string
+to show on the home page. text() throws for a file that is not valid UTF-8,
+such as assets/logo.png.
+
+Edit this file and push the folder again: the home page and /notes.txt both
+change, and the release gate is left alone because the release is the same.
+Change `release` in seedling.toml as well and the gate runs, logging the
+first line of these notes as they stood at its last success.
