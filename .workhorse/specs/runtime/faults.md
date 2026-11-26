@@ -94,7 +94,7 @@ A `health_check_replace_failed` fault MUST identify the failed replacement and t
 
 ### Withholding faults
 
-A withholding fault is one under which the runtime keeps back something the app needs until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)), `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)), `gate_failed`, `gate_check_unavailable` and `gate_state_unreadable` (the gate's dependants [wait](../language/gate.md#start-order)), and `evaluation_runaway` and `breaker_state_unreadable` (the breaker's thing is [not evaluated](engine-limits.md#breakers) with the inputs that tripped it, or at all).
+A withholding fault is one under which the runtime keeps back something the app needs until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)), `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)), `gate_failed`, `gate_check_unavailable` and `gate_state_unreadable` (the gate's dependants [wait](../language/gate.md#start-order)), and `evaluation_runaway` and `breaker_state_unreadable` with an empty subject or a gate as subject (the definition, or the gate's body, is [not evaluated](engine-limits.md#breakers) with the inputs that tripped it, or at all).
 An app holding one is [`faulted`](../interface/apps.md#status-derivation) rather than `degraded`.
 
 ## Volume faults
