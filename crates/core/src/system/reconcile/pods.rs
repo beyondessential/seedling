@@ -1370,9 +1370,6 @@ fn instances_waiting_on_targets(
     (waiting, kept_running)
 }
 
-/// Whether the Job instance has been running for longer than its deadline,
-/// counted from the moment it last reached Running.
-// spec: JOB#deadline
 /// What one observation says about a Job instance's own run, apart from
 /// what the runtime remembers of it.
 struct JobStanding {
@@ -1398,6 +1395,9 @@ fn job_is_done(job: &JobStanding, already_completed: bool, past_deadline: bool) 
     terminated || already_completed || past_deadline
 }
 
+/// Whether the Job instance has been running for longer than its deadline,
+/// counted from the moment it last reached Running.
+// spec: JOB#deadline
 fn job_deadline_passed(db: &DbHandle, instance: &ResourceInstance, definition: &Resource) -> bool {
     let Resource::Job(job) = definition else {
         return false;
