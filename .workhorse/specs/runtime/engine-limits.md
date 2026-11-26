@@ -67,7 +67,17 @@ An evaluation stopped at the limit fails to evaluate, and a request that reports
 
 ## Breakers
 
-The runtime MUST keep a breaker for each thing of an app it evaluates: the app's definition, each action handler, each shell handler, each gate body, and each parameter's validator.
+The runtime MUST keep a breaker for an app's definition and for each [action closure](../overview.md#action-closure) the definition declares: the closure of each action and of each shell, and each gate's body.
+
+A tracked evaluation is one of these, at the app's current [generation](../overview.md#generation):
+
+- an evaluation of the app's definition with its stored parameter values;
+- a pass of a lifecycle operation, a shell session's run of its shell's closure, or a gate run's run of the gate's body.
+
+Every other evaluation, such as of a proposed definition or proposed values, a change plan, a template preview, an image discovery probe, a validator, or a pass of an operation at an earlier generation, MUST neither trip nor reset a breaker, and is stopped at the evaluation time limit all the same.
+
+> [!NOTE]
+> An evaluation that is not tracked either answers a request whose caller sees the failure at once, or fails the operation it belongs to, so its cost is not paid again until someone acts.
 
 A thing's inputs are the app's [host constants](../language/constants.md#host-constants), its [app seed](secrets.md#app-seed) and the running Seedling version, together with the inputs below.
 
@@ -82,10 +92,15 @@ A thing's inputs are the app's [host constants](../language/constants.md#host-co
 > [!NOTE]
 > The running Seedling version is an input because a release can change how long the same script takes, such as through a different regex engine.
 
-When an evaluation fails at the evaluation time limit, the runtime MUST trip the breaker of the thing evaluated, recording the definition and the inputs it was evaluated with.
-While a breaker is tripped, an evaluation of its thing with the recorded definition and inputs MUST fail at once, without evaluating any part of the script.
-An evaluation of its thing with a different definition or different inputs MUST reset the breaker and evaluate as usual.
-A request that would evaluate an action or shell handler whose breaker is tripped for its inputs MUST be refused before any lifecycle operation or shell session starts, as [action invocation](../interface/actions.md#invoking-an-action), [opening an app shell](../interface/shells.md#opening-an-app-shell), [`invoke`](../language/action.md#action-invocation) and [scheduled actions](../language/action.md#scheduled-actions) specify.
+When a tracked evaluation fails at the evaluation time limit, the runtime MUST trip the breaker of the thing it evaluated, recording the definition and the inputs it was evaluated with.
+A pass of a lifecycle operation evaluates the action the operation runs, including any closure the pass reaches through [`invoke`](../language/action.md#action-invocation).
+
+While a breaker is tripped, a tracked evaluation of its thing with the recorded definition and inputs MUST fail at once, without evaluating any part of the script.
+A tracked evaluation of its thing with a different definition or different inputs MUST evaluate as usual.
+If it finishes within the limit, the runtime MUST reset the breaker.
+If it fails at the limit, the runtime MUST record its definition and inputs on the breaker in place of the earlier ones, and the breaker stays tripped.
+
+Runs of a tripped action closure are refused or held back before they start, as [action invocation](../interface/actions.md#invoking-an-action), [opening an app shell](../interface/shells.md#opening-an-app-shell), [`invoke`](../language/action.md#action-invocation), [scheduled actions](../language/action.md#scheduled-actions) and [gate preparation](gates.md#preparation) specify.
 
 The runtime MUST reset a breaker when an operator clears its [`evaluation_runaway`](faults.md#app-faults) fault, and MUST discard every breaker of an app when the app is deregistered.
 The runtime MUST persist a tripped breaker, so that a runtime restart does not reset it.

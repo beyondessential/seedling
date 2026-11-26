@@ -78,7 +78,7 @@ A `Regex` MUST be taken as its [pattern](regex.md#compiling-a-pattern).
 
 Before running the closure, the runtime MUST validate `params` against the action's param schema exactly as it validates an operator's invocation of the action.
 If validation fails, `invoke` MUST throw without running the closure.
-If the invoked action's [breaker](../runtime/engine-limits.md#breakers) is tripped for the inputs `invoke` would evaluate it with, `invoke` MUST throw without running the closure.
+If the invoked action's [breaker](../runtime/engine-limits.md#breakers) is tripped for the inputs `invoke` would evaluate it with, `invoke` MUST throw without running the closure, except when a replay reaches a call already recorded in the action log.
 
 An exception the invoked closure throws MUST propagate to the caller of `invoke`.
 
