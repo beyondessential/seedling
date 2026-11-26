@@ -56,7 +56,7 @@ pub(super) trait Tree {
     fn entries(&self, dir: &str) -> Result<Vec<(Name, Kind)>, String>;
 
     /// The contents of the file at `path`, taken from `budget`.
-    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, String>;
+    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, ReadError>;
 
     /// `path` as the operator knows it.
     fn show(&self, path: &str) -> String;
@@ -101,7 +101,7 @@ pub(super) fn read_folder(
     tree: &impl Tree,
     root: &str,
     budget: &mut Budget,
-) -> Result<BTreeMap<String, Vec<u8>>, String> {
+) -> Result<BTreeMap<String, Vec<u8>>, ReadError> {
     let mut ignores = Ignores::new(root);
     let mut files = BTreeMap::new();
     // Walked with a stack of its own rather than by recursion, since a
@@ -114,7 +114,7 @@ pub(super) fn read_folder(
                 continue;
             }
             if let Name::Other(_) = name {
-                return Err(format!("{} is not a UTF-8 path", tree.show(&path)));
+                return Err(format!("{} is not a UTF-8 path", tree.show(&path)).into());
             }
             match kind {
                 Kind::Dir => dirs.push(path),
@@ -128,7 +128,8 @@ pub(super) fn read_folder(
                     return Err(format!(
                         "{} is not a regular file; definitions may only hold files and folders",
                         tree.show(&path)
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -272,6 +273,29 @@ fn ignored(rules: &[(String, Arc<Gitignore>)], path: &str, is_dir: bool) -> bool
     false
 }
 
+/// Why a definition could not be read.
+#[derive(Debug)]
+pub(super) enum ReadError {
+    /// Reading on would take the definition past a bundle limit.
+    OverLimit(String),
+    /// Any other reason.
+    Other(String),
+}
+
+impl From<String> for ReadError {
+    fn from(e: String) -> Self {
+        Self::Other(e)
+    }
+}
+
+impl From<ReadError> for String {
+    fn from(e: ReadError) -> Self {
+        match e {
+            ReadError::OverLimit(e) | ReadError::Other(e) => e,
+        }
+    }
+}
+
 /// What is left of the bundle limits while a definition is read, shared by
 /// the folder and every source it includes.
 ///
@@ -294,23 +318,27 @@ impl Budget {
     }
 
     /// Take one file, with a path `path_len` bytes long, from the budget.
-    pub fn take_file(&mut self, shown: &str, path_len: usize) -> Result<(), String> {
+    pub fn take_file(&mut self, shown: &str, path_len: usize) -> Result<(), ReadError> {
         self.files = self.files.checked_sub(1).ok_or_else(|| {
-            format!("{shown} takes the definition past the {BUNDLE_FILE_LIMIT} files it may hold")
+            ReadError::OverLimit(format!(
+                "{shown} takes the definition past the {BUNDLE_FILE_LIMIT} files it may hold"
+            ))
         })?;
         self.take_bytes(shown, path_len)
     }
 
-    fn take_bytes(&mut self, shown: &str, len: usize) -> Result<(), String> {
+    fn take_bytes(&mut self, shown: &str, len: usize) -> Result<(), ReadError> {
         self.bytes = self.bytes.checked_sub(len).ok_or_else(|| {
-            format!("{shown} takes the definition past its {BUNDLE_SIZE_LIMIT}-byte size limit")
+            ReadError::OverLimit(format!(
+                "{shown} takes the definition past its {BUNDLE_SIZE_LIMIT}-byte size limit"
+            ))
         })?;
         Ok(())
     }
 
     /// Read `from` to its end, taking what it holds from the budget and
     /// refusing it as soon as it passes what is left.
-    pub fn read(&mut self, shown: &str, from: impl Read) -> Result<Vec<u8>, String> {
+    pub fn read(&mut self, shown: &str, from: impl Read) -> Result<Vec<u8>, ReadError> {
         let mut contents = Vec::new();
         from.take(self.bytes as u64 + 1)
             .read_to_end(&mut contents)
@@ -340,7 +368,7 @@ impl Budget {
 }
 
 /// Read a file on disk, taking its contents from `budget`.
-pub(super) fn read_file(path: &Path, budget: &mut Budget) -> Result<Vec<u8>, String> {
+pub(super) fn read_file(path: &Path, budget: &mut Budget) -> Result<Vec<u8>, ReadError> {
     let shown = path.display().to_string();
     let file = std::fs::File::open(path).map_err(|e| format!("cannot read {shown}: {e}"))?;
     budget.read(&shown, file)
@@ -404,7 +432,7 @@ impl Tree for Disk {
         Ok(found)
     }
 
-    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, String> {
+    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, ReadError> {
         read_file(&self.at(path), budget)
     }
 
@@ -441,7 +469,7 @@ impl Archive {
     /// known: every link, so that nothing is read through one, every
     /// `.seedignore`, so that what a folder leaves out is not held, and the
     /// folder's metadata file, which names the sources it includes.
-    pub fn scan(tarball: &[u8], folder: &str) -> Result<Self, String> {
+    pub fn scan(tarball: &[u8], folder: &str) -> Result<Self, ReadError> {
         let metadata = join(folder, METADATA_FILE);
         let mut archive = Self {
             entries: HashMap::new(),
@@ -486,7 +514,7 @@ impl Archive {
     /// A file is read only where some definition folder rooted at a wanted
     /// path would read it, and contents several paths share are held once,
     /// within the bundle limits.
-    pub fn load(&mut self, tarball: &[u8], wanted: &[String]) -> Result<(), String> {
+    pub fn load(&mut self, tarball: &[u8], wanted: &[String]) -> Result<(), ReadError> {
         // Looked up along an entry's own ancestors, so each entry costs its
         // depth however many paths are wanted.
         let roots_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
@@ -517,7 +545,8 @@ impl Archive {
                     {
                         return Err(format!(
                             "the downloaded archive holds a non-UTF-8 path: {lossy}"
-                        ));
+                        )
+                        .into());
                     }
                     continue;
                 }
@@ -633,7 +662,7 @@ fn share(
     budget: &mut Budget,
     name: &str,
     contents: Vec<u8>,
-) -> Result<Arc<[u8]>, String> {
+) -> Result<Arc<[u8]>, ReadError> {
     let mut hasher = DefaultHasher::new();
     contents.hash(&mut hasher);
     let same = held.entry(hasher.finish()).or_default();
@@ -672,10 +701,10 @@ impl Tree for Archive {
         Ok(found)
     }
 
-    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, String> {
+    fn read(&self, path: &str, budget: &mut Budget) -> Result<Vec<u8>, ReadError> {
         match self.entries.get(path) {
             Some(Held::File(contents)) => budget.read(path, &contents[..]),
-            _ => Err(format!("{path} was not read from the downloaded archive")),
+            _ => Err(format!("{path} was not read from the downloaded archive").into()),
         }
     }
 

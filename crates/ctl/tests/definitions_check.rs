@@ -235,6 +235,20 @@ fn a_bundle_naming_a_missing_script_file_is_not_evaluated() {
 // spec: CLI#include-assembly
 // spec: CLI#check-results
 #[test]
+fn a_folder_past_the_file_limit_is_a_bundle_error() {
+    let dir = dir_with(&[("def/app.seed.rhai", "throw \"evaluated\";\n")]);
+    for i in 0..seedling_bundle::BUNDLE_FILE_LIMIT {
+        write(dir.path(), &format!("def/many/{i}"), "");
+    }
+    let run = check(dir.path(), &["def", "--json"]);
+    assert_eq!(run.status, 1);
+    let errors = json_errors(&run);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0]["kind"], "bundle", "{errors:?}");
+}
+
+// spec: CLI#check-results
+#[test]
 fn an_include_naming_nothing_is_a_source_error_in_the_metadata_file() {
     let dir = dir_with(&[
         ("def/seedling.toml", "[include]\n\"lib\" = \"../nowhere\"\n"),

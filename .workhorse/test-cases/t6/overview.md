@@ -26,7 +26,7 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 - [ ] `--ref` to a manifest whose `vnd.bes.seedling.versions` annotation differs from the bundle's requirement: `bundle` error, exits 1 (verifies spec: CLI#check-results)
 - [x] A bundle whose `script` list names a missing file: `bundle` error naming the path, nothing evaluated (verifies spec: CLI#definition-checks, BND#metadata-file)
 - [x] A bundle whose metadata table holds `nan`: `bundle` error located at `seedling.toml` (verifies spec: CLI#check-results, BND#metadata-table)
-- [ ] A bundle over 4,096 files: `bundle` error, nothing evaluated (verifies spec: DEFN#bundle-rules)
+- [x] A bundle over 4,096 files: `bundle` error, nothing evaluated (verifies spec: DEFN#bundle-rules)
 - [x] A script with a syntax error on line 12 of its second script file: `script` error at that file and line 12, not the concatenated line (verifies spec: CLI#check-results, BND#script-formation)
 - [ ] A script calling a BSL method with an argument of the wrong type: `script` error naming the argument, exits 1 (verifies spec: CLI#definition-checks, BSL#arguments)
 - [ ] A script whose deployments order after each other in a cycle: `script` error naming the cycle (verifies spec: CLI#definition-checks)

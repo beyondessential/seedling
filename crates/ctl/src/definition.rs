@@ -117,7 +117,7 @@ impl DefinitionArgs {
                     .map_err(|e| e.to_string())?
                     .files
             } else {
-                read_lone_file(&path)?
+                read_lone_file(&path).map_err(|e| e.to_string())?
             };
             (files, None)
         };

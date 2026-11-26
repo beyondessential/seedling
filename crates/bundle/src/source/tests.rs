@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use super::*;
-use crate::Bundle;
+use crate::{Bundle, BundleError};
 
 fn write(root: &Path, rel: &str, contents: &[u8]) {
     let path = root.join(rel);
@@ -62,7 +62,8 @@ fn a_symlink_is_reported_and_nothing_is_read() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "app.seed.rhai", b"app;");
     std::os::unix::fs::symlink("/etc/passwd", dir.path().join("evil")).unwrap();
-    let err = read_folder(&Disk::new(dir.path()), "", &mut Budget::full()).unwrap_err();
+    let err =
+        String::from(read_folder(&Disk::new(dir.path()), "", &mut Budget::full()).unwrap_err());
     assert!(err.contains("evil"), "{err}");
     // An ignored symlink is simply left out.
     write(dir.path(), ".seedignore", b"evil\n");
@@ -109,7 +110,9 @@ fn a_lone_file_is_a_bundle_holding_it_under_its_own_name() {
 fn a_lone_seedling_toml_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "seedling.toml", b"");
-    let err = read_lone_file(&dir.path().join("seedling.toml")).unwrap_err();
+    let err = read_lone_file(&dir.path().join("seedling.toml"))
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("seedling.toml"), "{err}");
 }
 
@@ -124,7 +127,7 @@ fn a_non_utf8_name_is_refused() {
         .path()
         .join(std::ffi::OsStr::from_bytes(b"app-\xff.rhai"));
     std::fs::write(&odd, b"app;").unwrap();
-    let err = read_lone_file(&odd).unwrap_err();
+    let err = read_lone_file(&odd).unwrap_err().to_string();
     assert!(err.contains("not valid UTF-8"), "{err}");
 }
 
@@ -463,8 +466,12 @@ fn a_source_larger_than_any_bundle_is_refused_as_it_is_read() {
     for i in 0..=crate::BUNDLE_FILE_LIMIT {
         write(dir.path(), &format!("many/{i}"), b"");
     }
-    let e = assembled(&dir).unwrap_err();
-    assert!(e.contains("past the 4096 files"), "{e}");
+    let e = read_folder_definition(&dir.path().join("apps/def"), None).unwrap_err();
+    assert!(
+        matches!(e, SourceError::Bundle(BundleError::Invalid { .. })),
+        "{e}"
+    );
+    assert!(e.to_string().contains("past the 4096 files"), "{e}");
 
     let dir = repo(".git", "big.bin", "../big.bin");
     let big = vec![0u8; crate::BUNDLE_SIZE_LIMIT + 1];
@@ -513,7 +520,11 @@ fn a_lone_file_larger_than_any_bundle_is_refused_as_it_is_read() {
         &vec![b' '; crate::BUNDLE_SIZE_LIMIT + 1],
     );
     let e = read_lone_file(&dir.path().join("big.seed.rhai")).unwrap_err();
-    assert!(e.contains("size limit"), "{e}");
+    assert!(
+        matches!(e, SourceError::Bundle(BundleError::Invalid { .. })),
+        "{e}"
+    );
+    assert!(e.to_string().contains("size limit"), "{e}");
 }
 
 // spec: CLI#definition-sources

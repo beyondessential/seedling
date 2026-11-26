@@ -12,7 +12,7 @@ use semver::Version;
 
 use super::{
     SourceError,
-    tree::{Budget, Kind, Tree, VCS_METADATA_DIRS, locate, read_folder},
+    tree::{Budget, Kind, ReadError, Tree, VCS_METADATA_DIRS, locate, read_folder},
 };
 use crate::{BundleError, METADATA_FILE, included, normalise_path, requirement};
 
@@ -102,6 +102,10 @@ pub(super) fn assemble(
     for (key, value) in &table {
         let at =
             |msg: String| SourceError::Include(format!("include {key:?} from {value:?}: {msg}"));
+        let reading = |e: ReadError| match e {
+            ReadError::Other(msg) => at(msg),
+            over => over.into(),
+        };
         let source = source_path(folder, value);
         let has_copy = at_or_beneath(files, key).next().is_some();
         let yielded = match &source {
@@ -112,8 +116,8 @@ pub(super) fn assemble(
                 .lending(at_or_beneath(files, key), |budget| {
                     read_source(tree, path, budget)
                 })
-                .map_err(at)?,
-            Some(path) => read_source(tree, path, budget).map_err(at)?,
+                .map_err(reading)?,
+            Some(path) => read_source(tree, path, budget).map_err(reading)?,
             None => None,
         };
         let Some(yielded) = yielded else {
@@ -253,7 +257,7 @@ fn read_source(
     tree: &impl Tree,
     path: &str,
     budget: &mut Budget,
-) -> Result<Option<BTreeMap<String, Vec<u8>>>, String> {
+) -> Result<Option<BTreeMap<String, Vec<u8>>>, ReadError> {
     match locate(tree, path)? {
         None => Ok(None),
         Some(Kind::File) => {
@@ -264,7 +268,7 @@ fn read_source(
         Some(Kind::Dir) => {
             let found = read_folder(tree, path, budget)?;
             if found.is_empty() {
-                return Err(format!("{path} holds no files"));
+                return Err(format!("{path} holds no files").into());
             }
             if let Some(nested) = found
                 .keys()
@@ -272,10 +276,11 @@ fn read_source(
             {
                 return Err(format!(
                     "{path} holds {nested}, which would not be read; only the definition folder's own {METADATA_FILE} is"
-                ));
+                )
+                .into());
             }
             Ok(Some(found))
         }
-        Some(Kind::Other) => Err(format!("{path} is not a regular file or directory")),
+        Some(Kind::Other) => Err(format!("{path} is not a regular file or directory").into()),
     }
 }

@@ -8,7 +8,7 @@ use semver::Version;
 
 use crate::{BundleError, METADATA_FILE, normalise_path};
 use assembly::{Bounds, assemble, hold_to_version, relative, repository_of, source_paths};
-use tree::{Archive, Budget, Disk, Kind, locate, read_file, read_folder};
+use tree::{Archive, Budget, Disk, Kind, ReadError, locate, read_file, read_folder};
 
 mod assembly;
 mod tree;
@@ -28,6 +28,21 @@ pub enum SourceError {
 impl From<String> for SourceError {
     fn from(e: String) -> Self {
         Self::Other(e)
+    }
+}
+
+impl From<ReadError> for SourceError {
+    fn from(e: ReadError) -> Self {
+        match e {
+            // spec: CLI#check-results
+            // Reading stops at a bundle limit before the bundle exists, so
+            // the refused file has no place in it.
+            ReadError::OverLimit(message) => Self::Bundle(BundleError::Invalid {
+                message,
+                place: None,
+            }),
+            ReadError::Other(e) => Self::Other(e),
+        }
     }
 }
 
@@ -83,7 +98,7 @@ pub fn read_folder_definition(
 /// Read a lone file as a bundle holding it under its own name, with a
 /// metadata file naming it as the only script file.
 // spec: CLI#definition-sources
-pub fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
+pub fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, SourceError> {
     let name = path
         .file_name()
         .ok_or_else(|| format!("{} names no file", path.display()))?
@@ -93,7 +108,8 @@ pub fn read_lone_file(path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> 
         return Err(format!(
             "{}: a lone {METADATA_FILE} is not a definition; push its folder instead",
             path.display()
-        ));
+        )
+        .into());
     }
     let contents = read_file(path, &mut Budget::full())?;
     let metadata = toml::Table::from_iter([(

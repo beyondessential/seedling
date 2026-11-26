@@ -427,7 +427,7 @@ async fn read(
             (assembled.files, origin)
         } else {
             let origin = Origin::File(source.to_owned());
-            let files = read_lone_file(&path).map_err(|e| CheckError::new(Kind::Source, e))?;
+            let files = read_lone_file(&path).map_err(|e| origin.source_error(e))?;
             (files, origin)
         }
     };
