@@ -137,6 +137,7 @@ fn probe_gate_closure(
         .ok_or_else(|| format!("the body of gate '{gate}' cannot be called"))?;
     Ok(run_probe(
         engine,
+        script_ast,
         app,
         registry,
         actions,
@@ -204,6 +205,7 @@ pub fn probe_app(
     for (name, kind, closure, param_schema) in handlers {
         let probe_result = probe_handler(
             engine,
+            script_ast,
             app,
             &registry,
             &captured.actions,
@@ -259,6 +261,7 @@ pub fn probe_app(
 )]
 fn probe_handler(
     engine: &Engine,
+    script_ast: &AST,
     app: &App,
     registry: &Arc<dyn InstanceRegistry>,
     actions: &BTreeMap<ActionName, FnPtr>,
@@ -308,6 +311,7 @@ fn probe_handler(
     };
     run_probe(
         engine,
+        script_ast,
         app,
         registry,
         actions,
@@ -337,6 +341,7 @@ enum ProbeCall {
 )]
 fn run_probe(
     engine: &Engine,
+    script_ast: &AST,
     app: &App,
     registry: &Arc<dyn InstanceRegistry>,
     actions: &BTreeMap<ActionName, FnPtr>,
@@ -424,7 +429,7 @@ fn run_probe(
             .with_operation_seed(&seed, &probe_sensitive);
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
-        crate::defs::compile(engine, call_script)
+        crate::defs::compile_closure_call(engine, script_ast, call_script)
             .ok()
             .and_then(|ast| {
                 engine

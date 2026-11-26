@@ -230,6 +230,20 @@ pub fn compile(engine: &Engine, source: &str) -> Result<AST, Box<EvalAltResult>>
     Ok(engine.optimize_ast(&Scope::new(), ast, OptimizationLevel::Simple))
 }
 
+/// Compile `call`, a script calling a closure that `script` made, so that the
+/// closure's body resolves when it runs.
+///
+/// A closure's body is a function of the script that made it, and a function
+/// pointer does not carry that script's functions with it, so the call is
+/// compiled alongside them.
+pub fn compile_closure_call(
+    engine: &Engine,
+    script: &AST,
+    call: &str,
+) -> Result<AST, Box<EvalAltResult>> {
+    Ok(script.clone_functions_only().merge(&compile(engine, call)?))
+}
+
 // spec: BSL#evaluation
 // spec: BSL#enums
 /// Check a definition once its script has evaluated in full: resolve what the
