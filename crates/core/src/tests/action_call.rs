@@ -72,10 +72,12 @@ fn invoke_action(
     let result = defs::app::with_action_call_table(captured.actions.clone(), Some(outer), || {
         let _guard = ActionClosureGuard::new(action_def_arc, String::new(), HashMap::new())
             .with_active_rt(rt);
-        let call_ast = crate::defs::compile(&engine, "__bsl_closure.call(__bsl_rt, __bsl_param)")
-            .expect("call ast must compile");
-        // The script's functions only: its statements already ran, as in replay.
-        let merged = ast.clone_functions_only().merge(&call_ast);
+        let merged = crate::defs::compile_closure_call(
+            &engine,
+            &ast,
+            "__bsl_closure.call(__bsl_rt, __bsl_param)",
+        )
+        .expect("call ast must compile");
         engine.eval_ast_with_scope::<Dynamic>(&mut scope, &merged)
     });
 
@@ -426,11 +428,12 @@ fn run_outer_in_replay_context(
                     &crate::runtime::seeds::Seed::for_tests(),
                     &crate::runtime::redact::Scope::empty(),
                 );
-            let call_ast =
-                crate::defs::compile(&engine, "__bsl_closure.call(__bsl_rt, __bsl_param)")
-                    .expect("call ast must compile");
-            // The script's functions only: its statements already ran, as in replay.
-            let merged = ast.clone_functions_only().merge(&call_ast);
+            let merged = crate::defs::compile_closure_call(
+                &engine,
+                &ast,
+                "__bsl_closure.call(__bsl_rt, __bsl_param)",
+            )
+            .expect("call ast must compile");
             engine
                 .eval_ast_with_scope::<Dynamic>(&mut scope, &merged)
                 .map(|_| ())

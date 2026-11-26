@@ -329,9 +329,7 @@ fn eval_merged(
     script_ast: &AST,
     call_source: &str,
 ) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
-    let call_ast = crate::defs::compile(engine, call_source)?;
-    // The script's functions only: its statements already ran, as in replay.
-    let merged = script_ast.clone_functions_only().merge(&call_ast);
+    let merged = crate::defs::compile_closure_call(engine, script_ast, call_source)?;
     engine.eval_ast_with_scope(scope, &merged)
 }
 

@@ -4685,12 +4685,12 @@ dependencies = [
 
 [[package]]
 name = "rhai"
-version = "1.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd4dd0f8c36625202a4ba553c416c19b719947cd2a31d1bda06126e4a5727daf"
+version = "1.27.0"
+source = "git+https://github.com/rhaiscript/rhai?rev=f66a4d15153cfc124ade4b24cee50839ae15450d#f66a4d15153cfc124ade4b24cee50839ae15450d"
 dependencies = [
  "ahash",
  "bitflags",
+ "compact_str",
  "num-traits",
  "once_cell",
  "rhai_codegen",
@@ -4705,8 +4705,7 @@ dependencies = [
 [[package]]
 name = "rhai_codegen"
 version = "3.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d9661edb4a4b8145b017582d634c5eb88ff1a5284a5aa701f83a28f0657a826"
+source = "git+https://github.com/rhaiscript/rhai?rev=f66a4d15153cfc124ade4b24cee50839ae15450d#f66a4d15153cfc124ade4b24cee50839ae15450d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5566,10 +5565,10 @@ dependencies = [
 [[package]]
 name = "smartstring"
 version = "1.0.1"
-source = "git+https://github.com/bodil/smartstring?rev=refs%2Fpull%2F34%2Fhead#546fa9d618aec223f9f6a692db19510a1ca6cb04"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fb72c633efbaa2dd666986505016c32c3044395ceaf881518399d2f4127ee29"
 dependencies = [
  "autocfg",
- "serde",
  "static_assertions",
  "version_check",
 ]
@@ -5886,9 +5885,6 @@ name = "thin-vec"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6a4b9ba8738cb4a4f399d37e266becfd475e75eb73425b87a05a2f2039ba63e"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "thiserror"

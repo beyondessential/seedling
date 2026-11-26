@@ -19,12 +19,9 @@ parking_lot.workspace = true
 quinn.workspace = true
 rand.workspace = true
 reqwest.workspace = true
-# Held at 1.25.1: from 1.26 a closure that captures `app` cannot be passed to a
-# method called on `app` (`app.on_action("x", |rt, _| { ... app ... })`), which fails
-# with ErrorDataRace before any script runs, and every BSL script is written
-# that way. rhai 1.27 keeps that error as intended (rhaiscript/rhai#1190), so
-# moving past 1.25 means changing how scripts register their handlers.
-rhai = { version = "=1.25.1", features = ["internals", "metadata", "no_time"] }
+# A commit on main: 1.27.0 has an aliasing UB regression whose fix is listed
+# for 1.27.1. Switch to `=1.27.1` from crates.io once it is published.
+rhai = { git = "https://github.com/rhaiscript/rhai", rev = "f66a4d15153cfc124ade4b24cee50839ae15450d", features = ["compact_str", "internals", "metadata", "no_time"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 rustls.workspace = true
 rustls-pki-types.workspace = true
