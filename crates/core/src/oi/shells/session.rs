@@ -703,8 +703,10 @@ pub(super) async fn run_app_shell(
     let db_for_task = state.db.clone();
     let script_limits = state.script_limits.clone();
     // spec: LIM#breakers
-    let run_for_task = crate::runtime::breakers::Run::of_app(&app, &script_limits)
-        .with_params(&validated_params, schema);
+    // The base is what an `invoke` from the closure is consulted with, and
+    // the session's own run is that plus its params.
+    let base_run = crate::runtime::breakers::Run::of_app(&app, &script_limits);
+    let run_for_task = base_run.clone().with_params(&validated_params, schema);
     let cipher = Arc::clone(&state.cipher);
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
@@ -823,7 +825,7 @@ pub(super) async fn run_app_shell(
         let mut ran_out = false;
         // spec: ACN#action-invocation
         let _invokes = breakers::InvokesGuard::enter(
-            breakers::Run::of_app(&app, &script_limits),
+            base_run,
             breakers::consulting(&app_name_for_task, db.clone(), Arc::clone(&cipher)),
         );
         set_shell_attach_ctx(ShellAttachCtx {

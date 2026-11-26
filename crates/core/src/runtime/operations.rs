@@ -495,8 +495,12 @@ pub(crate) fn run_operation_loop(
         (_, _, Some(name)) => crate::runtime::breakers::Thing::Action(name.clone()),
         _ => unreachable!("an operation runs an action or a gate's body"),
     };
+    // What every evaluation of this app runs with, before the params or the
+    // last success of the one thing: the base an `invoke` is consulted with
+    // as well, so it is built once.
+    let base = crate::runtime::breakers::Run::of_app(app, script_limits);
     let run = {
-        let run = crate::runtime::breakers::Run::of_app(app, script_limits);
+        let run = base.clone();
         match &gate {
             Some(input) => run.with_last_success(input.last),
             None => {
@@ -517,7 +521,7 @@ pub(crate) fn run_operation_loop(
     };
     // spec: ACN#action-invocation
     let _invokes = crate::runtime::breakers::InvokesGuard::enter(
-        crate::runtime::breakers::Run::of_app(app, script_limits),
+        base,
         crate::runtime::breakers::consulting(app_name, db.clone(), Arc::clone(&cipher)),
     );
     let mut standing = None;
