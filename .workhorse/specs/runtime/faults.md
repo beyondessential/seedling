@@ -94,7 +94,7 @@ A `health_check_replace_failed` fault MUST identify the failed replacement and t
 
 ### Withholding faults
 
-A withholding fault is one under which the runtime keeps back something the app needs until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)), `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)), `gate_failed`, `gate_check_unavailable` and `gate_state_unreadable` (the gate's dependants [wait](../language/gate.md#start-order)), and `evaluation_runaway` (its thing is [not evaluated](engine-limits.md#breakers) with the inputs that tripped it).
+A withholding fault is one under which the runtime keeps back something the app needs until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)), `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)), `gate_failed`, `gate_check_unavailable` and `gate_state_unreadable` (the gate's dependants [wait](../language/gate.md#start-order)), and `evaluation_runaway` and `breaker_state_unreadable` (the breaker's thing is [not evaluated](engine-limits.md#breakers) with the inputs that tripped it, or at all).
 An app holding one is [`faulted`](../interface/apps.md#status-derivation) rather than `degraded`.
 
 ## Volume faults
@@ -130,7 +130,8 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | `schedule_params_invalid` | the action | a schedule of the action comes due and its run [fails param validation](../language/action.md#scheduled-actions) | a later scheduled run of the action passes validation, or the definition no longer schedules the action | event |
 | `schedule_unreadable` | the action | the runtime cannot read the [record](scheduled-actions.md#schedule-records) of a schedule of the action, or cannot parse its last fire time | the runtime reads the record and parses its last fire time, or the definition no longer schedules the action | condition |
 | `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers), Canopy access is enabled, and no offer has been live for the period [missing offers](canopy-reporting.md#missing-offers) specifies | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | latched |
-| `evaluation_runaway` | the action handler, shell handler, gate body or parameter validator, or none for the definition | an evaluation trips its [breaker](engine-limits.md#breakers) | the breaker resets, or an operator clears it | latched |
+| `evaluation_runaway` | the action, shell or gate whose closure the breaker is for, or none for the definition | an evaluation trips its [breaker](engine-limits.md#breakers) | the breaker resets, the definition no longer declares the closure, or an operator clears it | latched |
+| `breaker_state_unreadable` | the action, shell or gate whose closure the breaker is for, or none for the definition | the runtime cannot read whether the [breaker](engine-limits.md#breakers) is tripped | the runtime next reads it, or the definition no longer declares the closure | condition |
 
 An `operation_failed` fault MUST carry the failure, and so MUST a `gate_failed` fault.
 A `disallowed_registry` fault MUST name each disallowed registry.

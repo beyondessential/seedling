@@ -107,8 +107,17 @@ If it fails at the limit, the runtime MUST record its definition and inputs on t
 
 Runs of a tripped action closure are refused or held back before they start, as [action invocation](../interface/actions.md#invoking-an-action), [opening an app shell](../interface/shells.md#opening-an-app-shell), [`invoke`](../language/action.md#action-invocation), [scheduled actions](../language/action.md#scheduled-actions) and [gate preparation](gates.md#preparation) specify.
 
-The runtime MUST reset a breaker when an operator clears its [`evaluation_runaway`](faults.md#app-faults) fault, and MUST discard every breaker of an app when the app is deregistered.
-The runtime MUST persist a tripped breaker, so that a runtime restart does not reset it.
+A breaker is tripped exactly while its [`evaluation_runaway`](faults.md#app-faults) fault is active.
+The runtime MUST trip a breaker and file its fault as one durable change, and MUST reset a breaker and clear its fault as one durable change, so that neither outlives the other and a runtime restart resets neither.
+
+When an operator clears an `evaluation_runaway` fault, the runtime MUST reset its breaker, and where the breaker is the definition's, MUST then evaluate the definition again.
+When the app's definition no longer declares an action closure, the runtime MUST reset its breaker.
+When an app is deregistered, the runtime MUST discard every breaker of the app.
+
+> [!NOTE]
+> Clearing an app's faults clears every `evaluation_runaway` fault of the app with them, and so resets every breaker of the app.
+
+If the runtime cannot read whether a breaker is tripped, it MUST NOT make a tracked evaluation of the breaker's thing, MUST hold a [`breaker_state_unreadable`](faults.md#app-faults) fault against the thing, and MUST keep trying to read it.
 
 > [!NOTE]
 > Operators write the scripts a host evaluates, so the breaker is there to catch an accident, such as a pattern that is slow on a parameter's value, rather than to defend against a hostile script.
