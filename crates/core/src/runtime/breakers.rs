@@ -23,9 +23,12 @@ use crate::runtime::secrets::{Cipher, KeyDigest};
 pub const EVALUATION_RUNAWAY: &str = "evaluation_runaway";
 pub const BREAKER_STATE_UNREADABLE: &str = "breaker_state_unreadable";
 
-/// Domain separation for breaker digests, which share the secret key's
-/// digest subkey with gate keys.
-const DIGEST_DOMAIN: &[u8] = b"seedling breaker v1\0";
+/// Domain separation within the breaker subkey, between the digest a
+/// breaker is compared by and the digests of its inputs one at a time. A
+/// value is arbitrary bytes, so without these a one-input digest could be
+/// made to read as a whole-run one.
+const WHOLE_RUN_DOMAIN: &[u8] = b"seedling breaker run v1\0";
+const ONE_INPUT_DOMAIN: &[u8] = b"seedling breaker input v1\0";
 
 /// The thing a breaker is kept for.
 // spec: LIM#breakers
@@ -191,14 +194,14 @@ impl Run {
 
     // spec: LIM#breakers
     fn digest(&self, cipher: &Cipher) -> Result<KeyDigest, String> {
-        let mut bytes = DIGEST_DOMAIN.to_vec();
+        let mut bytes = WHOLE_RUN_DOMAIN.to_vec();
         push_field(&mut bytes, self.definition.as_bytes());
         for (label, value) in &self.inputs {
             push_field(&mut bytes, label.as_bytes());
             push_field(&mut bytes, value);
         }
         cipher
-            .key_digest(&bytes)
+            .breaker_digest(&bytes)
             .map_err(|e| format!("cannot digest the evaluation's inputs: {e:?}"))
     }
 
@@ -206,10 +209,10 @@ impl Run {
         self.inputs
             .iter()
             .map(|(label, value)| {
-                let mut bytes = DIGEST_DOMAIN.to_vec();
+                let mut bytes = ONE_INPUT_DOMAIN.to_vec();
                 push_field(&mut bytes, label.as_bytes());
                 push_field(&mut bytes, value);
-                (label.clone(), cipher.key_digest(&bytes).ok())
+                (label.clone(), cipher.breaker_digest(&bytes).ok())
             })
             .collect()
     }
