@@ -4,7 +4,7 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 
 ## Sources
 
-- [x] Check `apps/postgres.seed.rhai` as a file source, with `--set` values for its required parameters and `--const AVAILABLE_MEMORY`, since it reads it: exits 0 with no output (verifies spec: CLI#definition-checks)
+- [x] Check `demos/params-tour` as a folder source, with `--set` for its required `contact` parameter: exits 0 with no output (verifies spec: CLI#definition-checks)
 - [x] Check a folder holding `seedling.toml` with a two-file `script` list: both files are evaluated in order, exits 0 (verifies spec: CLI#definition-checks)
 - [ ] Check a folder with a `.git` directory and a `.seedignore` excluding a scratch file that holds invalid UTF-8: the excluded paths play no part, exits 0 (verifies spec: CLI#definition-folders)
 - [ ] Check a folder holding a symlink not left out by `.seedignore`: error names the symlink, nothing is evaluated (verifies spec: CLI#definition-folders)
@@ -88,5 +88,5 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 
 - [ ] A bundle with a script error, registered with `apps create` on a running daemon and checked with `definitions check`: the fault's message and the check's message name the same file, line and cause (verifies spec: CLI#definition-checks)
 - [ ] An `apps update` with `--set` values the server refuses with `validation_failed`, then the same bundle and values through `definitions check`: the same parameters are rejected for the same reasons
-- [x] Seedling's CI runs `definitions check` over every definition under `apps/`, and a deliberately broken one fails the job
-- [ ] The release builds of `seedling-ctl` for macOS and Windows run `definitions check` on `apps/postgres.seed.rhai` and exit 0
+- [x] Seedling's CI runs `definitions check` over every demo under `demos/`, and a deliberately broken one fails the job
+- [ ] The release builds of `seedling-ctl` for macOS and Windows run `definitions check` on `demos/params-tour` and exit 0

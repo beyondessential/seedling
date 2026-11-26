@@ -17,5 +17,5 @@
 
 - [x] `definitions check` in `seedling-ctl`: source reading and include assembly shared with `apps create`, `--ref` fetched by the CLI, version requirement, bundle rules, evaluation, validation, exit status
 - [x] `--set`, `--const` and engine-limit options, and their errors
-- [x] Seedling's own CI runs `definitions check` over every definition under `apps/`
+- [x] Seedling's own CI runs `definitions check` over every demo under `demos/`
 - [x] Document the command in `docs/`
