@@ -831,10 +831,8 @@ pub(super) async fn run_app_shell(
         };
         // spec: ACN#action-invocation
         let _invokes = breakers::InvokesGuard::enter(
-            &app_name_for_task,
             breakers::Run::of_app(&app, &script_limits),
-            db.clone(),
-            Arc::clone(&cipher),
+            breakers::consulting(&app_name_for_task, db.clone(), Arc::clone(&cipher)),
         );
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),

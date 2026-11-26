@@ -76,21 +76,20 @@ pub struct ProbeRequest {
 }
 
 /// The bounds a probe evaluates within: the evaluation time limit, and the
-/// breakers of the handlers it probes.
+/// breakers of the handlers it probes and the actions they invoke.
 // spec: IMG#image-discovery
 pub struct ProbeBounds<'a> {
     pub limits: &'a crate::ScriptLimits,
-    /// Why a handler is not evaluated with `run`, where its breaker is
-    /// tripped for it or cannot be read; `None` to evaluate it.
-    pub tripped: &'a dyn Fn(&breakers::Thing, breakers::Run) -> Option<String>,
+    pub tripped: breakers::Tripped,
 }
 
+#[cfg(test)]
 impl<'a> ProbeBounds<'a> {
-    /// Bounds that consult no breaker, for a caller that has consulted it.
+    /// Bounds that find no breaker tripped.
     pub fn unconsulted(limits: &'a crate::ScriptLimits) -> Self {
         Self {
             limits,
-            tripped: &|_, _| None,
+            tripped: std::sync::Arc::new(|_, _| None),
         }
     }
 }
@@ -198,7 +197,7 @@ fn probe_gate_closure(
             arity,
             last: last.map_or(Dynamic::UNIT, |last| Dynamic::from(last.clone())),
         },
-        bounds.limits,
+        bounds,
     ))
 }
 
@@ -394,7 +393,7 @@ fn probe_handler(
         kind,
         closure,
         call,
-        bounds.limits,
+        bounds,
     )
 }
 
@@ -425,8 +424,9 @@ fn run_probe(
     kind: HandlerKind,
     closure: FnPtr,
     call: ProbeCall,
-    limits: &crate::ScriptLimits,
+    bounds: &ProbeBounds<'_>,
 ) -> HandlerProbe {
+    let limits = bounds.limits;
     // Fresh probe buffer per handler. Shared across rt.* calls through the
     // ReplayContext and into Started's check_barrier.
     let images: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
@@ -506,6 +506,12 @@ fn run_probe(
             .with_operation_seed(&seed, &probe_sensitive);
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
+        // spec: IMG#image-discovery
+        // An invoked action is refused while its breaker is tripped, as in a run.
+        let _invokes = breakers::InvokesGuard::enter(
+            breakers::Run::of_app(app, limits),
+            std::sync::Arc::clone(&bounds.tripped),
+        );
         // spec: LIM#measuring-evaluation-time
         let evaluation = crate::evaluation::Evaluation::start(limits);
         let failed = crate::defs::compile_closure_call(engine, script_ast, call_script)
@@ -634,10 +640,6 @@ mod tests {
         );
         let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
         let limits = crate::ScriptLimits::default();
-        let tripped = |thing: &breakers::Thing, _: breakers::Run| {
-            (*thing == breakers::Thing::Action(ActionName::new_unchecked("spin")))
-                .then(|| "tripped".to_owned())
-        };
         let response = probe_app(
             &engine,
             &ast,
@@ -647,7 +649,7 @@ mod tests {
             &|_| Ok(None),
             &ProbeBounds {
                 limits: &limits,
-                tripped: &tripped,
+                tripped: tripped_for("spin"),
             },
         )
         .expect("probe");
@@ -660,6 +662,51 @@ mod tests {
         };
         assert_eq!(error_of("spin").as_deref(), Some("tripped"));
         assert_eq!(error_of("other"), None);
+    }
+
+    /// Breakers that find only the action `name` tripped.
+    fn tripped_for(name: &'static str) -> breakers::Tripped {
+        Arc::new(move |thing, _| {
+            (*thing == breakers::Thing::Action(ActionName::new_unchecked(name)))
+                .then(|| "tripped".to_owned())
+        })
+    }
+
+    // spec: IMG#image-discovery
+    // spec: ACN#action-invocation
+    #[test]
+    fn a_handler_invoking_an_action_whose_breaker_is_tripped_reports_the_refusal() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            let spin = app.on_action("spin", |rt, p| {});
+            app.on_action("calls", |rt, p| { spin.invoke(#{}); });
+            app.gate("warm").key(1).run(|rt| { spin.invoke(#{}); });
+            "#,
+        );
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let limits = crate::ScriptLimits::default();
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds {
+                limits: &limits,
+                tripped: tripped_for("spin"),
+            },
+        )
+        .expect("probe");
+        for name in ["calls", "warm"] {
+            let error = response
+                .per_handler
+                .iter()
+                .find(|h| h.name == name)
+                .and_then(|h| h.error.clone())
+                .unwrap_or_default();
+            assert!(error.contains("tripped"), "{name}: {error}");
+        }
     }
 
     // spec: IMG#image-discovery

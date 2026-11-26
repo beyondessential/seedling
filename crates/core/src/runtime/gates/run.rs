@@ -454,11 +454,18 @@ impl Run<'_> {
                 self.state.db.clone(),
                 self.state.script_limits.clone(),
             );
+            let tripped = crate::runtime::breakers::consulting(
+                &self.app_name,
+                db.clone(),
+                Arc::clone(&self.state.cipher),
+            );
             let probed = tokio::task::spawn_blocking(move || {
                 let (engine, _scope, ast) = language_for(&app, &limits)?;
                 let registry: Arc<dyn crate::runtime::InstanceRegistry> =
                     Arc::new(DbInstanceRegistry::new(db));
-                // The run has consulted the body's breaker before preparing.
+                // spec: GRUN#preparation
+                // An action the body invokes is refused while its breaker is
+                // tripped, failing the probe as it would fail the run.
                 probe_gate_body(
                     &engine,
                     &ast,
@@ -466,7 +473,10 @@ impl Run<'_> {
                     registry,
                     &gate,
                     last.as_ref(),
-                    &ProbeBounds::unconsulted(&limits),
+                    &ProbeBounds {
+                        limits: &limits,
+                        tripped,
+                    },
                 )
             })
             .await

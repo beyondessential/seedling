@@ -464,7 +464,6 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         &state.script_limits,
         &state.cipher,
     );
-    let tripped = tripped_breakers(state, &name);
     let response = probe_app(
         &engine,
         &ast,
@@ -474,7 +473,11 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         &|gate| last.of(gate),
         &ProbeBounds {
             limits: &state.script_limits,
-            tripped: &tripped,
+            tripped: breakers::consulting(
+                &name,
+                state.db.clone(),
+                std::sync::Arc::clone(&state.cipher),
+            ),
         },
     )
     .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
@@ -498,30 +501,6 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         "per_handler": per_handler,
         "all_images": all_images,
     }))
-}
-
-/// Why a probe does not evaluate a handler of `app`, where its breaker is
-/// tripped for the run or cannot be read.
-// spec: IMG#image-discovery
-fn tripped_breakers<'a>(
-    state: &'a OiState,
-    app: &'a AppName,
-) -> impl Fn(&breakers::Thing, breakers::Run) -> Option<String> + 'a {
-    move |thing, run| {
-        let (name, cipher, checked) = (
-            app.clone(),
-            std::sync::Arc::clone(&state.cipher),
-            thing.clone(),
-        );
-        match state
-            .db
-            .call(move |db| breakers::standing(db, &cipher, &name, &checked, &run))
-        {
-            Ok(breakers::Standing::Tripped) => Some(breakers::tripped_message(thing)),
-            Ok(_) => None,
-            Err(why) => Some(breakers::unreadable_message(thing, &why)),
-        }
-    }
 }
 
 /// Reconcile `app`'s pins against the current AppDef and a lenient probe
@@ -616,7 +595,11 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
         &|gate| last.of(gate),
         &crate::runtime::probe::ProbeBounds {
             limits: &state.script_limits,
-            tripped: &tripped_breakers(state, app_name),
+            tripped: breakers::consulting(
+                app_name,
+                state.db.clone(),
+                std::sync::Arc::clone(&state.cipher),
+            ),
         },
     ) {
         Ok(r) => r,

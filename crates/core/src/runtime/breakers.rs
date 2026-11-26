@@ -507,13 +507,32 @@ fn likely_cause(cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) -> Str
     }
 }
 
-/// What `Action.invoke` consults the invoked action's breaker with, for the
-/// passes of one operation or shell session on this thread.
-struct Invokes {
-    app: AppName,
-    base: Run,
+/// Why a thing is not evaluated with a run: its breaker is tripped for the
+/// run, or cannot be read. `None` to evaluate it.
+pub type Tripped = std::sync::Arc<dyn Fn(&Thing, Run) -> Option<String> + Send + Sync>;
+
+/// Consult the breakers of `app`, as they are stored.
+pub fn consulting(
+    app: &AppName,
     db: crate::runtime::db::DbHandle,
     cipher: std::sync::Arc<Cipher>,
+) -> Tripped {
+    let app = app.clone();
+    std::sync::Arc::new(move |thing, run| {
+        let (app, cipher, checked) = (app.clone(), std::sync::Arc::clone(&cipher), thing.clone());
+        match db.call(move |db| standing(db, &cipher, &app, &checked, &run)) {
+            Ok(Standing::Tripped) => Some(tripped_message(thing)),
+            Ok(_) => None,
+            Err(why) => Some(unreadable_message(thing, &why)),
+        }
+    })
+}
+
+/// What `Action.invoke` consults the invoked action's breaker with, for the
+/// passes of one operation, shell session or probe on this thread.
+struct Invokes {
+    base: Run,
+    tripped: Tripped,
 }
 
 thread_local! {
@@ -522,61 +541,41 @@ thread_local! {
 
 /// Lets `Action.invoke` consult breakers while it is held.
 #[must_use = "breakers are consulted only while this is held"]
-pub struct InvokesGuard(());
+pub struct InvokesGuard(Option<Invokes>);
 
 impl InvokesGuard {
-    /// Consult the breakers of `app`, whose evaluations run with `base`'s
-    /// definition and inputs, before any params.
-    pub fn enter(
-        app: &AppName,
-        base: Run,
-        db: crate::runtime::db::DbHandle,
-        cipher: std::sync::Arc<Cipher>,
-    ) -> Self {
-        INVOKES.with_borrow_mut(|held| {
-            *held = Some(Invokes {
-                app: app.clone(),
-                base,
-                db,
-                cipher,
-            })
-        });
-        Self(())
+    /// Consult breakers with `tripped`, for evaluations that run with
+    /// `base`'s definition and inputs, before any params.
+    pub fn enter(base: Run, tripped: Tripped) -> Self {
+        Self(INVOKES.with_borrow_mut(|held| held.replace(Invokes { base, tripped })))
     }
 }
 
 impl Drop for InvokesGuard {
     fn drop(&mut self) {
-        INVOKES.with_borrow_mut(|held| *held = None);
+        let previous = self.0.take();
+        INVOKES.with_borrow_mut(|held| *held = previous);
     }
 }
 
 /// Why `Action.invoke` does not run `action` with `params`: its breaker is
 /// tripped for them, or cannot be read. `None` to run it, as it is where no
-/// operation's breakers are being consulted.
+/// breakers are being consulted.
 // spec: ACN#action-invocation
 pub fn invoke_refused(
     action: &ActionName,
     params: &crate::runtime::param_map::ParamMap,
     schema: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
 ) -> Option<String> {
-    let (app, run, db, cipher) = INVOKES.with_borrow(|held| {
+    let (run, tripped) = INVOKES.with_borrow(|held| {
         held.as_ref().map(|i| {
             (
-                i.app.clone(),
                 i.base.clone().with_params(params, schema),
-                i.db.clone(),
-                std::sync::Arc::clone(&i.cipher),
+                std::sync::Arc::clone(&i.tripped),
             )
         })
     })?;
-    let thing = Thing::Action(action.clone());
-    let checked = thing.clone();
-    match db.call(move |db| standing(db, &cipher, &app, &checked, &run)) {
-        Ok(Standing::Tripped) => Some(tripped_message(&thing)),
-        Ok(_) => None,
-        Err(why) => Some(unreadable_message(&thing, &why)),
-    }
+    tripped(&Thing::Action(action.clone()), run)
 }
 
 /// What an evaluation refused by a tripped breaker reports.

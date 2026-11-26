@@ -517,10 +517,8 @@ pub(crate) fn run_operation_loop(
     };
     // spec: ACN#action-invocation
     let _invokes = crate::runtime::breakers::InvokesGuard::enter(
-        app_name,
         crate::runtime::breakers::Run::of_app(app, script_limits),
-        db.clone(),
-        Arc::clone(&cipher),
+        crate::runtime::breakers::consulting(app_name, db.clone(), Arc::clone(&cipher)),
     );
     let mut standing = None;
     if tracked() {
