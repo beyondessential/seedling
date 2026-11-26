@@ -243,11 +243,8 @@ pub(crate) fn run_gate(
                 format!("app is not installed: {app_name}"),
             ));
         }
-        if entry.script_error.is_some() {
-            return Err(OiError::script_error(format!(
-                "app has a script error: {app_name}"
-            )));
-        }
+        // spec: ACTL#gate-runs
+        super::apps::definition_refusal(app_name, &entry.script_error)?;
         (def, Arc::clone(&entry.phase), entry.current_generation)
     };
 

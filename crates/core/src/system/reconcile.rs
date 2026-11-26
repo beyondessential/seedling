@@ -1027,7 +1027,8 @@ impl Reconciler {
                         (name.clone(), Arc::clone(&app_def), Arc::clone(&self.cipher));
                     let stopped = stopped_set.clone();
                     let remembered = self.gate_runtime.remembered(&name);
-                    let definition_error = entry.script_error.as_ref().map(|(why, _)| why.clone());
+                    let definition_error =
+                        entry.script_error.as_ref().map(|(why, _)| why.to_string());
                     // spec: GATE#body
                     let body = progress
                         .as_ref()

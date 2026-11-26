@@ -454,7 +454,7 @@ async fn main() {
                     seedling_core::runtime::apps::sync_script_error_fault(
                         &db,
                         &entry.name,
-                        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+                        entry.script_error.as_ref().map(|(e, _)| e),
                     );
                 }
             },

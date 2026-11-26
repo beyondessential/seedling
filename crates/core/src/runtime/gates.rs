@@ -547,7 +547,7 @@ impl CurrentDefinition {
     pub fn of(registry: &RwLock<AppRegistry>, app: &AppName) -> Option<Self> {
         registry.read().get(app.as_str()).map(|entry| Self {
             def: entry.app.def.load_full(),
-            error: entry.script_error.as_ref().map(|(why, _)| why.clone()),
+            error: entry.script_error.as_ref().map(|(why, _)| why.to_string()),
         })
     }
 }

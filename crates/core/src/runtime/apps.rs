@@ -18,6 +18,7 @@ use crate::{
         regex::Budget,
     },
     runtime::{
+        breakers,
         db::{Db, DbHandle},
         definition::Source,
         desired::OperationProgress,
@@ -49,9 +50,15 @@ pub enum ScriptError {
         // spec: CLI#check-results
         at: Option<(String, usize)>,
     },
-    /// The evaluation ran past the evaluation time limit.
+    /// The evaluation ran past the evaluation time limit, or a tripped
+    /// breaker failed it.
     // spec: LIM#measuring-evaluation-time
+    // spec: LIM#breakers
     Runaway(String),
+    /// Whether the breaker is tripped could not be read, so the definition
+    /// was not evaluated.
+    // spec: LIM#breakers
+    BreakerUnreadable(String),
 }
 
 impl ScriptError {
@@ -86,7 +93,9 @@ impl ScriptError {
 
     pub fn message(&self) -> &str {
         match self {
-            Self::Failed { message, .. } | Self::Runaway(message) => message,
+            Self::Failed { message, .. }
+            | Self::Runaway(message)
+            | Self::BreakerUnreadable(message) => message,
         }
     }
 
@@ -94,7 +103,7 @@ impl ScriptError {
     pub fn at(&self) -> Option<&(String, usize)> {
         match self {
             Self::Failed { at, .. } => at.as_ref(),
-            Self::Runaway(_) => None,
+            Self::Runaway(_) | Self::BreakerUnreadable(_) => None,
         }
     }
 
@@ -109,6 +118,7 @@ impl ScriptError {
                 at,
             },
             Self::Runaway(m) => Self::Runaway(f(m)),
+            Self::BreakerUnreadable(m) => Self::BreakerUnreadable(f(m)),
         }
     }
 }
@@ -283,7 +293,7 @@ pub struct AppEntry {
     pub tick_notify: Arc<Notify>,
     /// Active script-evaluation fault, if the last reload failed.
     /// Cleared on the next successful evaluation.
-    pub script_error: Option<(String, Timestamp)>,
+    pub script_error: Option<(ScriptError, Timestamp)>,
     /// Current app generation (0 if not yet bumped).
     // spec: APPS#generations
     pub current_generation: generations::Generation,
@@ -389,7 +399,7 @@ impl AppRegistry {
     ) {
         let script_error = script_error.map(|e| {
             tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
-            (e.to_string(), Timestamp::now())
+            (e, Timestamp::now())
         });
         self.entries.insert(
             name.as_str().to_owned(),
@@ -479,10 +489,21 @@ impl AppRegistry {
             // dropped rather than published, so the previous good definition
             // keeps running and nothing downstream can diff against it.
             Some(e) => {
-                entry.script_error = Some((e.to_string(), Timestamp::now()));
+                entry.script_error = Some((e.clone(), Timestamp::now()));
                 ReloadOutcome::KeptPrevious(e)
             }
         }
+    }
+
+    /// Keep the app's definition as it is, recording why its definition was
+    /// not evaluated.
+    // spec: LIM#breakers
+    fn keep_previous(&mut self, name: &AppName, e: ScriptError) -> ReloadOutcome {
+        let Some(entry) = self.entries.get_mut(name.as_str()) else {
+            return ReloadOutcome::NotRegistered;
+        };
+        entry.script_error = Some((e.clone(), Timestamp::now()));
+        ReloadOutcome::KeptPrevious(e)
     }
 
     /// Install an already-evaluated, already-validated definition, whose
@@ -590,7 +611,38 @@ impl AppRegistry {
             };
             // spec: APPS#persistence — reload runs no validators: the stored
             // combination was validated when it was written.
-            let (app, raw_error) = evaluate(&name, &bundle, &stored, &seed, limits);
+            // spec: LIM#breakers
+            let run = breakers::Run::new(bundle.hash(), &stored, Some(&seed), limits);
+            let (app, raw_error) =
+                match breakers::standing(db, cipher, &name, &breakers::Thing::Definition, &run) {
+                    Ok(breakers::Standing::Tripped) => (
+                        App::with_bundle(Arc::clone(&bundle)),
+                        Some(ScriptError::Runaway(breakers::tripped_message(
+                            &breakers::Thing::Definition,
+                        ))),
+                    ),
+                    Err(why) => (
+                        App::with_bundle(Arc::clone(&bundle)),
+                        Some(ScriptError::BreakerUnreadable(
+                            breakers::unreadable_message(&breakers::Thing::Definition, &why),
+                        )),
+                    ),
+                    Ok(standing) => {
+                        let (app, raw_error) = evaluate(&name, &bundle, &stored, &seed, limits);
+                        record_definition_outcome(
+                            db,
+                            cipher,
+                            &name,
+                            &run,
+                            standing,
+                            current_generation,
+                            raw_error.as_ref(),
+                            &app.def.load(),
+                            limits,
+                        );
+                        (app, raw_error)
+                    }
+                };
             // spec: SEC#migration — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
             migrate_param_storage(db, cipher, &name, &app, raw_error.is_none());
@@ -604,7 +656,7 @@ impl AppRegistry {
             }
             let script_error = raw_error.map(|e| {
                 tracing::warn!("failed to reload script for app '{name}': {e}");
-                (e.to_string(), Timestamp::now())
+                (e, Timestamp::now())
             });
             registry.entries.insert(
                 name.as_str().to_owned(),
@@ -834,7 +886,62 @@ pub fn reload(
     params: &BTreeMap<String, String>,
     limits: &crate::ScriptLimits,
 ) -> ReloadOutcome {
-    let outcome = registry.write().reevaluate(name, params, limits);
+    // spec: LIM#breakers
+    let Some((bundle, seed, generation)) = registry
+        .read()
+        .get(name.as_str())
+        .map(|e| (Arc::clone(&e.bundle), e.seed.clone(), e.current_generation))
+    else {
+        return ReloadOutcome::NotRegistered;
+    };
+    let run = breakers::Run::new(bundle.hash(), params, Some(&seed), limits);
+    let standing = {
+        let (name, cipher, run) = (name.clone(), Arc::clone(cipher), run.clone());
+        db.call(move |db| {
+            breakers::standing(db, &cipher, &name, &breakers::Thing::Definition, &run)
+        })
+    };
+    let outcome = match standing {
+        Ok(breakers::Standing::Tripped) => registry.write().keep_previous(
+            name,
+            ScriptError::Runaway(breakers::tripped_message(&breakers::Thing::Definition)),
+        ),
+        Err(why) => registry.write().keep_previous(
+            name,
+            ScriptError::BreakerUnreadable(breakers::unreadable_message(
+                &breakers::Thing::Definition,
+                &why,
+            )),
+        ),
+        Ok(standing) => {
+            let outcome = registry.write().reevaluate(name, params, limits);
+            let error = match &outcome {
+                ReloadOutcome::KeptPrevious(e) => Some(e.clone()),
+                _ => None,
+            };
+            let declared = registry
+                .read()
+                .get(name.as_str())
+                .map(|e| e.app.def.load_full());
+            if let Some(declared) = declared {
+                let (name, cipher, limits) = (name.clone(), Arc::clone(cipher), limits.clone());
+                db.call(move |db| {
+                    record_definition_outcome(
+                        db,
+                        &cipher,
+                        &name,
+                        &run,
+                        standing,
+                        generation,
+                        error.as_ref(),
+                        &declared,
+                        &limits,
+                    );
+                });
+            }
+            outcome
+        }
+    };
     if outcome.is_applied() {
         let running = registry.read().get(name.as_str()).map(|e| e.app.clone());
         if let Some(running) = running {
@@ -850,6 +957,46 @@ pub fn reload(
         }
     }
     outcome
+}
+
+/// Record how a tracked evaluation of `name`'s definition with `run` ended:
+/// trip its breaker where it ran past the limit, and otherwise note that it
+/// finished in time, resetting its breaker where it was tripped for another
+/// run, and the breakers of closures `declared` no longer holds.
+// spec: LIM#breakers
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the outcome is these parts of one evaluation"
+)]
+pub fn record_definition_outcome(
+    db: &Db,
+    cipher: &Cipher,
+    name: &AppName,
+    run: &breakers::Run,
+    standing: breakers::Standing,
+    generation: u64,
+    error: Option<&ScriptError>,
+    declared: &crate::defs::app::AppDef,
+    limits: &crate::ScriptLimits,
+) {
+    let thing = breakers::Thing::Definition;
+    match error {
+        Some(ScriptError::Runaway(_)) => {
+            if let Err(e) = breakers::trip(db, cipher, name, &thing, run, generation, limits) {
+                tracing::error!(app = %name, "cannot trip the definition's breaker: {e}");
+            }
+        }
+        Some(ScriptError::BreakerUnreadable(_)) => {}
+        Some(ScriptError::Failed { .. }) => {
+            breakers::finished_in_time(db, cipher, name, &thing, run, standing);
+        }
+        None => {
+            breakers::finished_in_time(db, cipher, name, &thing, run, standing);
+            if let Err(e) = breakers::reset_undeclared(db, name, declared) {
+                tracing::error!(app = %name, "cannot reset breakers of undeclared closures: {e}");
+            }
+        }
+    }
 }
 
 /// Move each declared parameter's stored value to the storage its definition

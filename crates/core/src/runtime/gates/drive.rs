@@ -58,7 +58,7 @@ fn tracked(state: &Engine, name: Option<&AppName>) -> Vec<Tracked> {
         .map(|entry| Tracked {
             name: entry.name.clone(),
             def: entry.app.def.load_full(),
-            definition_error: entry.script_error.as_ref().map(|(why, _)| why.clone()),
+            definition_error: entry.script_error.as_ref().map(|(why, _)| why.to_string()),
             generation: entry.current_generation,
             phase: Arc::clone(&entry.phase),
         })

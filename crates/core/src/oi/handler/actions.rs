@@ -180,12 +180,8 @@ pub(crate) fn invoke_action(
             ));
         }
 
-        // spec: ACI#invoking-an-action - reject if script_error fault is active
-        if entry.script_error.is_some() {
-            return Err(OiError::script_error(format!(
-                "app has a script error: {app_name}"
-            )));
-        }
+        // spec: ACI#invoking-an-action
+        super::apps::definition_refusal(app_name, &entry.script_error)?;
 
         // spec: ACN#shells
         // Shells and actions have separate namespaces: a shell of the same

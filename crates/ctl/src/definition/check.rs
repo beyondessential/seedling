@@ -493,7 +493,9 @@ fn evaluate(
             }];
         }
         // spec: LIM#measuring-evaluation-time
-        Err(ScriptError::Runaway(message)) => return vec![CheckError::new(Kind::Script, message)],
+        Err(ScriptError::Runaway(message) | ScriptError::BreakerUnreadable(message)) => {
+            return vec![CheckError::new(Kind::Script, message)];
+        }
     };
     let def = app.def.load();
     // spec: CLI#sample-parameter-values
