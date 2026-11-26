@@ -1309,6 +1309,8 @@ const SPINNING_SCRIPT: &str = r#"
     app.deployment("web").image("docker.io/library/nginx:1");
     app.on_action("spin", |rt, _p| { loop {} });
     app.on_action("nested", |rt, _p| { app.action("spin").invoke(); });
+    app.on_action("quick", |rt, _p| {});
+    app.on_action("calls-quick", |rt, _p| { app.action("quick").invoke(); });
 "#;
 
 fn spinning_limits() -> crate::ScriptLimits {
@@ -1328,6 +1330,26 @@ fn run_at(
     cipher: &Arc<Cipher>,
     current: u64,
 ) -> OperationEnd {
+    run_as(
+        app,
+        name,
+        db,
+        cipher,
+        current,
+        &uuid::Uuid::new_v4().to_string(),
+    )
+}
+
+/// As [`run_at`], as the operation `operation_id`, so a second run with the
+/// same id replays the first's log.
+fn run_as(
+    app: &App,
+    name: &str,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    current: u64,
+    operation_id: &str,
+) -> OperationEnd {
     let mut registry = crate::runtime::apps::AppRegistry::new();
     registry
         .register(
@@ -1343,7 +1365,7 @@ fn run_at(
     let op_ctx = tx.operation(
         AppName::new("demo").unwrap(),
         ActionName::new(name).unwrap().into(),
-        uuid::Uuid::new_v4().to_string(),
+        operation_id.to_owned(),
         1,
         None,
     );
@@ -1421,23 +1443,7 @@ fn a_pass_at_an_earlier_generation_is_stopped_but_trips_nothing() {
 fn invoking_an_action_tripped_for_its_params_throws() {
     let app = evaluated(SPINNING_SCRIPT);
     let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
-    let run = crate::runtime::breakers::Run::of_app(&app, &spinning_limits()).with_params(
-        &crate::runtime::param_map::ParamMap::default(),
-        &Default::default(),
-    );
-    let tripping = Arc::clone(&cipher);
-    db.call(move |db| {
-        crate::runtime::breakers::trip(
-            db,
-            &tripping,
-            &AppName::new("demo").unwrap(),
-            &crate::runtime::breakers::Thing::Action(ActionName::new("spin").unwrap()),
-            &run,
-            1,
-            &spinning_limits(),
-        )
-    })
-    .unwrap();
+    trip_action(&app, "spin", &db, &cipher);
 
     let started = cpu_time::ThreadTime::now();
     let why = failure_of(run_at(&app, "nested", &db, &cipher, 1));
@@ -1446,4 +1452,46 @@ fn invoking_an_action_tripped_for_its_params_throws() {
         "{why}"
     );
     assert!(started.elapsed() < std::time::Duration::from_millis(500));
+}
+
+/// Trip the breaker of action `name` for a call with no params.
+fn trip_action(app: &App, name: &str, db: &DbHandle, cipher: &Arc<Cipher>) {
+    let run = crate::runtime::breakers::Run::of_app(app, &spinning_limits()).with_params(
+        &crate::runtime::param_map::ParamMap::default(),
+        &Default::default(),
+    );
+    let (cipher, name) = (Arc::clone(cipher), ActionName::new(name).unwrap());
+    db.call(move |db| {
+        crate::runtime::breakers::trip(
+            db,
+            &cipher,
+            &AppName::new("demo").unwrap(),
+            &crate::runtime::breakers::Thing::Action(name),
+            &run,
+            1,
+            &spinning_limits(),
+        )
+    })
+    .unwrap();
+}
+
+// spec: ACN#action-invocation
+// spec: SUSP#positional-replay
+#[test]
+fn a_replayed_invoke_of_an_action_since_tripped_is_not_checked() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    let completed = |end| match end {
+        OperationEnd::Completed => {}
+        OperationEnd::Failed(why) | OperationEnd::NotRun(why) => panic!("failed: {why}"),
+        OperationEnd::Cancelled => panic!("cancelled"),
+    };
+    completed(run_as(&app, "calls-quick", &db, &cipher, 1, &operation_id));
+
+    trip_action(&app, "quick", &db, &cipher);
+    completed(run_as(&app, "calls-quick", &db, &cipher, 1, &operation_id));
+
+    let why = failure_of(run_at(&app, "calls-quick", &db, &cipher, 1));
+    assert!(why.contains("not evaluated again"), "{why}");
 }
