@@ -778,6 +778,47 @@ pub fn requirement(metadata_file: &[u8]) -> Result<Option<VersionRequirement>, B
     read_requirement(&read_metadata_file(Some(metadata_file))?)
 }
 
+/// The Seedling version requirement the metadata file in a definition
+/// artefact's layer declares, read before, and without, anything else the
+/// archive holds, so that it can be held to a version before the archive is
+/// held to the bundle rules.
+///
+/// Where the archive gives up its metadata file only past what the bundle
+/// rules allow, it declares none here, and decoding it refuses it.
+// spec: BND#metadata-file
+pub fn requirement_in_tar_gz(data: &[u8]) -> Result<Option<VersionRequirement>, BundleError> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(data));
+    let entries = archive
+        .entries()
+        .map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
+    // The bound from_tar_gz holds entries to, files and others together.
+    for entry in entries.take(2 * BUNDLE_FILE_LIMIT) {
+        let mut entry = entry.map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
+        if !matches!(
+            entry.header().entry_type(),
+            tar::EntryType::Regular | tar::EntryType::Continuous
+        ) {
+            continue;
+        }
+        let Ok(path) = entry.path() else {
+            continue;
+        };
+        if normalise_path(&path.to_string_lossy()).as_deref() != Ok(METADATA_FILE) {
+            continue;
+        }
+        let mut contents = Vec::new();
+        (&mut entry)
+            .take(BUNDLE_SIZE_LIMIT as u64 + 1)
+            .read_to_end(&mut contents)
+            .map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
+        if contents.len() > BUNDLE_SIZE_LIMIT {
+            return Ok(None);
+        }
+        return requirement(&contents);
+    }
+    Ok(None)
+}
+
 /// The `include` table a metadata file declares, each normalised key mapped
 /// to the source path a client assembles it from, or an empty map where the
 /// file declares none.

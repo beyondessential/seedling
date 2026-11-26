@@ -24,6 +24,7 @@ Scenarios for `seedling-ctl definitions check`. Every case runs with no daemon r
 - [x] A bundle whose `seedling.toml` has `seedling = ">=999"` and also an unknown field: one `version` error naming the requirement and the CLI's version, located at `seedling.toml`, exits 1 (verifies spec: CLI#definition-checks, CLI#check-results)
 - [ ] `--ref` to an index whose every entry requires a later Seedling: `version` error naming each entry's requirement, with no location (verifies spec: CLI#check-results)
 - [ ] `--ref` to a manifest whose `vnd.bes.seedling.versions` annotation differs from the bundle's requirement: `bundle` error, exits 1 (verifies spec: CLI#check-results)
+- [ ] `--ref` to a manifest whose layer holds a symlink and a `seedling.toml` requiring `>=999`: `version` error, not `bundle` (verifies spec: CLI#definition-checks)
 - [x] A bundle whose `script` list names a missing file: `bundle` error naming the path, nothing evaluated (verifies spec: CLI#definition-checks, BND#metadata-file)
 - [x] A bundle whose metadata table holds `nan`: `bundle` error located at `seedling.toml` (verifies spec: CLI#check-results, BND#metadata-table)
 - [x] A bundle over 4,096 files: `bundle` error, nothing evaluated (verifies spec: DEFN#bundle-rules)

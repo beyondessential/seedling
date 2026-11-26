@@ -405,17 +405,31 @@ async fn read(
         // spec: CLI#check-results
         // A fetched bundle has no file the CLI read, so its locations are
         // bundle paths.
-        let fetched = fetch::fetch(&OciRegistry::new(), reference, running)
+        let fetch_error = |e: FetchError| match e {
+            // An index's entries are held to the version before the layer is
+            // fetched, and none of them is the bundle's own requirement.
+            FetchError::Bundle(BundleError::Unsupported { .. }) => {
+                CheckError::new(Kind::Version, e.to_string())
+            }
+            FetchError::Bundle(e) => Origin::Bundle.bundle_error(e),
+            e => CheckError::new(Kind::Source, e.to_string()),
+        };
+        let layer = fetch::fetch_layer(&OciRegistry::new(), reference, running)
             .await
-            .map_err(|e| match e {
-                // Only an index's entries are held to the version before
-                // the bundle is read, and none of them is the bundle's own.
-                FetchError::Bundle(BundleError::Unsupported { .. }) => {
-                    CheckError::new(Kind::Version, e.to_string())
-                }
-                FetchError::Bundle(e) => Origin::Bundle.bundle_error(e),
-                e => CheckError::new(Kind::Source, e.to_string()),
-            })?;
+            .map_err(fetch_error)?;
+        // spec: CLI#definition-checks
+        // The bundle's own requirement, read from its metadata file before
+        // the archive is decoded as a bundle and held to the bundle rules.
+        if let Some(requirement) = seedling_bundle::requirement_in_tar_gz(layer.blob())
+            .map_err(|e| Origin::Bundle.bundle_error(e))?
+            && !requirement.matches(running)
+        {
+            return Err(Origin::Bundle.bundle_error(BundleError::Unsupported {
+                requirement: requirement.to_string(),
+                running: running.clone(),
+            }));
+        }
+        let fetched = layer.decode().map_err(fetch_error)?;
         return Ok((fetched.bundle, Origin::Bundle));
     }
     let source = source.expect("clap requires a source or a reference");

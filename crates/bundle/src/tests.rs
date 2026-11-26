@@ -650,3 +650,22 @@ fn the_requirement_is_read_without_the_other_fields() {
     assert_eq!(req.map(|r| r.to_string()), Some(">=999".to_owned()));
     assert_eq!(requirement(b"unknown = 1\n").unwrap(), None);
 }
+
+// spec: BND#metadata-file
+#[test]
+fn an_archive_breaking_the_bundle_rules_still_gives_its_requirement() {
+    let data = tar_gz(|b| {
+        add_file(b, "app.seed.rhai", b"x");
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Symlink);
+        link.set_size(0);
+        b.append_link(&mut link, "evil", "/etc/passwd").unwrap();
+        add_file(b, "./seedling.toml", b"seedling = \">=999\"\nunknown = 1\n");
+    });
+    assert!(Bundle::from_tar_gz(&data).is_err());
+    let requirement = requirement_in_tar_gz(&data).unwrap().unwrap();
+    assert_eq!(requirement.as_str(), ">=999");
+
+    let none = tar_gz(|b| add_file(b, "app.seed.rhai", b"x"));
+    assert!(requirement_in_tar_gz(&none).unwrap().is_none());
+}
