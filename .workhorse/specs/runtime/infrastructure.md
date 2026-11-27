@@ -193,6 +193,8 @@ The runtime MUST drop packets arriving from a pod network and addressed to any o
 - packets of a connection whose destination [mount translation](#mount-endpoint-addressing) rewrote;
 - neighbour discovery messages.
 
+The runtime MUST count as the host's own addresses every address the host holds when the packet arrives, on any interface, including the multicast addresses it listens on.
+
 The runtime MUST treat traffic from a pod network that [NAT64](nat64.md#translator) translates to one of the host's own IPv4 addresses, or to an address within the [proxy](proxy.md#proxy-addresses) or [resolver](resolver.md#resolver-addresses) network, as addressed to the host.
 The runtime MUST redirect such traffic at an ingress port to the proxy, as it [redirects](#ingress-redirection) traffic arriving from the network.
 It MUST drop the rest of it, except packets of a connection whose destination mount translation rewrote, and packets of a connection already accepted or related to one.
