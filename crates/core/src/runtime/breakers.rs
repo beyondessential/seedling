@@ -247,26 +247,34 @@ enum Recorded {
     Tripped(KeyDigest),
 }
 
-/// What `thing`'s breaker holds, or why that cannot be read.
+/// What `thing`'s breaker holds, and whether a `breaker_state_unreadable`
+/// fault is held for it, or why that cannot be read.
 ///
 /// A failed read is never taken for a clear breaker.
+///
+/// Both faults are read in one statement, so a consult of a breaker that has
+/// neither, which is nearly every consult, costs that statement alone.
 // spec: LIM#breakers
-fn read_recorded(db: &Db, app: &AppName, thing: &Thing) -> Result<Recorded, String> {
+fn read_recorded(db: &Db, app: &AppName, thing: &Thing) -> Result<(Recorded, bool), String> {
     let subject = thing.subject();
-    let active: bool = db
+    let (active, unreadable_held): (bool, bool) = db
         .conn
         .prepare_cached(
-            "SELECT EXISTS (SELECT 1 FROM faults
-             WHERE app = ?1 AND kind = ?2 AND subject = ?3 AND cleared_at IS NULL)",
+            "SELECT
+                 EXISTS (SELECT 1 FROM faults
+                         WHERE app = ?1 AND kind = ?2 AND subject = ?4 AND cleared_at IS NULL),
+                 EXISTS (SELECT 1 FROM faults
+                         WHERE app = ?1 AND kind = ?3 AND subject = ?4 AND cleared_at IS NULL)",
         )
         .and_then(|mut stmt| {
-            stmt.query_row(rusqlite::params![app, EVALUATION_RUNAWAY, subject], |row| {
-                row.get(0)
-            })
+            stmt.query_row(
+                rusqlite::params![app, EVALUATION_RUNAWAY, BREAKER_STATE_UNREADABLE, subject],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
         })
         .map_err(|e| format!("cannot read the breaker's fault: {e}"))?;
     if !active {
-        return Ok(Recorded::Clear);
+        return Ok((Recorded::Clear, unreadable_held));
     }
     let recorded: Option<Vec<u8>> = db
         .conn
@@ -279,7 +287,7 @@ fn read_recorded(db: &Db, app: &AppName, thing: &Thing) -> Result<Recorded, Stri
     let recorded =
         recorded.ok_or_else(|| "the breaker's fault is active but it has no record".to_owned())?;
     KeyDigest::from_bytes(&recorded)
-        .map(Recorded::Tripped)
+        .map(|digest| (Recorded::Tripped(digest), unreadable_held))
         .ok_or_else(|| "the breaker's record holds no digest".to_owned())
 }
 
@@ -338,9 +346,14 @@ pub fn standing(
     thing: &Thing,
     run: impl FnOnce() -> Result<Run, String>,
 ) -> Result<Standing, String> {
-    match read_recorded(db, app, thing).and_then(|recorded| compare(cipher, recorded, run)) {
-        Ok(standing) => {
-            note_readable(db, app, thing);
+    let read = read_recorded(db, app, thing).and_then(|(recorded, unreadable_held)| {
+        Ok((compare(cipher, recorded, run)?, unreadable_held))
+    });
+    match read {
+        Ok((standing, unreadable_held)) => {
+            if unreadable_held {
+                note_readable(db, app, thing);
+            }
             Ok(standing)
         }
         Err(why) => {
@@ -417,14 +430,14 @@ pub fn consult_lazily(
     let read = db.call(move |db| {
         let read = read_recorded(db, &name, &checked);
         match &read {
-            Ok(Recorded::Clear) => note_readable(db, &name, &checked),
-            Ok(Recorded::Tripped(_)) => {}
+            Ok((Recorded::Clear, true)) => note_readable(db, &name, &checked),
+            Ok(_) => {}
             Err(why) => note_unreadable(db, &name, &checked, why),
         }
         read
     });
     let unreadable = |why: String| Refusal::Unreadable(unreadable_message(thing, &why));
-    let recorded = read.map_err(unreadable)?;
+    let (recorded, unreadable_held) = read.map_err(unreadable)?;
     let tripped = matches!(recorded, Recorded::Tripped(_));
     let standing = match compare(cipher, recorded, run) {
         Ok(standing) => standing,
@@ -434,7 +447,7 @@ pub fn consult_lazily(
             return Err(unreadable(why));
         }
     };
-    if tripped {
+    if tripped && unreadable_held {
         let (name, checked) = (app.clone(), thing.clone());
         db.call(move |db| note_readable(db, &name, &checked));
     }

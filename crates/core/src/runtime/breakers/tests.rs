@@ -199,6 +199,31 @@ fn a_breaker_whose_state_cannot_be_read_is_never_clear() {
 }
 
 // spec: LIM#breakers
+// spec: FLT#app-faults
+#[test]
+fn a_breaker_read_again_clears_its_unreadable_fault() {
+    let (db, cipher) = (Db::open_in_memory().unwrap(), Cipher::for_tests());
+    let run = run_with("sha256:a", "x+");
+    trip(&db, &cipher, &app(), &action(), &run, 3, &limits()).unwrap();
+    db.conn
+        .execute("UPDATE breakers SET digest = x'00'", [])
+        .unwrap();
+    assert!(standing(&db, &cipher, &app(), &action(), || Ok(run.clone())).is_err());
+
+    trip(&db, &cipher, &app(), &action(), &run, 3, &limits()).unwrap();
+    assert_eq!(
+        standing(&db, &cipher, &app(), &action(), || Ok(run.clone())),
+        Ok(Standing::Tripped)
+    );
+    let held = faults::list_active_faults_in_scope(
+        &db,
+        &faults::FaultScope::AppKind(app(), BREAKER_STATE_UNREADABLE.to_owned()),
+    )
+    .unwrap();
+    assert!(held.is_empty());
+}
+
+// spec: LIM#breakers
 #[test]
 fn a_closure_no_longer_declared_has_its_breaker_reset() {
     let (db, cipher) = (Db::open_in_memory().unwrap(), Cipher::for_tests());
