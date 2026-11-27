@@ -128,6 +128,7 @@ A breaker is tripped exactly while its [`evaluation_runaway`](faults.md#app-faul
 The runtime MUST trip a breaker and file its fault as one durable change, and MUST reset a breaker and clear its fault as one durable change, so that neither outlives the other and a runtime restart resets neither.
 
 When an operator clears an `evaluation_runaway` fault, the runtime MUST reset its breaker, and where the breaker is the definition's, MUST then evaluate the definition again.
+Where an operator clears an app's faults while its definition's last evaluation failed at the limit and no active fault records that, the runtime MUST evaluate the definition again too, so that clearing again retries an evaluation that did not run.
 When the app's definition no longer declares an action closure, the runtime MUST reset its breaker.
 When an app is deregistered, the runtime MUST discard every breaker of the app.
 

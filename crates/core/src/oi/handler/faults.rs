@@ -6,7 +6,7 @@ use serde_json::json;
 use super::{HandlerResult, RequestCtx};
 use crate::{
     oi::state::OiState,
-    runtime::{breakers, faults},
+    runtime::{apps::ScriptError, breakers, faults},
 };
 
 #[derive(Deserialize)]
@@ -114,9 +114,23 @@ pub(crate) fn clear_app_faults(
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("clear faults: {e}")))?;
     // spec: LIM#breakers
     // The definition's breaker reset, so the definition is evaluated again
-    // now rather than at whatever next asks for it.
-    if definition_reset {
-        super::params::reevaluate_current(state, &app)?;
+    // now rather than at whatever next asks for it. An app still held back by
+    // a runaway it no longer has a fault for, as a re-evaluation that failed
+    // to run leaves it, is evaluated again too, so that clearing again is how
+    // the operator retries it.
+    let held_back = state.registry.read().get(app.as_str()).is_some_and(|e| {
+        matches!(
+            e.script_error,
+            Some((
+                ScriptError::Runaway(_) | ScriptError::BreakerUnreadable(_),
+                _
+            ))
+        )
+    });
+    if definition_reset || held_back {
+        super::params::reevaluate_current(state, &app).inspect_err(|e| {
+            tracing::error!(%app, "cannot evaluate the definition again after clearing its faults: {}", e.message);
+        })?;
     }
     Ok(json!({ "app": app, "cleared": cleared }))
 }

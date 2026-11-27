@@ -155,6 +155,39 @@ fn clearing_a_definitions_runaway_evaluates_it_again() {
 // spec: LIM#breakers
 // spec: FLTS#clearing-faults
 #[test]
+fn clearing_again_evaluates_a_definition_still_held_back_by_a_runaway() {
+    let oi = TestOi::with_script_limits(runaway_limits());
+    oi.call(
+        "/apps/create",
+        json!({ "app": "spinning", "script": "loop {}" }),
+    )
+    .unwrap();
+    assert_eq!(runaway_ids(&oi).len(), 1);
+    // As a clear whose evaluation afterwards failed to run leaves it: the
+    // fault is gone, and the app is still held back by the runaway.
+    oi.state
+        .db
+        .call(|db| {
+            crate::runtime::faults::clear_all_faults_for_app(
+                db,
+                &seedling_protocol::names::AppName::new_unchecked("spinning"),
+            )
+        })
+        .unwrap();
+    assert!(runaway_ids(&oi).is_empty());
+
+    oi.call("/faults/clear", json!({ "app": "spinning" }))
+        .unwrap();
+    assert_eq!(
+        runaway_ids(&oi).len(),
+        1,
+        "the definition was evaluated again, and ran away again"
+    );
+}
+
+// spec: LIM#breakers
+// spec: FLTS#clearing-faults
+#[test]
 fn clearing_an_actions_runaway_forgets_its_breaker_record() {
     use crate::runtime::breakers::{self, Run, Thing};
     let oi = TestOi::with_app("demo");
