@@ -151,3 +151,41 @@ fn clearing_a_definitions_runaway_evaluates_it_again() {
     assert_eq!(again.len(), 1, "the definition ran away again");
     assert_ne!(again, tripped, "a new fault was filed by a new evaluation");
 }
+
+// spec: LIM#breakers
+// spec: FLTS#clearing-faults
+#[test]
+fn clearing_an_actions_runaway_forgets_its_breaker_record() {
+    use crate::runtime::breakers::{self, Run, Thing};
+    let oi = TestOi::with_app("demo");
+    let run = {
+        let reg = oi.state.registry.read();
+        Run::of_app(&reg.get("demo").unwrap().app, &oi.state.script_limits)
+    };
+    let cipher = std::sync::Arc::clone(&oi.state.cipher);
+    let limits = oi.state.script_limits.clone();
+    oi.state
+        .db
+        .call(move |db| {
+            breakers::trip(
+                db,
+                &cipher,
+                &seedling_protocol::names::AppName::new_unchecked("demo"),
+                &Thing::Action(seedling_protocol::names::ActionName::new_unchecked("spin")),
+                &run,
+                1,
+                &limits,
+            )
+        })
+        .unwrap();
+    oi.call("/faults/clear", json!({ "app": "demo" })).unwrap();
+    let left: i64 = oi
+        .state
+        .db
+        .call(|db| {
+            db.conn
+                .query_row("SELECT COUNT(*) FROM breakers", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert_eq!(left, 0, "the breaker's record went with its fault");
+}

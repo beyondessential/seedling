@@ -512,6 +512,14 @@ pub fn reset(db: &Db, app: &AppName, thing: &Thing) -> Result<(), String> {
     .map_err(|e| format!("cannot reset the breaker of {}: {e}", thing.describe()))
 }
 
+/// Forget the record of the breaker whose faults carry `subject`, as an
+/// operator's clear of its `evaluation_runaway` fault resets it. Run in the
+/// same savepoint as the clear, so the two land as one change.
+// spec: LIM#breakers
+pub fn forget_record(db: &Db, app: &AppName, subject: &str) -> rusqlite::Result<()> {
+    forget_row(db, app, subject)
+}
+
 fn forget_row(db: &Db, app: &AppName, subject: &str) -> rusqlite::Result<()> {
     db.conn
         .execute(

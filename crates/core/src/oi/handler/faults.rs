@@ -88,9 +88,22 @@ pub(crate) fn clear_app_faults(
             let mut count = 0;
             let mut definition_reset = false;
             for f in active {
-                faults::clear_fault_by(db, &f.id, &app_name, Some(std::sync::Arc::clone(&actor)))?;
                 // spec: LIM#breakers
-                // Clearing a breaker's fault is what resets it.
+                // Clearing a breaker's fault is what resets it, and its
+                // record goes with the fault as one change. The record goes
+                // first, so a clear that fails takes it back before the
+                // clear has announced anything.
+                db.atomically(|db| {
+                    if f.kind == breakers::EVALUATION_RUNAWAY {
+                        breakers::forget_record(db, &app_name, &f.subject)?;
+                    }
+                    faults::clear_fault_by(
+                        db,
+                        &f.id,
+                        &app_name,
+                        Some(std::sync::Arc::clone(&actor)),
+                    )
+                })?;
                 definition_reset |= f.kind == breakers::EVALUATION_RUNAWAY
                     && breakers::Thing::from_subject(&f.subject)
                         == Some(breakers::Thing::Definition);
