@@ -182,6 +182,9 @@ The runtime MUST keep this policy in force whenever a container on a pod network
 
 The runtime MUST NOT drop or otherwise filter forwarded traffic addressed outside the host prefix.
 
+> [!NOTE]
+> A pod still reaches another app's ingress through the proxy, by the host's own addresses, as any client on the network does.
+
 ## Pod traffic to the host
 
 The runtime MUST drop packets arriving from a pod network and addressed to any of the host's own addresses, except:
