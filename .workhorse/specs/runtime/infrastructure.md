@@ -100,7 +100,7 @@ The runtime MUST NOT remove the networks of its own infrastructure containers du
 
 The runtime MUST drop every packet arriving from a pod network whose source address lies outside that network's prefix, before applying any translation to it.
 Packets with a link-local or unspecified source address are exempt.
-The runtime MUST drop such packets from the moment the first container on a pod network starts.
+The runtime MUST keep this rule in force whenever a container on a pod network is running: before it first applies the rules it holds as absolute state, while an application of them is withheld, and across a restart of the runtime.
 
 > [!NOTE]
 > Every other rule that scopes traffic by its source prefix relies on this one: without it, a container that can send raw packets could take on another pod's address and be translated or forwarded as that pod.
@@ -138,7 +138,7 @@ Where a service has several backends, the runtime MUST distribute new connection
 > [!NOTE]
 > A pod reaches a service through the mount endpoint, never through the service's address.
 
-The runtime MUST apply the service translation, mount translation, [ingress redirection](#ingress-redirection), [pod network source](#pod-network-sources), forwarding policy and [host input](#pod-traffic-to-the-host) rules together, as one atomic replacement of the rules it last applied.
+The runtime MUST apply the service translation, mount translation and [ingress redirection](#ingress-redirection) rules together, as one atomic replacement of the rules it last applied.
 These rules are [absolute state](reconciliation.md#absolute-state).
 
 ## Ingress redirection
@@ -177,6 +177,7 @@ The runtime MUST drop forwarded packets addressed to the host prefix, except:
 - TCP and UDP packets from within the host prefix, addressed to the [resolver address](resolver.md#resolver-addresses) at port 53.
 
 The runtime MUST NOT forward traffic from one pod network to another other than through a [mount translation](#mount-endpoint-addressing).
+The runtime MUST keep this policy in force whenever a container on a pod network is running: before it first applies the rules it holds as absolute state, while an application of them is withheld, and across a restart of the runtime.
 
 The runtime MUST NOT drop or otherwise filter forwarded traffic addressed outside the host prefix.
 
@@ -187,7 +188,7 @@ The runtime MUST drop packets arriving from a pod network and addressed to any o
 - packets of a connection already accepted, or related to one;
 - neighbour discovery messages.
 
-The runtime MUST drop such packets from the moment the first container on a pod network starts.
+The runtime MUST keep this rule in force whenever a container on a pod network is running: before it first applies the rules it holds as absolute state, while an application of them is withheld, and across a restart of the runtime.
 
 > [!NOTE]
 > Replies to the host's own connections into a pod, such as its probes and port-forward relays, are packets of an accepted connection.
