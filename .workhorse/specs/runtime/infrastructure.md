@@ -157,7 +157,7 @@ The runtime MUST redirect a port for a protocol only where the proxy serves a [c
 An ingress, redirect or site ingress attachment that is left out of the proxy configuration, whether for a [conflict](../language/ingress.md#claims-across-apps) or because the attachment's target cannot be resolved, MUST NOT cause its port to be redirected.
 
 The runtime MUST redirect IPv6 traffic to the proxy's IPv6 address.
-Where the proxy has an IPv4 address, the runtime MUST also redirect IPv4 traffic to it.
+The runtime MUST redirect IPv4 traffic to the proxy's IPv4 address.
 The runtime MUST NOT redirect the ports of an app that is uninstalling.
 
 ## Host-originated traffic
