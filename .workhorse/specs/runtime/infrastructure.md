@@ -21,7 +21,7 @@ The IPv6 /48 unique local prefix the runtime derives for its host, within which 
 
 ### Pod network
 
-The IPv6 bridge network, with its own /64 prefix within the host prefix, to which one pod instance is connected.
+The IPv6 bridge network, with its own /64 prefix within the host prefix, to which one pod instance, or the container of one [shell session](../interface/shells.md#shell-session), is connected.
 
 ### Mount endpoint
 
@@ -73,7 +73,7 @@ If the machine identifier cannot be read or is empty, the runtime MUST NOT start
 
 ## Pod networks
 
-The runtime MUST connect each pod instance to a pod network of its own.
+The runtime MUST connect each pod instance, and each shell session's container, to a pod network of its own.
 A pod network MUST be IPv6 only, and the runtime MUST NOT allocate an IPv4 subnet on it.
 Its prefix MUST be a /64 within the host prefix, disjoint from every address the runtime reserves for its own infrastructure.
 Its gateway MUST be the first host address of its prefix (`<prefix>::1`).
@@ -108,7 +108,7 @@ The runtime MUST drop such packets from the moment the first container on a pod 
 ## Mount endpoint addressing
 
 The mount endpoint MUST be the address `<host prefix>:fffe::1`, the same for every pod on the host.
-The runtime MUST resolve the hostname `localmount` to the mount endpoint in every pod that mounts a service.
+The runtime MUST resolve the hostname `localmount` to the mount endpoint in every pod that mounts a service, and in the container of every shell session whose [job](../language/job.md) mounts one.
 
 > [!NOTE]
 > The mount endpoint is reached through translation, so no network interface needs to carry the address.
@@ -118,6 +118,9 @@ The translation MUST NOT pass through the service's own address.
 The runtime MUST scope each translation to the mounting pod's network prefix.
 Several pods MAY mount services at the same port, each reaching its own mounted service.
 Where a mounted service has several backends, the runtime MUST distribute new connections across them.
+
+The runtime MUST translate traffic from a shell session's container to the services its job mounts as it does for a pod, scoped to the session's pod network.
+The runtime MUST have those translations in place before the session's container starts, and MUST keep them until the session ends.
 
 ## Service addresses
 
