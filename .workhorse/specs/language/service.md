@@ -31,7 +31,7 @@ A [pod binding](pod.md#port-bindings) MAY attach it to a pod port with a differe
 
 ## Routing
 
-The runtime MUST deliver TCP and UDP traffic addressed to a service port to a target bound to that port.
+The runtime MUST deliver TCP and UDP traffic for a service port to a target bound to that port, where the traffic reaches the service through a [mount](pod.md#service-mounts), an [ingress](ingress.md#declaration), or from the host, as [host infrastructure](../runtime/infrastructure.md#service-translation) admits it.
 If a service port has no target, the runtime MUST drop or reject traffic addressed to it.
 Where a service port has several targets, the runtime MUST distribute traffic among them round-robin.
 
