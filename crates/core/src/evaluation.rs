@@ -7,6 +7,7 @@
 //! engine's progress hook only checks it.
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use cpu_time::ThreadTime;
@@ -26,6 +27,34 @@ struct Running {
 
 thread_local! {
     static RUNNING: RefCell<Option<Running>> = const { RefCell::new(None) };
+}
+
+/// Whether reading a thread's processor time has ever failed in this process.
+///
+/// Whether a thread's processor time can be read is a property of the host,
+/// so once it has failed no evaluation is taken to have been measured.
+static CLOCK_UNREADABLE: AtomicBool = AtomicBool::new(false);
+
+/// Note that a thread's processor time could not be read, saying so once.
+// spec: LIM#measuring-evaluation-time
+fn clock_failed(why: impl std::fmt::Display) {
+    if !CLOCK_UNREADABLE.swap(true, Ordering::Relaxed) {
+        tracing::error!(
+            "cannot read a thread's processor time, so evaluations are not held to the \
+             evaluation time limit and none is taken to have finished within it: {why}"
+        );
+    }
+}
+
+/// Whether the time evaluations take can be measured: false once reading a
+/// thread's processor time has failed.
+///
+/// An evaluation that could not be timed did not finish within the limit as
+/// far as anyone can tell, so nothing that rests on its having done so, such
+/// as resetting a breaker, is done for it.
+// spec: LIM#measuring-evaluation-time
+pub fn time_measured() -> bool {
+    !CLOCK_UNREADABLE.load(Ordering::Relaxed)
 }
 
 /// One evaluation under the evaluation time limit, timed from when it starts
@@ -53,7 +82,7 @@ impl Evaluation {
             *running = Some(Running {
                 // A thread whose processor time cannot be read is not timed:
                 // its evaluation is still bounded by the operations limit.
-                started: limit.and_then(|_| ThreadTime::try_now().ok()),
+                started: limit.and_then(|_| ThreadTime::try_now().map_err(clock_failed).ok()),
                 began: now,
                 read_at: now,
                 limit,
@@ -123,7 +152,13 @@ fn check(read: Read) -> bool {
             }
             running.read_at = now;
         }
-        running.exceeded = started.try_elapsed().is_ok_and(|spent| spent > limit);
+        running.exceeded = match started.try_elapsed() {
+            Ok(spent) => spent > limit,
+            Err(why) => {
+                clock_failed(why);
+                false
+            }
+        };
         running.exceeded
     })
 }

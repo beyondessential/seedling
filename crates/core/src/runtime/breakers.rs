@@ -485,6 +485,7 @@ pub fn record_outcome(
                 tracing::error!(%app, "{e}");
             }
         }
+        Outcome::InTime(_) if !crate::evaluation::time_measured() => {}
         Outcome::InTime(standing) => {
             // The in-time record is digests held in memory, so it is made
             // here. A breaker that was clear, which is the common end of a
@@ -654,6 +655,9 @@ pub fn finished_in_time(
     run: &Run,
     standing: Standing,
 ) {
+    if !crate::evaluation::time_measured() {
+        return;
+    }
     note_in_time(cipher, app, thing, run);
     if standing != Standing::Clear
         && let Err(e) = reset(db, app, thing)
@@ -667,6 +671,9 @@ pub fn finished_in_time(
 /// was tripped for.
 // spec: LIM#breakers
 pub fn adopted_in_time(db: &Db, cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) {
+    if !crate::evaluation::time_measured() {
+        return;
+    }
     note_in_time(cipher, app, thing, run);
     if let Err(e) = reset(db, app, thing) {
         tracing::error!(%app, "{e}");

@@ -72,6 +72,7 @@ Each of these is one evaluation:
 The runtime MUST stop an evaluation whose evaluation time exceeds the evaluation time limit, at the next of the operations the operations per evaluation limit counts.
 An evaluation that returns having exceeded the limit MUST fail all the same.
 The runtime MUST stop an evaluation within a short time of the limit, whatever each of its operations costs.
+Where the runtime cannot read the processor time an evaluation spends, it MUST log that it cannot, and MUST NOT take any evaluation to have finished within the limit.
 An evaluation stopped at the limit fails to evaluate, and a request that reports such failures in its result rather than refusing, such as [change planning](../interface/params.md#change-planning) or a [template preview](../interface/templates.md#preview), MUST report it there.
 
 > [!NOTE]
