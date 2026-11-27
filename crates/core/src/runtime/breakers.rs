@@ -698,10 +698,12 @@ pub fn adopted_in_time(db: &Db, cipher: &Cipher, app: &AppName, thing: &Thing, r
 /// digests alone, and touches no storage.
 // spec: FLT#app-faults
 fn note_in_time(cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) {
-    LAST_IN_TIME.lock().insert(
-        (app.clone(), thing.clone()),
-        (run.definition.clone(), run.input_digests(cipher)),
-    );
+    // Digested before the lock is taken: the record is process-wide, so
+    // evaluations of every app would otherwise wait on each other's digests.
+    let held = (run.definition.clone(), run.input_digests(cipher));
+    LAST_IN_TIME
+        .lock()
+        .insert((app.clone(), thing.clone()), held);
 }
 
 /// The likely cause of a runaway of `run`, judged against the last
@@ -709,11 +711,11 @@ fn note_in_time(cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) {
 /// values.
 // spec: FLT#app-faults
 fn likely_cause(cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) -> String {
+    let now = run.input_digests(cipher);
     let held = LAST_IN_TIME.lock();
     let Some((definition, inputs)) = held.get(&(app.clone(), thing.clone())) else {
         return "the likely cause is unknown".to_owned();
     };
-    let now = run.input_digests(cipher);
     let differing: Vec<&str> = now
         .keys()
         .chain(inputs.keys())
