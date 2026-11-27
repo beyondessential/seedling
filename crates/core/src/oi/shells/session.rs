@@ -184,7 +184,7 @@ pub(crate) async fn open_shell_session(
         }
         // spec: SHL#opening-an-app-shell
         if let Err(e) = crate::oi::handler::definition_refusal(&app_name, &entry.script_error) {
-            return Err((error_code_name(e.code), e.message));
+            return Err((e.code.wire_name(), e.message));
         }
         let shell_params_schema = {
             let def = entry.app.def.load();
@@ -258,7 +258,7 @@ pub(crate) async fn open_shell_session(
             .call(move |db| breakers::consult(db, &cipher, &name, &thing, || run))
         {
             let e = crate::oi::handler::actions::refusal_error(refusal);
-            reject(&mut send, error_code_name(e.code), e.message).await;
+            reject(&mut send, e.code.wire_name(), e.message).await;
             return;
         }
     }
@@ -636,16 +636,6 @@ pub(super) fn session_outcome(
             reason: None,
         },
         ScriptEnd::Completed => failed("the shell did not attach".to_owned()),
-    }
-}
-
-/// The wire name of `code`.
-fn error_code_name(code: seedling_protocol::error::ErrorCode) -> &'static str {
-    use seedling_protocol::error::ErrorCode;
-    match code {
-        ErrorCode::ScriptError => "script_error",
-        ErrorCode::EvaluationRunaway => "evaluation_runaway",
-        _ => "internal",
     }
 }
 
