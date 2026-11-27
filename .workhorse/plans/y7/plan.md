@@ -75,10 +75,10 @@ The design:
 
 ### Bridge names
 
-- [ ] `crates/core/src/system.rs`: `pod_bridge_name(prefix)` (`sdp-` plus the /64's subnet ID as four hex digits), and constants for `sdl-proxy`, `sdl-resolver` and the `sdp-` prefix. Unit tests for the derivation.
-- [ ] `ContainerRuntime::create_network` takes the bridge name. `crates/linux/src/podman.rs` sends it as `network_interface`. Update `stub.rs`, `unavailable.rs` and `backends.rs`.
-- [ ] Pass the name from every caller: `actuator/pod.rs` (`ensure_network`), `oi/shells/session.rs`, `oi/shells/volume_session.rs`, `caddy/startup.rs`, `resolver/startup.rs`, and the test call sites.
-- [ ] `startup_cleanup.rs`: remove a pod or infrastructure network whose recorded bridge name differs from the chosen one, with its containers, before reconciliation recreates them. An unreadable listing removes nothing. Test with the stub runtime.
+- [x] `crates/core/src/system.rs`: `pod_bridge_name(prefix)` (`sdp-` plus the /64's subnet ID as four hex digits), and constants for `sdl-proxy`, `sdl-resolver` and the `sdp-` prefix. Unit tests for the derivation.
+- [x] `ContainerRuntime::create_network` takes the bridge name. `crates/linux/src/podman.rs` sends it as `network_interface`. Update `stub.rs`, `unavailable.rs` and `backends.rs`.
+- [x] Pass the name from every caller: `actuator/pod.rs` (`ensure_network`), `oi/shells/session.rs`, `oi/shells/volume_session.rs`, `caddy/startup.rs`, `resolver/startup.rs`, and the test call sites.
+- [x] `startup_cleanup.rs`: remove a pod or infrastructure network whose recorded bridge name differs from the chosen one, with its containers, before reconciliation recreates them. An unreadable listing removes nothing. Test with the stub runtime.
 
 ### Isolation table
 
