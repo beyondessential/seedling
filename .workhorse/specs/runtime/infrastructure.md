@@ -190,6 +190,7 @@ Other than under the [pod network source](#pod-network-sources) rule, the runtim
 The runtime MUST drop packets arriving from a pod network and addressed to any of the host's own addresses, except:
 
 - packets of a connection already accepted, or related to one;
+- packets of a connection whose destination [mount translation](#mount-endpoint-addressing) rewrote;
 - neighbour discovery messages.
 
 The runtime MUST keep this rule in force whenever a container on a pod network is running: before it first applies the rules it holds as absolute state, while an application of them is withheld, and across a restart of the runtime.
@@ -197,3 +198,4 @@ The runtime MUST keep this rule in force whenever a container on a pod network i
 > [!NOTE]
 > Replies to the host's own connections into a pod, such as its probes and port-forward relays, are packets of an accepted connection.
 > Traffic from a pod to an ingress port on one of the host's addresses is redirected to the proxy before it would reach the host, so it is forwarded rather than delivered here.
+> A mount is a grant, so a pod mounting a [site service](site-resources.md#site-service) whose endpoint is one of the host's own addresses reaches the host at that endpoint.
