@@ -735,7 +735,9 @@ fn likely_cause(cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) -> Str
 
 /// Why a thing is not evaluated with the run the second argument builds: its
 /// breaker is tripped for the run, or cannot be read. `None` to evaluate it.
-pub type Tripped = std::sync::Arc<dyn Fn(&Thing, &dyn Fn() -> Result<Run, String>) -> Option<String> + Send + Sync>;
+pub type Tripped = std::sync::Arc<
+    dyn Fn(&Thing, &dyn Fn() -> Result<Run, String>) -> Option<String> + Send + Sync,
+>;
 
 /// Consult the breakers of `app`, as they are stored.
 pub fn consulting(
@@ -792,8 +794,12 @@ pub fn invoke_refused(
     schema: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
 ) -> Option<String> {
     let (base, tripped) = INVOKES.with_borrow(|held| {
-        held.as_ref()
-            .map(|i| (std::sync::Arc::clone(&i.base), std::sync::Arc::clone(&i.tripped)))
+        held.as_ref().map(|i| {
+            (
+                std::sync::Arc::clone(&i.base),
+                std::sync::Arc::clone(&i.tripped),
+            )
+        })
     })?;
     tripped(&Thing::Action(action.clone()), &|| {
         Ok(base.as_ref().clone().with_params(params, schema))

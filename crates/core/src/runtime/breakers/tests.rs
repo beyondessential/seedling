@@ -311,7 +311,9 @@ fn raising_the_limit_is_a_change_of_inputs() {
     };
     let rerun = Run::new("sha256:a", &stored, Some(&seed), &raised);
     assert_eq!(
-        standing(&db, &cipher, &app(), &Thing::Definition, || Ok(rerun.clone())),
+        standing(&db, &cipher, &app(), &Thing::Definition, || Ok(
+            rerun.clone()
+        )),
         Ok(Standing::TrippedForOther)
     );
 }
