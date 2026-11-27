@@ -940,10 +940,19 @@ async fn main() {
                     // spec: SCHED#firing
                     // Only Installed apps' schedules may fire. Apps
                     // uninstalling or never installed are excluded.
-                    let app_generations: std::collections::HashMap<
-                        AppName,
-                        seedling_core::runtime::schedules::ScheduledApp,
-                    > = {
+                    // spec: ACN#scheduled-actions
+                    // The app each breaker run is assembled from is taken
+                    // here too, under this read of the registry: the check
+                    // runs on the database thread, which must never wait on
+                    // the registry's lock, since a request can hold that lock
+                    // while it waits on the database.
+                    let (app_generations, breaker_apps): (
+                        std::collections::HashMap<
+                            AppName,
+                            seedling_core::runtime::schedules::ScheduledApp,
+                        >,
+                        std::collections::HashMap<AppName, seedling_core::defs::app::App>,
+                    ) = {
                         let reg = schedule_registry.read();
                         reg.names()
                             .into_iter()
@@ -964,20 +973,22 @@ async fn main() {
                                         .map(|(n, a)| (n.clone(), a.params.clone()))
                                         .collect();
                                     Some((
-                                        name,
                                         (
-                                            entry.current_generation,
-                                            Arc::clone(&entry.phase),
-                                            Arc::new(schemas),
+                                            name.clone(),
+                                            (
+                                                entry.current_generation,
+                                                Arc::clone(&entry.phase),
+                                                Arc::new(schemas),
+                                            ),
                                         ),
+                                        (name, entry.app.clone()),
                                     ))
                                 } else {
                                     None
                                 }
                             })
-                            .collect()
+                            .unzip()
                     };
-                    let breaker_registry = Arc::clone(&schedule_registry);
                     let breaker_limits = oi_state_for_sched.script_limits.clone();
                     let breaker_cipher = Arc::clone(&oi_state_for_sched.cipher);
                     let sched_arc = Arc::clone(&schedule_scheduler);
@@ -1002,12 +1013,9 @@ async fn main() {
                                     app,
                                     &Thing::Action(action.clone()),
                                     || {
-                                        let Some(base) = breaker_registry
-                                            .read()
-                                            .get(app.as_str())
-                                            .map(|entry| {
-                                                breakers::Run::of_app(&entry.app, &breaker_limits)
-                                            })
+                                        let Some(base) = breaker_apps
+                                            .get(app)
+                                            .map(|app| breakers::Run::of_app(app, &breaker_limits))
                                         else {
                                             return Err(format!("app {app} is not registered"));
                                         };
