@@ -108,11 +108,12 @@ impl ContainerRuntime for Switchable<dyn ContainerRuntime> {
     fn create_network<'a>(
         &'a self,
         name: &'a str,
+        bridge_name: &'a str,
         prefix: Ipv6Net,
         ipv4: Option<Ipv4Net>,
     ) -> BoxFuture<'a, Result<String, BoxError>> {
         let inner = self.get();
-        async move { inner.create_network(name, prefix, ipv4).await }.boxed()
+        async move { inner.create_network(name, bridge_name, prefix, ipv4).await }.boxed()
     }
 
     fn remove_network<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {

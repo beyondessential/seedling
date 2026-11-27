@@ -596,6 +596,7 @@ fn a_session_whose_resources_are_slow_to_go_holds_the_stall_fault_by_its_id() {
     let network = format!("seedling-{}", job.display_name);
     oi.block_on(oi.state.driver.container.create_network(
         &network,
+        "sdp-0001",
         "fd00:0:0:1::/64".parse().unwrap(),
         None,
     ))

@@ -15,7 +15,10 @@ use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
     runtime::identity::{InstanceId, InstanceVariant, ResourceInstance},
-    system::types::{ContainerSpec, Mount, MountSource},
+    system::{
+        pod_bridge_name,
+        types::{ContainerSpec, Mount, MountSource},
+    },
 };
 
 #[derive(serde::Deserialize)]
@@ -256,7 +259,7 @@ pub(crate) async fn open_volume_shell_session(
     };
     if let Err(e) = state
         .container_runtime
-        .create_network(&net_name, net_prefix, None)
+        .create_network(&net_name, &pod_bridge_name(&net_prefix), net_prefix, None)
         .await
     {
         super::remove_session_network(&state, &net_name).await;

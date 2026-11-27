@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use snafu::{ResultExt, Snafu};
 
 use crate::system::{
-    ContainerRuntime, ProcessManager,
+    ContainerRuntime, ProcessManager, RESOLVER_BRIDGE,
     types::{
         ContainerState, ContainerStatus, SPEC_HASH_LABEL, TransientRestart, TransientUnitSpec,
     },
@@ -350,6 +350,7 @@ pub async fn ensure_resolver_running(
         let _ = container
             .create_network(
                 RESOLVER_NETWORK,
+                RESOLVER_BRIDGE,
                 resolver_prefix,
                 Some(resolver_ipv4_subnet()),
             )

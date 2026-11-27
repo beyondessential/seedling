@@ -582,6 +582,7 @@ fn the_cleanup_does_not_give_up_on_a_resource_that_is_slow_to_go() {
     let network = format!("seedling-{}", job.display_name);
     oi.block_on(oi.state.driver.container.create_network(
         &network,
+        "sdp-0001",
         "fd00:0:0:1::/64".parse().unwrap(),
         None,
     ))

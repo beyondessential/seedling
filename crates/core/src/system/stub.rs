@@ -400,19 +400,18 @@ impl ContainerRuntime for StubContainerRuntime {
     fn create_network<'a>(
         &'a self,
         name: &'a str,
+        bridge_name: &'a str,
         _prefix: ipnet::Ipv6Net,
         _ipv4: Option<Ipv4Net>,
     ) -> BoxFuture<'a, Result<String, BoxError>> {
         async move {
-            let mut s = self.state.lock();
-            let bridge_name = format!("br-{name}");
-            s.networks.insert(
+            self.state.lock().networks.insert(
                 name.to_owned(),
                 StubNetwork {
-                    bridge_name: bridge_name.clone(),
+                    bridge_name: bridge_name.to_owned(),
                 },
             );
-            Ok(bridge_name)
+            Ok(bridge_name.to_owned())
         }
         .boxed()
     }

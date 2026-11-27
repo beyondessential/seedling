@@ -15,7 +15,7 @@ use crate::{
         registry::RegistryError,
     },
     system::{
-        System,
+        System, pod_bridge_name,
         priority::{UnitStanding, WorkloadStanding},
         types::{ActiveState, TransientRestart, TransientUnitSpec},
     },
@@ -282,7 +282,7 @@ async fn ensure_network(
         Ok(Some(
             driver
                 .container
-                .create_network(net_name, net_prefix, None)
+                .create_network(net_name, &pod_bridge_name(&net_prefix), net_prefix, None)
                 .await
                 .context(ContainerSnafu)?,
         ))

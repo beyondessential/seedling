@@ -177,9 +177,14 @@ mod tests {
     }
 
     async fn network(rt: &StubContainerRuntime, name: &str) {
-        rt.create_network(name, "fd5e:ed00:0:1::/64".parse().unwrap(), None)
-            .await
-            .expect("create network");
+        rt.create_network(
+            name,
+            "sdp-0001",
+            "fd5e:ed00:0:1::/64".parse().unwrap(),
+            None,
+        )
+        .await
+        .expect("create network");
     }
 
     async fn network_names(rt: &StubContainerRuntime) -> Vec<String> {

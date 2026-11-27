@@ -4666,6 +4666,7 @@ mod tests {
         containers.seed_container(&instance.display_name, &[]);
         oi.block_on(oi.state.driver.container.create_network(
             &network,
+            "sdp-0001",
             "fd00:0:0:1::/64".parse().unwrap(),
             None,
         ))

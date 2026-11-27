@@ -29,6 +29,7 @@ use crate::{
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
     system::{
+        pod_bridge_name,
         translate::container::{ConfigStamp, job_spec},
         types::ExecHandle,
     },
@@ -958,7 +959,7 @@ impl AppShellHost {
             .map_err(|e| format!("create network failed: {e}"))?;
         if let Err(e) = state
             .container_runtime
-            .create_network(&net_name, net_prefix, None)
+            .create_network(&net_name, &pod_bridge_name(&net_prefix), net_prefix, None)
             .await
         {
             super::remove_session_network(state, &net_name).await;

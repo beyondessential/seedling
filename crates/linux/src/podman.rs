@@ -276,6 +276,7 @@ impl PodmanRuntime {
     async fn create_network_impl(
         &self,
         name: &str,
+        bridge_name: &str,
         prefix: Ipv6Net,
         ipv4: Option<ipnet::Ipv4Net>,
     ) -> Result<String, PodmanError> {
@@ -325,6 +326,7 @@ impl PodmanRuntime {
         let body = NetworkCreateLibpod {
             name: Some(name.to_string()),
             driver: Some("bridge".to_string()),
+            network_interface: Some(bridge_name.to_string()),
             ipv6_enabled: if dual_stack { Some(true) } else { None },
             // Explicitly disable Podman's built-in DNS. DNS for containers is owned by
             // seedling's CoreDNS resolver plus the in-process forwarder, reached via each
@@ -338,8 +340,6 @@ impl PodmanRuntime {
             ..Default::default()
         };
 
-        // The creation response includes network_interface: the bridge name
-        // assigned by netavark (e.g. "podman1" or "br-<id>").
         let created = self
             .client
             .v5()
@@ -348,14 +348,24 @@ impl PodmanRuntime {
             .await
             .map_err(map_api_err)?;
 
-        let bridge_name = created.network_interface.ok_or_else(|| {
+        let assigned = created.network_interface.ok_or_else(|| {
             ProtocolSnafu {
                 message: format!("network {name} was created but has no network_interface field"),
             }
             .build()
         })?;
+        // The packet filter recognises the network by its bridge name, so a
+        // network whose bridge is named otherwise is one it does not cover.
+        if assigned != bridge_name {
+            return ProtocolSnafu {
+                message: format!(
+                    "network {name} was created with bridge {assigned}, not {bridge_name}"
+                ),
+            }
+            .fail();
+        }
 
-        Ok(bridge_name)
+        Ok(assigned)
     }
 
     async fn list_networks_impl(&self, prefix: &str) -> Result<Vec<NetworkSummary>, PodmanError> {
@@ -982,11 +992,12 @@ impl ContainerRuntime for PodmanRuntime {
     fn create_network<'a>(
         &'a self,
         name: &'a str,
+        bridge_name: &'a str,
         prefix: Ipv6Net,
         ipv4: Option<ipnet::Ipv4Net>,
     ) -> BoxFuture<'a, Result<String, BoxError>> {
         Box::pin(async move {
-            self.create_network_impl(name, prefix, ipv4)
+            self.create_network_impl(name, bridge_name, prefix, ipv4)
                 .await
                 .map_err(Into::into)
         })

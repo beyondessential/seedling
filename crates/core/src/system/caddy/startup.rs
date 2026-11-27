@@ -10,7 +10,7 @@ use snafu::{ResultExt, Snafu};
 use super::config::build_caddy_config;
 use super::proxy::{CaddyAddrs, CaddyProxy};
 use crate::system::{
-    ContainerRuntime, NetworkProxy, ProcessManager,
+    ContainerRuntime, NetworkProxy, PROXY_BRIDGE, ProcessManager,
     types::{ContainerStatus, ProxyConfig, TransientRestart, TransientUnitSpec},
 };
 use crate::system::{journal::INFRA_FIELD, priority::UnitStanding};
@@ -490,7 +490,12 @@ pub(crate) async fn ensure_caddy_running(
         .context(ContainerSnafu)?
     {
         let _ = container
-            .create_network(PROXY_NETWORK, proxy_prefix, Some(proxy_ipv4_subnet()))
+            .create_network(
+                PROXY_NETWORK,
+                PROXY_BRIDGE,
+                proxy_prefix,
+                Some(proxy_ipv4_subnet()),
+            )
             .await
             .context(ContainerSnafu)?;
     }

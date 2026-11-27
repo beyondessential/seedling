@@ -67,6 +67,26 @@ pub fn first_host_v6(prefix: &Ipv6Net) -> Option<std::net::Ipv6Addr> {
     (prefix.prefix_len() <= 126).then(|| std::net::Ipv6Addr::from(u128::from(prefix.network()) + 1))
 }
 
+/// The start of every pod network's bridge name. Packet filter rules match pod
+/// bridges by it.
+pub const POD_BRIDGE_PREFIX: &str = "sdp-";
+
+/// The bridge name of the proxy network.
+pub const PROXY_BRIDGE: &str = "sdl-proxy";
+
+/// The bridge name of the resolver network.
+pub const RESOLVER_BRIDGE: &str = "sdl-resolver";
+
+/// The bridge name of the pod network holding `prefix`: [`POD_BRIDGE_PREFIX`]
+/// and the /64's subnet ID, the bits between the host's /48 and the /64, as
+/// four hex digits.
+///
+/// Unique because the prefix is allocated and recorded, and within Linux's
+/// 15-character limit on interface names.
+pub fn pod_bridge_name(prefix: &Ipv6Net) -> String {
+    format!("{POD_BRIDGE_PREFIX}{:04x}", prefix.network().segments()[3])
+}
+
 // spec: INFRA#pod-networks
 pub fn first_host_v4(prefix: &ipnet::Ipv4Net) -> Option<std::net::Ipv4Addr> {
     (prefix.prefix_len() <= 30).then(|| std::net::Ipv4Addr::from(u32::from(prefix.network()) + 1))
@@ -126,10 +146,12 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     // Networks — one IPv6 /64 per pod instance.
     // The host bridge is assigned ::1 (gateway) and ::2 (mount endpoint).
     fn network_exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<bool, BoxError>>;
-    /// Returns the Linux bridge interface name assigned to the network.
+    /// Create the network with its bridge interface named `bridge_name`, and
+    /// return the bridge name the runtime reports for it.
     fn create_network<'a>(
         &'a self,
         name: &'a str,
+        bridge_name: &'a str,
         prefix: Ipv6Net,
         ipv4: Option<Ipv4Net>,
     ) -> BoxFuture<'a, Result<String, BoxError>>;
@@ -608,6 +630,37 @@ mod gateway_tests {
                 .parse::<std::net::Ipv6Addr>()
                 .unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod bridge_name_tests {
+    use super::{POD_BRIDGE_PREFIX, PROXY_BRIDGE, RESOLVER_BRIDGE, pod_bridge_name};
+
+    /// Linux refuses interface names longer than this.
+    const IFNAMSIZ_CHARS: usize = 15;
+
+    #[test]
+    fn a_pod_bridge_is_named_after_its_subnet_id() {
+        let name = |p: &str| pod_bridge_name(&p.parse().unwrap());
+        assert_eq!(name("fd5e:1234:5678:0a1b::/64"), "sdp-0a1b");
+        assert_eq!(name("fd5e:1234:5678:4::/64"), "sdp-0004");
+        assert_eq!(name("fd5e:1234:5678:ffff::/64"), "sdp-ffff");
+        assert_ne!(
+            name("fd5e:1234:5678:0400::/64"),
+            name("fd5e:1234:5678:0401::/64")
+        );
+    }
+
+    #[test]
+    fn every_bridge_name_fits_an_interface_name() {
+        let widest = pod_bridge_name(&"fd5e:1234:5678:ffff::/64".parse().unwrap());
+        for name in [widest.as_str(), PROXY_BRIDGE, RESOLVER_BRIDGE] {
+            assert!(name.len() <= IFNAMSIZ_CHARS, "{name} is too long");
+        }
+        assert!(widest.starts_with(POD_BRIDGE_PREFIX));
+        assert!(!PROXY_BRIDGE.starts_with(POD_BRIDGE_PREFIX));
+        assert!(!RESOLVER_BRIDGE.starts_with(POD_BRIDGE_PREFIX));
     }
 }
 

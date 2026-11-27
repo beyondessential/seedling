@@ -99,9 +99,15 @@ async fn started(state: &OiState, stdin: impl AsyncWrite + Send + Unpin + 'stati
     ));
 
     let net_name = "seedling-shell-test";
+    let net_prefix = "fd5e:ed11:9000:1::/64".parse().unwrap();
     state
         .container_runtime
-        .create_network(net_name, "fd5e:ed11:9000:1::/64".parse().unwrap(), None)
+        .create_network(
+            net_name,
+            &crate::system::pod_bridge_name(&net_prefix),
+            net_prefix,
+            None,
+        )
         .await
         .expect("create network");
 
