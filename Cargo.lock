@@ -5083,7 +5083,7 @@ dependencies = [
 
 [[package]]
 name = "seedling"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "clap",
  "futures-util",
@@ -5104,7 +5104,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-bundle"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -5121,7 +5121,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-core"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "arc-swap",
  "argon2",
@@ -5203,7 +5203,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-ctl"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -5230,7 +5230,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-linux"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bytes",
  "futures-util",
@@ -5257,7 +5257,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-protocol"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "compact_str",
  "dirs",
@@ -5280,7 +5280,7 @@ dependencies = [
 
 [[package]]
 name = "seedling-web"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "argon2",
  "axum",
