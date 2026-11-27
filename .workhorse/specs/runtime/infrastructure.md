@@ -180,7 +180,7 @@ The runtime MUST drop forwarded packets addressed to the host prefix, except:
 The runtime MUST NOT forward a packet from one pod network to another unless it belongs to a connection whose destination [mount translation](#mount-endpoint-addressing) rewrote, or is related to one.
 The runtime MUST keep this policy in force whenever a container on a pod network is running: before it first applies the rules it holds as absolute state, while an application of them is withheld, and across a restart of the runtime.
 
-The runtime MUST NOT drop or otherwise filter forwarded traffic addressed outside the host prefix.
+Other than under the [pod network source](#pod-network-sources) rule, the runtime MUST NOT drop or otherwise filter forwarded traffic addressed outside the host prefix.
 
 > [!NOTE]
 > A pod still reaches another app's ingress through the proxy, by the host's own addresses, as any client on the network does.
