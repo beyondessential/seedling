@@ -63,9 +63,21 @@ pub fn delete_one_param(
 /// Bring the app's `script_error` fault in line with its evaluation: filed
 /// with `script_error`'s message where the evaluation failed, replacing one
 /// filed for another message, and cleared where it succeeded.
+///
+/// An evaluation that ran out of time, or that its breaker kept from running,
+/// neither files nor clears it.
 // spec: FLT#app-faults
-pub fn sync_script_error_fault(db: &Db, app_name: &AppName, script_error: Option<&str>) {
+pub fn sync_script_error_fault(
+    db: &Db,
+    app_name: &AppName,
+    script_error: Option<&super::ScriptError>,
+) {
     use crate::runtime::faults;
+    let script_error = match script_error {
+        Some(super::ScriptError::Failed { message: msg, .. }) => Some(msg.as_str()),
+        Some(super::ScriptError::Runaway(_) | super::ScriptError::BreakerUnreadable(_)) => return,
+        None => None,
+    };
     let existing: Vec<_> = faults::list_active_faults(db, Some(app_name))
         .unwrap_or_default()
         .into_iter()

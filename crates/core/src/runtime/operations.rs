@@ -487,7 +487,56 @@ pub(crate) fn run_operation_loop(
         });
     }
 
+    // spec: LIM#breakers
+    // Only a pass at the app's current generation is tracked; one at an
+    // earlier generation is stopped at the limit all the same.
+    let thing = match (&gate, target.gate(), target.action()) {
+        (Some(_), Some(name), _) => crate::runtime::breakers::Thing::Gate(name.clone()),
+        (_, _, Some(name)) => crate::runtime::breakers::Thing::Action(name.clone()),
+        _ => unreachable!("an operation runs an action or a gate's body"),
+    };
+    // What every evaluation of this app runs with, before the params or the
+    // last success of the one thing: the base an `invoke` is consulted with
+    // as well, so it is built once.
+    let base = Arc::new(crate::runtime::breakers::Run::of_app(app, script_limits));
+    let run = {
+        let run = base.as_ref().clone();
+        match &gate {
+            Some(input) => run.with_last_success(input.last),
+            None => {
+                let def = app.def.load();
+                let schema = target
+                    .action()
+                    .and_then(|action| def.actions.get(action))
+                    .map(|a| a.params.clone())
+                    .unwrap_or_default();
+                run.with_params(&params, &schema)
+            }
+        }
+    };
+    let tracked = || {
+        apps.read()
+            .get(app_name.as_str())
+            .is_some_and(|e| e.current_generation == op_ctx.operation_generation)
+    };
+    let mut standing = None;
+    if tracked() {
+        match crate::runtime::breakers::consult_lazily(&db, &cipher, app_name, &thing, || {
+            Ok(run.clone())
+        }) {
+            Ok(s) => standing = Some(s),
+            Err(refusal) => return OperationEnd::Failed(refusal.message().to_owned()),
+        }
+    }
+
     loop {
+        // spec: ACN#action-invocation
+        // The breakers of what the closure invokes are read as each pass
+        // begins, so a pass that follows a wait sees them as they stand then.
+        let _invokes = crate::runtime::breakers::InvokesGuard::enter(
+            Arc::clone(&base),
+            crate::runtime::breakers::consulting_once(app_name, db.clone(), Arc::clone(&cipher)),
+        );
         // spec: RT#resources-a-gate-holds
         // What gates keep from the closure is read for each pass, so a pass
         // that follows a wait sees the gates as they stand then. In a gate's
@@ -513,6 +562,9 @@ pub(crate) fn run_operation_loop(
                 )
             })
         };
+        // spec: LIM#measuring-evaluation-time
+        // A pass is one evaluation, the definition it begins with included.
+        let evaluation = crate::evaluation::Evaluation::start(script_limits);
         let result = run_operation(
             OperationContext {
                 engine: &engine,
@@ -545,6 +597,45 @@ pub(crate) fn run_operation_loop(
             },
             &mut scope,
         );
+        // spec: LIM#measuring-evaluation-time
+        // spec: LIM#breakers
+        let ran_out = evaluation.exceeded();
+        drop(evaluation);
+        if ran_out {
+            let why = crate::evaluation::out_of_time_message(script_limits);
+            tracing::error!(app = %app_name, operation = %target, "operation failed: {why}");
+            if tracked() {
+                crate::runtime::breakers::record_outcome(
+                    &db,
+                    &cipher,
+                    app_name,
+                    &thing,
+                    &run,
+                    crate::runtime::breakers::Outcome::RanOut {
+                        generation: op_ctx.operation_generation,
+                        limits: script_limits.clone(),
+                    },
+                );
+            }
+            return OperationEnd::Failed(why);
+        }
+        // spec: LIM#breakers
+        // A pass an operator cancelled neither finished within the limit nor
+        // ran past it, so it says nothing about how long the closure takes
+        // and earns no reset.
+        if !matches!(result, OperationResult::Cancelled)
+            && let Some(standing) = standing.take()
+            && tracked()
+        {
+            crate::runtime::breakers::record_outcome(
+                &db,
+                &cipher,
+                app_name,
+                &thing,
+                &run,
+                crate::runtime::breakers::Outcome::InTime(standing),
+            );
+        }
         match result {
             OperationResult::Completed => return OperationEnd::Completed,
             OperationResult::Failed(e) => {

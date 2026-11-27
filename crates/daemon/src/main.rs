@@ -454,7 +454,7 @@ async fn main() {
                     seedling_core::runtime::apps::sync_script_error_fault(
                         &db,
                         &entry.name,
-                        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+                        entry.script_error.as_ref().map(|(e, _)| e),
                     );
                 }
             },
@@ -940,10 +940,19 @@ async fn main() {
                     // spec: SCHED#firing
                     // Only Installed apps' schedules may fire. Apps
                     // uninstalling or never installed are excluded.
-                    let app_generations: std::collections::HashMap<
-                        AppName,
-                        seedling_core::runtime::schedules::ScheduledApp,
-                    > = {
+                    // spec: ACN#scheduled-actions
+                    // The app each breaker run is assembled from is taken
+                    // here too, under this read of the registry: the check
+                    // runs on the database thread, which must never wait on
+                    // the registry's lock, since a request can hold that lock
+                    // while it waits on the database.
+                    let (app_generations, breaker_apps): (
+                        std::collections::HashMap<
+                            AppName,
+                            seedling_core::runtime::schedules::ScheduledApp,
+                        >,
+                        std::collections::HashMap<AppName, seedling_core::defs::app::App>,
+                    ) = {
                         let reg = schedule_registry.read();
                         reg.names()
                             .into_iter()
@@ -964,19 +973,24 @@ async fn main() {
                                         .map(|(n, a)| (n.clone(), a.params.clone()))
                                         .collect();
                                     Some((
-                                        name,
                                         (
-                                            entry.current_generation,
-                                            Arc::clone(&entry.phase),
-                                            Arc::new(schemas),
+                                            name.clone(),
+                                            (
+                                                entry.current_generation,
+                                                Arc::clone(&entry.phase),
+                                                Arc::new(schemas),
+                                            ),
                                         ),
+                                        (name, entry.app.clone()),
                                     ))
                                 } else {
                                     None
                                 }
                             })
-                            .collect()
+                            .unzip()
                     };
+                    let breaker_limits = oi_state_for_sched.script_limits.clone();
+                    let breaker_cipher = Arc::clone(&oi_state_for_sched.cipher);
                     let sched_arc = Arc::clone(&schedule_scheduler);
                     let helper_limits = oi_state_for_sched.script_limits.helpers();
                     let accepted_fires = schedule_db.call(move |db| {
@@ -986,6 +1000,35 @@ async fn main() {
                             &mut sched,
                             now,
                             &helper_limits,
+                            // spec: ACN#scheduled-actions
+                            // What the run is evaluated with is assembled
+                            // only for a schedule that is due, and only
+                            // where the breaker has a fault to compare it
+                            // against, rather than for every app each tick.
+                            &|db, app, action, params| {
+                                use seedling_core::runtime::breakers::{self, Thing};
+                                breakers::standing(
+                                    db,
+                                    &breaker_cipher,
+                                    app,
+                                    &Thing::Action(action.clone()),
+                                    || {
+                                        let Some(base) = breaker_apps
+                                            .get(app)
+                                            .map(|app| breakers::Run::of_app(app, &breaker_limits))
+                                        else {
+                                            return Err(format!("app {app} is not registered"));
+                                        };
+                                        let schema = app_generations
+                                            .get(app)
+                                            .and_then(|(_, _, schemas)| {
+                                                schemas.get(action).cloned()
+                                            })
+                                            .unwrap_or_default();
+                                        Ok(base.with_params(params, &schema))
+                                    },
+                                )
+                            },
                             &|app_name| app_generations.get(app_name).cloned(),
                         );
                         drop(sched);
@@ -1619,8 +1662,11 @@ mod tests {
             "0",
             "--script-max-regex-compiled-size",
             "0",
+            "--script-max-evaluation-time",
+            "0",
         ])
         .unwrap();
+        assert_eq!(args.script_limits.max_evaluation_time, 0);
         assert_eq!(args.script_limits.max_operations, 0);
         assert_eq!(args.script_limits.max_password_hashes, 0);
         assert_eq!(args.script_limits.max_regex_compiled_size, 0);

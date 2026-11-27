@@ -120,6 +120,7 @@ The barriers include `.scheduled()`, `.running()`, `.ready()`, `.ready_eventuall
 `termination.ensure_success()` MUST succeed.
 
 If a handler's closure throws, the probe MUST report the thrown message as that handler's error, together with the image references recorded before the throw.
+A handler whose closure fails at the [evaluation time limit](engine-limits.md#measuring-evaluation-time), or whose [breaker](engine-limits.md#breakers) is tripped, MUST be reported with that as its error.
 
 > [!NOTE]
 > A probe follows the success path of every closure, so an image reference reached only after a failure, such as in a branch taken when `ensure_success()` fails, is not reported.

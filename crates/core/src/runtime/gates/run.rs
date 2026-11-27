@@ -48,7 +48,7 @@ use crate::{
             BoundParams, Engine, GateInput, OperationEnd, Persisted, adapters, app_at_generation,
             clear_superseded_operation_faults, language_for, run_operation_loop,
         },
-        probe::probe_gate_body,
+        probe::{ProbeBounds, probe_gate_body},
         registry::DbInstanceRegistry,
         secrets::KeyDigest,
     },
@@ -394,6 +394,17 @@ impl Run<'_> {
             .call(move |db| store::begin_run(db, &n, &g))
             .map_err(|e| format!("the gate's last success could not be invalidated: {e}"))?;
 
+        // spec: GRUN#preparation
+        // spec: LIM#breakers
+        if gate_def.has_body {
+            use crate::runtime::breakers::{self, Thing};
+            let thing = Thing::Gate(gate.clone());
+            breakers::consult_lazily(&state.db, &state.cipher, &name, &thing, || {
+                Ok(breakers::Run::of_app(app, &state.script_limits).with_last_success(last))
+            })
+            .map_err(|refusal| Stopped::Failed(refusal.message().to_owned()))?;
+        }
+
         let images = self.images(app, def, gate_def, last).await?;
         stream::iter(images)
             .map(|image| async move { self.ensure_image(&image).await })
@@ -433,11 +444,29 @@ impl Run<'_> {
                 self.state.db.clone(),
                 self.state.script_limits.clone(),
             );
+            let (app_name, cipher) = (self.app_name.clone(), Arc::clone(&self.state.cipher));
             let probed = tokio::task::spawn_blocking(move || {
-                let (engine, _scope, ast) = language_for(&app, &limits)?;
+                let tripped =
+                    crate::runtime::breakers::consulting_once(&app_name, db.clone(), cipher);
+                let (engine, _scope, ast) = language_for(&app, &limits)
+                    .map_err(crate::runtime::apps::ScriptError::failed)?;
                 let registry: Arc<dyn crate::runtime::InstanceRegistry> =
                     Arc::new(DbInstanceRegistry::new(db));
-                probe_gate_body(&engine, &ast, &app, registry, &gate, last.as_ref())
+                // spec: GRUN#preparation
+                // An action the body invokes is refused while its breaker is
+                // tripped, failing the probe as it would fail the run.
+                probe_gate_body(
+                    &engine,
+                    &ast,
+                    &app,
+                    registry,
+                    &gate,
+                    last.as_ref(),
+                    &ProbeBounds {
+                        limits: &limits,
+                        tripped,
+                    },
+                )
             })
             .await
             .map_err(|e| format!("the probe of the gate's body failed: {e}"))?

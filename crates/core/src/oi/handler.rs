@@ -80,6 +80,7 @@ mod templates;
 mod tls;
 mod volumes;
 
+pub(crate) use apps::definition_refusal;
 pub(crate) use params::current_sensitive;
 pub(crate) use status::get_infra_status;
 

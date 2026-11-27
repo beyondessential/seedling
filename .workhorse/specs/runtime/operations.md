@@ -175,7 +175,7 @@ The runtime MUST identify the actions on the stack by name.
 
 The supplied parameters are validated before the invoked closure runs, as [action invocation](../language/action.md#action-invocation) specifies.
 
-On replay, the runtime MUST run a call already recorded in the [action log](history.md#action-calls) with the parameters its entry holds, restored as [persistence](#persistence) specifies, and MUST NOT validate them again.
+On replay, the runtime MUST run a call already recorded in the [action log](history.md#action-calls) with the parameters its entry holds, restored as [persistence](#persistence) specifies, and MUST NOT validate them again nor check the invoked action's [breaker](engine-limits.md#breakers).
 If the entry at the call's position records a different action than the one being invoked, the runtime MUST fail the replay as a [divergence](suspension.md#positional-replay).
 
 > [!NOTE]

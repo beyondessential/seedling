@@ -264,41 +264,16 @@ pub fn constants(
     let mut constants = BTreeMap::new();
 
     // spec: CONST#host-constants
-    constants.insert(
-        "AVAILABLE_THREADS",
-        Dynamic::from(facts.available_threads.unwrap_or(1)),
-    );
-
-    // spec: CONST#host-constants
-    if let Ok(memory) = facts.available_memory {
-        constants.insert("AVAILABLE_MEMORY", Dynamic::from(memory));
+    for (name, value) in facts.host_constants() {
+        constants.insert(
+            name,
+            match value {
+                crate::sysconst::HostConstant::Int(n) => Dynamic::from(n),
+                crate::sysconst::HostConstant::Bool(b) => Dynamic::from(b),
+                crate::sysconst::HostConstant::Text(t) => Dynamic::from(t),
+            },
+        );
     }
-
-    // spec: CONST#host-constants
-    constants.insert(
-        "CPU_ARCHITECTURE",
-        Dynamic::from(facts.cpu_architecture.clone()),
-    );
-
-    // spec: CONST#host-constants
-    constants.insert("HOST_HAS_IPV4", Dynamic::from(facts.ipv4_egress));
-
-    // spec: CONST#host-constants
-    constants.insert("HOST_HAS_IPV6", Dynamic::from(facts.ipv6_egress));
-
-    // spec: CONST#host-constants
-    constants.insert("NAT64_ACTIVE", Dynamic::from(facts.nat64_active));
-
-    // spec: CONST#host-constants
-    constants.insert("HAS_SNAPSHOTS", Dynamic::from(facts.has_snapshots));
-
-    // spec: CONST#host-constants
-    if let Ok(name) = &facts.node_name {
-        constants.insert("NODE_NAME", Dynamic::from(name.clone()));
-    }
-
-    // spec: CONST#host-constants
-    constants.insert("TIMEZONE", Dynamic::from(facts.timezone.clone()));
 
     // spec: CONST#idle-command
     // spec: LINUX#idle-command

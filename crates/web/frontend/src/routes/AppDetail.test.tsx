@@ -243,6 +243,37 @@ describe("AppDetail page", () => {
       );
     });
 
+    const definitionRunaway = makeFault({
+      kind: "evaluation_runaway",
+      resource_type: null,
+      resource_name: null,
+      instance_id: null,
+      description: "the app's definition ran past the evaluation time limit",
+    });
+
+    it("withholds install while the definition has run away", async () => {
+      mount(
+        baseFixtures(makeDetail({ ...notInstalled(), faults: [definitionRunaway] })),
+        "write",
+      );
+      const install = await screen.findByRole("button", { name: "Install" });
+      expect((install as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("offers install while only an action has run away", async () => {
+      const actionRunaway = {
+        ...definitionRunaway,
+        resource_type: "action",
+        resource_name: "backup",
+      };
+      mount(
+        baseFixtures(makeDetail({ ...notInstalled(), faults: [actionRunaway] })),
+        "write",
+      );
+      const install = await screen.findByRole("button", { name: "Install" });
+      expect((install as HTMLButtonElement).disabled).toBe(false);
+    });
+
     it("deregisters the app through the confirm dialog", async () => {
       const { request } = mount(baseFixtures(notInstalled()), "dangerous");
       fireEvent.click(await screen.findByRole("button", { name: "Deregister" }));

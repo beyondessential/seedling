@@ -36,9 +36,11 @@ A client opens a [shell session](#shell-session) on one of an app's [shells](../
 
 The server MUST reject a request naming an app that is not registered with `not_found`.
 The server MUST reject the request with `not_installed` unless the app's [install phase](../overview.md#install-phase) is `Installed`.
+If the app has an active `evaluation_runaway` [fault](../runtime/faults.md#app-faults) with an empty subject, the server MUST reject the request with `evaluation_runaway`, and if it has an active `script_error` fault, with `script_error`.
 The server MUST reject a request naming a shell the app does not declare with `not_found`.
 A `params` key ending in `_volume` or `_filename` is [reserved](../language/action.md#param-delivery), and the server MUST reject a request carrying one with `requirements_invalid`.
 Where the shell declares parameters, the server MUST validate `params` and fill in defaults as for [action parameters](actions.md#action-parameters).
+If the shell's [breaker](../runtime/engine-limits.md#breakers) is tripped for the definition and inputs the session would evaluate it with, the server MUST reject the request with `evaluation_runaway`.
 
 On success the handshake response's result is:
 

@@ -18,6 +18,7 @@ use crate::{
         regex::Budget,
     },
     runtime::{
+        breakers,
         db::{Db, DbHandle},
         definition::Source,
         desired::OperationProgress,
@@ -38,18 +39,32 @@ pub use params::{
 };
 pub use registry_faults::{sync_registry_faults, sync_used_registries};
 
-#[derive(Debug)]
-pub struct ScriptError {
-    pub message: String,
-    /// The script file, and the line within it, where the error arose, for
-    /// an error that arose at a position in the script.
-    // spec: CLI#check-results
-    pub at: Option<(String, usize)>,
+/// Why an evaluation of a definition failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptError {
+    /// The script failed to parse or evaluate.
+    Failed {
+        message: String,
+        /// The script file, and the line within it, where the error arose,
+        /// for an error that arose at a position in the script.
+        // spec: CLI#check-results
+        at: Option<(String, usize)>,
+    },
+    /// The evaluation ran past the evaluation time limit, or a tripped
+    /// breaker failed it.
+    // spec: LIM#measuring-evaluation-time
+    // spec: LIM#breakers
+    Runaway(String),
+    /// Whether the breaker is tripped could not be read, so the definition
+    /// was not evaluated.
+    // spec: LIM#breakers
+    BreakerUnreadable(String),
 }
 
 impl ScriptError {
-    fn new(message: String) -> Self {
-        Self { message, at: None }
+    /// A failure that arose at no position in the script.
+    pub fn failed(message: String) -> Self {
+        Self::Failed { message, at: None }
     }
 
     /// An error Rhai raised evaluating `script`, at the position where it
@@ -70,20 +85,63 @@ impl ScriptError {
             .line()
             .and_then(|line| script.locate(line))
             .map(|(file, line)| (file.to_owned(), line));
-        Self {
+        Self::Failed {
             message: script.remap_error(&e.to_string()),
             at,
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Failed { message, .. }
+            | Self::Runaway(message)
+            | Self::BreakerUnreadable(message) => message,
+        }
+    }
+
+    /// The script file and line a failure arose at, where it arose at one.
+    pub fn at(&self) -> Option<&(String, usize)> {
+        match self {
+            Self::Failed { at, .. } => at.as_ref(),
+            Self::Runaway(_) | Self::BreakerUnreadable(_) => None,
+        }
+    }
+
+    pub fn is_runaway(&self) -> bool {
+        matches!(self, Self::Runaway(_))
+    }
+
+    fn map(self, f: impl FnOnce(String) -> String) -> Self {
+        match self {
+            Self::Failed { message, at } => Self::Failed {
+                message: f(message),
+                at,
+            },
+            Self::Runaway(m) => Self::Runaway(f(m)),
+            Self::BreakerUnreadable(m) => Self::BreakerUnreadable(f(m)),
         }
     }
 }
 
 impl std::fmt::Display for ScriptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(self.message())
     }
 }
 
 impl std::error::Error for ScriptError {}
+
+/// A definition a breaker refused is a definition that failed to evaluate,
+/// under the kind the refusal gives.
+// spec: LIM#breakers
+impl From<breakers::Refusal> for ScriptError {
+    fn from(refusal: breakers::Refusal) -> Self {
+        match refusal {
+            breakers::Refusal::Tripped(why) => Self::Runaway(why),
+            breakers::Refusal::Unreadable(why) => Self::BreakerUnreadable(why),
+        }
+    }
+}
 
 /// What [`AppRegistry::reload`] did to the registry.
 ///
@@ -247,7 +305,7 @@ pub struct AppEntry {
     pub tick_notify: Arc<Notify>,
     /// Active script-evaluation fault, if the last reload failed.
     /// Cleared on the next successful evaluation.
-    pub script_error: Option<(String, Timestamp)>,
+    pub script_error: Option<(ScriptError, Timestamp)>,
     /// Current app generation (0 if not yet bumped).
     // spec: APPS#generations
     pub current_generation: generations::Generation,
@@ -353,7 +411,7 @@ impl AppRegistry {
     ) {
         let script_error = script_error.map(|e| {
             tracing::warn!(app = %name, error = %e, "script has errors at registration; params may need to be set");
-            (e.to_string(), Timestamp::now())
+            (e, Timestamp::now())
         });
         self.entries.insert(
             name.as_str().to_owned(),
@@ -443,10 +501,21 @@ impl AppRegistry {
             // dropped rather than published, so the previous good definition
             // keeps running and nothing downstream can diff against it.
             Some(e) => {
-                entry.script_error = Some((e.to_string(), Timestamp::now()));
+                entry.script_error = Some((e.clone(), Timestamp::now()));
                 ReloadOutcome::KeptPrevious(e)
             }
         }
+    }
+
+    /// Keep the app's definition as it is, recording why its definition was
+    /// not evaluated.
+    // spec: LIM#breakers
+    fn keep_previous(&mut self, name: &AppName, e: ScriptError) -> ReloadOutcome {
+        let Some(entry) = self.entries.get_mut(name.as_str()) else {
+            return ReloadOutcome::NotRegistered;
+        };
+        entry.script_error = Some((e.clone(), Timestamp::now()));
+        ReloadOutcome::KeptPrevious(e)
     }
 
     /// Install an already-evaluated, already-validated definition, whose
@@ -554,7 +623,21 @@ impl AppRegistry {
             };
             // spec: APPS#persistence — reload runs no validators: the stored
             // combination was validated when it was written.
-            let (app, raw_error) = evaluate(&name, &bundle, &stored, &seed, limits);
+            // spec: LIM#breakers
+            let tracked = DefinitionRun::new(
+                &name,
+                breakers::Run::new(bundle.hash(), &stored, Some(&seed), limits),
+                current_generation,
+                limits,
+            );
+            let (app, raw_error) = match tracked.consult(db, cipher) {
+                Err(refusal) => (App::with_bundle(Arc::clone(&bundle)), Some(refusal)),
+                Ok(standing) => {
+                    let (app, raw_error) = evaluate(&name, &bundle, &stored, &seed, limits);
+                    tracked.record(db, cipher, standing, raw_error.as_ref(), &app.def.load());
+                    (app, raw_error)
+                }
+            };
             // spec: SEC#migration — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
             migrate_param_storage(db, cipher, &name, &app, raw_error.is_none());
@@ -568,7 +651,7 @@ impl AppRegistry {
             }
             let script_error = raw_error.map(|e| {
                 tracing::warn!("failed to reload script for app '{name}': {e}");
-                (e.to_string(), Timestamp::now())
+                (e, Timestamp::now())
             });
             registry.entries.insert(
                 name.as_str().to_owned(),
@@ -798,7 +881,45 @@ pub fn reload(
     params: &BTreeMap<String, String>,
     limits: &crate::ScriptLimits,
 ) -> ReloadOutcome {
-    let outcome = registry.write().reevaluate(name, params, limits);
+    // spec: LIM#breakers
+    let Some((bundle, seed, generation)) = registry
+        .read()
+        .get(name.as_str())
+        .map(|e| (Arc::clone(&e.bundle), e.seed.clone(), e.current_generation))
+    else {
+        return ReloadOutcome::NotRegistered;
+    };
+    let tracked = Arc::new(DefinitionRun::new(
+        name,
+        breakers::Run::new(bundle.hash(), params, Some(&seed), limits),
+        generation,
+        limits,
+    ));
+    let standing = {
+        let (tracked, cipher) = (Arc::clone(&tracked), Arc::clone(cipher));
+        db.call(move |db| tracked.consult(db, &cipher))
+    };
+    let outcome = match standing {
+        Err(refusal) => registry.write().keep_previous(name, refusal),
+        Ok(standing) => {
+            let outcome = registry.write().reevaluate(name, params, limits);
+            let error = match &outcome {
+                ReloadOutcome::KeptPrevious(e) => Some(e.clone()),
+                _ => None,
+            };
+            let declared = registry
+                .read()
+                .get(name.as_str())
+                .map(|e| e.app.def.load_full());
+            if let Some(declared) = declared {
+                let cipher = Arc::clone(cipher);
+                db.call(move |db| {
+                    tracked.record(db, &cipher, standing, error.as_ref(), &declared);
+                });
+            }
+            outcome
+        }
+    };
     if outcome.is_applied() {
         let running = registry.read().get(name.as_str()).map(|e| e.app.clone());
         if let Some(running) = running {
@@ -814,6 +935,98 @@ pub fn reload(
         }
     }
     outcome
+}
+
+/// Record that an evaluation of `name`'s definition that the runtime has
+/// adopted as the app's own finished within the limit.
+///
+/// Its breaker resets whatever it was tripped for, so where it stood is not
+/// read: a read that failed would otherwise leave the old definition's fault
+/// active over a definition the runtime has just evaluated in time, holding
+/// back an app the server would itself accept requests for.
+// spec: LIM#breakers
+pub fn record_adopted_definition(
+    db: &Db,
+    cipher: &Cipher,
+    name: &AppName,
+    run: &breakers::Run,
+    declared: &crate::defs::app::AppDef,
+) {
+    breakers::adopted_in_time(db, cipher, name, &breakers::Thing::Definition, run);
+    if let Err(e) = breakers::reset_undeclared(db, name, declared) {
+        tracing::error!(app = %name, "cannot reset breakers of undeclared closures: {e}");
+    }
+}
+
+/// One tracked evaluation of an app's definition: what it runs with, the
+/// generation it is at, and the limits in force. Every place that evaluates a
+/// definition against its breaker consults it before, and records how the
+/// evaluation ended after, through this.
+// spec: LIM#breakers
+pub struct DefinitionRun {
+    name: AppName,
+    run: breakers::Run,
+    generation: u64,
+    limits: crate::ScriptLimits,
+}
+
+impl DefinitionRun {
+    pub fn new(
+        name: &AppName,
+        run: breakers::Run,
+        generation: u64,
+        limits: &crate::ScriptLimits,
+    ) -> Self {
+        Self {
+            name: name.clone(),
+            run,
+            generation,
+            limits: limits.clone(),
+        }
+    }
+
+    /// Where the definition's breaker stands for this run, or the script error
+    /// that stands in for an evaluation that does not go ahead.
+    pub fn consult(&self, db: &Db, cipher: &Cipher) -> Result<breakers::Standing, ScriptError> {
+        breakers::consult(db, cipher, &self.name, &breakers::Thing::Definition, || {
+            Ok(self.run.clone())
+        })
+        .map_err(ScriptError::from)
+    }
+
+    /// Record how the evaluation ended: trip the breaker where it ran past the
+    /// limit, and otherwise note that it finished in time, resetting the
+    /// breaker where it was tripped for another run, and the breakers of
+    /// closures `declared` no longer holds.
+    pub fn record(
+        &self,
+        db: &Db,
+        cipher: &Cipher,
+        standing: breakers::Standing,
+        error: Option<&ScriptError>,
+        declared: &crate::defs::app::AppDef,
+    ) {
+        let (name, run, thing) = (&self.name, &self.run, breakers::Thing::Definition);
+        match error {
+            Some(ScriptError::Runaway(_)) => {
+                if let Err(e) =
+                    breakers::trip(db, cipher, name, &thing, run, self.generation, &self.limits)
+                {
+                    tracing::error!(app = %name, "cannot trip the definition's breaker: {e}");
+                }
+            }
+            Some(ScriptError::BreakerUnreadable(_)) => {}
+            Some(ScriptError::Failed { .. }) => {
+                breakers::finished_in_time(db, cipher, name, &thing, run, standing);
+            }
+            None => {
+                breakers::finished_in_time(db, cipher, name, &thing, run, standing);
+                if let Err(e) = breakers::reset_undeclared(db, name, declared) {
+                    tracing::error!(app = %name, "cannot reset breakers of undeclared closures: {e}");
+                }
+            }
+        }
+    }
 }
 
 /// Move each declared parameter's stored value to the storage its definition
@@ -862,6 +1075,10 @@ pub(crate) fn migrate_param_storage(
 pub struct Rejection {
     pub name: String,
     pub reason: String,
+    /// The validator ran past the evaluation time limit, so it neither
+    /// accepted nor rejected the value.
+    // spec: PARAM#validators
+    pub runaway: bool,
 }
 
 /// Evaluate a definition with `params`.
@@ -944,7 +1161,7 @@ fn run_definition(
         Ok(derived) => derived,
         Err(e) => {
             if result.is_ok() {
-                result = Err(ScriptError::new(e));
+                result = Err(ScriptError::failed(e));
             }
             crate::runtime::redact::SensitiveValues::default()
         }
@@ -977,10 +1194,7 @@ fn run_definition(
                 ..r
             })
             .collect()),
-        Err(ScriptError { message, at }) => Err(ScriptError {
-            message: sensitive.mask(&message).into_owned(),
-            at,
-        }),
+        Err(e) => Err(e.map(|e| sensitive.mask(&e).into_owned())),
     };
     (app, result)
 }
@@ -1000,7 +1214,7 @@ fn run_seeded_definition(
         Err(e) => {
             return (
                 App::with_bundle(Arc::clone(bundle)),
-                Err(ScriptError::new(e)),
+                Err(ScriptError::failed(e)),
             );
         }
     };
@@ -1009,7 +1223,7 @@ fn run_seeded_definition(
         Ok(s) => s,
         // A stored definition that no longer reads as one (only possible
         // for a bundle written for another Seedling) evaluates to nothing.
-        Err(e) => return (app, Err(ScriptError::new(e.to_string()))),
+        Err(e) => return (app, Err(ScriptError::failed(e.to_string()))),
     };
     // spec: PRM#parameter-storage — pre-populate stored values so is_set()/value() work
     // during script evaluation. AppDef.params (the BSL-declared set) is
@@ -1031,6 +1245,8 @@ fn run_seeded_definition(
     // becomes a ScriptError and is surfaced as a fault by the caller.
     // spec: BND#script-formation
     let remap = |e: Box<rhai::EvalAltResult>| ScriptError::raised(script, &e);
+    // spec: LIM#measuring-evaluation-time
+    let evaluation = crate::evaluation::Evaluation::start(limits);
     let ran = crate::defs::compile(&engine, script.text())
         .map_err(remap)
         .and_then(|ast| {
@@ -1041,13 +1257,25 @@ fn run_seeded_definition(
         });
     crate::defs::app::clear_appdef_holder();
     let validators = validate.map(|_| crate::defs::app::end_validator_capture());
+    // spec: LIM#measuring-evaluation-time
+    // An evaluation that returns having run past the limit fails all the
+    // same, whatever it returned.
+    if evaluation.exceeded() {
+        return (
+            app,
+            Err(ScriptError::Runaway(
+                crate::evaluation::out_of_time_message(limits),
+            )),
+        );
+    }
+    drop(evaluation);
     let ast = match ran {
         Ok(ast) => ast,
         Err(e) => return (app, Err(e)),
     };
     // spec: BSL#evaluation
     if let Err(e) = crate::defs::finish_evaluation(&app, limits) {
-        return (app, Err(ScriptError::new(e)));
+        return (app, Err(ScriptError::failed(e)));
     }
     let (Some(proposed), Some(mut validators)) = (validate, validators) else {
         return (app, Ok(Vec::new()));
@@ -1059,7 +1287,7 @@ fn run_seeded_definition(
         Err(rejections) => return (app, Ok(rejections)),
     };
     validators.retain(|name, _| parsed.contains_key(name.as_str()));
-    let mut rejections = run_validators(&engine, &ast, script, &validators, parsed);
+    let mut rejections = run_validators(&engine, &ast, script, &validators, parsed, limits);
     rejections.sort_by(|a, b| a.name.cmp(&b.name));
     (app, Ok(rejections))
 }
@@ -1114,6 +1342,7 @@ fn check_kinds(
             Err(reason) => rejections.push(Rejection {
                 name: name.clone(),
                 reason,
+                runaway: false,
             }),
         }
     }
@@ -1131,6 +1360,7 @@ fn run_validators(
     script: &seedling_bundle::Script,
     validators: &BTreeMap<seedling_protocol::names::ParamName, rhai::FnPtr>,
     parsed: BTreeMap<String, ParsedValue>,
+    limits: &crate::ScriptLimits,
 ) -> Vec<Rejection> {
     let values: rhai::Map = parsed
         .into_iter()
@@ -1143,8 +1373,21 @@ fn run_validators(
             continue;
         };
         let _frame = crate::defs::app::ValidatorFrame::enter();
+        // spec: LIM#measuring-evaluation-time
+        // Each call of a validator is an evaluation of its own.
+        let evaluation = crate::evaluation::Evaluation::start(limits);
         let result: Result<rhai::Dynamic, _> =
             validator.call(engine, ast, (value.clone(), values.clone()));
+        // spec: PARAM#validators
+        if evaluation.exceeded() {
+            rejections.push(Rejection {
+                name: name.as_str().to_owned(),
+                reason: crate::evaluation::out_of_time_message(limits),
+                runaway: true,
+            });
+            continue;
+        }
+        drop(evaluation);
         if let Err(e) = result {
             // A thrown value is the reason, whether the validator threw it or
             // a function it called did, as a kind parser does; any other
@@ -1160,6 +1403,7 @@ fn run_validators(
             rejections.push(Rejection {
                 name: name.as_str().to_owned(),
                 reason,
+                runaway: false,
             });
         }
     }

@@ -3,11 +3,14 @@ use std::sync::Arc;
 use seedling_protocol::names::SessionId;
 
 use super::{
+    open_shell_session,
     registry::StopSignal,
-    session::{SessionOutcome, SessionProgress, run_app_shell, session_outcome},
+    session::{
+        SessionOutcome, SessionProgress, run_app_shell, session_outcome, validate_shell_params,
+    },
 };
 use crate::{
-    oi::test_support::TestOi,
+    oi::test_support::{TestOi, loopback, runaway_limits},
     runtime::{
         apps::DynamicSlot,
         barrier::shell::{ShellExecTarget, ShellExit, ShellHost},
@@ -94,16 +97,27 @@ fn run_shell_session(
     stop_after: Option<std::time::Duration>,
     setup: impl FnOnce(&TestOi),
 ) -> ShellRan {
+    run_shell_on(TestOi::new(), script, params, host, stop_after, setup)
+}
+
+/// As [`run_shell_session`], on `oi`.
+fn run_shell_on(
+    oi: TestOi,
+    script: &str,
+    params: serde_json::Value,
+    host: &Arc<FakeHost>,
+    stop_after: Option<std::time::Duration>,
+    setup: impl FnOnce(&TestOi),
+) -> ShellRan {
     use seedling_protocol::names::ShellName;
 
-    let oi = TestOi::new();
     oi.call(
         "/apps/create",
         serde_json::json!({ "app": "demo", "script": script }),
     )
     .unwrap();
     setup(&oi);
-    let (app, schema, sessions, tick_notify) = {
+    let (app, generation, schema, sessions, tick_notify) = {
         let reg = oi.state.registry.read();
         let entry = reg.get("demo").unwrap();
         let schema = entry
@@ -117,6 +131,7 @@ fn run_shell_session(
             .clone();
         (
             entry.app.clone(),
+            entry.current_generation,
             schema,
             Arc::clone(&entry.sessions),
             Arc::clone(&entry.tick_notify),
@@ -139,6 +154,7 @@ fn run_shell_session(
         let run = run_app_shell(
             &oi.state,
             app,
+            generation,
             &"demo".parse().unwrap(),
             &"tools".parse().unwrap(),
             &schema,
@@ -825,5 +841,161 @@ fn a_shell_param_takes_its_native_json_type_and_reaches_the_closure_parsed() {
         err.message.contains("an integer is given"),
         "{}",
         err.message
+    );
+}
+
+/// How opening the `tools` shell of `demo` with `params` was refused.
+fn open_refusal(oi: &TestOi, params: serde_json::Value) -> (String, String) {
+    oi.block_on(async {
+        let link = loopback().await;
+        let (mut client_send, mut client_recv) = link.client.open_bi().await.unwrap();
+        // The server sees a stream only once something is sent on it.
+        client_send.write_all(b" ").await.unwrap();
+        let (send, recv) = link.server.accept_bi().await.unwrap();
+        let line = serde_json::to_vec(&serde_json::json!({
+            "method": "/shells/start",
+            "params": { "app": "demo", "name": "tools", "rows": 24, "cols": 80, "params": params },
+        }))
+        .unwrap();
+        open_shell_session(
+            link.server.clone(),
+            send,
+            recv,
+            Vec::new(),
+            line,
+            Arc::clone(&oi.state),
+            oi.ctx.events.clone(),
+        )
+        .await;
+        let frame = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client_recv.read_to_end(4096),
+        )
+        .await
+        .expect("the session answered")
+        .expect("the answer was read");
+        let frame: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+        (
+            frame["error"]["code"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            frame["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    })
+}
+
+fn installed_tools_shell() -> TestOi {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        serde_json::json!({
+            "app": "demo",
+            "script": format!(r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{ }});"#),
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+    oi
+}
+
+// spec: SHL#opening-an-app-shell
+#[test]
+fn a_shell_is_not_opened_while_the_definition_did_not_evaluate() {
+    use crate::runtime::apps::ScriptError;
+
+    let oi = installed_tools_shell();
+    for (error, code) in [
+        (ScriptError::failed("kaboom".to_owned()), "script_error"),
+        (
+            ScriptError::Runaway("ran past the limit".to_owned()),
+            "evaluation_runaway",
+        ),
+    ] {
+        oi.state
+            .registry
+            .write()
+            .get_mut("demo")
+            .unwrap()
+            .script_error = Some((error, jiff::Timestamp::now()));
+        let (refused, message) = open_refusal(&oi, serde_json::json!({}));
+        assert_eq!(refused, code, "{message}");
+    }
+}
+
+// spec: SHL#opening-an-app-shell
+// spec: LIM#breakers
+#[test]
+fn a_shell_is_not_opened_with_params_its_breaker_is_tripped_for() {
+    use crate::runtime::breakers::{self, Thing};
+
+    let oi = installed_tools_shell();
+    let (app, schema) = {
+        let reg = oi.state.registry.read();
+        let entry = reg.get("demo").unwrap();
+        let schema = entry.app.def.load().shells[&"tools"
+            .parse::<seedling_protocol::names::ShellName>()
+            .unwrap()]
+            .params
+            .clone();
+        (entry.app.clone(), schema)
+    };
+    let submitted = serde_json::json!({ "mode": "spin" });
+    let validated =
+        validate_shell_params(&oi.state, &schema, submitted.as_object().cloned().unwrap()).unwrap();
+    let run = breakers::Run::of_app(&app, &oi.state.script_limits).with_params(&validated, &schema);
+    let (cipher, limits) = (Arc::clone(&oi.state.cipher), oi.state.script_limits.clone());
+    oi.state
+        .db
+        .call(move |db| {
+            breakers::trip(
+                db,
+                &cipher,
+                &"demo".parse().unwrap(),
+                &Thing::Shell("tools".parse().unwrap()),
+                &run,
+                1,
+                &limits,
+            )
+        })
+        .unwrap();
+
+    let (refused, message) = open_refusal(&oi, submitted);
+    assert_eq!(refused, "evaluation_runaway", "{message}");
+    assert!(message.contains("shell `tools`"), "{message}");
+}
+
+// spec: LIM#breakers
+// spec: LIM#measuring-evaluation-time
+#[test]
+fn a_shell_run_that_runs_away_trips_the_shells_breaker() {
+    let script = format!(r#"{TOOLS_JOB} app.on_shell("tools", |rt, shell, p| {{ loop {{}} }});"#);
+    let host = FakeHost::answering(Ok(ShellExit::exited(0)));
+    let ran = run_shell_on(
+        TestOi::with_script_limits(runaway_limits()),
+        &script,
+        serde_json::json!({}),
+        &host,
+        None,
+        |_| {},
+    );
+    let reason = ran.outcome.reason.unwrap_or_default();
+    assert!(reason.contains("evaluation time limit"), "{reason}");
+    let runaways: Vec<_> = ran
+        .oi
+        .call("/faults/list", serde_json::json!({ "app": "demo" }))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "evaluation_runaway")
+        .map(|f| (f["resource_type"].clone(), f["resource_name"].clone()))
+        .collect();
+    assert_eq!(
+        runaways,
+        vec![(serde_json::json!("shell"), serde_json::json!("tools"))]
     );
 }

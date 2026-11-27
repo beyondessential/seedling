@@ -87,12 +87,18 @@ pub fn reject_reserved_keys(
     reject_reserved(params.keys())
 }
 
+/// Whether `key` is reserved for the runtime to insert.
+// spec: ACN#param-delivery
+pub fn is_reserved(key: &str) -> bool {
+    key.ends_with("_volume") || key.ends_with("_filename")
+}
+
 /// Refuse the first of `keys` that is reserved for the runtime.
 // spec: ACN#param-delivery
 pub fn reject_reserved<'a>(
     mut keys: impl Iterator<Item = &'a String>,
 ) -> Result<(), ParamValidationError> {
-    match keys.find(|key| key.ends_with("_volume") || key.ends_with("_filename")) {
+    match keys.find(|key| is_reserved(key)) {
         Some(key) => Err(ParamValidationError::ReservedKey { key: key.clone() }),
         None => Ok(()),
     }

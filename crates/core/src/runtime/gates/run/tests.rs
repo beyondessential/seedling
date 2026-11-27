@@ -636,6 +636,57 @@ fn a_run_whose_body_throws_when_probed_fails_with_nothing_stopped() {
 }
 
 // spec: GRUN#preparation
+// spec: LIM#breakers
+#[test]
+fn a_run_whose_body_breaker_is_tripped_fails_with_nothing_stopped() {
+    use crate::runtime::breakers::{self, Thing};
+
+    let oi = TestOi::new();
+    installed(
+        &oi,
+        r#"
+        let api = app.deployment("api").image("docker.io/library/api:1");
+        let migrate = app.gate("migrate").key(1).exclusive(api).run(|rt, last| {});
+        app.deployment("web").image("docker.io/library/web:1").after(migrate);
+    "#,
+    );
+    let app = oi.state.registry.read().get("demo").unwrap().app.clone();
+    let run = breakers::Run::of_app(&app, &oi.state.script_limits).with_last_success(None);
+    let (cipher, limits) = (Arc::clone(&oi.state.cipher), oi.state.script_limits.clone());
+    oi.state
+        .db
+        .call(move |db| {
+            breakers::trip(
+                db,
+                &cipher,
+                &app_name(),
+                &Thing::Gate(gate("migrate")),
+                &run,
+                1,
+                &limits,
+            )
+        })
+        .unwrap();
+
+    let kinds = run_once(&oi, "migrate", false);
+    assert!(kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
+    let record = record(&oi, "migrate");
+    assert!(
+        record
+            .last_failure
+            .as_deref()
+            .is_some_and(|how| how.contains("not evaluated again")),
+        "{:?}",
+        record.last_failure
+    );
+    assert_eq!(
+        holds(&oi),
+        0,
+        "the selection was never held, so nothing was stopped"
+    );
+}
+
+// spec: GRUN#preparation
 #[test]
 fn an_instance_that_has_started_and_not_ended_is_still_running_and_one_that_never_started_is_not() {
     use crate::runtime::history::{insert_instance, insert_observation};

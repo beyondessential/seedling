@@ -1304,3 +1304,320 @@ fn a_failure_masks_a_helper_result_computed_from_a_value_the_operation_derived()
     let thrown = derived_on_replay(&seed, r#"`hex=${std::encode_hex(id)};`"#);
     assert!(thrown.contains("hex=<redacted>;"), "{thrown}");
 }
+
+const SPINNING_SCRIPT: &str = r#"
+    let web = app.deployment("web").image("docker.io/library/nginx:1");
+    app.on_action("poke", |rt, _p| { rt.start(web); });
+    app.on_action("spin", |rt, _p| { loop {} });
+    app.on_action("nested", |rt, _p| { app.action("spin").invoke(); });
+    app.on_action("quick", |rt, _p| {});
+    app.on_action("calls-quick", |rt, _p| { app.action("quick").invoke(); });
+    app.gate("spin").key(1).run(|rt, last| { loop {} });
+"#;
+
+fn spinning_limits() -> crate::ScriptLimits {
+    crate::ScriptLimits {
+        max_operations: 0,
+        max_evaluation_time: 1,
+        ..crate::ScriptLimits::default()
+    }
+}
+
+/// Run action `name` of an app whose current generation is `current`, as an
+/// operation at generation 1, under limits that stop a runaway in a second.
+fn run_at(
+    app: &App,
+    name: &str,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    current: u64,
+) -> OperationEnd {
+    run_as(
+        app,
+        name,
+        db,
+        cipher,
+        current,
+        &uuid::Uuid::new_v4().to_string(),
+    )
+}
+
+/// As [`run_at`], as the operation `operation_id`, so a second run with the
+/// same id replays the first's log.
+fn run_as(
+    app: &App,
+    name: &str,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    current: u64,
+    operation_id: &str,
+) -> OperationEnd {
+    run_target(
+        app,
+        ActionName::new(name).unwrap().into(),
+        None,
+        db,
+        cipher,
+        current,
+        operation_id,
+    )
+}
+
+/// As [`run_as`], for any target, with `gate` the input of a gate body.
+fn run_target(
+    app: &App,
+    target: OperationTarget,
+    gate: Option<GateInput<'_>>,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    current: u64,
+    operation_id: &str,
+) -> OperationEnd {
+    run_target_until(
+        app,
+        target,
+        gate,
+        db,
+        cipher,
+        current,
+        operation_id,
+        &Arc::new(CancelToken::new()),
+    )
+}
+
+/// As [`run_target`], with `cancel` the operation's cancellation token.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are what one operation needs"
+)]
+fn run_target_until(
+    app: &App,
+    target: OperationTarget,
+    gate: Option<GateInput<'_>>,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    current: u64,
+    operation_id: &str,
+    cancel: &Arc<CancelToken>,
+) -> OperationEnd {
+    let mut registry = crate::runtime::apps::AppRegistry::new();
+    registry
+        .register(
+            AppName::new("demo").unwrap(),
+            Arc::clone(&app.bundle),
+            crate::runtime::definition::Source::unknown_push(),
+            Arc::new(Notify::new()),
+            &crate::ScriptLimits::default(),
+        )
+        .unwrap();
+    registry.get_mut("demo").unwrap().current_generation = current;
+    let tx = new_event_channel();
+    let op_ctx = tx.operation(
+        AppName::new("demo").unwrap(),
+        target,
+        operation_id.to_owned(),
+        1,
+        None,
+    );
+    super::run_operation_loop(
+        app,
+        db.clone(),
+        Ok(BoundParams {
+            params: crate::runtime::param_map::ParamMap::default(),
+            bindings: HashMap::new(),
+        }),
+        Arc::new(RwLock::new(None)),
+        Arc::new(Notify::new()),
+        &op_ctx,
+        &spinning_limits(),
+        Arc::clone(cipher),
+        &crate::runtime::gates::GateRuntime::new(),
+        &RwLock::new(registry),
+        Arc::clone(cancel),
+        None,
+        None,
+        None,
+        gate,
+        Persisted::No,
+    )
+}
+
+fn spinning_db() -> DbHandle {
+    let db = DbHandle::open_in_memory().unwrap();
+    db.call(|db| {
+        generations::register_script(db, &AppName::new("demo").unwrap(), SPINNING_SCRIPT).unwrap()
+    });
+    db
+}
+
+fn runaway_subjects(db: &DbHandle) -> Vec<String> {
+    db.call(|db| faults::list_active_faults(db, Some(&AppName::new("demo").unwrap())))
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.kind == crate::runtime::breakers::EVALUATION_RUNAWAY)
+        .map(|f| f.subject)
+        .collect()
+}
+
+// spec: LIM#breakers
+// spec: LIM#measuring-evaluation-time
+#[test]
+fn an_action_pass_that_runs_away_trips_the_actions_breaker() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+
+    let why = failure_of(run_at(&app, "spin", &db, &cipher, 1));
+    assert!(why.contains("evaluation time limit"), "{why}");
+    assert_eq!(runaway_subjects(&db), vec!["action:spin".to_owned()]);
+
+    let started = cpu_time::ThreadTime::now();
+    let why = failure_of(run_at(&app, "spin", &db, &cipher, 1));
+    assert!(why.contains("not evaluated again"), "{why}");
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+}
+
+// spec: LIM#breakers
+#[test]
+fn a_pass_at_an_earlier_generation_is_stopped_but_trips_nothing() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+
+    let why = failure_of(run_at(&app, "spin", &db, &cipher, 2));
+    assert!(why.contains("evaluation time limit"), "{why}");
+    assert!(runaway_subjects(&db).is_empty());
+}
+
+// spec: ACN#action-invocation
+// spec: LIM#breakers
+#[test]
+fn invoking_an_action_tripped_for_its_params_throws() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+    trip_action(&app, "spin", &db, &cipher);
+
+    let started = cpu_time::ThreadTime::now();
+    let why = failure_of(run_at(&app, "nested", &db, &cipher, 1));
+    assert!(
+        why.contains("Action.invoke") && why.contains("not evaluated again"),
+        "{why}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+}
+
+/// Trip the breaker of action `name` for a call with no params.
+fn trip_action(app: &App, name: &str, db: &DbHandle, cipher: &Arc<Cipher>) {
+    let run = crate::runtime::breakers::Run::of_app(app, &spinning_limits()).with_params(
+        &crate::runtime::param_map::ParamMap::default(),
+        &Default::default(),
+    );
+    trip_action_run(name, db, cipher, run);
+}
+
+/// Trip `name`'s breaker for a run that is not the one an operation makes,
+/// by giving it a last success no action has.
+fn trip_action_with_params(
+    app: &App,
+    name: &str,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    other: &str,
+) {
+    let mut params = crate::runtime::param_map::ParamMap::default();
+    params.insert(
+        other.to_owned(),
+        serde_json::Value::String(other.to_owned()),
+    );
+    let run = crate::runtime::breakers::Run::of_app(app, &spinning_limits())
+        .with_params(&params, &Default::default());
+    trip_action_run(name, db, cipher, run);
+}
+
+fn trip_action_run(
+    name: &str,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    run: crate::runtime::breakers::Run,
+) {
+    let (cipher, name) = (Arc::clone(cipher), ActionName::new(name).unwrap());
+    db.call(move |db| {
+        crate::runtime::breakers::trip(
+            db,
+            &cipher,
+            &AppName::new("demo").unwrap(),
+            &crate::runtime::breakers::Thing::Action(name),
+            &run,
+            1,
+            &spinning_limits(),
+        )
+    })
+    .unwrap();
+}
+
+// spec: ACN#action-invocation
+// spec: SUSP#positional-replay
+#[test]
+fn a_replayed_invoke_of_an_action_since_tripped_is_not_checked() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    let completed = |end| match end {
+        OperationEnd::Completed => {}
+        OperationEnd::Failed(why) | OperationEnd::NotRun(why) => panic!("failed: {why}"),
+        OperationEnd::Cancelled => panic!("cancelled"),
+    };
+    completed(run_as(&app, "calls-quick", &db, &cipher, 1, &operation_id));
+
+    trip_action(&app, "quick", &db, &cipher);
+    completed(run_as(&app, "calls-quick", &db, &cipher, 1, &operation_id));
+
+    let why = failure_of(run_at(&app, "calls-quick", &db, &cipher, 1));
+    assert!(why.contains("not evaluated again"), "{why}");
+}
+
+// spec: LIM#breakers
+#[test]
+fn a_cancelled_pass_resets_no_breaker() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+    // Tripped for inputs other than the run's, so an in-time pass would
+    // reset it.
+    trip_action_with_params(&app, "poke", &db, &cipher, "other");
+
+    let cancel = Arc::new(CancelToken::new());
+    cancel.request();
+    let end = run_target_until(
+        &app,
+        ActionName::new("poke").unwrap().into(),
+        None,
+        &db,
+        &cipher,
+        1,
+        &uuid::Uuid::new_v4().to_string(),
+        &cancel,
+    );
+    assert!(
+        matches!(end, OperationEnd::Cancelled),
+        "the pass is cancelled"
+    );
+    assert_eq!(runaway_subjects(&db), vec!["action:poke".to_owned()]);
+}
+
+// spec: LIM#breakers
+// spec: LIM#measuring-evaluation-time
+#[test]
+fn a_gate_body_that_runs_away_trips_the_gates_breaker() {
+    let app = evaluated(SPINNING_SCRIPT);
+    let (db, cipher) = (spinning_db(), Arc::new(Cipher::for_tests()));
+
+    let why = failure_of(run_target(
+        &app,
+        OperationTarget::Gate(GateName::new("spin").unwrap()),
+        Some(GateInput { last: None }),
+        &db,
+        &cipher,
+        1,
+        &uuid::Uuid::new_v4().to_string(),
+    ));
+    assert!(why.contains("evaluation time limit"), "{why}");
+    assert_eq!(runaway_subjects(&db), vec!["gate:spin".to_owned()]);
+}

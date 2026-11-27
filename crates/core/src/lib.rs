@@ -1,6 +1,7 @@
 use rhai::{Engine, Scope};
 
 pub mod defs;
+pub mod evaluation;
 pub mod oi;
 pub mod reserved;
 pub mod runtime;
@@ -55,6 +56,10 @@ pub struct ScriptLimits {
     // spec: LIM#limits
     #[arg(long = "script-max-regex-compiled-size", default_value_t = ScriptLimits::DEFAULT.max_regex_compiled_size)]
     pub max_regex_compiled_size: usize,
+    /// Maximum whole seconds of processor time per evaluation (0 = unlimited)
+    // spec: LIM#limits
+    #[arg(long = "script-max-evaluation-time", default_value_t = ScriptLimits::DEFAULT.max_evaluation_time)]
+    pub max_evaluation_time: u64,
 }
 
 impl Default for ScriptLimits {
@@ -84,6 +89,7 @@ impl ScriptLimits {
         max_derived_values: 1_000,
         max_password_hashes: 16,
         max_regex_compiled_size: 33_554_432,
+        max_evaluation_time: 10,
     };
 
     /// The limits the `std` helpers and the kind parsers hold values to.
@@ -111,6 +117,7 @@ pub fn setup_language(
     engine.set_max_string_size(limits.max_string_size);
     engine.set_max_array_size(limits.max_array_size);
     engine.set_max_map_size(limits.max_map_size);
+    evaluation::install(&mut engine);
     engine.set_default_tag(rhai::Dynamic::from(limits.helpers()));
     // spec: REX#compiling-a-pattern
     // Optimisation would carry a `const` into a call's argument, which the
@@ -264,6 +271,74 @@ mod engine_limits_tests {
             r#"app.deployment("web").image("docker.io/library/nginx:latest");"#,
         )
         .expect("normal script should run within default limits");
+    }
+
+    /// Spend `for_at_least` of this thread's processor time.
+    fn spin(for_at_least: std::time::Duration) {
+        let started = cpu_time::ThreadTime::now();
+        let mut x = 0u64;
+        while started.elapsed() < for_at_least {
+            x = std::hint::black_box(x.wrapping_add(1));
+        }
+    }
+
+    fn timed(seconds: u64) -> ScriptLimits {
+        ScriptLimits {
+            max_operations: 0,
+            max_evaluation_time: seconds,
+            ..ScriptLimits::default()
+        }
+    }
+
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn a_runaway_loop_is_stopped_at_the_limit() {
+        let started = std::time::Instant::now();
+        let (_, err) = crate::runtime::apps::evaluate_script(
+            &seedling_protocol::names::AppName::new_unchecked("demo"),
+            "loop {}",
+            &Default::default(),
+            &timed(1),
+        );
+        let err = err.expect("the loop runs out of time");
+        assert!(err.is_runaway(), "{err:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn an_evaluation_that_returns_past_the_limit_has_exceeded_it() {
+        let evaluation = crate::evaluation::Evaluation::start(&timed(1));
+        spin(std::time::Duration::from_millis(1100));
+        assert!(evaluation.exceeded());
+    }
+
+    // spec: LIM#limits
+    #[test]
+    fn a_limit_of_zero_times_nothing() {
+        let evaluation = crate::evaluation::Evaluation::start(&timed(0));
+        spin(std::time::Duration::from_millis(1100));
+        assert!(!evaluation.exceeded());
+    }
+
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn time_spent_waiting_is_not_evaluation_time() {
+        let evaluation = crate::evaluation::Evaluation::start(&timed(1));
+        std::thread::sleep(std::time::Duration::from_millis(1300));
+        assert!(!evaluation.exceeded());
+    }
+
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn an_evaluation_started_within_another_shares_its_time() {
+        let outer = crate::evaluation::Evaluation::start(&timed(1));
+        spin(std::time::Duration::from_millis(700));
+        let inner = crate::evaluation::Evaluation::start(&timed(1));
+        spin(std::time::Duration::from_millis(500));
+        assert!(inner.exceeded());
+        drop(inner);
+        assert!(outer.exceeded());
     }
 
     // spec: LIM#limits

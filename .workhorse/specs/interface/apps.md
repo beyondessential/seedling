@@ -29,7 +29,7 @@ The server MUST refuse a definition that cannot be fetched, breaks the bundle ru
 Otherwise the server MUST register the app with the status `not_installed` and the [generation](../overview.md#generation) 1, recorded with a `register` [history entry](#generation-history), and MUST emit an `AppRegistered` [event](events.md#app-events).
 The result is `{ "generation": 1 }`.
 
-The server MUST register an app whose definition fails to parse or evaluate, and MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against it.
+The server MUST register an app whose definition fails to parse or evaluate, and MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against it, or an [`evaluation_runaway`](../runtime/faults.md#app-faults) fault where the evaluation fails at the [evaluation time limit](../runtime/engine-limits.md#measuring-evaluation-time).
 
 A registration that fails for any reason MUST leave nothing observable behind.
 The app MUST NOT appear in listings, MUST NOT reappear after the daemon restarts, and a later registration under the same name MUST NOT be refused as a duplicate.
@@ -37,7 +37,7 @@ The app MUST NOT appear in listings, MUST NOT reappear after the daemon restarts
 ## Persistence
 
 The runtime MUST store every registered app, with each of its definitions and their [definition provenance](definitions.md#provenance-reporting), durably, and MUST load them again when the daemon starts.
-If a stored definition fails to evaluate when it is loaded, the runtime MUST file a `script_error` fault against the app.
+If a stored definition fails to evaluate when it is loaded, the runtime MUST file a `script_error` fault against the app, or an [`evaluation_runaway`](../runtime/faults.md#app-faults) fault where the evaluation fails at the [evaluation time limit](../runtime/engine-limits.md#measuring-evaluation-time).
 
 ## Generations
 

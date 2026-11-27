@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::oi::test_support::{MINIMAL_SCRIPT, TestOi};
+use crate::oi::test_support::{MINIMAL_SCRIPT, TestOi, runaway_limits};
 
 // spec: APPS#registration
 // spec: APPS#listing
@@ -197,6 +197,32 @@ fn update_bumps_generation_and_records_history() {
         .collect();
     assert!(kinds.contains(&"register"));
     assert!(kinds.contains(&"script_update"));
+}
+
+// spec: APPS#update
+// spec: WIRE#error-codes
+#[test]
+fn an_update_whose_definition_runs_away_is_refused_and_files_nothing() {
+    let oi = TestOi::with_script_limits(runaway_limits());
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+
+    let (code, message) = oi
+        .call(
+            "/apps/update",
+            json!({ "app": "demo", "script": format!("loop {{}}\n{MINIMAL_SCRIPT}") }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "evaluation_runaway", "{message}");
+    let generations = oi
+        .call("/apps/generations", json!({ "app": "demo" }))
+        .unwrap();
+    assert_eq!(generations.as_array().unwrap().len(), 1);
+    let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+    assert_eq!(faults, json!([]));
 }
 
 // spec: APPS#update
@@ -2382,7 +2408,10 @@ fn install_refusals_are_given_in_the_order_the_spec_lists_them() {
             .write()
             .get_mut("demo")
             .unwrap()
-            .script_error = Some(("it broke".to_owned(), Timestamp::now()));
+            .script_error = Some((
+            crate::runtime::apps::ScriptError::failed("it broke".to_owned()),
+            Timestamp::now(),
+        ));
     };
 
     let hold = AppHold::take(&oi.state.scheduler, &name).expect("nothing holds the app");
@@ -2930,4 +2959,41 @@ fn a_description_reports_each_ip_param_family() {
         .unwrap()
         .clone();
     assert_eq!(allow["params"]["subnet"]["family"], json!(6));
+}
+
+// spec: LIM#breakers
+#[test]
+fn removing_an_app_discards_its_breakers() {
+    use crate::runtime::breakers::{self, Run, Thing};
+    let oi = TestOi::with_app("demo");
+    let run = {
+        let reg = oi.state.registry.read();
+        Run::of_app(&reg.get("demo").unwrap().app, &oi.state.script_limits)
+    };
+    let cipher = std::sync::Arc::clone(&oi.state.cipher);
+    let limits = oi.state.script_limits.clone();
+    oi.state
+        .db
+        .call(move |db| {
+            breakers::trip(
+                db,
+                &cipher,
+                &seedling_protocol::names::AppName::new_unchecked("demo"),
+                &Thing::Definition,
+                &run,
+                1,
+                &limits,
+            )
+        })
+        .unwrap();
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+    let left: i64 = oi
+        .state
+        .db
+        .call(|db| {
+            db.conn
+                .query_row("SELECT COUNT(*) FROM breakers", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert_eq!(left, 0);
 }

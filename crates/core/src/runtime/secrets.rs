@@ -14,11 +14,17 @@ use crate::runtime::db::Db;
 pub struct Cipher {
     key: aead::SecretKey,
     digest_key: auth::SecretKey,
+    breaker_digest_key: auth::SecretKey,
 }
 
 /// The context the key digests' subkey is derived under, so that no other use
 /// of the secret key can produce the same key.
 const KEY_DIGEST_CONTEXT: &[u8] = b"seedling gate key digest v1";
+
+/// The context the breaker digests' subkey is derived under, so that the
+/// digests a breaker is compared by and the digests a gate key is compared
+/// by cannot be made equal by their bytes.
+const BREAKER_DIGEST_CONTEXT: &[u8] = b"seedling breaker digest v1";
 
 /// A digest of a gate key under the secret key, which tells keys apart
 /// without holding them.
@@ -137,15 +143,18 @@ impl Cipher {
     }
 
     fn from_key(key: aead::SecretKey) -> Result<Self, Error> {
-        let mut subkey = [0u8; 32];
-        Hkdf::<SHA512>::derive_key(
-            &[],
-            key.unprotected_as_ref(),
-            Some(KEY_DIGEST_CONTEXT),
-            &mut subkey,
-        )?;
-        let digest_key = auth::SecretKey::try_from(&subkey[..])?;
-        Ok(Self { key, digest_key })
+        let subkey = |context: &[u8]| -> Result<auth::SecretKey, Error> {
+            let mut bytes = [0u8; 32];
+            Hkdf::<SHA512>::derive_key(&[], key.unprotected_as_ref(), Some(context), &mut bytes)?;
+            Ok(auth::SecretKey::try_from(&bytes[..])?)
+        };
+        let digest_key = subkey(KEY_DIGEST_CONTEXT)?;
+        let breaker_digest_key = subkey(BREAKER_DIGEST_CONTEXT)?;
+        Ok(Self {
+            key,
+            digest_key,
+            breaker_digest_key,
+        })
     }
 
     /// The digest of `canonical` under a subkey derived from the secret key.
@@ -159,6 +168,14 @@ impl Cipher {
     // spec: GRUN#outcome
     pub fn key_digest(&self, canonical: &[u8]) -> Result<KeyDigest, Error> {
         let tag = auth::authenticate(&self.digest_key, canonical)?;
+        KeyDigest::from_bytes(tag.unprotected_as_ref()).ok_or(Error::BadEncoding)
+    }
+
+    /// The digest of `canonical` under the breaker subkey, as
+    /// [`key_digest`](Self::key_digest) does under its own.
+    // spec: LIM#breakers
+    pub fn breaker_digest(&self, canonical: &[u8]) -> Result<KeyDigest, Error> {
+        let tag = auth::authenticate(&self.breaker_digest_key, canonical)?;
         KeyDigest::from_bytes(tag.unprotected_as_ref()).ok_or(Error::BadEncoding)
     }
 

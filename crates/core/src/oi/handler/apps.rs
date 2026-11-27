@@ -222,7 +222,7 @@ pub(crate) fn sync_fault_state(
         crate::runtime::apps::sync_script_error_fault(
             db,
             &app_name,
-            script_error.as_ref().map(|(msg, _)| msg.as_str()),
+            script_error.as_ref().map(|(e, _)| e),
         );
         crate::runtime::apps::sync_used_registries(db, &app_name, &used_registries);
     });
@@ -576,7 +576,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         state,
         &params.app,
         &entry.app.def.load_full(),
-        entry.script_error.as_ref().map(|(why, _)| why.clone()),
+        entry.script_error.as_ref().map(|(why, _)| why.to_string()),
         *entry.phase.lock() == AppPhase::Installed,
         stopped_set.clone(),
         entry
@@ -1254,7 +1254,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
             let entry = reg.get(name).expect("confirmed registered");
             (
                 entry.app.def.load_full(),
-                entry.script_error.as_ref().map(|(why, _)| why.clone()),
+                entry.script_error.as_ref().map(|(why, _)| why.to_string()),
                 *entry.phase.lock() == AppPhase::Installed,
             )
         };
@@ -1489,6 +1489,37 @@ pub(crate) fn register_resolved(
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("db persist: {e}")))?;
 
+    // spec: LIM#breakers
+    // A new registration has no breaker: deregistering under its name
+    // discarded any.
+    {
+        let tracked = crate::runtime::apps::DefinitionRun::new(
+            app_name,
+            crate::runtime::breakers::Run::new(
+                bundle.hash(),
+                &std::collections::BTreeMap::new(),
+                Some(&app_seed),
+                &state.script_limits,
+            ),
+            generation,
+            &state.script_limits,
+        );
+        let (cipher, error, declared) = (
+            Arc::clone(&state.cipher),
+            script_error.clone(),
+            app.def.load_full(),
+        );
+        state.db.call(move |db| {
+            tracked.record(
+                db,
+                &cipher,
+                crate::runtime::breakers::Standing::Clear,
+                error.as_ref(),
+                &declared,
+            );
+        });
+    }
+
     state.registry.write().insert_registered(
         app_name.clone(),
         bundle,
@@ -1616,6 +1647,8 @@ pub(crate) fn deregister_app(
                 // mounting data an operator granted to a different one.
                 crate::runtime::external_volume_mappings::delete_for_app(db, &name_owned)?;
                 crate::runtime::external_service_mappings::delete_for_app(db, &name_owned)?;
+                // spec: LIM#breakers
+                crate::runtime::breakers::discard_app(db, &name_owned)?;
                 // Last, because clearing announces itself: nothing after it
                 // can roll back what the events have already said.
                 crate::runtime::faults::clear_all_faults_for_app(db, &name_owned)?;
@@ -1644,11 +1677,7 @@ pub(crate) fn install_app(state: &OiState, params: AppParams, ctx: &RequestCtx) 
         if !matches!(*entry.phase.lock(), AppPhase::NotInstalled) {
             return Err(already_installed(name));
         }
-        if entry.script_error.is_some() {
-            return Err(OiError::script_error(format!(
-                "app has a script error: {name}"
-            )));
-        }
+        definition_refusal(&params.app, &entry.script_error)?;
         Arc::clone(&entry.phase)
     };
 
@@ -1659,15 +1688,8 @@ pub(crate) fn install_app(state: &OiState, params: AppParams, ctx: &RequestCtx) 
         return Err(already_installed(name));
     }
     // spec: ACI#install
-    if state
-        .registry
-        .read()
-        .get(name)
-        .is_some_and(|entry| entry.script_error.is_some())
-    {
-        return Err(OiError::script_error(format!(
-            "app has a script error: {name}"
-        )));
+    if let Some(entry) = state.registry.read().get(name) {
+        definition_refusal(&params.app, &entry.script_error)?;
     }
 
     // spec: ING#claims-across-apps
@@ -1835,6 +1857,21 @@ fn named_volumes(def: &crate::defs::app::AppDef) -> Vec<String> {
 }
 
 pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -> OiError {
+    // spec: PARAM#validators
+    // spec: WIRE#error-codes
+    // A validator that ran out of time neither accepted nor rejected its
+    // value, so the request fails for that rather than for validation.
+    let runaway: Vec<String> = rejections
+        .iter()
+        .filter(|r| r.runaway)
+        .map(|r| format!("{}: {}", r.name, r.reason))
+        .collect();
+    if !runaway.is_empty() {
+        return OiError::new(
+            ErrorCode::EvaluationRunaway,
+            format!("a validator ran out of time: {}", runaway.join("; ")),
+        );
+    }
     let detail: Vec<String> = rejections
         .iter()
         .map(|r| format!("{}: {}", r.name, r.reason))
@@ -1843,6 +1880,35 @@ pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -
         ErrorCode::ValidationFailed,
         format!("rejected by validation: {}", detail.join("; ")),
     )
+}
+
+/// The error a request fails with when an evaluation it made fails.
+// spec: WIRE#error-codes
+pub(crate) fn evaluation_error(context: &str, e: &crate::runtime::apps::ScriptError) -> OiError {
+    use crate::runtime::apps::ScriptError;
+    let code = match e {
+        ScriptError::Failed { .. } => ErrorCode::ScriptError,
+        ScriptError::Runaway(_) => ErrorCode::EvaluationRunaway,
+        ScriptError::BreakerUnreadable(_) => ErrorCode::Internal,
+    };
+    OiError::new(code, format!("{context}{e}"))
+}
+
+/// The refusal of a request that needs the app's definition, while the app's
+/// definition fails to evaluate.
+// spec: ACI#invoking-an-action
+// spec: ACI#install
+pub(crate) fn definition_refusal(
+    app: &AppName,
+    script_error: &Option<(crate::runtime::apps::ScriptError, jiff::Timestamp)>,
+) -> Result<(), OiError> {
+    match script_error {
+        Some((e, _)) => Err(evaluation_error(
+            &format!("app's definition does not evaluate: {app}: "),
+            e,
+        )),
+        None => Ok(()),
+    }
 }
 
 // spec: APPS#update
@@ -1905,7 +1971,7 @@ pub(crate) fn update_app(
         &seed,
         &state.script_limits,
     );
-    let rejections = evaluation.map_err(|e| OiError::new(ErrorCode::ScriptError, e.to_string()))?;
+    let rejections = evaluation.map_err(|e| evaluation_error("", &e))?;
     if !rejections.is_empty() {
         return Err(validation_error(&rejections));
     }
@@ -1975,6 +2041,26 @@ pub(crate) fn update_app(
             Ok((generation, stored))
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("db generation: {e}")))?;
+
+    // spec: LIM#breakers
+    // The new definition is now the app's own, with the values it was
+    // evaluated with, and that evaluation finished in time.
+    {
+        let run = crate::runtime::breakers::Run::new(
+            bundle.hash(),
+            &proposed,
+            Some(&seed),
+            &state.script_limits,
+        );
+        let (name, cipher, declared) = (
+            params.app.clone(),
+            Arc::clone(&state.cipher),
+            app.def.load_full(),
+        );
+        state.db.call(move |db| {
+            crate::runtime::apps::record_adopted_definition(db, &cipher, &name, &run, &declared);
+        });
+    }
 
     // Durable; now observable.
     state.registry.write().replace_definition(

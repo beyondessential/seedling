@@ -56,6 +56,7 @@ Where those rules do not let the runtime queue a run, the run is not initiated a
 
 When a run starts, the runtime MUST first invalidate the gate's last success in its record.
 If it cannot, the run MUST fail with nothing stopped.
+If the gate body's [breaker](engine-limits.md#breakers) is tripped for the definition and inputs the run would evaluate it with, or the runtime cannot read whether it is, the run MUST fail with nothing stopped.
 
 > [!NOTE]
 > A run that an operator starts for a satisfied gate leaves it unsatisfied until a run succeeds, so a migration that fails part way keeps the selection stopped.
@@ -66,7 +67,7 @@ Before it stops anything for a run, the runtime MUST pull every image that the r
 - the image of the gate's check;
 - the images of the gate's dependant workloads at the run's generation.
 
-If that probe reports that the body throws, or a pull fails, the run MUST fail with nothing stopped, and the instances that were running MUST go on running.
+If that probe reports that the body throws or is stopped at the [evaluation time limit](engine-limits.md#measuring-evaluation-time), or a pull fails, the run MUST fail with nothing stopped, and the instances that were running MUST go on running.
 
 The runtime MUST then stop the gate's [exclusive selection](../language/gate.md#exclusive-selection), wait until every instance of it has reached Terminated, and only then run the body.
 How the selection is held from then on is specified by [gate holds](reconciliation.md#gate-holds).

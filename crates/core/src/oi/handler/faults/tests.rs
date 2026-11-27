@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::oi::test_support::TestOi;
+use crate::oi::test_support::{TestOi, runaway_limits};
 
 /// Registers `broken` (script error fault) and `demo` (no faults).
 fn oi_with_fault() -> TestOi {
@@ -113,4 +113,112 @@ fn an_unregistered_app_is_not_found() {
         let (code, _) = oi.call(method, json!({ "app": "ghost" })).unwrap_err();
         assert_eq!(code, "not_found", "{method}");
     }
+}
+
+fn runaway_ids(oi: &TestOi) -> Vec<String> {
+    oi.call("/faults/list", json!({ "app": "spinning" }))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "evaluation_runaway")
+        .map(|f| f["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+// spec: LIM#breakers
+// spec: FLTS#clearing-faults
+#[test]
+fn clearing_a_definitions_runaway_evaluates_it_again() {
+    let oi = TestOi::with_script_limits(runaway_limits());
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "spinning",
+            "script": r#"
+                loop {}
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+    let tripped = runaway_ids(&oi);
+    assert_eq!(tripped.len(), 1);
+
+    oi.call("/faults/clear", json!({ "app": "spinning" }))
+        .unwrap();
+    let again = runaway_ids(&oi);
+    assert_eq!(again.len(), 1, "the definition ran away again");
+    assert_ne!(again, tripped, "a new fault was filed by a new evaluation");
+}
+
+// spec: LIM#breakers
+// spec: FLTS#clearing-faults
+#[test]
+fn clearing_again_evaluates_a_definition_still_held_back_by_a_runaway() {
+    let oi = TestOi::with_script_limits(runaway_limits());
+    oi.call(
+        "/apps/create",
+        json!({ "app": "spinning", "script": "loop {}" }),
+    )
+    .unwrap();
+    assert_eq!(runaway_ids(&oi).len(), 1);
+    // As a clear whose evaluation afterwards failed to run leaves it: the
+    // fault is gone, and the app is still held back by the runaway.
+    oi.state
+        .db
+        .call(|db| {
+            crate::runtime::faults::clear_all_faults_for_app(
+                db,
+                &seedling_protocol::names::AppName::new_unchecked("spinning"),
+            )
+        })
+        .unwrap();
+    assert!(runaway_ids(&oi).is_empty());
+
+    oi.call("/faults/clear", json!({ "app": "spinning" }))
+        .unwrap();
+    assert_eq!(
+        runaway_ids(&oi).len(),
+        1,
+        "the definition was evaluated again, and ran away again"
+    );
+}
+
+// spec: LIM#breakers
+// spec: FLTS#clearing-faults
+#[test]
+fn clearing_an_actions_runaway_forgets_its_breaker_record() {
+    use crate::runtime::breakers::{self, Run, Thing};
+    let oi = TestOi::with_app("demo");
+    let run = {
+        let reg = oi.state.registry.read();
+        Run::of_app(&reg.get("demo").unwrap().app, &oi.state.script_limits)
+    };
+    let cipher = std::sync::Arc::clone(&oi.state.cipher);
+    let limits = oi.state.script_limits.clone();
+    oi.state
+        .db
+        .call(move |db| {
+            breakers::trip(
+                db,
+                &cipher,
+                &seedling_protocol::names::AppName::new_unchecked("demo"),
+                &Thing::Action(seedling_protocol::names::ActionName::new_unchecked("spin")),
+                &run,
+                1,
+                &limits,
+            )
+        })
+        .unwrap();
+    oi.call("/faults/clear", json!({ "app": "demo" })).unwrap();
+    let left: i64 = oi
+        .state
+        .db
+        .call(|db| {
+            db.conn
+                .query_row("SELECT COUNT(*) FROM breakers", [], |row| row.get(0))
+        })
+        .unwrap();
+    assert_eq!(left, 0, "the breaker's record went with its fault");
 }

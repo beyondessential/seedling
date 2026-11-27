@@ -13,6 +13,8 @@ pub enum ErrorCode {
     ScriptError,
     // spec: PRM#validation
     ValidationFailed,
+    // spec: WIRE#error-codes
+    EvaluationRunaway,
     // spec: DEFN#bundle-rules
     BundleInvalid,
     // spec: DEFN#seedling-version-support
@@ -28,6 +30,36 @@ pub enum ErrorCode {
     // spec: RLY#disabled-access
     // spec: RLY#unavailability
     CanopyDisabled,
+}
+
+impl ErrorCode {
+    /// The name the code goes by on the wire.
+    ///
+    /// Matched exhaustively, so a code added to the enum does not compile
+    /// until it is named here, and the serialisation test holds this to what
+    /// serde writes.
+    // spec: WIRE#error-codes
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::NotInstalled => "not_installed",
+            Self::AlreadyInstalled => "already_installed",
+            Self::OperationInProgress => "operation_in_progress",
+            Self::AlreadyQueued => "already_queued",
+            Self::RequirementsInvalid => "requirements_invalid",
+            Self::ScriptError => "script_error",
+            Self::ValidationFailed => "validation_failed",
+            Self::EvaluationRunaway => "evaluation_runaway",
+            Self::BundleInvalid => "bundle_invalid",
+            Self::UnsupportedSeedling => "unsupported_seedling",
+            Self::FetchFailed => "fetch_failed",
+            Self::ImageInUse => "image_in_use",
+            Self::RegistryNotAllowed => "registry_not_allowed",
+            Self::ServerBusy => "server_busy",
+            Self::Internal => "internal",
+            Self::CanopyDisabled => "canopy_disabled",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -80,6 +112,7 @@ mod tests {
             (ErrorCode::RequirementsInvalid, "requirements_invalid"),
             (ErrorCode::ScriptError, "script_error"),
             (ErrorCode::ValidationFailed, "validation_failed"),
+            (ErrorCode::EvaluationRunaway, "evaluation_runaway"),
             (ErrorCode::BundleInvalid, "bundle_invalid"),
             (ErrorCode::UnsupportedSeedling, "unsupported_seedling"),
             (ErrorCode::FetchFailed, "fetch_failed"),
@@ -87,9 +120,11 @@ mod tests {
             (ErrorCode::RegistryNotAllowed, "registry_not_allowed"),
             (ErrorCode::ServerBusy, "server_busy"),
             (ErrorCode::Internal, "internal"),
+            (ErrorCode::CanopyDisabled, "canopy_disabled"),
         ];
         for (code, expected) in cases {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(expected));
+            assert_eq!(code.wire_name(), expected);
         }
     }
 }

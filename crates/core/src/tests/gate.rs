@@ -20,7 +20,7 @@ fn evaluation_error(script: &str) -> String {
     evaluate(script)
         .1
         .unwrap_or_else(|| panic!("the definition evaluates: {script}"))
-        .message
+        .to_string()
 }
 
 fn evaluated(script: &str) -> defs::app::App {

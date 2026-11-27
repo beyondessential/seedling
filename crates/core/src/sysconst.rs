@@ -52,7 +52,45 @@ pub enum Undetermined {
 /// The host constants that have no stand-in value while undetermined.
 pub const UNDETERMINABLE: [&str; 2] = ["AVAILABLE_MEMORY", "NODE_NAME"];
 
+/// The value of a host constant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostConstant {
+    Int(i64),
+    Bool(bool),
+    Text(String),
+}
+
 impl SystemFacts {
+    /// Each host constant a script can read, by name, as these facts give it.
+    ///
+    /// A constant that is undetermined and has no stand-in value is left out.
+    /// This is the one list of what a script sees of the host, which both an
+    /// evaluation's scope and the inputs a breaker is judged against are
+    /// made from.
+    // spec: CONST#host-constants
+    pub fn host_constants(&self) -> Vec<(&'static str, HostConstant)> {
+        let mut constants = vec![(
+            "AVAILABLE_THREADS",
+            HostConstant::Int(self.available_threads.unwrap_or(1)),
+        )];
+        if let Ok(memory) = self.available_memory {
+            constants.push(("AVAILABLE_MEMORY", HostConstant::Int(memory)));
+        }
+        constants.push((
+            "CPU_ARCHITECTURE",
+            HostConstant::Text(self.cpu_architecture.clone()),
+        ));
+        constants.push(("HOST_HAS_IPV4", HostConstant::Bool(self.ipv4_egress)));
+        constants.push(("HOST_HAS_IPV6", HostConstant::Bool(self.ipv6_egress)));
+        constants.push(("NAT64_ACTIVE", HostConstant::Bool(self.nat64_active)));
+        constants.push(("HAS_SNAPSHOTS", HostConstant::Bool(self.has_snapshots)));
+        if let Ok(name) = &self.node_name {
+            constants.push(("NODE_NAME", HostConstant::Text(name.clone())));
+        }
+        constants.push(("TIMEZONE", HostConstant::Text(self.timezone.clone())));
+        constants
+    }
+
     /// Why the host constant `name` has no value, where it is one of
     /// [`UNDETERMINABLE`] and is undetermined.
     pub fn why_undetermined(&self, name: &str) -> Option<String> {

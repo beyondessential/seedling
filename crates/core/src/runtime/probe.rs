@@ -12,7 +12,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rhai::{AST, Dynamic, Engine, FnPtr, Scope};
-use seedling_protocol::names::{ActionName, AppName, GateName, ParamName};
+use seedling_protocol::names::{ActionName, AppName, GateName, ParamName, ShellName};
 
 use crate::{
     defs::{
@@ -22,11 +22,13 @@ use crate::{
     runtime::{
         InstanceRegistry,
         action_params::apply_schema,
+        apps::ScriptError,
         barrier::{
             CancelToken, OperationId, ReplayContext,
             oracle::TestWorldOracle,
             runtime::{ActionClosureGuard, ProbeGuard, RuntimeInstance, clear_barrier_hit},
         },
+        breakers,
         param_map::ParamMap,
     },
 };
@@ -74,6 +76,72 @@ pub struct ProbeRequest {
     pub lenient: bool,
 }
 
+/// The bounds a probe evaluates within: the evaluation time limit, and the
+/// breakers of the handlers it probes and the actions they invoke.
+// spec: IMG#image-discovery
+pub struct ProbeBounds<'a> {
+    pub limits: &'a crate::ScriptLimits,
+    pub tripped: breakers::Tripped,
+}
+
+/// What every handler of one probe is evaluated with, before its own params
+/// or the gate's last success.
+///
+/// Assembling it reads the app's stored parameters and host constants, so a
+/// probe builds it once rather than once per handler.
+struct Base<'a> {
+    run: std::sync::Arc<breakers::Run>,
+    bounds: &'a ProbeBounds<'a>,
+}
+
+impl<'a> Base<'a> {
+    fn of(app: &App, bounds: &'a ProbeBounds<'a>) -> Self {
+        Base {
+            run: std::sync::Arc::new(breakers::Run::of_app(app, bounds.limits)),
+            bounds,
+        }
+    }
+
+    /// Why `thing` is not evaluated with the base plus `inputs`, or `None`
+    /// to evaluate it.
+    fn tripped(
+        &self,
+        thing: &breakers::Thing,
+        inputs: impl Fn(breakers::Run) -> breakers::Run,
+    ) -> Option<String> {
+        (self.bounds.tripped)(thing, &|| Ok(inputs(self.run.as_ref().clone())))
+    }
+}
+
+#[cfg(test)]
+impl<'a> ProbeBounds<'a> {
+    /// Bounds that find no breaker tripped.
+    pub fn unconsulted(limits: &'a crate::ScriptLimits) -> Self {
+        Self {
+            limits,
+            tripped: std::sync::Arc::new(|_, _| None),
+        }
+    }
+}
+
+/// Recover `app`'s closures, as one evaluation under the limit.
+fn capture(
+    engine: &Engine,
+    script_ast: &AST,
+    app: &App,
+    limits: &crate::ScriptLimits,
+) -> Result<crate::defs::app::ClosureCapture, ScriptError> {
+    // spec: LIM#measuring-evaluation-time
+    let evaluation = crate::evaluation::Evaluation::start(limits);
+    let captured = capture_closures(engine, script_ast, app);
+    if evaluation.exceeded() {
+        return Err(ScriptError::Runaway(
+            crate::evaluation::out_of_time_message(limits),
+        ));
+    }
+    captured.map_err(|e| ScriptError::failed(format!("script evaluation failed: {e}")))
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ProbeResponse {
     pub per_handler: Vec<HandlerProbe>,
@@ -93,9 +161,14 @@ pub fn probe_gate_body(
     registry: Arc<dyn InstanceRegistry>,
     gate: &GateName,
     last: Option<&App>,
-) -> Result<HandlerProbe, String> {
-    let captured = capture_closures(engine, script_ast, app)
-        .map_err(|e| format!("script evaluation failed: {e}"))?;
+    bounds: &ProbeBounds<'_>,
+) -> Result<HandlerProbe, ScriptError> {
+    // spec: LIM#measuring-evaluation-time
+    // A probe is one evaluation: recovering the closures and running the
+    // body share a budget, which the starts within them join.
+    let _evaluation = crate::evaluation::Evaluation::start(bounds.limits);
+    let captured = capture(engine, script_ast, app, bounds.limits)?;
+    let base = Base::of(app, bounds);
     match captured.gates.get(gate) {
         Some(Some(body)) => probe_gate_closure(
             engine,
@@ -106,7 +179,9 @@ pub fn probe_gate_body(
             gate,
             body.clone(),
             last,
-        ),
+            &base,
+        )
+        .map_err(ScriptError::failed),
         Some(None) => Ok(HandlerProbe {
             name: gate.as_str().to_owned(),
             kind: HandlerKind::Gate,
@@ -114,7 +189,9 @@ pub fn probe_gate_body(
             error: None,
             skipped_reason: None,
         }),
-        None => Err(format!("gate '{gate}' is not declared")),
+        None => Err(ScriptError::failed(format!(
+            "gate '{gate}' is not declared"
+        ))),
     }
 }
 
@@ -132,9 +209,21 @@ fn probe_gate_closure(
     gate: &GateName,
     body: FnPtr,
     last: Option<&App>,
+    base: &Base<'_>,
 ) -> Result<HandlerProbe, String> {
     let arity = closure_arity(script_ast, &body)
         .ok_or_else(|| format!("the body of gate '{gate}' cannot be called"))?;
+    // spec: IMG#image-discovery
+    let thing = breakers::Thing::Gate(gate.clone());
+    if let Some(why) = base.tripped(&thing, |run| run.with_last_success(last)) {
+        return Ok(HandlerProbe {
+            name: gate.as_str().to_owned(),
+            kind: HandlerKind::Gate,
+            images: BTreeSet::new(),
+            error: Some(why),
+            skipped_reason: None,
+        });
+    }
     Ok(run_probe(
         engine,
         script_ast,
@@ -148,6 +237,7 @@ fn probe_gate_closure(
             arity,
             last: last.map_or(Dynamic::UNIT, |last| Dynamic::from(last.clone())),
         },
+        base,
     ))
 }
 
@@ -162,12 +252,18 @@ pub fn probe_app(
     registry: Arc<dyn InstanceRegistry>,
     request: &ProbeRequest,
     last_of: &dyn Fn(&GateName) -> Result<Option<App>, String>,
-) -> Result<ProbeResponse, String> {
+    bounds: &ProbeBounds<'_>,
+) -> Result<ProbeResponse, ScriptError> {
+    // spec: LIM#measuring-evaluation-time
+    // A probe is one evaluation, so recovering the closures and probing
+    // every handler share a budget rather than each handler taking the
+    // whole limit. The starts within them join this one.
+    let _evaluation = crate::evaluation::Evaluation::start(bounds.limits);
     // Re-run the script to capture every registered closure. The script
     // itself must not fail; if it does, the caller can surface that as an
     // app-level script_error fault and there's nothing to probe.
-    let captured = capture_closures(engine, script_ast, app)
-        .map_err(|e| format!("script evaluation failed: {e}"))?;
+    let captured = capture(engine, script_ast, app, bounds.limits)?;
+    let base = Base::of(app, bounds);
 
     // Build the per-handler probe list in declaration order from the def.
     let def = app.def.load_full();
@@ -214,6 +310,7 @@ pub fn probe_app(
             closure,
             &param_schema,
             request,
+            &base,
         );
         results.push(probe_result);
     }
@@ -231,6 +328,7 @@ pub fn probe_app(
                 name,
                 body.clone(),
                 last.as_ref(),
+                &base,
             )
         });
         results.push(probed.unwrap_or_else(|error| HandlerProbe {
@@ -270,6 +368,7 @@ fn probe_handler(
     closure: FnPtr,
     schema: &BTreeMap<ParamName, ParamDef>,
     request: &ProbeRequest,
+    base: &Base<'_>,
 ) -> HandlerProbe {
     // spec: IMG#probe-parameters
     let supplied = request
@@ -305,6 +404,26 @@ fn probe_handler(
             };
         }
     };
+    // spec: IMG#image-discovery
+    let thing = match kind {
+        HandlerKind::Shell => ShellName::new(handler_name)
+            .ok()
+            .map(breakers::Thing::Shell),
+        _ => ActionName::new(handler_name)
+            .ok()
+            .map(breakers::Thing::Action),
+    };
+    if let Some(thing) = thing
+        && let Some(why) = base.tripped(&thing, |run| run.with_params(&resolved_params, schema))
+    {
+        return HandlerProbe {
+            name: handler_name.to_owned(),
+            kind,
+            images: BTreeSet::new(),
+            error: Some(why),
+            skipped_reason: None,
+        };
+    }
     let call = match kind {
         HandlerKind::Shell => ProbeCall::Shell(param_map),
         HandlerKind::Action | HandlerKind::Gate => ProbeCall::Action(param_map),
@@ -319,6 +438,7 @@ fn probe_handler(
         kind,
         closure,
         call,
+        base,
     )
 }
 
@@ -349,7 +469,9 @@ fn run_probe(
     kind: HandlerKind,
     closure: FnPtr,
     call: ProbeCall,
+    base: &Base<'_>,
 ) -> HandlerProbe {
+    let limits = base.bounds.limits;
     // Fresh probe buffer per handler. Shared across rt.* calls through the
     // ReplayContext and into Started's check_barrier.
     let images: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
@@ -429,19 +551,35 @@ fn run_probe(
             .with_operation_seed(&seed, &probe_sensitive);
         // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
-        crate::defs::compile_closure_call(engine, script_ast, call_script)
+        // spec: IMG#image-discovery
+        // An invoked action is refused while its breaker is tripped, as in a run.
+        let _invokes = breakers::InvokesGuard::enter(
+            std::sync::Arc::clone(&base.run),
+            std::sync::Arc::clone(&base.bounds.tripped),
+        );
+        // spec: LIM#measuring-evaluation-time
+        let evaluation = crate::evaluation::Evaluation::start(limits);
+        let failed = crate::defs::compile_closure_call(engine, script_ast, call_script)
             .ok()
             .and_then(|ast| {
                 engine
                     .eval_ast_with_scope::<Dynamic>(&mut scope, &ast)
                     .err()
-            })
+            });
+        if evaluation.exceeded() {
+            Err(crate::evaluation::out_of_time_message(limits))
+        } else {
+            Ok(failed)
+        }
     });
 
     let gathered_images = images.lock().clone();
 
     // spec: SEC#withheld-values
-    let error = eval_result.map(|e| probe_sensitive.values().mask(&e.to_string()).into_owned());
+    let error = match eval_result {
+        Err(out_of_time) => Some(out_of_time),
+        Ok(failed) => failed.map(|e| probe_sensitive.values().mask(&e.to_string()).into_owned()),
+    };
 
     HandlerProbe {
         name: handler_name.to_owned(),
@@ -523,8 +661,201 @@ mod tests {
         app: &App,
         registry: Arc<dyn InstanceRegistry>,
         request: &ProbeRequest,
-    ) -> Result<ProbeResponse, String> {
-        probe_app(engine, ast, app, registry, request, &|_| Ok(None))
+    ) -> Result<ProbeResponse, ScriptError> {
+        probe_app(
+            engine,
+            ast,
+            app,
+            registry,
+            request,
+            &|_| Ok(None),
+            &ProbeBounds::unconsulted(&crate::ScriptLimits::default()),
+        )
+    }
+
+    // spec: IMG#image-discovery
+    // spec: LIM#breakers
+    #[test]
+    fn a_handler_whose_breaker_is_tripped_is_reported_and_not_evaluated() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("spin", |rt, p| { throw "evaluated"; });
+            app.on_action("other", |rt, p| {});
+            "#,
+        );
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let limits = crate::ScriptLimits::default();
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds {
+                limits: &limits,
+                tripped: tripped_for("spin"),
+            },
+        )
+        .expect("probe");
+        let error_of = |name: &str| {
+            response
+                .per_handler
+                .iter()
+                .find(|h| h.name == name)
+                .and_then(|h| h.error.clone())
+        };
+        assert_eq!(error_of("spin").as_deref(), Some("tripped"));
+        assert_eq!(error_of("other"), None);
+    }
+
+    /// Breakers that find only the action `name` tripped.
+    fn tripped_for(name: &'static str) -> breakers::Tripped {
+        Arc::new(move |thing, _| {
+            (*thing == breakers::Thing::Action(ActionName::new_unchecked(name)))
+                .then(|| "tripped".to_owned())
+        })
+    }
+
+    // spec: IMG#image-discovery
+    // spec: ACN#action-invocation
+    #[test]
+    fn a_handler_invoking_an_action_whose_breaker_is_tripped_reports_the_refusal() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            let spin = app.on_action("spin", |rt, p| {});
+            app.on_action("calls", |rt, p| { spin.invoke(#{}); });
+            app.gate("warm").key(1).run(|rt| { spin.invoke(#{}); });
+            "#,
+        );
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let limits = crate::ScriptLimits::default();
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds {
+                limits: &limits,
+                tripped: tripped_for("spin"),
+            },
+        )
+        .expect("probe");
+        for name in ["calls", "warm"] {
+            let error = response
+                .per_handler
+                .iter()
+                .find(|h| h.name == name)
+                .and_then(|h| h.error.clone())
+                .unwrap_or_default();
+            assert!(error.contains("tripped"), "{name}: {error}");
+        }
+    }
+
+    // spec: WIRE#error-codes
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn a_probe_whose_capture_runs_past_the_limit_fails_as_a_runaway() {
+        let limits = crate::ScriptLimits {
+            max_operations: 0,
+            max_evaluation_time: 1,
+            ..crate::ScriptLimits::default()
+        };
+        let (engine, _scope, app) =
+            crate::setup_language(&limits, Default::default()).expect("the scope builds");
+        // Recovering the closures re-runs the script's own top level, so a
+        // definition that runs away there runs away in the probe.
+        let ast = crate::defs::compile(&engine, "loop {}").expect("compile");
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let failure = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds::unconsulted(&limits),
+        )
+        .expect_err("the capture runs away");
+        assert!(failure.is_runaway(), "{failure:?}");
+    }
+
+    // spec: IMG#image-discovery
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn a_handler_that_runs_past_the_limit_is_reported_with_that_as_its_error() {
+        let limits = crate::ScriptLimits {
+            max_operations: 0,
+            max_evaluation_time: 1,
+            ..crate::ScriptLimits::default()
+        };
+        let (engine, mut scope, app) =
+            crate::setup_language(&limits, Default::default()).expect("the scope builds");
+        let ast = crate::defs::compile(&engine, r#"app.on_action("spin", |rt, p| { loop {} });"#)
+            .expect("compile");
+        engine
+            .run_ast_with_scope(&mut scope, &ast)
+            .expect("run script");
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds::unconsulted(&limits),
+        )
+        .expect("probe");
+        let error = response.per_handler[0].error.clone().unwrap_or_default();
+        assert!(error.contains("evaluation time limit"), "{error}");
+    }
+
+    // spec: IMG#image-discovery
+    // spec: LIM#measuring-evaluation-time
+    #[test]
+    fn one_handlers_runaway_spends_the_whole_probes_budget() {
+        let limits = crate::ScriptLimits {
+            max_operations: 0,
+            max_evaluation_time: 1,
+            ..crate::ScriptLimits::default()
+        };
+        let (engine, mut scope, app) =
+            crate::setup_language(&limits, Default::default()).expect("the scope builds");
+        let ast = crate::defs::compile(
+            &engine,
+            r#"
+            app.on_action("aspin", |rt, p| { loop {} });
+            app.on_action("bquick", |rt, p| {});
+            "#,
+        )
+        .expect("compile");
+        engine
+            .run_ast_with_scope(&mut scope, &ast)
+            .expect("run script");
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            registry,
+            &ProbeRequest::default(),
+            &|_| Ok(None),
+            &ProbeBounds::unconsulted(&limits),
+        )
+        .expect("probe");
+        // The probe is one evaluation, so the handler after the runaway is
+        // stopped on the spent budget rather than given a limit of its own.
+        for handler in &response.per_handler {
+            let error = handler.error.clone().unwrap_or_default();
+            assert!(
+                error.contains("evaluation time limit"),
+                "{}: {error}",
+                handler.name
+            );
+        }
     }
 
     // spec: IMG#image-discovery
@@ -614,6 +945,7 @@ mod tests {
                 Arc::clone(&registry),
                 &ProbeRequest::default(),
                 &move |_| Ok(last.clone()),
+                &ProbeBounds::unconsulted(&crate::ScriptLimits::default()),
             )
             .expect("probe")
         };
@@ -653,6 +985,7 @@ mod tests {
             registry,
             &ProbeRequest::default(),
             &|_| Err("generation 3 cannot be rebuilt".to_owned()),
+            &ProbeBounds::unconsulted(&crate::ScriptLimits::default()),
         )
         .expect("probe");
         let migrate = &response.per_handler[0];

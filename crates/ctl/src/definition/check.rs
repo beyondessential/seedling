@@ -485,12 +485,16 @@ fn evaluate(
     );
     let mut rejections = match evaluated {
         Ok(rejections) => rejections,
-        Err(ScriptError { message, at }) => {
+        Err(ScriptError::Failed { message, at }) => {
             let error = CheckError::new(Kind::Script, message);
             return vec![match at {
                 Some((file, line)) => error.at(origin.file(&file), Some(line)),
                 None => error,
             }];
+        }
+        // spec: LIM#measuring-evaluation-time
+        Err(ScriptError::Runaway(message) | ScriptError::BreakerUnreadable(message)) => {
+            return vec![CheckError::new(Kind::Script, message)];
         }
     };
     let def = app.def.load();
@@ -502,12 +506,13 @@ fn evaluate(
             .map(|name| Rejection {
                 name: name.clone(),
                 reason: "not declared".to_owned(),
+                runaway: false,
             }),
     );
     rejections.sort_by(|a, b| a.name.cmp(&b.name));
     rejections
         .into_iter()
-        .map(|Rejection { name, reason }| CheckError {
+        .map(|Rejection { name, reason, .. }| CheckError {
             parameter: Some(name.clone()),
             ..CheckError::new(Kind::Validation, format!("parameter {name:?}: {reason}"))
         })

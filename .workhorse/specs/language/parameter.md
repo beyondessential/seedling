@@ -99,6 +99,7 @@ Calling `validate` a second time for the same parameter MUST throw.
 The runtime MUST call a validator with two arguments: the [parser result](action.md#param-kinds) of the parameter's proposed value, and an object map from the name of each declared parameter that would be set to the parser result of its proposed value.
 A validator that returns accepts the value.
 A validator that raises a script error rejects the value, whether the script threw deliberately or not.
+A validator stopped at the [evaluation time limit](../runtime/engine-limits.md#measuring-evaluation-time) neither accepts nor rejects the value, and the request that ran it fails with `evaluation_runaway`, as [error codes](../interface/wire.md#error-codes) specify.
 Where the script threw a value, that value MUST be the reason reported for the rejection.
 
 The runtime MUST run a validator only while its parameter would be set.

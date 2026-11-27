@@ -62,6 +62,10 @@ used for 30 days, once per collection interval (`--gc-interval-secs`, default
 `--gc-retain-restart-records` (the 50 most recent restart records of each
 resource instance).
 
+### Script limits
+
+The `--script-max-*` options bound each evaluation of an app's script, and take 0 to remove a limit (other than the call depth). `--script-max-evaluation-time` (default 10 seconds of processor time) is the one most likely to need raising, on a slow host evaluating a large definition; a breaker tripped under the old limit is reset by the new one. See [Script engine limits](../.workhorse/specs/runtime/engine-limits.md) for the full set.
+
 ## Known host issue: AppArmor denies container signals
 
 On hosts where AppArmor mediates signals between the container stack's

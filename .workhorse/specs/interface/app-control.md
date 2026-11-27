@@ -80,7 +80,7 @@ The server MUST reply once the new seed is persisted, without waiting for the ap
 The result is `{}`.
 On success the server MUST emit an `AppSeedRotated` event.
 
-If the app's definition fails to evaluate against the new seed, the server MUST still keep the new seed, and the failure is reported as a [`script_error`](../runtime/faults.md#app-faults) fault.
+If the app's definition fails to evaluate against the new seed, the server MUST still keep the new seed, and the failure is reported as a [`script_error`](../runtime/faults.md#app-faults) fault, or as an [`evaluation_runaway`](../runtime/faults.md#app-faults) fault where the evaluation fails at the [evaluation time limit](../runtime/engine-limits.md#measuring-evaluation-time).
 
 ## Deployment restart
 
@@ -164,7 +164,7 @@ Each entry of `/apps/list` reports a `has_stopped_resources` member, true when a
 | `gate` | string | yes | the gate's name |
 
 The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no gate of that name.
-It MUST refuse it with `not_installed` unless the app is `Installed`, and with `script_error` while the app has an active `script_error` fault.
+It MUST refuse it with `not_installed` unless the app is `Installed`, with `evaluation_runaway` while it has an active `evaluation_runaway` fault with an empty subject, or the gate body's [breaker](../runtime/engine-limits.md#breakers) is tripped for the definition and inputs the run would evaluate it with, and with `script_error` while the app has an active `script_error` fault.
 It MUST refuse it with `requirements_invalid` while any of the gate's [targets](../language/gate.md#start-order) is not ready, with a `message` naming each such target.
 It MUST refuse it with `operation_in_progress` while an operation for the app is running or a change to the app is being applied, and with `already_queued` while an operation for the app is queued.
 

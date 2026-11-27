@@ -182,6 +182,10 @@ pub(crate) async fn open_shell_session(
         if !matches!(*entry.phase.lock(), AppPhase::Installed) {
             return Err(("not_installed", format!("app is not installed: {app_name}")));
         }
+        // spec: SHL#opening-an-app-shell
+        if let Err(e) = crate::oi::handler::definition_refusal(&app_name, &entry.script_error) {
+            return Err((e.code.wire_name(), e.message));
+        }
         let shell_params_schema = {
             let def = entry.app.def.load();
             match def.shells.get(&shell_name) {
@@ -198,13 +202,14 @@ pub(crate) async fn open_shell_session(
         let slot = entry.sessions.open(session_id);
         Ok((
             entry.app.clone(),
+            entry.current_generation,
             shell_params_schema,
             Arc::clone(&entry.sessions),
             slot,
             Arc::clone(&entry.tick_notify),
         ))
     })();
-    let (app, shell_params_schema, sessions, slot, tick_notify) = match lookup {
+    let (app, generation, shell_params_schema, sessions, slot, tick_notify) = match lookup {
         Ok(v) => v,
         Err((code, msg)) => {
             reject(&mut send, code, msg).await;
@@ -240,6 +245,23 @@ pub(crate) async fn open_shell_session(
                 return;
             }
         };
+
+    // spec: SHL#opening-an-app-shell
+    // spec: LIM#breakers
+    {
+        use crate::runtime::breakers::{self, Thing};
+        let thing = Thing::Shell(shell_name.clone());
+        if let Err(refusal) =
+            breakers::consult_lazily(&state.db, &state.cipher, &app_name, &thing, || {
+                Ok(breakers::Run::of_app(&app, &state.script_limits)
+                    .with_params(&validated_params, &shell_params_schema))
+            })
+        {
+            let e = crate::oi::handler::actions::refusal_error(refusal);
+            reject(&mut send, e.code.wire_name(), e.message).await;
+            return;
+        }
+    }
 
     // spec: WIRE#shell-sessions
     let (stdout_send, stdout_stream_id) = match conn.open_uni().await {
@@ -309,6 +331,7 @@ pub(crate) async fn open_shell_session(
     let run = run_app_shell(
         &state,
         app,
+        generation,
         &app_name,
         &shell_name,
         &shell_params_schema,
@@ -628,6 +651,7 @@ pub(super) fn session_outcome(
 pub(super) async fn run_app_shell(
     state: &OiState,
     app: App,
+    generation: u64,
     app_name: &AppName,
     shell_name: &ShellName,
     schema: &std::collections::BTreeMap<
@@ -670,6 +694,14 @@ pub(super) async fn run_app_shell(
     let progress_for_task = Arc::clone(&progress);
     let db_for_task = state.db.clone();
     let script_limits = state.script_limits.clone();
+    // spec: LIM#breakers
+    // The base is what an `invoke` from the closure is consulted with, and
+    // the session's own run is that plus its params.
+    let base_run = Arc::new(crate::runtime::breakers::Run::of_app(&app, &script_limits));
+    let run_for_task = base_run
+        .as_ref()
+        .clone()
+        .with_params(&validated_params, schema);
     let cipher = Arc::clone(&state.cipher);
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
@@ -767,13 +799,48 @@ pub(super) async fn run_app_shell(
                     .is_some_and(|p| p.is_secret())
             });
         }
+        // spec: LIM#breakers
+        // A session runs the definition of the generation it opened at, so
+        // its run of the closure is tracked only while that is still the
+        // app's current one: an update while it runs leaves it untracked.
+        use crate::runtime::breakers::{self, Thing};
+        let thing = Thing::Shell(shell_name_for_task.clone());
+        let run = run_for_task;
+        let tracked = || {
+            apps.read()
+                .get(app_name_for_task.as_str())
+                .is_some_and(|e| e.current_generation == generation)
+        };
+        let mut standing = None;
+        if tracked() {
+            match breakers::consult_lazily(&db, &cipher, &app_name_for_task, &thing, || {
+                Ok(run.clone())
+            }) {
+                Ok(s) => standing = Some(s),
+                Err(refusal) => return ScriptEnd::Failed(refusal.message().to_owned()),
+            }
+        }
+        let mut ran_out = false;
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,
             progress: progress_for_task,
         });
 
+        // spec: LIM#measuring-evaluation-time
+        // The whole run of the closure is one evaluation, however many passes
+        // it takes: the time it spends suspended, or with its shell attached,
+        // is not processor time, so one budget covers the run and a closure
+        // cannot shed what it has spent by suspending.
+        let evaluation = crate::evaluation::Evaluation::start(&script_limits);
         let end = loop {
+            // spec: ACN#action-invocation
+            // The breakers of what the closure invokes are read as each pass
+            // begins, as an operation's are.
+            let _invokes = breakers::InvokesGuard::enter(
+                Arc::clone(&base_run),
+                breakers::consulting_once(&app_name_for_task, db.clone(), Arc::clone(&cipher)),
+            );
             // spec: RT#resources-a-gate-holds
             // What gates keep from the closure is read for each pass, as an
             // operation's is, so a pass that follows a wait sees the gates as
@@ -831,6 +898,30 @@ pub(super) async fn run_app_shell(
                 },
                 &mut scope,
             );
+            // spec: LIM#measuring-evaluation-time
+            // spec: LIM#breakers
+            if evaluation.exceeded() {
+                let why = crate::evaluation::out_of_time_message(&script_limits);
+                tracing::error!(
+                    app = %app_name_for_task, shell = %shell_name_for_task,
+                    "shell closure failed: {why}"
+                );
+                if tracked() {
+                    breakers::record_outcome(
+                        &db,
+                        &cipher,
+                        &app_name_for_task,
+                        &thing,
+                        &run,
+                        breakers::Outcome::RanOut {
+                            generation,
+                            limits: script_limits.clone(),
+                        },
+                    );
+                }
+                ran_out = true;
+                break ScriptEnd::Failed(format!("the shell's script failed: {why}"));
+            }
             match result {
                 OperationResult::Completed => break ScriptEnd::Completed,
                 OperationResult::Failed(e) => {
@@ -847,6 +938,26 @@ pub(super) async fn run_app_shell(
                 OperationResult::Suspended(_) => cancel.wait_for(Duration::from_secs(2)),
             }
         };
+        drop(evaluation);
+        // spec: LIM#breakers
+        // The run is over, and it is the whole run that finished within the
+        // limit; a pass that returns is only part of one. A run an operator
+        // stopped neither finished nor ran away, so it says nothing about
+        // how long the closure takes and earns no reset.
+        if !ran_out
+            && !matches!(end, ScriptEnd::Cancelled)
+            && let Some(standing) = standing
+            && tracked()
+        {
+            breakers::record_outcome(
+                &db,
+                &cipher,
+                &app_name_for_task,
+                &thing,
+                &run,
+                breakers::Outcome::InTime(standing),
+            );
+        }
 
         clear_shell_attach_ctx();
         end

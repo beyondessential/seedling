@@ -11,10 +11,10 @@ use serde_json::{Value, json};
 use crate::{
     oi::state::OiState,
     runtime::{
-        DbInstanceRegistry, InstanceRegistry,
+        DbInstanceRegistry, InstanceRegistry, breakers,
         gates::run::LastSuccesses,
         images,
-        probe::{ProbeRequest, probe_app},
+        probe::{ProbeBounds, ProbeRequest, probe_app},
     },
 };
 
@@ -424,9 +424,10 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         );
         // spec: IMGM#image-discovery
         if let Some(e) = err {
-            return Err(OiError::script_error(format!(
-                "proposed script failed to evaluate: {e}"
-            )));
+            return Err(super::apps::evaluation_error(
+                "proposed script failed to evaluate: ",
+                &e,
+            ));
         }
         proposed_app
     } else {
@@ -463,10 +464,24 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         &state.script_limits,
         &state.cipher,
     );
-    let response = probe_app(&engine, &ast, &app, registry, &request, &|gate| {
-        last.of(gate)
-    })
-    .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
+    let response = probe_app(
+        &engine,
+        &ast,
+        &app,
+        registry,
+        &request,
+        &|gate| last.of(gate),
+        &ProbeBounds {
+            limits: &state.script_limits,
+            tripped: breakers::consulting_once(
+                &name,
+                state.db.clone(),
+                std::sync::Arc::clone(&state.cipher),
+            ),
+        },
+    )
+    // spec: WIRE#error-codes
+    .map_err(|e| super::apps::evaluation_error("probe failed: ", &e))?;
 
     let per_handler: Vec<Value> = response
         .per_handler
@@ -579,6 +594,14 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
             ..Default::default()
         },
         &|gate| last.of(gate),
+        &crate::runtime::probe::ProbeBounds {
+            limits: &state.script_limits,
+            tripped: breakers::consulting_once(
+                app_name,
+                state.db.clone(),
+                std::sync::Arc::clone(&state.cipher),
+            ),
+        },
     ) {
         Ok(r) => r,
         Err(e) => {

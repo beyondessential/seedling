@@ -78,7 +78,8 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         sessions: Default::default(),
         checks: Default::default(),
         tick_notify: Arc::new(Notify::new()),
-        script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
+        script_error: script_error
+            .map(|msg| (super::ScriptError::failed(msg.to_owned()), Timestamp::now())),
         current_generation: 0,
         install_seq: None,
         seed: crate::runtime::seeds::AppSeed::for_tests(),
@@ -94,7 +95,7 @@ fn sync_clears_fault_on_successful_reload() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     assert_eq!(
         crate::runtime::faults::list_active_faults(&db, Some(&app("myapp")))
@@ -107,7 +108,7 @@ fn sync_clears_fault_on_successful_reload() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     assert!(
         crate::runtime::faults::list_active_faults(&db, Some(&app("myapp")))
@@ -126,7 +127,7 @@ fn sync_replaces_fault_when_error_changes() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(faults.len(), 1);
@@ -137,7 +138,7 @@ fn sync_replaces_fault_when_error_changes() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(
@@ -158,7 +159,7 @@ fn sync_is_idempotent_for_same_error() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     let first = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(first.len(), 1);
@@ -167,7 +168,7 @@ fn sync_is_idempotent_for_same_error() {
     sync_script_error_fault(
         &db,
         &entry.name,
-        entry.script_error.as_ref().map(|(m, _)| m.as_str()),
+        entry.script_error.as_ref().map(|(e, _)| e),
     );
     let second = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert_eq!(second.len(), 1);
@@ -807,6 +808,74 @@ fn a_reload_that_moves_a_deployments_bounds_clamps_its_stored_scale() {
     assert_eq!(stored, Some(4), "lowered to the new upper bound");
 }
 
+// spec: LIM#breakers
+// spec: FLT#app-faults
+#[test]
+fn a_definition_that_runs_away_trips_its_breaker_until_its_inputs_change() {
+    let script = r#"
+        let spin = app.param("spin");
+        if spin.is_set() && spin.value() == "yes" { loop {} }
+        app.deployment("api").image("ghcr.io/acme/api:1.0");
+    "#;
+    let limits = crate::ScriptLimits {
+        max_operations: 0,
+        max_evaluation_time: 1,
+        ..crate::ScriptLimits::default()
+    };
+    let registry = RwLock::new(AppRegistry::new());
+    registry
+        .write()
+        .register(
+            app("myapp"),
+            bundle_of(script),
+            Source::unknown_push(),
+            Arc::new(Notify::new()),
+            &limits,
+        )
+        .unwrap();
+    let db = crate::runtime::db::DbHandle::from_db(Db::open_in_memory().expect("open"));
+    let cipher = Arc::new(crate::runtime::secrets::Cipher::for_tests());
+    let spinning = BTreeMap::from([("spin".to_owned(), "yes".to_owned())]);
+    let kinds = || {
+        db.call(|db| crate::runtime::faults::list_active_faults(db, Some(&app("myapp"))))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.kind)
+            .collect::<Vec<_>>()
+    };
+
+    let outcome = reload(&registry, &db, &cipher, &app("myapp"), &spinning, &limits);
+    assert!(
+        matches!(
+            outcome,
+            ReloadOutcome::KeptPrevious(ScriptError::Runaway(_))
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(kinds(), vec!["evaluation_runaway".to_owned()]);
+
+    // The same definition and inputs are not evaluated again.
+    let started = cpu_time::ThreadTime::now();
+    let outcome = reload(&registry, &db, &cipher, &app("myapp"), &spinning, &limits);
+    assert!(matches!(
+        outcome,
+        ReloadOutcome::KeptPrevious(ScriptError::Runaway(_))
+    ));
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+
+    // Other inputs evaluate as usual, and finishing in time resets it.
+    let outcome = reload(
+        &registry,
+        &db,
+        &cipher,
+        &app("myapp"),
+        &BTreeMap::new(),
+        &limits,
+    );
+    assert!(outcome.is_applied(), "{outcome:?}");
+    assert!(kinds().is_empty(), "{:?}", kinds());
+}
+
 // spec: APPS#update
 #[test]
 fn reload_of_unknown_app_is_noop() {
@@ -849,7 +918,7 @@ fn a_stored_definition_that_no_longer_evaluates_is_faulted_on_reload() {
     sync_script_error_fault(
         &db,
         &loaded.name,
-        loaded.script_error.as_ref().map(|(m, _)| m.as_str()),
+        loaded.script_error.as_ref().map(|(e, _)| e),
     );
     let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
     assert!(
@@ -1010,7 +1079,7 @@ fn a_script_error_lies_at_its_own_file_and_line() {
         ("first.rhai", "let a = 1;\nlet b = 2;\n"),
         ("second.rhai", "let c = 3;\nthrow \"broken\";\n"),
     ]);
-    assert_eq!(err.at, Some(("second.rhai".to_owned(), 2)), "{err}");
+    assert_eq!(err.at(), Some(&("second.rhai".to_owned(), 2)), "{err}");
 }
 
 // spec: CLI#check-results
@@ -1020,7 +1089,7 @@ fn a_script_error_in_a_function_lies_where_it_was_raised() {
         "app.seed.rhai",
         "fn fail() {\n    throw \"broken\";\n}\n\nfail();\n",
     )]);
-    assert_eq!(err.at, Some(("app.seed.rhai".to_owned(), 2)), "{err}");
+    assert_eq!(err.at(), Some(&("app.seed.rhai".to_owned(), 2)), "{err}");
 }
 
 // spec: CLI#check-results
@@ -1039,12 +1108,12 @@ fn an_error_with_no_position_in_a_function_is_not_placed_at_its_call() {
         rhai::Position::new(2, 1),
     );
     let err = ScriptError::raised(bundle.script().unwrap(), &e);
-    assert_eq!(err.at, None, "{err}");
+    assert_eq!(err.at(), None, "{err}");
 }
 
 // spec: CLI#check-results
 #[test]
 fn a_syntax_error_lies_at_its_line() {
     let err = script_error_at(&[("app.seed.rhai", "let a = 1;\nlet = ;\n")]);
-    assert_eq!(err.at, Some(("app.seed.rhai".to_owned(), 2)), "{err}");
+    assert_eq!(err.at(), Some(&("app.seed.rhai".to_owned(), 2)), "{err}");
 }

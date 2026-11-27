@@ -155,6 +155,30 @@ pub(crate) fn rejection_error(app_name: &AppName, reason: RejectReason) -> OiErr
     }
 }
 
+/// Refuse a request that would evaluate `thing` with the run `run` builds
+/// while its breaker is tripped for it, or while whether it is cannot be read.
+// spec: LIM#breakers
+pub(crate) fn breaker_refusal(
+    state: &OiState,
+    app: &AppName,
+    thing: crate::runtime::breakers::Thing,
+    run: impl FnOnce() -> Result<crate::runtime::breakers::Run, String>,
+) -> Result<(), OiError> {
+    crate::runtime::breakers::consult_lazily(&state.db, &state.cipher, app, &thing, run)
+        .map(drop)
+        .map_err(refusal_error)
+}
+
+/// The error a request refused by a breaker fails with.
+// spec: WIRE#error-codes
+pub(crate) fn refusal_error(refusal: crate::runtime::breakers::Refusal) -> OiError {
+    use crate::runtime::breakers::Refusal;
+    match refusal {
+        Refusal::Tripped(why) => OiError::new(ErrorCode::EvaluationRunaway, why),
+        Refusal::Unreadable(why) => OiError::internal(why),
+    }
+}
+
 // spec: ACI#invoking-an-action
 pub(crate) fn invoke_action(
     state: &Arc<OiState>,
@@ -166,7 +190,7 @@ pub(crate) fn invoke_action(
     let supplied_params = params.params.unwrap_or_default();
     validate_action_params(&supplied_params)?;
 
-    let (phase_handle, action_params) = {
+    let (phase_handle, action_params, app, def) = {
         let reg = state.registry.read();
         let entry = reg
             .get(app_name.as_str())
@@ -180,12 +204,8 @@ pub(crate) fn invoke_action(
             ));
         }
 
-        // spec: ACI#invoking-an-action - reject if script_error fault is active
-        if entry.script_error.is_some() {
-            return Err(OiError::script_error(format!(
-                "app has a script error: {app_name}"
-            )));
-        }
+        // spec: ACI#invoking-an-action
+        super::apps::definition_refusal(app_name, &entry.script_error)?;
 
         // spec: ACN#shells
         // Shells and actions have separate namespaces: a shell of the same
@@ -201,8 +221,28 @@ pub(crate) fn invoke_action(
         // spec: ACN#volume-params
         validate_volume_params(state, &action_def.params, &action_params)?;
 
-        (Arc::clone(&entry.phase), action_params)
+        (
+            Arc::clone(&entry.phase),
+            action_params,
+            entry.app.clone(),
+            entry.app.def.load_full(),
+        )
     };
+
+    // spec: ACI#invoking-an-action
+    // spec: LIM#breakers
+    breaker_refusal(
+        state,
+        app_name,
+        crate::runtime::breakers::Thing::Action(action_name.clone()),
+        || {
+            let schema = &def.actions[action_name.as_str()].params;
+            Ok(
+                crate::runtime::breakers::Run::of_app(&app, &state.script_limits)
+                    .with_params(&action_params, schema),
+            )
+        },
+    )?;
 
     // Operator-invoked action: source and target generation are equal to the
     // app's current generation at dispatch.
@@ -333,6 +373,64 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(code, "requirements_invalid");
+    }
+
+    // spec: ACI#invoking-an-action
+    // spec: LIM#breakers
+    #[test]
+    fn an_action_whose_breaker_is_tripped_for_the_invocation_is_refused() {
+        use crate::runtime::breakers::{self, Run, Thing};
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({
+                "app": "demo",
+                "script": r#"
+                    app.deployment("web").image("docker.io/library/nginx:1.29");
+                    app.on_action("search", |rt, p| {});
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let run = {
+            let reg = oi.state.registry.read();
+            let mut tripped = serde_json::Map::new();
+            tripped.insert("pattern".into(), json!("(a+)+b"));
+            Run::of_app(&reg.get("demo").unwrap().app, &oi.state.script_limits)
+                .with_params(&ParamMap::from_values(tripped), &BTreeMap::new())
+        };
+        let cipher = Arc::clone(&oi.state.cipher);
+        let limits = oi.state.script_limits.clone();
+        oi.state
+            .db
+            .call(move |db| {
+                breakers::trip(
+                    db,
+                    &cipher,
+                    &AppName::new_unchecked("demo"),
+                    &Thing::Action(ActionName::new_unchecked("search")),
+                    &run,
+                    1,
+                    &limits,
+                )
+            })
+            .unwrap();
+
+        let (code, _) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "search", "params": { "pattern": "(a+)+b" } }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "evaluation_runaway");
+        let result = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "search", "params": { "pattern": "ab" } }),
+            )
+            .expect("other params are not held back");
+        assert_eq!(result["schedule"], "accepted");
     }
 
     // spec: ACN#shells

@@ -16,6 +16,12 @@ A script runs in a fresh scope every time it is evaluated. The `app` global is p
 
 A script is evaluated many times over an app's life, and must declare the same app each time from the same inputs: its bundle, its parameter values, the [host constants](#constants) and the app's seed, which [derived random values](#derived-random-values) come from. So BSL leaves out the parts of Rhai that would let an evaluation differ or stall: there is no `timestamp()`, `sleep()` throws, and a script that contains `import` fails to evaluate. An action that needs the time or the network reaches it through `rt`, for example by running a command in a container with `rt.exec`.
 
+### Evaluation time
+
+Each evaluation has 10 seconds of processor time (`--script-max-evaluation-time`, 0 for none): one evaluation of the definition, one call of a validator, or one pass of an action, shell or gate body, including the definition evaluation the pass begins with. Time spent waiting, in `rt` calls, at barriers or with a shell attached, does not count. An evaluation that runs out is stopped, and fails.
+
+A runaway trips a breaker for the definition, action, shell or gate body, and files an `evaluation_runaway` fault saying whether the definition or an input is the likely cause. Until the fault clears, the runtime does not evaluate that thing again with the same definition and inputs: the definition keeps its last good evaluation, and an action or shell with those params is refused. A new definition, other params or a run that finishes in time resets the breaker; so does clearing the fault, which is how to retry once the cause is fixed elsewhere, such as on the host.
+
 ### Names
 
 Most resources take a name. Valid names are 3–63 characters, ASCII alphanumeric with hyphens, must not start with a digit or hyphen, and must not end with a hyphen. Regex: `^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$`.
@@ -582,7 +588,7 @@ app.deployment("api").stop_timeout(grace.parsed() * 2);
 
 ### Regular expressions
 
-`std::regex(pattern)` compiles a pattern in the [Rust `regex` crate's syntax](https://docs.rs/regex/1/regex/#syntax) and returns a `Regex`. Searches run in time linear in the text, with no backtracking, so the syntax has no backreferences or look-around. A search finds a match anywhere in the text; anchor the pattern with `^` and `$` to match the whole of it.
+`std::regex(pattern)` compiles a pattern in the [Rust `regex` crate's syntax](https://docs.rs/regex/1/regex/#syntax) and returns a `Regex`. Searches run in time linear in the text, with no backtracking, so the syntax has no backreferences or look-around. A search over a very large text is bounded by the [evaluation time](#evaluation-time). A search finds a match anywhere in the text; anchor the pattern with `^` and `$` to match the whole of it.
 
 ```rhai
 let kv = std::regex("(?<key>[a-z_]+)=(?<value>[^;]*)");

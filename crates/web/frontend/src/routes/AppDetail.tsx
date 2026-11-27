@@ -1642,13 +1642,25 @@ function ActionInvokeDialog({
   );
 }
 
+/** Whether a fault says the app's definition did not evaluate, as the server
+ * refuses installs, gate runs and action invocations for. A runaway in one
+ * action, shell or gate names it, and leaves the rest of the app usable. */
+function isDefinitionFault(f: FaultRecord): boolean {
+  return (
+    f.kind === "script_error" ||
+    ((f.kind === "evaluation_runaway" ||
+      f.kind === "breaker_state_unreadable") &&
+      !f.resource_type)
+  );
+}
+
 function InstallSection({
   appName,
-  hasScriptError,
+  definitionFailed,
   onRefresh,
 }: {
   appName: string;
-  hasScriptError: boolean;
+  definitionFailed: boolean;
   onRefresh: () => void;
 }) {
   const { execute, loading } = useOiAction();
@@ -1679,7 +1691,7 @@ function InstallSection({
         safety="write"
         size="large"
         onClick={() => void handleInstall()}
-        disabled={loading || hasScriptError}
+        disabled={loading || definitionFailed}
       >
         {loading ? "Installing…" : "Install"}
       </SolidActionButton>
@@ -1762,18 +1774,18 @@ function GatesSection({
   appName,
   gates,
   status,
-  hasScriptError,
+  definitionFailed,
   onRefresh,
 }: {
   appName: string;
   gates: AppGate[];
   status: AppStatus;
-  hasScriptError: boolean;
+  definitionFailed: boolean;
   onRefresh: () => void;
 }) {
   const { execute, loading, error, clearError } = useOiAction();
   const canRun =
-    !hasScriptError &&
+    !definitionFailed &&
     status !== "not_installed" &&
     status !== "uninstalling" &&
     status !== "operating";
@@ -1875,14 +1887,14 @@ function ActionsSection({
   appName,
   actions,
   status,
-  hasScriptError,
+  definitionFailed,
   operatingAction,
   onRefresh,
 }: {
   appName: string;
   actions: AppAction[];
   status: AppStatus;
-  hasScriptError: boolean;
+  definitionFailed: boolean;
   operatingAction?: string;
   onRefresh: () => void;
 }) {
@@ -1891,7 +1903,7 @@ function ActionsSection({
   const { openShell } = useSessionContext();
 
   const canInvoke =
-    !hasScriptError &&
+    !definitionFailed &&
     status !== "not_installed" &&
     status !== "installing" &&
     status !== "uninstalling" &&
@@ -3102,9 +3114,7 @@ export default function AppDetail() {
           {data.status === "not_installed" ? (
             <InstallSection
               appName={name!}
-              hasScriptError={data.faults.some(
-                (f) => f.kind === "script_error",
-              )}
+              definitionFailed={data.faults.some(isDefinitionFault)}
               onRefresh={refetch}
             />
           ) : (
@@ -3130,9 +3140,7 @@ export default function AppDetail() {
                         appName={name!}
                         gates={data.gates}
                         status={data.status}
-                        hasScriptError={data.faults.some(
-                          (f) => f.kind === "script_error",
-                        )}
+                        definitionFailed={data.faults.some(isDefinitionFault)}
                         onRefresh={refetch}
                       />
                     </Section>
@@ -3145,9 +3153,7 @@ export default function AppDetail() {
                     appName={name!}
                     actions={data.actions}
                     status={data.status}
-                    hasScriptError={data.faults.some(
-                      (f) => f.kind === "script_error",
-                    )}
+                    definitionFailed={data.faults.some(isDefinitionFault)}
                     operatingAction={data.current_operation?.action_name}
                     onRefresh={refetch}
                   />

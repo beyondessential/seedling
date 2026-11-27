@@ -29,9 +29,9 @@ export interface FaultRecord {
   id: string;
   app?: string;
   kind: string;
-  resource_type?: string;
-  resource_name?: string;
-  instance_id?: string;
+  resource_type?: string | null;
+  resource_name?: string | null;
+  instance_id?: string | null;
   timestamp: string;
   description: string;
 }
