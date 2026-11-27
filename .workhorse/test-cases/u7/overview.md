@@ -36,6 +36,7 @@
 - [x] A shell run that runs away trips the shell's breaker, and its fault names the shell (verifies spec: LIM, FLTS)
 - [x] `Action.invoke` of an action tripped for those params throws without running it (verifies spec: ACN)
 - [x] A replay reaching a recorded `invoke` of an action since tripped runs it, without checking the breaker (verifies spec: ACN)
+- [x] A pass reads breakers as it begins: one that trips during the pass is seen by the next pass, not the running one (verifies spec: ACN)
 - [x] Opening a shell is refused under `script_error`, under the definition's `evaluation_runaway`, and when the shell's breaker is tripped for its params (verifies spec: SHL)
 - [x] A gate run fails with nothing stopped when its body's breaker is tripped (verifies spec: GRUN)
 - [x] An operator gate-run request is refused with `evaluation_runaway` while the body's breaker is tripped for the run (verifies spec: CTL)
