@@ -744,8 +744,8 @@ pub type Tripped = std::sync::Arc<
     dyn Fn(&Thing, &dyn Fn() -> Result<Run, String>) -> Option<String> + Send + Sync,
 >;
 
-/// Consult the breakers of `app`, as they are stored.
-pub fn consulting(
+/// Consult the breakers of `app`, as they are stored, one thing at a time.
+fn consulting(
     app: &AppName,
     db: crate::runtime::db::DbHandle,
     cipher: std::sync::Arc<Cipher>,
@@ -758,15 +758,18 @@ pub fn consulting(
     })
 }
 
-/// Consult the breakers of `app` for one evaluation, such as a probe, as they
-/// stand when it starts.
+/// Consult the breakers of `app` for one pass of an evaluation, such as a pass
+/// of an operation or a probe, as they stand when it starts.
 ///
 /// One read finds which of the app's things hold a breaker fault, runaway or
-/// unreadable. A thing that holds neither is clear for the whole evaluation
-/// without a further read, which is nearly every thing; one that holds either
+/// unreadable. A thing that holds neither is clear for the whole pass without
+/// a further read, which is nearly every thing, so a closure that invokes
+/// actions in a loop reads once however often it loops; one that holds either
 /// is consulted as [`consulting`] consults it. Where that read fails, every
 /// thing is consulted that way, and each consult that fails is held as its
 /// own unreadable fault.
+///
+/// A breaker that trips while the pass runs is not seen until the next one.
 // spec: LIM#breakers
 pub fn consulting_once(
     app: &AppName,
@@ -819,8 +822,7 @@ pub struct InvokesGuard(Option<Invokes>);
 impl InvokesGuard {
     /// Consult breakers with `tripped`, for evaluations that run with
     /// `base`'s definition and inputs, before any params.
-    pub fn enter(base: Run, tripped: Tripped) -> Self {
-        let base = std::sync::Arc::new(base);
+    pub fn enter(base: std::sync::Arc<Run>, tripped: Tripped) -> Self {
         Self(INVOKES.with_borrow_mut(|held| held.replace(Invokes { base, tripped })))
     }
 }

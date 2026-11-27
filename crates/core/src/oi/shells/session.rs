@@ -697,8 +697,11 @@ pub(super) async fn run_app_shell(
     // spec: LIM#breakers
     // The base is what an `invoke` from the closure is consulted with, and
     // the session's own run is that plus its params.
-    let base_run = crate::runtime::breakers::Run::of_app(&app, &script_limits);
-    let run_for_task = base_run.clone().with_params(&validated_params, schema);
+    let base_run = Arc::new(crate::runtime::breakers::Run::of_app(&app, &script_limits));
+    let run_for_task = base_run
+        .as_ref()
+        .clone()
+        .with_params(&validated_params, schema);
     let cipher = Arc::clone(&state.cipher);
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
@@ -818,11 +821,6 @@ pub(super) async fn run_app_shell(
             }
         }
         let mut ran_out = false;
-        // spec: ACN#action-invocation
-        let _invokes = breakers::InvokesGuard::enter(
-            base_run,
-            breakers::consulting(&app_name_for_task, db.clone(), Arc::clone(&cipher)),
-        );
         set_shell_attach_ctx(ShellAttachCtx {
             app_name: app_name_for_task.clone(),
             host,
@@ -836,6 +834,13 @@ pub(super) async fn run_app_shell(
         // cannot shed what it has spent by suspending.
         let evaluation = crate::evaluation::Evaluation::start(&script_limits);
         let end = loop {
+            // spec: ACN#action-invocation
+            // The breakers of what the closure invokes are read as each pass
+            // begins, as an operation's are.
+            let _invokes = breakers::InvokesGuard::enter(
+                Arc::clone(&base_run),
+                breakers::consulting_once(&app_name_for_task, db.clone(), Arc::clone(&cipher)),
+            );
             // spec: RT#resources-a-gate-holds
             // What gates keep from the closure is read for each pass, as an
             // operation's is, so a pass that follows a wait sees the gates as

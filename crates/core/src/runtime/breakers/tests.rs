@@ -366,3 +366,27 @@ fn a_closure_fault_names_its_closure_and_a_definition_fault_names_nothing() {
     );
     assert_eq!(named(""), (None, None, None));
 }
+
+// spec: ACN#action-invocation
+#[test]
+fn a_pass_reads_breakers_as_it_begins_and_not_as_they_trip() {
+    let db = crate::runtime::db::DbHandle::open_in_memory().unwrap();
+    let cipher = std::sync::Arc::new(Cipher::for_tests());
+    let run = run_with("sha256:a", "x+");
+    let building = || Ok(run.clone());
+
+    let before = consulting_once(&app(), db.clone(), std::sync::Arc::clone(&cipher));
+    assert_eq!(before(&action(), &building), None);
+
+    let (c, r) = (std::sync::Arc::clone(&cipher), run.clone());
+    db.call(move |db| trip(db, &c, &app(), &action(), &r, 3, &limits()))
+        .unwrap();
+
+    assert_eq!(
+        before(&action(), &building),
+        None,
+        "a breaker that tripped during the pass is read at the next"
+    );
+    let after = consulting_once(&app(), db, cipher);
+    assert!(after(&action(), &building).is_some());
+}

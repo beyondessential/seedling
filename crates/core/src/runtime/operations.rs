@@ -498,9 +498,9 @@ pub(crate) fn run_operation_loop(
     // What every evaluation of this app runs with, before the params or the
     // last success of the one thing: the base an `invoke` is consulted with
     // as well, so it is built once.
-    let base = crate::runtime::breakers::Run::of_app(app, script_limits);
+    let base = Arc::new(crate::runtime::breakers::Run::of_app(app, script_limits));
     let run = {
-        let run = base.clone();
+        let run = base.as_ref().clone();
         match &gate {
             Some(input) => run.with_last_success(input.last),
             None => {
@@ -519,11 +519,6 @@ pub(crate) fn run_operation_loop(
             .get(app_name.as_str())
             .is_some_and(|e| e.current_generation == op_ctx.operation_generation)
     };
-    // spec: ACN#action-invocation
-    let _invokes = crate::runtime::breakers::InvokesGuard::enter(
-        base,
-        crate::runtime::breakers::consulting(app_name, db.clone(), Arc::clone(&cipher)),
-    );
     let mut standing = None;
     if tracked() {
         match crate::runtime::breakers::consult_lazily(&db, &cipher, app_name, &thing, || {
@@ -535,6 +530,13 @@ pub(crate) fn run_operation_loop(
     }
 
     loop {
+        // spec: ACN#action-invocation
+        // The breakers of what the closure invokes are read as each pass
+        // begins, so a pass that follows a wait sees them as they stand then.
+        let _invokes = crate::runtime::breakers::InvokesGuard::enter(
+            Arc::clone(&base),
+            crate::runtime::breakers::consulting_once(app_name, db.clone(), Arc::clone(&cipher)),
+        );
         // spec: RT#resources-a-gate-holds
         // What gates keep from the closure is read for each pass, so a pass
         // that follows a wait sees the gates as they stand then. In a gate's

@@ -90,14 +90,14 @@ pub struct ProbeBounds<'a> {
 /// Assembling it reads the app's stored parameters and host constants, so a
 /// probe builds it once rather than once per handler.
 struct Base<'a> {
-    run: breakers::Run,
+    run: std::sync::Arc<breakers::Run>,
     bounds: &'a ProbeBounds<'a>,
 }
 
 impl<'a> Base<'a> {
     fn of(app: &App, bounds: &'a ProbeBounds<'a>) -> Self {
         Base {
-            run: breakers::Run::of_app(app, bounds.limits),
+            run: std::sync::Arc::new(breakers::Run::of_app(app, bounds.limits)),
             bounds,
         }
     }
@@ -109,7 +109,7 @@ impl<'a> Base<'a> {
         thing: &breakers::Thing,
         inputs: impl Fn(breakers::Run) -> breakers::Run,
     ) -> Option<String> {
-        (self.bounds.tripped)(thing, &|| Ok(inputs(self.run.clone())))
+        (self.bounds.tripped)(thing, &|| Ok(inputs(self.run.as_ref().clone())))
     }
 }
 
@@ -554,7 +554,7 @@ fn run_probe(
         // spec: IMG#image-discovery
         // An invoked action is refused while its breaker is tripped, as in a run.
         let _invokes = breakers::InvokesGuard::enter(
-            base.run.clone(),
+            std::sync::Arc::clone(&base.run),
             std::sync::Arc::clone(&base.bounds.tripped),
         );
         // spec: LIM#measuring-evaluation-time
