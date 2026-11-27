@@ -1,0 +1,10 @@
+# Restrict pod-to-pod traffic to mounts
+
+## Technical notes
+
+- Pod network source checking can't wait for a reconcile pass. A pod network created after the last ruleset apply would otherwise run unchecked until the next one, and the spec requires the check from the first container's start. A reverse-path lookup (`fib saddr . iif oif missing drop`, or an equivalent comparison of the arrival interface with the route back to the source) covers every bridge without listing them. Scope it to traffic from the runtime's own bridges, or to sources within the host prefix, so a multi-homed host's asymmetric uplink routing is left alone. Exempt `::` and link-local sources.
+- The source check runs ahead of every translation: before the dstnat prerouting chain, and before Jool's netfilter hook (registered after the dstnat priority). A chain at raw priority does both.
+- The forward chain keeps accepting every translated connection (`ct status dnat`). Once service translation is limited to the proxy network and the host, every DNAT the runtime performs is legitimate: ingress redirection, a pod's own mounts, and service translation for the proxy or the host.
+- "Arriving from the proxy network" is matched by the proxy bridge's input interface, not by source prefix, so a pod can't qualify by forging a proxy address.
+- Service translation in prerouting gains the same proxy bridge input-interface match. The output-chain copy (host-originated) stays as it is.
+- The host input drop needs a filter chain on the input hook. Match pod traffic without enumerating bridges, for the same reason as the source check: a source within the host prefix but outside the proxy and resolver networks, arriving on any interface but loopback (the host holds every bridge gateway, so its traffic to itself carries host-prefix sources). The source check makes that trustworthy, and it already drops anything else a pod bridge could send, IPv4 included. Accept established/related and ICMPv6 neighbour solicitation and advertisement first.

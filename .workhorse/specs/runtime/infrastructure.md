@@ -10,6 +10,7 @@ Applies to the host-level state the [runtime](../overview.md#runtime) keeps bene
 
 | term | meaning |
 | --- | --- |
+| neighbour discovery | The ICMPv6 messages by which nodes on a link resolve each other's link-layer addresses and confirm reachability, [RFC 4861](https://www.rfc-editor.org/rfc/rfc4861). |
 | unique local address | An IPv6 address within `fc00::/7`, routable only within a site, [RFC 4193](https://www.rfc-editor.org/rfc/rfc4193). |
 
 ## Terminology
@@ -95,6 +96,15 @@ If a listing cannot be read, the runtime MUST NOT remove any pod network on the 
 
 The runtime MUST NOT remove the networks of its own infrastructure containers during this cleanup.
 
+## Pod network sources
+
+The runtime MUST drop every packet arriving from a pod network whose source address lies outside that network's prefix, before applying any translation to it.
+Packets with a link-local or unspecified source address are exempt.
+The runtime MUST drop such packets from the moment the first container on a pod network starts.
+
+> [!NOTE]
+> Every other rule that scopes traffic by its source prefix relies on this one: without it, a container that can send raw packets could take on another pod's address and be translated or forwarded as that pod.
+
 ## Mount endpoint addressing
 
 The mount endpoint MUST be the address `<host prefix>:fffe::1`, the same for every pod on the host.
@@ -118,10 +128,14 @@ A service's address MUST differ from every address the runtime reserves for its 
 ## Service translation
 
 The runtime MUST translate traffic addressed to a service's address and declared service port to the address and pod-side port of one of the service's backends.
-The translation MUST apply to traffic forwarded through the host and to traffic originating on the host.
+The translation MUST apply to traffic arriving from the [proxy network](proxy.md#proxy-addresses) and to traffic originating on the host.
+The runtime MUST NOT translate traffic addressed to a service's address that arrives from anywhere else.
 Where a service has several backends, the runtime MUST distribute new connections across them.
 
-The runtime MUST apply the service translation, mount translation, [ingress redirection](#ingress-redirection) and forwarding policy rules together, as one atomic replacement of the rules it last applied.
+> [!NOTE]
+> A pod reaches a service through the mount endpoint, never through the service's address.
+
+The runtime MUST apply the service translation, mount translation, [ingress redirection](#ingress-redirection), [pod network source](#pod-network-sources), forwarding policy and [host input](#pod-traffic-to-the-host) rules together, as one atomic replacement of the rules it last applied.
 These rules are [absolute state](reconciliation.md#absolute-state).
 
 ## Ingress redirection
@@ -155,7 +169,23 @@ A connection from a host process over the loopback interface that the runtime re
 The runtime MUST drop forwarded packets addressed to the host prefix, except:
 
 - packets of a connection already accepted, or related to one;
-- packets of a connection whose destination the runtime's ingress redirection rewrote;
-- packets whose source address is also within the host prefix.
+- packets of a connection whose destination the runtime rewrote, by ingress redirection, mount translation or service translation;
+- packets arriving from the proxy network;
+- TCP and UDP packets from within the host prefix, addressed to the [resolver address](resolver.md#resolver-addresses) at port 53.
+
+The runtime MUST NOT forward traffic from one pod network to another other than through a [mount translation](#mount-endpoint-addressing).
 
 The runtime MUST NOT drop or otherwise filter forwarded traffic addressed outside the host prefix.
+
+## Pod traffic to the host
+
+The runtime MUST drop packets arriving from a pod network and addressed to any of the host's own addresses, except:
+
+- packets of a connection already accepted, or related to one;
+- neighbour discovery messages.
+
+The runtime MUST drop such packets from the moment the first container on a pod network starts.
+
+> [!NOTE]
+> Replies to the host's own connections into a pod, such as its probes and port-forward relays, are packets of an accepted connection.
+> Traffic from a pod to an ingress port on one of the host's addresses is redirected to the proxy before it would reach the host, so it is forwarded rather than delivered here.

@@ -290,6 +290,17 @@ The proxy MUST NOT add connection-specific fields to responses to keep a connect
 > Connection-specific fields make a response malformed on HTTP/2 ([RFC 9113 §8.2.2](https://www.rfc-editor.org/rfc/rfc9113#section-8.2.2)) and HTTP/3 ([RFC 9114 §4.2](https://www.rfc-editor.org/rfc/rfc9114#section-4.2)).
 > An app [cannot declare them](../language/http-service.md#header-operations) as header operations, and needs no declaration for persistence.
 
+## Proxy addresses
+
+The proxy MUST be connected to a network of its own, the proxy network, at the addresses below, the IPv6 ones derived from the [host prefix](infrastructure.md#host-prefix):
+
+| address | value |
+| --- | --- |
+| proxy network | `<host prefix>:ff00::/64` and `10.89.255.0/24` |
+| host side of the proxy network | `<host prefix>:ff00::1` and `10.89.255.1` |
+
+The runtime MUST NOT connect any other container to the proxy network.
+
 ## Proxy lifecycle
 
 The runtime MUST attempt to bring the proxy up when it starts.
