@@ -202,13 +202,14 @@ pub(crate) async fn open_shell_session(
         let slot = entry.sessions.open(session_id);
         Ok((
             entry.app.clone(),
+            entry.current_generation,
             shell_params_schema,
             Arc::clone(&entry.sessions),
             slot,
             Arc::clone(&entry.tick_notify),
         ))
     })();
-    let (app, shell_params_schema, sessions, slot, tick_notify) = match lookup {
+    let (app, generation, shell_params_schema, sessions, slot, tick_notify) = match lookup {
         Ok(v) => v,
         Err((code, msg)) => {
             reject(&mut send, code, msg).await;
@@ -330,6 +331,7 @@ pub(crate) async fn open_shell_session(
     let run = run_app_shell(
         &state,
         app,
+        generation,
         &app_name,
         &shell_name,
         &shell_params_schema,
@@ -649,6 +651,7 @@ pub(super) fn session_outcome(
 pub(super) async fn run_app_shell(
     state: &OiState,
     app: App,
+    generation: u64,
     app_name: &AppName,
     shell_name: &ShellName,
     schema: &std::collections::BTreeMap<
@@ -794,18 +797,26 @@ pub(super) async fn run_app_shell(
             });
         }
         // spec: LIM#breakers
-        // A session runs against the app's current definition, so its run of
-        // the closure is tracked.
+        // A session runs the definition of the generation it opened at, so
+        // its run of the closure is tracked only while that is still the
+        // app's current one: an update while it runs leaves it untracked.
         use crate::runtime::breakers::{self, Thing};
         let thing = Thing::Shell(shell_name_for_task.clone());
         let run = run_for_task;
-        let standing =
+        let tracked = || {
+            apps.read()
+                .get(app_name_for_task.as_str())
+                .is_some_and(|e| e.current_generation == generation)
+        };
+        let mut standing = None;
+        if tracked() {
             match breakers::consult_lazily(&db, &cipher, &app_name_for_task, &thing, || {
                 Ok(run.clone())
             }) {
-                Ok(standing) => standing,
+                Ok(s) => standing = Some(s),
                 Err(refusal) => return ScriptEnd::Failed(refusal.message().to_owned()),
-            };
+            }
+        }
         let mut ran_out = false;
         // spec: ACN#action-invocation
         let _invokes = breakers::InvokesGuard::enter(
@@ -890,21 +901,19 @@ pub(super) async fn run_app_shell(
                     app = %app_name_for_task, shell = %shell_name_for_task,
                     "shell closure failed: {why}"
                 );
-                let generation = apps
-                    .read()
-                    .get(app_name_for_task.as_str())
-                    .map_or(0, |e| e.current_generation);
-                breakers::record_outcome(
-                    &db,
-                    &cipher,
-                    &app_name_for_task,
-                    &thing,
-                    &run,
-                    breakers::Outcome::RanOut {
-                        generation,
-                        limits: script_limits.clone(),
-                    },
-                );
+                if tracked() {
+                    breakers::record_outcome(
+                        &db,
+                        &cipher,
+                        &app_name_for_task,
+                        &thing,
+                        &run,
+                        breakers::Outcome::RanOut {
+                            generation,
+                            limits: script_limits.clone(),
+                        },
+                    );
+                }
                 ran_out = true;
                 break ScriptEnd::Failed(format!("the shell's script failed: {why}"));
             }
@@ -930,7 +939,11 @@ pub(super) async fn run_app_shell(
         // limit; a pass that returns is only part of one. A run an operator
         // stopped neither finished nor ran away, so it says nothing about
         // how long the closure takes and earns no reset.
-        if !ran_out && !matches!(end, ScriptEnd::Cancelled) {
+        if !ran_out
+            && !matches!(end, ScriptEnd::Cancelled)
+            && let Some(standing) = standing
+            && tracked()
+        {
             breakers::record_outcome(
                 &db,
                 &cipher,

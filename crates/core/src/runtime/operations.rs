@@ -623,6 +623,7 @@ pub(crate) fn run_operation_loop(
         // and earns no reset.
         if !matches!(result, OperationResult::Cancelled)
             && let Some(standing) = standing.take()
+            && tracked()
         {
             crate::runtime::breakers::record_outcome(
                 &db,

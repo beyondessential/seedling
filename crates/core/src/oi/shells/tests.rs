@@ -117,7 +117,7 @@ fn run_shell_on(
     )
     .unwrap();
     setup(&oi);
-    let (app, schema, sessions, tick_notify) = {
+    let (app, generation, schema, sessions, tick_notify) = {
         let reg = oi.state.registry.read();
         let entry = reg.get("demo").unwrap();
         let schema = entry
@@ -131,6 +131,7 @@ fn run_shell_on(
             .clone();
         (
             entry.app.clone(),
+            entry.current_generation,
             schema,
             Arc::clone(&entry.sessions),
             Arc::clone(&entry.tick_notify),
@@ -153,6 +154,7 @@ fn run_shell_on(
         let run = run_app_shell(
             &oi.state,
             app,
+            generation,
             &"demo".parse().unwrap(),
             &"tools".parse().unwrap(),
             &schema,
