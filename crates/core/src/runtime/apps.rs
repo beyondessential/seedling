@@ -627,7 +627,7 @@ impl AppRegistry {
             let run = breakers::Run::new(bundle.hash(), &stored, Some(&seed), limits);
             let (app, raw_error) =
                 match breakers::consult(db, cipher, &name, &breakers::Thing::Definition, || {
-                    run.clone()
+                    Ok(run.clone())
                 }) {
                     Err(refusal) => (
                         App::with_bundle(Arc::clone(&bundle)),
@@ -904,7 +904,7 @@ pub fn reload(
     let standing = {
         let (name, cipher, run) = (name.clone(), Arc::clone(cipher), run.clone());
         db.call(move |db| {
-            breakers::consult(db, &cipher, &name, &breakers::Thing::Definition, || run)
+            breakers::consult(db, &cipher, &name, &breakers::Thing::Definition, || Ok(run))
         })
     };
     let outcome = match standing {

@@ -526,15 +526,9 @@ pub(crate) fn run_operation_loop(
     );
     let mut standing = None;
     if tracked() {
-        let (name, cipher, checked, run) = (
-            app_name.clone(),
-            Arc::clone(&cipher),
-            thing.clone(),
-            run.clone(),
-        );
-        match db
-            .call(move |db| crate::runtime::breakers::consult(db, &cipher, &name, &checked, || run))
-        {
+        match crate::runtime::breakers::consult_lazily(&db, &cipher, app_name, &thing, || {
+            Ok(run.clone())
+        }) {
             Ok(s) => standing = Some(s),
             Err(refusal) => return OperationEnd::Failed(refusal.message().to_owned()),
         }

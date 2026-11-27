@@ -63,18 +63,18 @@ fn a_tripped_breaker_holds_for_its_run_alone() {
     let (db, cipher) = (Db::open_in_memory().unwrap(), Cipher::for_tests());
     let run = run_with("sha256:a", "x+");
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || run.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(run.clone())),
         Ok(Standing::Clear)
     );
 
     trip(&db, &cipher, &app(), &action(), &run, 3, &limits()).unwrap();
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || run.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(run.clone())),
         Ok(Standing::Tripped)
     );
     let other = run_with("sha256:a", "y+");
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || other.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(other.clone())),
         Ok(Standing::TrippedForOther)
     );
     assert_eq!(runaway_faults(&db).len(), 1);
@@ -94,7 +94,7 @@ fn a_tripped_breaker_survives_a_restart() {
     LAST_IN_TIME.lock().clear();
     let db = Db::open(&path).unwrap();
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || run.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(run.clone())),
         Ok(Standing::Tripped)
     );
 }
@@ -117,11 +117,11 @@ fn a_second_runaway_with_other_inputs_records_them_without_clearing_the_fault() 
         "the fault was not cleared and filed again"
     );
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || second.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(second.clone())),
         Ok(Standing::Tripped)
     );
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || first.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(first.clone())),
         Ok(Standing::TrippedForOther)
     );
 }
@@ -144,7 +144,7 @@ fn an_in_time_run_with_other_inputs_resets_the_breaker() {
     );
     assert!(runaway_faults(&db).is_empty());
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || tripped.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(tripped.clone())),
         Ok(Standing::Clear)
     );
 }
@@ -162,7 +162,7 @@ fn an_in_time_run_of_what_tripped_the_breaker_resets_it() {
     adopted_in_time(&db, &cipher, &app(), &action(), &tripped);
     assert!(runaway_faults(&db).is_empty());
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || tripped.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(tripped.clone())),
         Ok(Standing::Clear)
     );
 }
@@ -175,7 +175,7 @@ fn clearing_the_fault_resets_the_breaker() {
     trip(&db, &cipher, &app(), &action(), &run, 3, &limits()).unwrap();
     faults::clear_all_faults_for_app(&db, &app()).unwrap();
     assert_eq!(
-        standing(&db, &cipher, &app(), &action(), || run.clone()),
+        standing(&db, &cipher, &app(), &action(), || Ok(run.clone())),
         Ok(Standing::Clear)
     );
 }
@@ -188,7 +188,7 @@ fn a_breaker_whose_state_cannot_be_read_is_never_clear() {
     trip(&db, &cipher, &app(), &action(), &run, 3, &limits()).unwrap();
     db.conn.execute("DROP TABLE breakers", []).unwrap();
 
-    assert!(standing(&db, &cipher, &app(), &action(), || run.clone()).is_err());
+    assert!(standing(&db, &cipher, &app(), &action(), || Ok(run.clone())).is_err());
     let held = faults::list_active_faults_in_scope(
         &db,
         &faults::FaultScope::AppKind(app(), BREAKER_STATE_UNREADABLE.to_owned()),
@@ -311,7 +311,7 @@ fn raising_the_limit_is_a_change_of_inputs() {
     };
     let rerun = Run::new("sha256:a", &stored, Some(&seed), &raised);
     assert_eq!(
-        standing(&db, &cipher, &app(), &Thing::Definition, || rerun.clone()),
+        standing(&db, &cipher, &app(), &Thing::Definition, || Ok(rerun.clone())),
         Ok(Standing::TrippedForOther)
     );
 }

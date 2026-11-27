@@ -255,22 +255,20 @@ pub enum Standing {
     Tripped,
 }
 
-/// Where `thing`'s breaker stands for the run `run` builds, or why that
-/// cannot be read.
+/// What a thing's breaker holds, before any run is compared against it.
+enum Recorded {
+    /// No fault is active, so the breaker is not tripped.
+    Clear,
+    /// The fault is active, and the breaker holds the digest of the
+    /// definition and inputs that tripped it.
+    Tripped(KeyDigest),
+}
+
+/// What `thing`'s breaker holds, or why that cannot be read.
 ///
 /// A failed read is never taken for a clear breaker.
-///
-/// The run is built only where the breaker's fault is active, which is the
-/// uncommon answer: assembling a run reads the app's stored parameters and
-/// host constants, and a breaker with no fault needs none of them.
 // spec: LIM#breakers
-fn read_standing(
-    db: &Db,
-    cipher: &Cipher,
-    app: &AppName,
-    thing: &Thing,
-    run: impl FnOnce() -> Run,
-) -> Result<Standing, String> {
+fn read_recorded(db: &Db, app: &AppName, thing: &Thing) -> Result<Recorded, String> {
     let subject = thing.subject();
     let active: bool = db
         .conn
@@ -285,7 +283,7 @@ fn read_standing(
         })
         .map_err(|e| format!("cannot read the breaker's fault: {e}"))?;
     if !active {
-        return Ok(Standing::Clear);
+        return Ok(Recorded::Clear);
     }
     let recorded: Option<Vec<u8>> = db
         .conn
@@ -297,13 +295,52 @@ fn read_standing(
         .map_err(|e| format!("cannot read the breaker: {e}"))?;
     let recorded =
         recorded.ok_or_else(|| "the breaker's fault is active but it has no record".to_owned())?;
-    let recorded = KeyDigest::from_bytes(&recorded)
-        .ok_or_else(|| "the breaker's record holds no digest".to_owned())?;
-    Ok(if recorded == run().digest(cipher)? {
-        Standing::Tripped
-    } else {
-        Standing::TrippedForOther
+    KeyDigest::from_bytes(&recorded)
+        .map(Recorded::Tripped)
+        .ok_or_else(|| "the breaker's record holds no digest".to_owned())
+}
+
+/// Where `recorded` leaves a run, which is digested only where the breaker's
+/// fault is active, the uncommon answer: assembling a run reads the app's
+/// stored parameters and host constants, and a breaker with no fault needs
+/// none of them.
+///
+/// A run that cannot be assembled, as a gate's last success cannot be read,
+/// is a breaker that cannot be compared, and not a different run.
+fn compare(
+    cipher: &Cipher,
+    recorded: Recorded,
+    run: impl FnOnce() -> Result<Run, String>,
+) -> Result<Standing, String> {
+    Ok(match recorded {
+        Recorded::Clear => Standing::Clear,
+        Recorded::Tripped(recorded) if recorded == run()?.digest(cipher)? => Standing::Tripped,
+        Recorded::Tripped(_) => Standing::TrippedForOther,
     })
+}
+
+/// Note that `thing`'s breaker could be read, clearing the fault that said it
+/// could not.
+fn note_readable(db: &Db, app: &AppName, thing: &Thing) {
+    let key = FaultKey::new(app, BREAKER_STATE_UNREADABLE, thing.subject());
+    if let Err(e) = faults::clear_fault_by_key(db, &key) {
+        tracing::error!(%app, "cannot clear {BREAKER_STATE_UNREADABLE}: {e}");
+    }
+}
+
+/// Note that `thing`'s breaker could not be read, holding the fault that says
+/// so.
+// spec: FLT#app-faults
+fn note_unreadable(db: &Db, app: &AppName, thing: &Thing, why: &str) {
+    tracing::error!(%app, "cannot read the breaker of {}: {why}", thing.describe());
+    let key = FaultKey::new(app, BREAKER_STATE_UNREADABLE, thing.subject());
+    let description = format!(
+        "cannot read whether the breaker of {} is tripped, so it is not evaluated: {why}",
+        thing.describe()
+    );
+    if let Err(e) = faults::file_once(db, &key, &thing.fault_meta(), &description) {
+        tracing::error!(%app, "cannot file {BREAKER_STATE_UNREADABLE}: {e}");
+    }
 }
 
 /// Where `thing`'s breaker stands for `run`, holding
@@ -316,25 +353,15 @@ pub fn standing(
     cipher: &Cipher,
     app: &AppName,
     thing: &Thing,
-    run: impl FnOnce() -> Run,
+    run: impl FnOnce() -> Result<Run, String>,
 ) -> Result<Standing, String> {
-    let key = FaultKey::new(app, BREAKER_STATE_UNREADABLE, thing.subject());
-    match read_standing(db, cipher, app, thing, run) {
+    match read_recorded(db, app, thing).and_then(|recorded| compare(cipher, recorded, run)) {
         Ok(standing) => {
-            if let Err(e) = faults::clear_fault_by_key(db, &key) {
-                tracing::error!(%app, "cannot clear {BREAKER_STATE_UNREADABLE}: {e}");
-            }
+            note_readable(db, app, thing);
             Ok(standing)
         }
         Err(why) => {
-            tracing::error!(%app, "cannot read the breaker of {}: {why}", thing.describe());
-            let description = format!(
-                "cannot read whether the breaker of {} is tripped, so it is not evaluated: {why}",
-                thing.describe()
-            );
-            if let Err(e) = faults::file_once(db, &key, &thing.fault_meta(), &description) {
-                tracing::error!(%app, "cannot file {BREAKER_STATE_UNREADABLE}: {e}");
-            }
+            note_unreadable(db, app, thing, &why);
             Err(why)
         }
     }
@@ -381,12 +408,56 @@ pub fn consult(
     cipher: &Cipher,
     app: &AppName,
     thing: &Thing,
-    run: impl FnOnce() -> Run,
+    run: impl FnOnce() -> Result<Run, String>,
 ) -> Result<Standing, Refusal> {
     match standing(db, cipher, app, thing, run) {
         Ok(Standing::Tripped) => Err(Refusal::Tripped(tripped_message(thing))),
         Ok(standing) => Ok(standing),
         Err(why) => Err(Refusal::Unreadable(unreadable_message(thing, &why))),
+    }
+}
+
+/// [`consult`] from a thread that is not the database's, building `run` on
+/// this one and only once the breaker's fault is found active.
+///
+/// The database thread is a single queue every request waits on, so it is
+/// asked only for what the breaker holds, and the run is digested here.
+// spec: LIM#breakers
+pub fn consult_lazily(
+    db: &crate::runtime::db::DbHandle,
+    cipher: &std::sync::Arc<Cipher>,
+    app: &AppName,
+    thing: &Thing,
+    run: impl FnOnce() -> Result<Run, String>,
+) -> Result<Standing, Refusal> {
+    let (name, checked) = (app.clone(), thing.clone());
+    let read = db.call(move |db| {
+        let read = read_recorded(db, &name, &checked);
+        match &read {
+            Ok(Recorded::Clear) => note_readable(db, &name, &checked),
+            Ok(Recorded::Tripped(_)) => {}
+            Err(why) => note_unreadable(db, &name, &checked, why),
+        }
+        read
+    });
+    let unreadable = |why: String| Refusal::Unreadable(unreadable_message(thing, &why));
+    let recorded = read.map_err(unreadable)?;
+    let tripped = matches!(recorded, Recorded::Tripped(_));
+    let standing = match compare(cipher, recorded, run) {
+        Ok(standing) => standing,
+        Err(why) => {
+            let (name, checked, noted) = (app.clone(), thing.clone(), why.clone());
+            db.call(move |db| note_unreadable(db, &name, &checked, &noted));
+            return Err(unreadable(why));
+        }
+    };
+    if tripped {
+        let (name, checked) = (app.clone(), thing.clone());
+        db.call(move |db| note_readable(db, &name, &checked));
+    }
+    match standing {
+        Standing::Tripped => Err(Refusal::Tripped(tripped_message(thing))),
+        standing => Ok(standing),
     }
 }
 
@@ -662,9 +733,9 @@ fn likely_cause(cipher: &Cipher, app: &AppName, thing: &Thing, run: &Run) -> Str
     }
 }
 
-/// Why a thing is not evaluated with a run: its breaker is tripped for the
-/// run, or cannot be read. `None` to evaluate it.
-pub type Tripped = std::sync::Arc<dyn Fn(&Thing, Run) -> Option<String> + Send + Sync>;
+/// Why a thing is not evaluated with the run the second argument builds: its
+/// breaker is tripped for the run, or cannot be read. `None` to evaluate it.
+pub type Tripped = std::sync::Arc<dyn Fn(&Thing, &dyn Fn() -> Result<Run, String>) -> Option<String> + Send + Sync>;
 
 /// Consult the breakers of `app`, as they are stored.
 pub fn consulting(
@@ -674,8 +745,7 @@ pub fn consulting(
 ) -> Tripped {
     let app = app.clone();
     std::sync::Arc::new(move |thing, run| {
-        let (app, cipher, checked) = (app.clone(), std::sync::Arc::clone(&cipher), thing.clone());
-        db.call(move |db| consult(db, &cipher, &app, &checked, || run))
+        consult_lazily(&db, &cipher, &app, thing, run)
             .err()
             .map(|refusal| refusal.message().to_owned())
     })
@@ -684,7 +754,7 @@ pub fn consulting(
 /// What `Action.invoke` consults the invoked action's breaker with, for the
 /// passes of one operation, shell session or probe on this thread.
 struct Invokes {
-    base: Run,
+    base: std::sync::Arc<Run>,
     tripped: Tripped,
 }
 
@@ -700,6 +770,7 @@ impl InvokesGuard {
     /// Consult breakers with `tripped`, for evaluations that run with
     /// `base`'s definition and inputs, before any params.
     pub fn enter(base: Run, tripped: Tripped) -> Self {
+        let base = std::sync::Arc::new(base);
         Self(INVOKES.with_borrow_mut(|held| held.replace(Invokes { base, tripped })))
     }
 }
@@ -720,15 +791,13 @@ pub fn invoke_refused(
     params: &crate::runtime::param_map::ParamMap,
     schema: &BTreeMap<seedling_protocol::names::ParamName, crate::defs::param_def::ParamDef>,
 ) -> Option<String> {
-    let (run, tripped) = INVOKES.with_borrow(|held| {
-        held.as_ref().map(|i| {
-            (
-                i.base.clone().with_params(params, schema),
-                std::sync::Arc::clone(&i.tripped),
-            )
-        })
+    let (base, tripped) = INVOKES.with_borrow(|held| {
+        held.as_ref()
+            .map(|i| (std::sync::Arc::clone(&i.base), std::sync::Arc::clone(&i.tripped)))
     })?;
-    tripped(&Thing::Action(action.clone()), run)
+    tripped(&Thing::Action(action.clone()), &|| {
+        Ok(base.as_ref().clone().with_params(params, schema))
+    })
 }
 
 /// What an evaluation refused by a tripped breaker reports.

@@ -256,22 +256,24 @@ pub(crate) fn run_gate(
     // spec: CTL#gate-runs
     // spec: LIM#breakers
     if def.gates.get(gate_name).is_some_and(|g| g.has_body) {
-        let last = crate::runtime::gates::run::LastSuccesses::new(
-            &state.db,
-            app_name,
-            &current,
-            &state.script_limits,
-            &state.cipher,
-        )
-        .of(gate_name)
-        .map_err(OiError::internal)?;
-        let run = crate::runtime::breakers::Run::of_app(&current, &state.script_limits)
-            .with_last_success(last.as_ref());
         actions::breaker_refusal(
             state,
             app_name,
             crate::runtime::breakers::Thing::Gate(gate_name.clone()),
-            run,
+            || {
+                let last = crate::runtime::gates::run::LastSuccesses::new(
+                    &state.db,
+                    app_name,
+                    &current,
+                    &state.script_limits,
+                    &state.cipher,
+                )
+                .of(gate_name)?;
+                Ok(
+                    crate::runtime::breakers::Run::of_app(&current, &state.script_limits)
+                        .with_last_success(last.as_ref()),
+                )
+            },
         )?;
     }
 

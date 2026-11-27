@@ -107,9 +107,9 @@ impl<'a> Base<'a> {
     fn tripped(
         &self,
         thing: &breakers::Thing,
-        inputs: impl FnOnce(breakers::Run) -> breakers::Run,
+        inputs: impl Fn(breakers::Run) -> breakers::Run,
     ) -> Option<String> {
-        (self.bounds.tripped)(thing, inputs(self.run.clone()))
+        (self.bounds.tripped)(thing, &|| Ok(inputs(self.run.clone())))
     }
 }
 

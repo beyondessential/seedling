@@ -250,13 +250,10 @@ pub(crate) async fn open_shell_session(
     {
         use crate::runtime::breakers::{self, Thing};
         let thing = Thing::Shell(shell_name.clone());
-        let run = breakers::Run::of_app(&app, &state.script_limits)
-            .with_params(&validated_params, &shell_params_schema);
-        let (name, cipher) = (app_name.clone(), Arc::clone(&state.cipher));
-        if let Err(refusal) = state
-            .db
-            .call(move |db| breakers::consult(db, &cipher, &name, &thing, || run))
-        {
+        if let Err(refusal) = breakers::consult_lazily(&state.db, &state.cipher, &app_name, &thing, || {
+            Ok(breakers::Run::of_app(&app, &state.script_limits)
+                .with_params(&validated_params, &shell_params_schema))
+        }) {
             let e = crate::oi::handler::actions::refusal_error(refusal);
             reject(&mut send, e.code.wire_name(), e.message).await;
             return;
@@ -800,17 +797,15 @@ pub(super) async fn run_app_shell(
         use crate::runtime::breakers::{self, Thing};
         let thing = Thing::Shell(shell_name_for_task.clone());
         let run = run_for_task;
-        let standing = {
-            let (name, cipher, checked, run) = (
-                app_name_for_task.clone(),
-                Arc::clone(&cipher),
-                thing.clone(),
-                run.clone(),
-            );
-            match db.call(move |db| breakers::consult(db, &cipher, &name, &checked, || run)) {
-                Ok(standing) => standing,
-                Err(refusal) => return ScriptEnd::Failed(refusal.message().to_owned()),
-            }
+        let standing = match breakers::consult_lazily(
+            &db,
+            &cipher,
+            &app_name_for_task,
+            &thing,
+            || Ok(run.clone()),
+        ) {
+            Ok(standing) => standing,
+            Err(refusal) => return ScriptEnd::Failed(refusal.message().to_owned()),
         };
         let mut ran_out = false;
         // spec: ACN#action-invocation

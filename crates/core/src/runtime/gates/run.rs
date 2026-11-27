@@ -399,12 +399,10 @@ impl Run<'_> {
         if gate_def.has_body {
             use crate::runtime::breakers::{self, Thing};
             let thing = Thing::Gate(gate.clone());
-            let run = breakers::Run::of_app(app, &state.script_limits).with_last_success(last);
-            let (n, cipher) = (name.clone(), Arc::clone(&state.cipher));
-            state
-                .db
-                .call(move |db| breakers::consult(db, &cipher, &n, &thing, || run))
-                .map_err(|refusal| Stopped::Failed(refusal.message().to_owned()))?;
+            breakers::consult_lazily(&state.db, &state.cipher, &name, &thing, || {
+                Ok(breakers::Run::of_app(app, &state.script_limits).with_last_success(last))
+            })
+            .map_err(|refusal| Stopped::Failed(refusal.message().to_owned()))?;
         }
 
         let images = self.images(app, def, gate_def, last).await?;

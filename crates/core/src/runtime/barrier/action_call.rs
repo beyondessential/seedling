@@ -195,10 +195,11 @@ fn resolve_call_params(
     let validated = validate_call_params(rt, schema.as_ref(), params, budget)?;
     // spec: ACN#action-invocation
     // A call already on the log, returned above, is not checked again.
+    let no_schema = Schema::default();
     if let Some(why) = crate::runtime::breakers::invoke_refused(
         action_name,
         &validated,
-        &schema.clone().unwrap_or_default(),
+        schema.as_ref().unwrap_or(&no_schema),
     ) {
         return Err(format!("Action.invoke: {why}").into());
     }

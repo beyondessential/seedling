@@ -996,26 +996,28 @@ async fn main() {
                             // against, rather than for every app each tick.
                             &|db, app, action, params| {
                                 use seedling_core::runtime::breakers::{self, Thing};
-                                let base = {
-                                    let reg = breaker_registry.read();
-                                    let Some(entry) = reg.get(app.as_str()) else {
-                                        return Ok(breakers::Standing::Clear);
-                                    };
-                                    breakers::Run::of_app(&entry.app, &breaker_limits)
-                                };
                                 breakers::standing(
                                     db,
                                     &breaker_cipher,
                                     app,
                                     &Thing::Action(action.clone()),
                                     || {
+                                        let Some(base) = breaker_registry
+                                            .read()
+                                            .get(app.as_str())
+                                            .map(|entry| {
+                                                breakers::Run::of_app(&entry.app, &breaker_limits)
+                                            })
+                                        else {
+                                            return Err(format!("app {app} is not registered"));
+                                        };
                                         let schema = app_generations
                                             .get(app)
                                             .and_then(|(_, _, schemas)| {
                                                 schemas.get(action).cloned()
                                             })
                                             .unwrap_or_default();
-                                        base.with_params(params, &schema)
+                                        Ok(base.with_params(params, &schema))
                                     },
                                 )
                             },
