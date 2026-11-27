@@ -2,8 +2,9 @@
 
 ## Technical notes
 
-### Two tables
+### Tables
 
+- Three nftables tables: the translation table (absolute state, flushed and rebuilt on each apply), the isolation table (static, below), and the sessions table ([Shell sessions](#shell-sessions)). Each has one writer, and no apply touches another's table.
 - The isolation rules (pod network sources, forwarding policy, pod traffic to the host, the NAT64 marks and drops) live in a table of their own, separate from the translation table the absolute-state apply flushes and rebuilds. Every isolation rule depends only on the host prefix, fixed bridge names and the NAT64 prefix, never on any app's contribution, so the table is static: built once from the host prefix, and re-applied wholesale and idempotently.
 - The runtime installs the isolation table at startup, before the first reconcile. It never removes it, on shutdown or in `clear_all`, because workload containers outlive the runtime. Workload units are transient systemd units that don't survive a reboot, so after a reboot nothing starts a workload before the runtime has installed the table.
 - The forward chain moves into the isolation table. The translation table keeps only nat-type chains (prerouting, output, postrouting masquerade).
@@ -55,4 +56,7 @@ The design:
 ### Shell sessions
 
 - Mount rules are built only from running app pods (`build_mount_rules`). A shell session's job needs mount translations for its own prefix in place before its container starts, and removed when the session ends.
-- Open: whether the session registers with the reconciler and waits for an apply that includes it, or session mount rules get a chain of their own in the translation table that the session writes directly, built by the same function that builds a pod's mount rules.
+- Session mount rules go in a third table, `seedling_sessions`, with one nat prerouting chain, owned by the shell session code. A session builds its rules with the same function that builds a pod's mount rules, then adds them before its container starts, after its network exists. It deletes them by handle when the session ends, on every exit path that also removes the session's network.
+- Sessions don't survive a runtime restart (stray shell containers are removed), so the runtime deletes and recreates the whole `seedling_sessions` table at startup.
+- A session never waits on reconciliation, so a withheld apply can't block an operator's shell. A failure to add the rules ends session startup the way a network creation failure does: the session's network is removed and the session reports an error.
+- Explicitly rejected: having sessions register with the reconciler and wait for an apply that includes their mounts. A withheld apply would block every shell with mounts.
