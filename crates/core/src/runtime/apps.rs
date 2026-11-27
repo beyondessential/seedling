@@ -624,31 +624,20 @@ impl AppRegistry {
             // spec: APPS#persistence — reload runs no validators: the stored
             // combination was validated when it was written.
             // spec: LIM#breakers
-            let run = breakers::Run::new(bundle.hash(), &stored, Some(&seed), limits);
-            let (app, raw_error) =
-                match breakers::consult(db, cipher, &name, &breakers::Thing::Definition, || {
-                    Ok(run.clone())
-                }) {
-                    Err(refusal) => (
-                        App::with_bundle(Arc::clone(&bundle)),
-                        Some(ScriptError::from(refusal)),
-                    ),
-                    Ok(standing) => {
-                        let (app, raw_error) = evaluate(&name, &bundle, &stored, &seed, limits);
-                        record_definition_outcome(
-                            db,
-                            cipher,
-                            &name,
-                            &run,
-                            standing,
-                            current_generation,
-                            raw_error.as_ref(),
-                            &app.def.load(),
-                            limits,
-                        );
-                        (app, raw_error)
-                    }
-                };
+            let tracked = DefinitionRun::new(
+                &name,
+                breakers::Run::new(bundle.hash(), &stored, Some(&seed), limits),
+                current_generation,
+                limits,
+            );
+            let (app, raw_error) = match tracked.consult(db, cipher) {
+                Err(refusal) => (App::with_bundle(Arc::clone(&bundle)), Some(refusal)),
+                Ok(standing) => {
+                    let (app, raw_error) = evaluate(&name, &bundle, &stored, &seed, limits);
+                    tracked.record(db, cipher, standing, raw_error.as_ref(), &app.def.load());
+                    (app, raw_error)
+                }
+            };
             // spec: SEC#migration — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
             migrate_param_storage(db, cipher, &name, &app, raw_error.is_none());
@@ -900,17 +889,18 @@ pub fn reload(
     else {
         return ReloadOutcome::NotRegistered;
     };
-    let run = breakers::Run::new(bundle.hash(), params, Some(&seed), limits);
+    let tracked = Arc::new(DefinitionRun::new(
+        name,
+        breakers::Run::new(bundle.hash(), params, Some(&seed), limits),
+        generation,
+        limits,
+    ));
     let standing = {
-        let (name, cipher, run) = (name.clone(), Arc::clone(cipher), run.clone());
-        db.call(move |db| {
-            breakers::consult(db, &cipher, &name, &breakers::Thing::Definition, || Ok(run))
-        })
+        let (tracked, cipher) = (Arc::clone(&tracked), Arc::clone(cipher));
+        db.call(move |db| tracked.consult(db, &cipher))
     };
     let outcome = match standing {
-        Err(refusal) => registry
-            .write()
-            .keep_previous(name, ScriptError::from(refusal)),
+        Err(refusal) => registry.write().keep_previous(name, refusal),
         Ok(standing) => {
             let outcome = registry.write().reevaluate(name, params, limits);
             let error = match &outcome {
@@ -922,19 +912,9 @@ pub fn reload(
                 .get(name.as_str())
                 .map(|e| e.app.def.load_full());
             if let Some(declared) = declared {
-                let (name, cipher, limits) = (name.clone(), Arc::clone(cipher), limits.clone());
+                let cipher = Arc::clone(cipher);
                 db.call(move |db| {
-                    record_definition_outcome(
-                        db,
-                        &cipher,
-                        &name,
-                        &run,
-                        standing,
-                        generation,
-                        error.as_ref(),
-                        &declared,
-                        &limits,
-                    );
+                    tracked.record(db, &cipher, standing, error.as_ref(), &declared);
                 });
             }
             outcome
@@ -978,41 +958,72 @@ pub fn record_adopted_definition(
     }
 }
 
-/// Record how a tracked evaluation of `name`'s definition with `run` ended:
-/// trip its breaker where it ran past the limit, and otherwise note that it
-/// finished in time, resetting its breaker where it was tripped for another
-/// run, and the breakers of closures `declared` no longer holds.
+/// One tracked evaluation of an app's definition: what it runs with, the
+/// generation it is at, and the limits in force. Every place that evaluates a
+/// definition against its breaker consults it before, and records how the
+/// evaluation ended after, through this.
 // spec: LIM#breakers
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the outcome is these parts of one evaluation"
-)]
-pub fn record_definition_outcome(
-    db: &Db,
-    cipher: &Cipher,
-    name: &AppName,
-    run: &breakers::Run,
-    standing: breakers::Standing,
+pub struct DefinitionRun {
+    name: AppName,
+    run: breakers::Run,
     generation: u64,
-    error: Option<&ScriptError>,
-    declared: &crate::defs::app::AppDef,
-    limits: &crate::ScriptLimits,
-) {
-    let thing = breakers::Thing::Definition;
-    match error {
-        Some(ScriptError::Runaway(_)) => {
-            if let Err(e) = breakers::trip(db, cipher, name, &thing, run, generation, limits) {
-                tracing::error!(app = %name, "cannot trip the definition's breaker: {e}");
+    limits: crate::ScriptLimits,
+}
+
+impl DefinitionRun {
+    pub fn new(
+        name: &AppName,
+        run: breakers::Run,
+        generation: u64,
+        limits: &crate::ScriptLimits,
+    ) -> Self {
+        Self {
+            name: name.clone(),
+            run,
+            generation,
+            limits: limits.clone(),
+        }
+    }
+
+    /// Where the definition's breaker stands for this run, or the script error
+    /// that stands in for an evaluation that does not go ahead.
+    pub fn consult(&self, db: &Db, cipher: &Cipher) -> Result<breakers::Standing, ScriptError> {
+        breakers::consult(db, cipher, &self.name, &breakers::Thing::Definition, || {
+            Ok(self.run.clone())
+        })
+        .map_err(ScriptError::from)
+    }
+
+    /// Record how the evaluation ended: trip the breaker where it ran past the
+    /// limit, and otherwise note that it finished in time, resetting the
+    /// breaker where it was tripped for another run, and the breakers of
+    /// closures `declared` no longer holds.
+    pub fn record(
+        &self,
+        db: &Db,
+        cipher: &Cipher,
+        standing: breakers::Standing,
+        error: Option<&ScriptError>,
+        declared: &crate::defs::app::AppDef,
+    ) {
+        let (name, run, thing) = (&self.name, &self.run, breakers::Thing::Definition);
+        match error {
+            Some(ScriptError::Runaway(_)) => {
+                if let Err(e) =
+                    breakers::trip(db, cipher, name, &thing, run, self.generation, &self.limits)
+                {
+                    tracing::error!(app = %name, "cannot trip the definition's breaker: {e}");
+                }
             }
-        }
-        Some(ScriptError::BreakerUnreadable(_)) => {}
-        Some(ScriptError::Failed { .. }) => {
-            breakers::finished_in_time(db, cipher, name, &thing, run, standing);
-        }
-        None => {
-            breakers::finished_in_time(db, cipher, name, &thing, run, standing);
-            if let Err(e) = breakers::reset_undeclared(db, name, declared) {
-                tracing::error!(app = %name, "cannot reset breakers of undeclared closures: {e}");
+            Some(ScriptError::BreakerUnreadable(_)) => {}
+            Some(ScriptError::Failed { .. }) => {
+                breakers::finished_in_time(db, cipher, name, &thing, run, standing);
+            }
+            None => {
+                breakers::finished_in_time(db, cipher, name, &thing, run, standing);
+                if let Err(e) = breakers::reset_undeclared(db, name, declared) {
+                    tracing::error!(app = %name, "cannot reset breakers of undeclared closures: {e}");
+                }
             }
         }
     }

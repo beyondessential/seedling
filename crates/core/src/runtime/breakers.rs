@@ -121,8 +121,11 @@ impl Run {
         for (name, value) in stored {
             inputs.insert(format!("parameter `{name}`"), value.as_bytes().to_vec());
         }
-        for (name, value) in host_constants() {
-            inputs.insert(format!("host constant `{name}`"), value.into_bytes());
+        for (name, value) in crate::sysconst::get().host_constants() {
+            inputs.insert(
+                format!("host constant `{name}`"),
+                format!("{value:?}").into_bytes(),
+            );
         }
         let seed = match seed {
             Some(crate::runtime::seeds::AppSeed::Ready(seed)) => seed.expose().to_vec(),
@@ -221,26 +224,6 @@ impl Run {
 fn push_field(bytes: &mut Vec<u8>, field: &[u8]) {
     bytes.extend_from_slice(&(field.len() as u64).to_be_bytes());
     bytes.extend_from_slice(field);
-}
-
-/// Each host constant by its name, as an evaluation sees it.
-// spec: CONST#host-constants
-fn host_constants() -> Vec<(&'static str, String)> {
-    let facts = crate::sysconst::get();
-    vec![
-        (
-            "AVAILABLE_THREADS",
-            format!("{:?}", facts.available_threads),
-        ),
-        ("AVAILABLE_MEMORY", format!("{:?}", facts.available_memory)),
-        ("CPU_ARCHITECTURE", std::env::consts::ARCH.to_owned()),
-        ("HOST_HAS_IPV4", facts.ipv4_egress.to_string()),
-        ("HOST_HAS_IPV6", facts.ipv6_egress.to_string()),
-        ("NAT64_ACTIVE", facts.nat64_active.to_string()),
-        ("HAS_SNAPSHOTS", facts.has_snapshots.to_string()),
-        ("NODE_NAME", format!("{:?}", facts.node_name)),
-        ("TIMEZONE", facts.timezone.clone()),
-    ]
 }
 
 /// Where a thing's breaker stands for one run of it.

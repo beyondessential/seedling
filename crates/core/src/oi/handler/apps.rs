@@ -1493,30 +1493,29 @@ pub(crate) fn register_resolved(
     // A new registration has no breaker: deregistering under its name
     // discarded any.
     {
-        let run = crate::runtime::breakers::Run::new(
-            bundle.hash(),
-            &std::collections::BTreeMap::new(),
-            Some(&app_seed),
+        let tracked = crate::runtime::apps::DefinitionRun::new(
+            app_name,
+            crate::runtime::breakers::Run::new(
+                bundle.hash(),
+                &std::collections::BTreeMap::new(),
+                Some(&app_seed),
+                &state.script_limits,
+            ),
+            generation,
             &state.script_limits,
         );
-        let (name, cipher, limits, error, declared) = (
-            app_name.clone(),
+        let (cipher, error, declared) = (
             Arc::clone(&state.cipher),
-            state.script_limits.clone(),
             script_error.clone(),
             app.def.load_full(),
         );
         state.db.call(move |db| {
-            crate::runtime::apps::record_definition_outcome(
+            tracked.record(
                 db,
                 &cipher,
-                &name,
-                &run,
                 crate::runtime::breakers::Standing::Clear,
-                generation,
                 error.as_ref(),
                 &declared,
-                &limits,
             );
         });
     }
