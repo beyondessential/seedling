@@ -98,8 +98,9 @@ The runtime MUST NOT remove the networks of its own infrastructure containers du
 
 ## Pod network sources
 
-The runtime MUST drop every packet arriving from a pod network whose source address lies outside that network's prefix, before applying any translation to it.
-Packets with a link-local or unspecified source address are exempt.
+The runtime MUST drop every packet arriving from a pod network whose source address lies outside that network's prefix, before redirecting, translating or forwarding it.
+This MUST include translation by [NAT64](nat64.md#translator), and every IPv4 packet, as a pod network holds no IPv4 prefix.
+The runtime MUST NOT drop an IPv6 packet under this rule for having a link-local or unspecified source address.
 The runtime MUST keep this rule in force whenever a container on a pod network is running: before it first applies the rules it holds as absolute state, while an application of them is withheld, and across a restart of the runtime.
 
 > [!NOTE]
