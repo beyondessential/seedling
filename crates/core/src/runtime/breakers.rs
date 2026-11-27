@@ -756,6 +756,49 @@ pub fn consulting(
     })
 }
 
+/// Consult the breakers of `app` for one evaluation, such as a probe, as they
+/// stand when it starts.
+///
+/// One read finds which of the app's things hold a breaker fault, runaway or
+/// unreadable. A thing that holds neither is clear for the whole evaluation
+/// without a further read, which is nearly every thing; one that holds either
+/// is consulted as [`consulting`] consults it. Where that read fails, every
+/// thing is consulted that way, and each consult that fails is held as its
+/// own unreadable fault.
+// spec: LIM#breakers
+pub fn consulting_once(
+    app: &AppName,
+    db: crate::runtime::db::DbHandle,
+    cipher: std::sync::Arc<Cipher>,
+) -> Tripped {
+    let name = app.clone();
+    let held = db.call(
+        move |db| -> rusqlite::Result<std::collections::HashSet<String>> {
+            db.conn
+                .prepare_cached(
+                    "SELECT DISTINCT subject FROM faults
+                 WHERE app = ?1 AND kind IN (?2, ?3) AND cleared_at IS NULL",
+                )?
+                .query_map(
+                    rusqlite::params![name, EVALUATION_RUNAWAY, BREAKER_STATE_UNREADABLE],
+                    |row| row.get(0),
+                )?
+                .collect()
+        },
+    );
+    let each = consulting(app, db, cipher);
+    match held {
+        Ok(held) => std::sync::Arc::new(move |thing, run| {
+            if held.contains(&thing.subject()) {
+                each(thing, run)
+            } else {
+                None
+            }
+        }),
+        Err(_) => each,
+    }
+}
+
 /// What `Action.invoke` consults the invoked action's breaker with, for the
 /// passes of one operation, shell session or probe on this thread.
 struct Invokes {

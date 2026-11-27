@@ -298,3 +298,68 @@ fn discover_probes_a_gate_body_with_last_from_the_gates_record() {
     });
     assert_eq!(discover(), json!(["ghcr.io/example/again:1"]));
 }
+
+// spec: IMG#image-discovery
+// spec: LIM#breakers
+#[test]
+fn discovery_reports_a_handler_whose_breaker_is_tripped_and_probes_the_rest() {
+    use crate::runtime::breakers::{self, Run, Thing};
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.on_action("spin", |rt, p| { throw "evaluated"; });
+                app.on_action("other", |rt, p| {
+                    rt.warm_images(app.job().image("ghcr.io/example/other:1")).ready();
+                });
+            "#,
+        }),
+    )
+    .unwrap();
+    let run_of_spin = {
+        let reg = oi.state.registry.read();
+        Run::of_app(&reg.get("demo").unwrap().app, &oi.state.script_limits)
+    };
+    let cipher = std::sync::Arc::clone(&oi.state.cipher);
+    let limits = oi.state.script_limits.clone();
+    oi.state
+        .db
+        .call(move |db| {
+            breakers::trip(
+                db,
+                &cipher,
+                &seedling_protocol::names::AppName::new_unchecked("demo"),
+                &Thing::Action(seedling_protocol::names::ActionName::new_unchecked("spin")),
+                &run_of_spin,
+                1,
+                &limits,
+            )
+        })
+        .unwrap();
+
+    let result = oi
+        .call("/apps/images/discover", json!({ "app": "demo" }))
+        .unwrap();
+    let handler = |name: &str| {
+        result["per_handler"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["name"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("no handler {name}: {result}"))
+    };
+    let spin = handler("spin");
+    let why = spin["error"].as_str().unwrap_or_default();
+    assert!(
+        why.contains("ran past the evaluation time limit"),
+        "{result}"
+    );
+    assert!(handler("other")["error"].is_null(), "{result}");
+    assert_eq!(
+        handler("other")["images"],
+        json!(["ghcr.io/example/other:1"])
+    );
+}

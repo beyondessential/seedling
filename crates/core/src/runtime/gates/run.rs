@@ -444,12 +444,10 @@ impl Run<'_> {
                 self.state.db.clone(),
                 self.state.script_limits.clone(),
             );
-            let tripped = crate::runtime::breakers::consulting(
-                &self.app_name,
-                db.clone(),
-                Arc::clone(&self.state.cipher),
-            );
+            let (app_name, cipher) = (self.app_name.clone(), Arc::clone(&self.state.cipher));
             let probed = tokio::task::spawn_blocking(move || {
+                let tripped =
+                    crate::runtime::breakers::consulting_once(&app_name, db.clone(), cipher);
                 let (engine, _scope, ast) = language_for(&app, &limits)
                     .map_err(crate::runtime::apps::ScriptError::failed)?;
                 let registry: Arc<dyn crate::runtime::InstanceRegistry> =

@@ -44,6 +44,7 @@
 - [x] A probe is one evaluation: a handler reached after another has spent the budget is stopped at the limit too (verifies spec: LIM)
 - [x] A run an operator cancels resets no breaker, since it neither finished within the limit nor ran past it (verifies spec: LIM)
 - [x] A probed action or gate body that invokes an action whose breaker is tripped reports the refusal as its error (verifies spec: IMG, ACN)
+- [x] Image discovery over an app with one handler's breaker tripped reports that handler as refused and probes the others (verifies spec: IMG, LIM)
 - [x] Clearing an app's faults while its definition's breaker is tripped evaluates the definition again (verifies spec: LIM)
 - [x] An in-time evaluation the runtime adopts resets the definition's breaker, whatever it was tripped for (verifies spec: LIM)
 - [x] A breaker fault about an action names it by `resource_type` and `resource_name`; the definition's names nothing (verifies spec: FLTS)

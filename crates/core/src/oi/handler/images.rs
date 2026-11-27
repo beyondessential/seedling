@@ -473,7 +473,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         &|gate| last.of(gate),
         &ProbeBounds {
             limits: &state.script_limits,
-            tripped: breakers::consulting(
+            tripped: breakers::consulting_once(
                 &name,
                 state.db.clone(),
                 std::sync::Arc::clone(&state.cipher),
@@ -596,7 +596,7 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
         &|gate| last.of(gate),
         &crate::runtime::probe::ProbeBounds {
             limits: &state.script_limits,
-            tripped: breakers::consulting(
+            tripped: breakers::consulting_once(
                 app_name,
                 state.db.clone(),
                 std::sync::Arc::clone(&state.cipher),
