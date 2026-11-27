@@ -78,6 +78,8 @@ pub struct StubContainerRuntime {
     /// Whether removing a volume fails, as a container runtime refusing it
     /// does.
     refuse_volume_removal: std::sync::atomic::AtomicBool,
+    /// Whether listing networks fails, as an unreadable listing does.
+    refuse_network_listing: std::sync::atomic::AtomicBool,
     /// Images whose pulls do not succeed, and how each goes instead.
     pull_faults: Mutex<HashMap<String, PullFault>>,
 }
@@ -129,6 +131,7 @@ impl StubContainerRuntime {
             }),
             volumes_root,
             refuse_volume_removal: std::sync::atomic::AtomicBool::new(false),
+            refuse_network_listing: std::sync::atomic::AtomicBool::new(false),
             pull_faults: Mutex::default(),
         }
     }
@@ -138,6 +141,25 @@ impl StubContainerRuntime {
     pub(crate) fn refuse_volume_removal(&self, refuse: bool) {
         self.refuse_volume_removal
             .store(refuse, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make every later network listing fail, or succeed again.
+    #[cfg(test)]
+    pub(crate) fn refuse_network_listing(&self, refuse: bool) {
+        self.refuse_network_listing
+            .store(refuse, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Add a network whose bridge is named `bridge_name`, as one left behind
+    /// by a previous daemon would be found.
+    #[cfg(test)]
+    pub(crate) fn seed_network(&self, name: &str, bridge_name: &str) {
+        self.state.lock().networks.insert(
+            name.to_owned(),
+            StubNetwork {
+                bridge_name: bridge_name.to_owned(),
+            },
+        );
     }
 
     /// Make every later pull of `image` go as `fault` says.
@@ -150,6 +172,12 @@ impl StubContainerRuntime {
     /// previous daemon would be found.
     #[cfg(test)]
     pub(crate) fn seed_container(&self, name: &str, labels: &[(&str, &str)]) {
+        self.seed_container_on(name, "", labels);
+    }
+
+    /// [`Self::seed_container`], connected to `network`.
+    #[cfg(test)]
+    pub(crate) fn seed_container_on(&self, name: &str, network: &str, labels: &[(&str, &str)]) {
         let mut s = self.state.lock();
         let image_id = Self::ensure_image_for(&mut s, "seeded:latest");
         let pid = Self::next_pid(&mut s);
@@ -163,7 +191,7 @@ impl StubContainerRuntime {
                     entrypoint: vec![],
                     env: vec![],
                     mounts: vec![],
-                    network: String::new(),
+                    network: network.to_owned(),
                     labels: labels
                         .iter()
                         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -282,6 +310,11 @@ impl ContainerRuntime for StubContainerRuntime {
                 }
                 if let Some(k) = filter.label_key
                     && !c.spec.labels.contains_key(k)
+                {
+                    continue;
+                }
+                if let Some(network) = filter.network
+                    && c.spec.network != network
                 {
                     continue;
                 }
@@ -418,7 +451,11 @@ impl ContainerRuntime for StubContainerRuntime {
 
     fn remove_network<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
-            self.state.lock().networks.remove(name);
+            let mut s = self.state.lock();
+            if s.containers.values().any(|c| c.spec.network == name) {
+                return Err(format!("network {name} is in use").into());
+            }
+            s.networks.remove(name);
             Ok(())
         }
         .boxed()
@@ -429,6 +466,12 @@ impl ContainerRuntime for StubContainerRuntime {
         prefix: &'a str,
     ) -> BoxFuture<'a, Result<Vec<NetworkSummary>, BoxError>> {
         async move {
+            if self
+                .refuse_network_listing
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err("the network listing is refused".into());
+            }
             let s = self.state.lock();
             Ok(s.networks
                 .iter()

@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use ipnet::{Ipv4Net, Ipv6Net};
 use sha2::{Digest, Sha256};
@@ -400,12 +400,17 @@ impl System {
     /// Initialize all system backends, ensure Caddy is running, and return the
     /// assembled `System` handle alongside the Caddy admin client handle.
     ///
+    /// `recorded_pod_prefixes` is the prefix recorded for each pod network, or
+    /// `None` when the records could not be read; see
+    /// [`startup_cleanup::replace_misnamed_networks`].
+    ///
     /// Errors from individual backends are returned as boxed trait objects so
     /// callers do not need to depend on internal error types.
     pub async fn setup(
         platform: Platform,
         node_prefix: Ipv6Net,
         data_dir: &Path,
+        recorded_pod_prefixes: Option<HashMap<String, Ipv6Net>>,
     ) -> Result<SystemSetup, BoxError> {
         // spec: INFRA#unavailable-backends — bring up the container runtime
         // and process manager best-effort. If either connection fails
@@ -429,6 +434,13 @@ impl System {
             );
         }
         let (container, process) = (backends.container(), backends.process());
+
+        // Before Caddy comes up, so that a proxy network it would otherwise
+        // run on is replaced first.
+        if backends.unavailable_reason().is_none() {
+            startup_cleanup::replace_misnamed_networks(&*container, recorded_pod_prefixes.as_ref())
+                .await;
+        }
 
         // spec: PRX#proxy-lifecycle — bring Caddy up best-effort. A failure
         // here (image build, container start, health check) must NOT take down

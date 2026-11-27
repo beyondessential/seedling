@@ -112,11 +112,18 @@ pub fn instance_ipv6(node_prefix: &Ipv6Net, instance: &ResourceInstance) -> Ipv6
 /// service /128 space and from the `fffe` infrastructure addresses.
 // spec: INFRA#pod-networks
 pub fn pod_network_prefix(node_prefix: &Ipv6Net, kind: ResourceKind, slot: u8) -> Ipv6Net {
+    recorded_pod_network_prefix(node_prefix, kind as u8, slot)
+}
+
+/// [`pod_network_prefix`] for a kind as [`crate::runtime::pod_networks`]
+/// records it, by its discriminant.
+// spec: INFRA#pod-networks
+pub(crate) fn recorded_pod_network_prefix(node_prefix: &Ipv6Net, kind: u8, slot: u8) -> Ipv6Net {
     debug_assert_eq!(node_prefix.prefix_len(), 48, "node prefix must be /48");
 
     let mut bytes = [0u8; 16];
     bytes[..6].copy_from_slice(&node_prefix.network().octets()[..6]);
-    bytes[6] = kind as u8;
+    bytes[6] = kind;
     bytes[7] = slot;
     Ipv6Net::new(Ipv6Addr::from(bytes), 64).expect("64 is a valid IPv6 prefix length")
 }

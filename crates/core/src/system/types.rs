@@ -92,6 +92,8 @@ pub struct ContainerFilter<'a> {
     /// Match containers that have this label key, regardless of value.
     pub label_key: Option<&'a str>,
     pub name_prefix: Option<&'a str>,
+    /// Match containers connected to the network with exactly this name.
+    pub network: Option<&'a str>,
 }
 
 /// Returned by `ContainerRuntime::list_networks`; carries the bridge

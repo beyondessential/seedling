@@ -4,11 +4,15 @@
 //! a probability, so the slot an instance's /64 takes is allocated here, with
 //! a unique index to stand behind it, and held until its network is removed.
 
+use std::collections::HashMap;
+
 use ipnet::Ipv6Net;
 use rusqlite::{OptionalExtension, params};
 
 use crate::{
-    defs::resource::ResourceKind, runtime::db::Db, system::translate::proxy::pod_network_prefix,
+    defs::resource::ResourceKind,
+    runtime::db::Db,
+    system::translate::proxy::{pod_network_prefix, recorded_pod_network_prefix},
 };
 
 /// How many pod networks one resource kind can hold at once.
@@ -104,6 +108,24 @@ pub fn recorded_prefix(
     Ok(recorded(db, network_name)?.map(|slot| pod_network_prefix(node_prefix, kind, slot)))
 }
 
+/// The /64 recorded for every pod network that has one, by network name.
+// spec: INFRA#pod-networks
+pub fn recorded_prefixes(
+    db: &Db,
+    node_prefix: &Ipv6Net,
+) -> rusqlite::Result<HashMap<String, Ipv6Net>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT network_name, kind, slot FROM pod_networks")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            recorded_pod_network_prefix(node_prefix, row.get(1)?, row.get(2)?),
+        ))
+    })?;
+    rows.collect()
+}
+
 /// Free the slot `network_name` holds, once its network is gone.
 pub fn release(db: &Db, network_name: &str) -> rusqlite::Result<()> {
     db.conn.execute(
@@ -158,6 +180,23 @@ mod tests {
             allocate(&db, "seedling-one-more", 4),
             Err(AllocationError::Exhausted { kind: 4 })
         ));
+    }
+
+    // spec: INFRA#pod-networks
+    #[test]
+    fn every_recorded_prefix_is_the_one_allocated() {
+        let db = Db::open_in_memory().unwrap();
+        let node: Ipv6Net = "fd5e:ed12:3456::/48".parse().unwrap();
+        let job = allocated_prefix(&db, &node, "seedling-job", ResourceKind::Job).unwrap();
+        let deployment =
+            allocated_prefix(&db, &node, "seedling-dep", ResourceKind::Deployment).unwrap();
+        assert_eq!(
+            recorded_prefixes(&db, &node).unwrap(),
+            HashMap::from([
+                ("seedling-job".to_owned(), job),
+                ("seedling-dep".to_owned(), deployment),
+            ])
+        );
     }
 
     #[test]

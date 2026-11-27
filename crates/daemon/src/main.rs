@@ -435,7 +435,17 @@ async fn main() {
             storage,
             translator: Arc::new(seedling_linux::jool::Jool),
         };
-        System::setup(platform, node_prefix, &data_dir)
+        let recorded_pod_prefixes = match seedling_core::runtime::pod_networks::recorded_prefixes(
+            &db,
+            &node_prefix,
+        ) {
+            Ok(prefixes) => Some(prefixes),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read the pod network records; leaving pod network bridge names unchecked");
+                None
+            }
+        };
+        System::setup(platform, node_prefix, &data_dir, recorded_pod_prefixes)
             .await
             .unwrap_or_else(|e| fatal!("system setup failed: {e}"))
     };

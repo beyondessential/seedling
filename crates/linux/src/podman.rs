@@ -924,6 +924,9 @@ fn build_filters(filter: &ContainerFilter<'_>) -> Option<String> {
     if let Some(prefix) = filter.name_prefix {
         map.insert("name", vec![format!("^{}", prefix)]);
     }
+    if let Some(network) = filter.network {
+        map.insert("network", vec![network.to_string()]);
+    }
     if map.is_empty() {
         None
     } else {
