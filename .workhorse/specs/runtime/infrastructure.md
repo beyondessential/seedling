@@ -177,7 +177,7 @@ The runtime MUST drop forwarded packets addressed to the host prefix, except:
 - packets arriving from the proxy network;
 - TCP and UDP packets from within the host prefix, addressed to the [resolver address](resolver.md#resolver-addresses) at port 53.
 
-The runtime MUST NOT forward traffic from one pod network to another other than through a [mount translation](#mount-endpoint-addressing).
+The runtime MUST NOT forward a packet from one pod network to another unless it belongs to a connection whose destination [mount translation](#mount-endpoint-addressing) rewrote, or is related to one.
 The runtime MUST keep this policy in force whenever a container on a pod network is running: before it first applies the rules it holds as absolute state, while an application of them is withheld, and across a restart of the runtime.
 
 The runtime MUST NOT drop or otherwise filter forwarded traffic addressed outside the host prefix.
