@@ -4,7 +4,6 @@ use std::{
     net::{IpAddr, Ipv6Addr},
 };
 
-use ipnet::Ipv6Net;
 use nftables::{
     expr::{
         BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, Map, Meta, MetaKey,
@@ -21,95 +20,75 @@ pub(super) const TABLE: &str = "seedling_net";
 pub(super) const CHAIN_PRE: &str = "prerouting";
 pub(super) const CHAIN_OUT: &str = "output";
 pub(super) const CHAIN_POST: &str = "postrouting";
-pub(super) const CHAIN_FWD: &str = "forward";
 pub(super) const PRIO_DSTNAT: i32 = -100;
 pub(super) const PRIO_SRCNAT: i32 = 100;
-pub(super) const PRIO_FILTER: i32 = 0;
 
 /// Netfilter protocol number for IPv6 (`NFPROTO_IPV6`).
 /// Used to guard inet-table ingress rules so they only match IPv6 packets.
 pub(super) const NFPROTO_IPV6: u32 = 10;
 pub(super) const NFPROTO_IPV4: u32 = 2;
 
-pub(super) fn table() -> Table<'static> {
+pub(super) fn table(name: &'static str) -> Table<'static> {
     Table {
         family: NfFamily::INet,
-        name: Cow::Borrowed(TABLE),
+        name: Cow::Borrowed(name),
         handle: None,
     }
 }
 
-pub(super) fn nft_table() -> NfListObject<'static> {
-    NfListObject::Table(table())
+pub(super) fn base_chain(
+    table: &'static str,
+    name: &'static str,
+    kind: NfChainType,
+    hook: NfHook,
+    prio: i32,
+) -> NfListObject<'static> {
+    NfListObject::Chain(Chain {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(table),
+        name: Cow::Borrowed(name),
+        newname: None,
+        handle: None,
+        _type: Some(kind),
+        hook: Some(hook),
+        prio: Some(prio),
+        dev: None,
+        policy: Some(NfChainPolicy::Accept),
+    })
 }
 
 pub(super) fn prerouting_chain() -> NfListObject<'static> {
-    NfListObject::Chain(Chain {
-        family: NfFamily::INet,
-        table: Cow::Borrowed(TABLE),
-        name: Cow::Borrowed(CHAIN_PRE),
-        newname: None,
-        handle: None,
-        _type: Some(NfChainType::NAT),
-        hook: Some(NfHook::Prerouting),
-        prio: Some(PRIO_DSTNAT),
-        dev: None,
-        policy: Some(NfChainPolicy::Accept),
-    })
-}
-
-pub(super) fn forward_chain() -> NfListObject<'static> {
-    NfListObject::Chain(Chain {
-        family: NfFamily::INet,
-        table: Cow::Borrowed(TABLE),
-        name: Cow::Borrowed(CHAIN_FWD),
-        newname: None,
-        handle: None,
-        _type: Some(NfChainType::Filter),
-        hook: Some(NfHook::Forward),
-        prio: Some(PRIO_FILTER),
-        dev: None,
-        policy: Some(NfChainPolicy::Accept),
-    })
+    base_chain(
+        TABLE,
+        CHAIN_PRE,
+        NfChainType::NAT,
+        NfHook::Prerouting,
+        PRIO_DSTNAT,
+    )
 }
 
 pub(super) fn output_chain() -> NfListObject<'static> {
-    NfListObject::Chain(Chain {
-        family: NfFamily::INet,
-        table: Cow::Borrowed(TABLE),
-        name: Cow::Borrowed(CHAIN_OUT),
-        newname: None,
-        handle: None,
-        _type: Some(NfChainType::NAT),
-        hook: Some(NfHook::Output),
-        prio: Some(PRIO_DSTNAT),
-        dev: None,
-        policy: Some(NfChainPolicy::Accept),
-    })
+    base_chain(TABLE, CHAIN_OUT, NfChainType::NAT, NfHook::Output, PRIO_DSTNAT)
 }
 
 pub(super) fn postrouting_chain() -> NfListObject<'static> {
-    NfListObject::Chain(Chain {
-        family: NfFamily::INet,
-        table: Cow::Borrowed(TABLE),
-        name: Cow::Borrowed(CHAIN_POST),
-        newname: None,
-        handle: None,
-        _type: Some(NfChainType::NAT),
-        hook: Some(NfHook::Postrouting),
-        prio: Some(PRIO_SRCNAT),
-        dev: None,
-        policy: Some(NfChainPolicy::Accept),
-    })
+    base_chain(
+        TABLE,
+        CHAIN_POST,
+        NfChainType::NAT,
+        NfHook::Postrouting,
+        PRIO_SRCNAT,
+    )
 }
 
 pub(super) fn rule_obj(
+    table: &'static str,
     chain: &'static str,
     stmts: Vec<Statement<'static>>,
 ) -> NfListObject<'static> {
     NfListObject::Rule(Rule {
         family: NfFamily::INet,
-        table: Cow::Borrowed(TABLE),
+        table: Cow::Borrowed(table),
         chain: Cow::Borrowed(chain),
         expr: Cow::Owned(stmts),
         handle: None,
@@ -398,27 +377,6 @@ pub(super) fn loopback_masquerade_stmts() -> Vec<Vec<Statement<'static>>> {
     ]
 }
 
-// spec: INFRA#forwarding-policy
-pub(super) fn ct_state_established_related_accept() -> Vec<Statement<'static>> {
-    let ct_expr = Expression::Named(NamedExpression::CT(CT {
-        key: Cow::Borrowed("state"),
-        family: None,
-        dir: None,
-    }));
-    let states = Expression::List(vec![
-        Expression::String(Cow::Borrowed("established")),
-        Expression::String(Cow::Borrowed("related")),
-    ]);
-    vec![
-        Statement::Match(Match {
-            left: ct_expr,
-            right: states,
-            op: Operator::IN,
-        }),
-        Statement::Accept(None),
-    ]
-}
-
 /// Produces `ct status & dnat == dnat` — matches packets belonging to
 /// connections that had a DNAT rule applied.
 pub(super) fn match_ct_status_dnat() -> Statement<'static> {
@@ -435,28 +393,4 @@ pub(super) fn match_ct_status_dnat() -> Statement<'static> {
         right: Expression::String(Cow::Borrowed("dnat")),
         op: Operator::EQ,
     })
-}
-
-// spec: INFRA#forwarding-policy
-pub(super) fn ct_status_dnat_accept() -> Vec<Statement<'static>> {
-    vec![match_ct_status_dnat(), Statement::Accept(None)]
-}
-
-// spec: INFRA#forwarding-policy
-pub(super) fn seedling_forward_stmts(node_prefix: &Ipv6Net) -> Vec<Statement<'static>> {
-    let pfx = prefix_expr(node_prefix.network().to_string(), node_prefix.prefix_len());
-    vec![
-        match_eq(payload_expr("ip6", "saddr"), pfx.clone()),
-        match_eq(payload_expr("ip6", "daddr"), pfx),
-        Statement::Accept(None),
-    ]
-}
-
-// spec: INFRA#forwarding-policy
-pub(super) fn drop_unsolicited_inbound_stmts(node_prefix: &Ipv6Net) -> Vec<Statement<'static>> {
-    let pfx = prefix_expr(node_prefix.network().to_string(), node_prefix.prefix_len());
-    vec![
-        match_eq(payload_expr("ip6", "daddr"), pfx),
-        Statement::Drop(None),
-    ]
 }

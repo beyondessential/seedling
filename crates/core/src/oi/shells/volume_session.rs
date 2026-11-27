@@ -249,6 +249,14 @@ pub(crate) async fn open_volume_shell_session(
         Err(e) => tracing::warn!(%image, "image_exists check failed: {e}"),
     }
 
+    // spec: INFRA#pod-network-sources
+    // spec: INFRA#forwarding-policy
+    // spec: INFRA#pod-traffic-to-the-host
+    if let Err(e) = state.driver.ensure_isolation().await {
+        tracing::warn!(%container_name, "volume shell: {e}");
+        err!("internal", e.to_string());
+    }
+
     let net_name = format!("seedling-{container_name}");
     let net_prefix = match super::allocate_session_prefix(&state, &net_name, instance.kind) {
         Ok(prefix) => prefix,

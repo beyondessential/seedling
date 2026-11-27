@@ -11,7 +11,10 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::SystemTime,
 };
 
@@ -903,8 +906,25 @@ impl NetworkProxy for StubNetworkProxy {
 /// Stub `DataPlane`: no-ops everything. nftables / routing-table effects
 /// aren't observable through any OI surface so there's nothing for tests
 /// to assert against; the runtime still gets the trait so reconciliation
-/// proceeds.
-pub struct StubDataPlane;
+/// proceeds. It counts installs of the isolation rules, which a test can make
+/// fail.
+#[derive(Default)]
+pub struct StubDataPlane {
+    isolation_installs: AtomicUsize,
+    refuse_isolation: AtomicBool,
+}
+
+impl StubDataPlane {
+    /// How many times the isolation rules were installed, failed or not.
+    pub fn isolation_installs(&self) -> usize {
+        self.isolation_installs.load(Ordering::SeqCst)
+    }
+
+    /// Make installing the isolation rules fail, or succeed again.
+    pub fn refuse_isolation(&self, refuse: bool) {
+        self.refuse_isolation.store(refuse, Ordering::SeqCst);
+    }
+}
 
 impl DataPlane for StubDataPlane {
     fn apply_rules<'a>(
@@ -919,6 +939,19 @@ impl DataPlane for StubDataPlane {
         _routes: &'a [ServiceRoute],
     ) -> BoxFuture<'a, Result<(), BoxError>> {
         async { Ok(()) }.boxed()
+    }
+
+    fn ensure_isolation<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
+        self.isolation_installs.fetch_add(1, Ordering::SeqCst);
+        let refused = self.refuse_isolation.load(Ordering::SeqCst);
+        async move {
+            if refused {
+                Err("the isolation rules were refused".into())
+            } else {
+                Ok(())
+            }
+        }
+        .boxed()
     }
 
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {

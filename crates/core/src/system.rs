@@ -15,6 +15,7 @@ use crate::system::{
 pub mod actuator;
 pub mod backends;
 pub mod host_probes;
+pub mod isolation;
 pub mod nat64;
 pub mod observer;
 pub mod priority;
@@ -278,9 +279,9 @@ pub trait NetworkProxy: Send + Sync + 'static {
 }
 
 pub trait DataPlane: Send + Sync + 'static {
-    /// Atomically replace the complete set of packet-filtering rules the
-    /// runtime owns. Idempotent. Covers ingress DNAT, FORWARD policy, and
-    /// mount DNAT6.
+    /// Atomically replace the packet rules the runtime holds as absolute
+    /// state. Idempotent. Covers ingress redirection, service translation and
+    /// mount translation.
     fn apply_rules<'a>(&'a self, rules: &'a DataPlaneRules) -> BoxFuture<'a, Result<(), BoxError>>;
 
     /// Replace the complete set of IPv6 service routes in the routing table.
@@ -290,7 +291,14 @@ pub trait DataPlane: Send + Sync + 'static {
         routes: &'a [ServiceRoute],
     ) -> BoxFuture<'a, Result<(), BoxError>>;
 
-    /// Remove all rules and routes owned by seedling. Called on shutdown.
+    /// Install the isolation rules, which keep pods apart from one another
+    /// and from the host, replacing them atomically if they are installed.
+    /// Idempotent. Nothing removes them: workload containers outlive the
+    /// runtime.
+    fn ensure_isolation<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>>;
+
+    /// Remove the rules held as absolute state, and the routes. Called on
+    /// shutdown.
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>>;
 }
 
@@ -329,9 +337,18 @@ pub struct System {
     /// [`Self::container`] and [`Self::process`] become the working ones when
     /// a probe reaches them.
     pub backends: backends::Backends,
+    /// Whether the isolation rules are installed. While they are not, no
+    /// workload container and no shell session starts.
+    pub isolation: isolation::Isolation,
 }
 
 impl System {
+    /// Install the isolation rules unless they are installed, or the delay
+    /// since the last failed install has yet to pass.
+    pub async fn ensure_isolation(&self) -> Result<(), isolation::IsolationMissing> {
+        self.isolation.ensure(&*self.data_plane).await
+    }
+
     /// The reason the daemon is running in degraded mode, if it is.
     pub fn degraded_reason(&self) -> Option<String> {
         self.backends.unavailable_reason()
@@ -412,6 +429,15 @@ impl System {
         data_dir: &Path,
         recorded_pod_prefixes: Option<HashMap<String, Ipv6Net>>,
     ) -> Result<SystemSetup, BoxError> {
+        // spec: INFRA#pod-network-sources
+        // spec: INFRA#forwarding-policy
+        // spec: INFRA#pod-traffic-to-the-host
+        // Before anything that might start a container on a pod network. A
+        // failure is retried from the reconciliation loop, which starts no
+        // workload until an install succeeds.
+        let isolation = isolation::Isolation::default();
+        let _ = isolation.ensure(&*platform.data_plane).await;
+
         // spec: INFRA#unavailable-backends — bring up the container runtime
         // and process manager best-effort. If either connection fails
         // the daemon must NOT crash-loop: either being down is a
@@ -482,6 +508,7 @@ impl System {
             journal: platform.journal,
             translator: platform.translator,
             backends,
+            isolation,
         });
         Ok((system, caddy_admin_client))
     }
@@ -506,7 +533,7 @@ impl System {
 
         let container = Arc::new(stub::StubContainerRuntime::new(volumes_root));
         let process = Arc::new(stub::StubProcessManager::new(Arc::clone(&container)));
-        let data_plane_arc: Arc<dyn DataPlane> = Arc::new(stub::StubDataPlane);
+        let data_plane_arc: Arc<dyn DataPlane> = Arc::new(stub::StubDataPlane::default());
         let proxy: Arc<dyn NetworkProxy> = Arc::new(stub::StubNetworkProxy);
 
         let volume_store = volume_store::VolumeStore::new(data_dir, storage)?;
@@ -532,6 +559,7 @@ impl System {
             journal,
             translator: Arc::new(stub::StubTranslator),
             backends,
+            isolation: isolation::Isolation::default(),
         });
         Ok((system, caddy_admin_client))
     }
@@ -556,11 +584,12 @@ impl System {
             container: backends.container(),
             process: backends.process(),
             proxy: Arc::new(stub::StubNetworkProxy),
-            data_plane: Arc::new(stub::StubDataPlane),
+            data_plane: Arc::new(stub::StubDataPlane::default()),
             volume_store,
             journal: Arc::new(stub::StubJournal),
             translator: Arc::new(stub::StubTranslator),
             backends,
+            isolation: isolation::Isolation::default(),
         });
         Ok((system, caddy_admin_client))
     }
@@ -577,7 +606,7 @@ impl System {
             container: backends.container(),
             process: backends.process(),
             proxy,
-            data_plane: Arc::new(stub::StubDataPlane),
+            data_plane: Arc::new(stub::StubDataPlane::default()),
             volume_store: volume_store::VolumeStore::new(
                 data_dir,
                 Arc::new(stub::StubVolumeStorage),
@@ -586,6 +615,7 @@ impl System {
             journal: Arc::new(stub::StubJournal),
             translator: Arc::new(stub::StubTranslator),
             backends,
+            isolation: isolation::Isolation::default(),
         }
     }
 }

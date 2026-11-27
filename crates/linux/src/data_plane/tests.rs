@@ -1,13 +1,16 @@
 use std::net::{Ipv6Addr, SocketAddr};
 
 use ipnet::Ipv6Net;
+use serde_json::json;
 
 use seedling_core::system::types::{ForwardProto, IngressRule};
 
-use super::nft::{
-    ct_state_established_related_accept, ct_status_dnat_accept, dnat_lb,
-    drop_unsolicited_inbound_stmts, ingress_rule_stmts, loopback_masquerade_stmts,
-    output_ingress_rule_stmts, seedling_forward_stmts,
+use super::{
+    isolation::{
+        MARK_MASK, MARK_MOUNT, MARK_POD_NAT64, forwarding_rules, isolation_batch,
+        nat64_drop_rules, nat64_mark_rules, pod_source_rules, to_host_rules,
+    },
+    nft::{dnat_lb, ingress_rule_stmts, loopback_masquerade_stmts, output_ingress_rule_stmts},
 };
 
 fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
@@ -145,76 +148,6 @@ fn sample_prefix() -> Ipv6Net {
     "fd5e:1234:5678::/48".parse().expect("valid prefix")
 }
 
-// spec: INFRA#forwarding-policy
-#[test]
-fn ct_state_established_related_accept_json() {
-    let stmts = ct_state_established_related_accept();
-    let json = serde_json::to_string(&stmts).expect("serialize");
-    assert!(
-        json.contains("\"ct\""),
-        "must contain ct expression, got: {json}"
-    );
-    assert!(
-        json.contains("\"state\""),
-        "must contain state key, got: {json}"
-    );
-    assert!(
-        json.contains("\"established\""),
-        "must contain established, got: {json}"
-    );
-    assert!(
-        json.contains("\"related\""),
-        "must contain related, got: {json}"
-    );
-    assert!(json.contains("\"in\""), "must use IN operator, got: {json}");
-}
-
-// spec: INFRA#forwarding-policy
-#[test]
-fn ct_status_dnat_accept_json() {
-    let stmts = ct_status_dnat_accept();
-    let json = serde_json::to_string(&stmts).expect("serialize");
-    assert!(
-        json.contains("\"ct\""),
-        "must contain ct expression, got: {json}"
-    );
-    assert!(
-        json.contains("\"status\""),
-        "must contain status key, got: {json}"
-    );
-    assert!(json.contains("\"dnat\""), "must contain dnat, got: {json}");
-    assert!(
-        json.contains("\"&\""),
-        "must contain bitwise AND expression, got: {json}"
-    );
-    assert!(
-        json.contains("\"==\""),
-        "must use EQ as the match operator, got: {json}"
-    );
-}
-
-// spec: INFRA#forwarding-policy
-#[test]
-fn drop_unsolicited_inbound_stmts_json() {
-    let prefix = sample_prefix();
-    let stmts = drop_unsolicited_inbound_stmts(&prefix);
-    let json = serde_json::to_string(&stmts).expect("serialize");
-    assert!(json.contains("\"daddr\""), "must match daddr, got: {json}");
-    assert!(
-        json.contains("\"fd5e:1234:5678::\""),
-        "must contain node prefix addr, got: {json}"
-    );
-    assert!(
-        json.contains("\"48\"") || json.contains("48"),
-        "must contain prefix len 48, got: {json}"
-    );
-    assert!(json.contains("\"drop\""), "must contain drop, got: {json}");
-    assert!(
-        !json.contains("\"accept\""),
-        "must NOT contain accept, got: {json}"
-    );
-}
-
 // spec: SVC#routing
 #[test]
 fn dnat_lb_single_backend() {
@@ -299,20 +232,6 @@ fn dnat_lb_multiple_backends_mixed_ports() {
     );
 }
 
-// spec: INFRA#forwarding-policy
-#[test]
-fn seedling_forward_stmts_json() {
-    let prefix = sample_prefix();
-    let stmts = seedling_forward_stmts(&prefix);
-    let json = serde_json::to_string(&stmts).expect("serialize");
-    assert!(json.contains("\"saddr\""), "must match saddr, got: {json}");
-    assert!(json.contains("\"daddr\""), "must match daddr, got: {json}");
-    assert!(
-        json.contains("\"accept\""),
-        "must contain accept, got: {json}"
-    );
-}
-
 #[test]
 fn loopback_masquerade_scoped_to_dnat_connections() {
     let stmts_list = loopback_masquerade_stmts();
@@ -329,4 +248,247 @@ fn loopback_masquerade_scoped_to_dnat_connections() {
              (e.g. DNS to 127.0.0.53) is not masqueraded, got: {json}"
         );
     }
+}
+
+fn rule_json(stmts: &[nftables::stmt::Statement<'static>]) -> serde_json::Value {
+    serde_json::to_value(stmts).expect("serialize")
+}
+
+fn iifname_pods() -> serde_json::Value {
+    json!({"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "sdp-*"}})
+}
+
+fn host_prefix_json() -> serde_json::Value {
+    json!({"prefix": {"addr": "fd5e:1234:5678::", "len": 48}})
+}
+
+fn nfproto(n: u32) -> serde_json::Value {
+    json!({"match": {"op": "==", "left": {"meta": {"key": "nfproto"}}, "right": n}})
+}
+
+fn ct_established_related() -> serde_json::Value {
+    json!({"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}})
+}
+
+fn ct_status_dnat() -> serde_json::Value {
+    json!({"match": {"op": "==", "left": {"&": [{"ct": {"key": "status"}}, "dnat"]}, "right": "dnat"}})
+}
+
+fn mark_is(mask: u32, value: u32) -> serde_json::Value {
+    json!({"match": {"op": "==", "left": {"&": [{"meta": {"key": "mark"}}, mask]}, "right": value}})
+}
+
+// spec: INFRA#pod-network-sources
+#[test]
+fn host_prefix_sources_must_arrive_where_their_route_points_on_every_interface_but_loopback() {
+    let rule = rule_json(&pod_source_rules(&sample_prefix())[0]);
+    assert_eq!(
+        rule[0],
+        json!({"match": {"op": "!=", "left": {"meta": {"key": "iifname"}}, "right": "lo"}})
+    );
+    assert_eq!(
+        rule[1],
+        json!({"match": {"op": "==", "left": {"payload": {"protocol": "ip6", "field": "saddr"}}, "right": host_prefix_json()}})
+    );
+    // `fib saddr . iif oif missing`: the flags are a set, so their order is
+    // not fixed.
+    let fib = &rule[2]["match"];
+    assert_eq!(fib["op"], "==");
+    assert_eq!(fib["left"]["fib"]["result"], "oif");
+    let mut flags: Vec<&str> = fib["left"]["fib"]["flags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    flags.sort_unstable();
+    assert_eq!(flags, ["iif", "saddr"]);
+    assert_eq!(fib["right"], false);
+    assert_eq!(rule[3], json!({"drop": null}));
+    assert_eq!(rule.as_array().unwrap().len(), 4);
+}
+
+// spec: INFRA#pod-network-sources
+#[test]
+fn a_pod_bridge_passes_no_ipv4_and_no_ipv6_source_outside_the_host_prefix() {
+    let rules = pod_source_rules(&sample_prefix());
+    assert_eq!(rules.len(), 3);
+    assert_eq!(
+        rule_json(&rules[1]),
+        json!([iifname_pods(), nfproto(2), {"drop": null}])
+    );
+    assert_eq!(
+        rule_json(&rules[2]),
+        json!([
+            iifname_pods(),
+            {"match": {
+                "op": "!=",
+                "left": {"payload": {"protocol": "ip6", "field": "saddr"}},
+                "right": {"set": [host_prefix_json(), "::", {"prefix": {"addr": "fe80::", "len": 10}}]},
+            }},
+            {"drop": null},
+        ])
+    );
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn pod_traffic_to_the_nat64_prefix_is_marked_and_mounted_traffic_doubly() {
+    let to_nat64 = || {
+        vec![
+            iifname_pods(),
+            json!({"match": {
+                "op": "==",
+                "left": {"payload": {"protocol": "ip6", "field": "daddr"}},
+                "right": {"prefix": {"addr": "64:ff9b::", "len": 96}},
+            }}),
+        ]
+    };
+    let or_mark = |bit: u32| {
+        json!({"mangle": {"key": {"meta": {"key": "mark"}}, "value": {"|": [{"meta": {"key": "mark"}}, bit]}}})
+    };
+    let mut pod = to_nat64();
+    pod.push(or_mark(MARK_POD_NAT64));
+    let mut mount = to_nat64();
+    mount.extend([ct_status_dnat(), or_mark(MARK_MOUNT)]);
+
+    let rules = nat64_mark_rules();
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rule_json(&rules[0]), json!(pod));
+    assert_eq!(rule_json(&rules[1]), json!(mount));
+}
+
+#[test]
+fn the_marks_keep_clear_of_the_bits_host_tools_route_by() {
+    assert_eq!(MARK_MASK, MARK_POD_NAT64 | MARK_MOUNT);
+    assert_eq!(MARK_POD_NAT64 & MARK_MOUNT, 0);
+    assert_eq!(MARK_MASK & 0x00ff_ffff, 0, "Tailscale's 0xff0000 and the low 16 bits");
+}
+
+// spec: INFRA#forwarding-policy
+#[test]
+fn forwarding_to_the_host_prefix_is_dropped_but_for_the_exceptions() {
+    let resolver_dns = |proto: &str| {
+        json!([
+            {"match": {"op": "==", "left": {"payload": {"protocol": "ip6", "field": "saddr"}}, "right": host_prefix_json()}},
+            {"match": {"op": "==", "left": {"payload": {"protocol": "ip6", "field": "daddr"}}, "right": "fd5e:1234:5678:fd00::53"}},
+            {"match": {"op": "==", "left": {"payload": {"protocol": proto, "field": "dport"}}, "right": 53}},
+            {"accept": null},
+        ])
+    };
+    let rules: Vec<_> = forwarding_rules(&sample_prefix())
+        .iter()
+        .map(|r| rule_json(r))
+        .collect();
+    assert_eq!(
+        rules,
+        [
+            json!([ct_established_related(), {"accept": null}]),
+            json!([ct_status_dnat(), {"accept": null}]),
+            json!([
+                {"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "sdl-proxy"}},
+                {"accept": null},
+            ]),
+            resolver_dns("tcp"),
+            resolver_dns("udp"),
+            json!([
+                {"match": {"op": "==", "left": {"payload": {"protocol": "ip6", "field": "daddr"}}, "right": host_prefix_json()}},
+                {"drop": null},
+            ]),
+        ]
+    );
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn a_pod_reaches_the_host_only_by_accepted_or_mounted_connections_and_neighbour_discovery() {
+    let rules: Vec<_> = to_host_rules().iter().map(|r| rule_json(r)).collect();
+    assert_eq!(
+        rules,
+        [
+            json!([iifname_pods(), ct_established_related(), {"accept": null}]),
+            json!([iifname_pods(), ct_status_dnat(), {"accept": null}]),
+            json!([
+                iifname_pods(),
+                {"match": {
+                    "op": "==",
+                    "left": {"payload": {"protocol": "icmpv6", "field": "type"}},
+                    "right": {"set": [133, 135, 136]},
+                }},
+                {"accept": null},
+            ]),
+            json!([iifname_pods(), {"drop": null}]),
+            json!([nfproto(2), mark_is(MARK_MASK, MARK_POD_NAT64), {"drop": null}]),
+        ]
+    );
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn translated_pod_traffic_is_dropped_towards_the_proxy_resolver_and_pods() {
+    let rules: Vec<_> = nat64_drop_rules().iter().map(|r| rule_json(r)).collect();
+    assert_eq!(
+        rules,
+        [
+            json!([
+                nfproto(2),
+                {"match": {
+                    "op": "==",
+                    "left": {"meta": {"key": "oifname"}},
+                    "right": {"set": ["sdl-proxy", "sdl-resolver"]},
+                }},
+                mark_is(MARK_MASK, MARK_POD_NAT64),
+                {"drop": null},
+            ]),
+            json!([
+                nfproto(10),
+                {"match": {"op": "==", "left": {"meta": {"key": "oifname"}}, "right": "sdp-*"}},
+                mark_is(MARK_POD_NAT64, MARK_POD_NAT64),
+                {"drop": null},
+            ]),
+        ]
+    );
+}
+
+// spec: INFRA#pod-network-sources
+// spec: INFRA#forwarding-policy
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn the_isolation_table_is_replaced_whole_in_one_batch() {
+    let batch = serde_json::to_value(isolation_batch(&sample_prefix()).to_nftables()).unwrap();
+    let cmds = batch["nftables"].as_array().unwrap();
+    let table = json!({"family": "inet", "name": "seedling_isolation"});
+    assert_eq!(cmds[0], json!({"add": {"table": table}}));
+    assert_eq!(cmds[1], json!({"flush": {"table": table}}));
+
+    let chains: Vec<(String, String, i64)> = cmds
+        .iter()
+        .filter_map(|c| c["add"]["chain"].as_object())
+        .map(|c| {
+            assert_eq!(c["type"], "filter");
+            assert_eq!(c["policy"], "accept");
+            (
+                c["name"].as_str().unwrap().to_owned(),
+                c["hook"].as_str().unwrap().to_owned(),
+                c["prio"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    let chain = |name: &str, hook: &str, prio: i64| (name.to_owned(), hook.to_owned(), prio);
+    assert_eq!(
+        chains,
+        [
+            chain("pod_sources", "prerouting", -300),
+            chain("nat64_marks", "prerouting", -90),
+            chain("forwarding", "forward", 0),
+            chain("to_host", "input", 0),
+            chain("nat64_drops", "postrouting", 0),
+        ]
+    );
+    assert!(
+        cmds.iter()
+            .filter_map(|c| c["add"]["rule"].as_object())
+            .all(|r| r["table"] == "seedling_isolation"),
+        "every rule is in the isolation table"
+    );
 }

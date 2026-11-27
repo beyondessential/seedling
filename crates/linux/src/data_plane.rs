@@ -13,6 +13,7 @@ use seedling_core::system::{
     types::{DataPlaneRules, ServiceRoute},
 };
 
+mod isolation;
 mod nft;
 pub mod routes;
 
@@ -50,61 +51,43 @@ impl NftablesDataPlane {
     // spec: INFRA#host-originated-traffic
     async fn apply_rules_impl(&self, rules: &DataPlaneRules) -> Result<(), DataPlaneError> {
         let mut batch = Batch::new();
-        batch.add(nft::nft_table());
-        batch.add_cmd(NfCmd::Flush(FlushObject::Table(nft::table())));
+        batch.add(NfListObject::Table(nft::table(nft::TABLE)));
+        batch.add_cmd(NfCmd::Flush(FlushObject::Table(nft::table(nft::TABLE))));
         batch.add(nft::prerouting_chain());
         batch.add(nft::output_chain());
         batch.add(nft::postrouting_chain());
-        batch.add(nft::forward_chain());
 
         for rule in &rules.ingress {
             for stmts in nft::ingress_rule_stmts(rule) {
-                batch.add(nft::rule_obj(nft::CHAIN_PRE, stmts));
+                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
             }
             for stmts in nft::output_ingress_rule_stmts(rule) {
-                batch.add(nft::rule_obj(nft::CHAIN_OUT, stmts));
+                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_OUT, stmts));
             }
         }
 
         for rule in &rules.mounts {
             for stmts in nft::mount_rule_stmts(rule) {
-                batch.add(nft::rule_obj(nft::CHAIN_PRE, stmts));
+                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
             }
         }
 
         for rule in &rules.service_dnat {
             for stmts in nft::service_dnat_rule_stmts(rule) {
-                batch.add(nft::rule_obj(nft::CHAIN_PRE, stmts.clone()));
-                batch.add(nft::rule_obj(nft::CHAIN_OUT, stmts));
+                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts.clone()));
+                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_OUT, stmts));
             }
         }
 
         for stmts in nft::loopback_masquerade_stmts() {
-            batch.add(nft::rule_obj(nft::CHAIN_POST, stmts));
+            batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_POST, stmts));
         }
 
-        // spec: INFRA#forwarding-policy
-        batch.add(nft::rule_obj(
-            nft::CHAIN_FWD,
-            nft::ct_state_established_related_accept(),
-        ));
-        batch.add(nft::rule_obj(nft::CHAIN_FWD, nft::ct_status_dnat_accept()));
-        batch.add(nft::rule_obj(
-            nft::CHAIN_FWD,
-            nft::seedling_forward_stmts(&self.node_prefix),
-        ));
-        batch.add(nft::rule_obj(
-            nft::CHAIN_FWD,
-            nft::drop_unsolicited_inbound_stmts(&self.node_prefix),
-        ));
+        apply_batch(batch).await
+    }
 
-        let ruleset = batch.to_nftables();
-        helper::apply_ruleset_async(&ruleset)
-            .await
-            .map_err(|e| DataPlaneError::Nftables {
-                source: Box::new(e),
-                backtrace: std::backtrace::Backtrace::capture(),
-            })
+    async fn ensure_isolation_impl(&self) -> Result<(), DataPlaneError> {
+        apply_batch(isolation::isolation_batch(&self.node_prefix)).await
     }
 
     async fn apply_routes_impl(&self, routes: &[ServiceRoute]) -> Result<(), DataPlaneError> {
@@ -132,7 +115,7 @@ impl NftablesDataPlane {
 
     async fn clear_all_impl(&self) -> Result<(), DataPlaneError> {
         let mut batch = Batch::new();
-        batch.add_cmd(NfCmd::Delete(NfListObject::Table(nft::table())));
+        batch.add_cmd(NfCmd::Delete(NfListObject::Table(nft::table(nft::TABLE))));
         let ruleset = batch.to_nftables();
         let _ = helper::apply_ruleset_async(&ruleset).await;
         self.delete_managed_routes(&self.handle).await
@@ -151,9 +134,22 @@ impl DataPlane for NftablesDataPlane {
         Box::pin(async move { self.apply_routes_impl(routes).await.map_err(Into::into) })
     }
 
+    fn ensure_isolation<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.ensure_isolation_impl().await.map_err(Into::into) })
+    }
+
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.clear_all_impl().await.map_err(Into::into) })
     }
+}
+
+async fn apply_batch(batch: Batch<'_>) -> Result<(), DataPlaneError> {
+    helper::apply_ruleset_async(&batch.to_nftables())
+        .await
+        .map_err(|e| DataPlaneError::Nftables {
+            source: Box::new(e),
+            backtrace: std::backtrace::Backtrace::capture(),
+        })
 }
 
 #[cfg(test)]

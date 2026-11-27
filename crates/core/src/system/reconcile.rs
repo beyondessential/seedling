@@ -77,6 +77,10 @@ const SLICE_BACKOFF_CAP: Duration = Duration::from_secs(300);
 /// worth a fault.
 const SLICE_FAULT_THRESHOLD: u32 = 5;
 
+/// The subject of the `packet_filter_failed` fault for the isolation rules,
+/// beside the one for the rules held as absolute state, which has none.
+const ISOLATION_FAULT_SUBJECT: &str = "isolation";
+
 /// Enumerate hostnames from the site-ingress snapshot that need TLS this
 /// tick. A hostname is only emitted when its parent ingress is non-stale,
 /// declares a non-`None` TLS provider, *and* carries at least one
@@ -1440,6 +1444,23 @@ impl Reconciler {
     }
 
     async fn iterate(&mut self) -> bool {
+        // spec: INFRA#pod-network-sources
+        // spec: INFRA#forwarding-policy
+        // spec: INFRA#pod-traffic-to-the-host
+        // No workload starts until the isolation rules are installed. The
+        // install is retried here after a growing delay, and the fault is
+        // settled whether or not the backends are reachable.
+        let isolation = self.driver.ensure_isolation().await;
+        // spec: FLT#host-faults
+        match &isolation {
+            Err(e) => self.file_system_fault_for(
+                "packet_filter_failed",
+                ISOLATION_FAULT_SUBJECT,
+                &format!("{e}; no workloads will be actuated until they are"),
+            ),
+            Ok(()) => self.clear_system_fault_for("packet_filter_failed", ISOLATION_FAULT_SUBJECT),
+        }
+
         // spec: INFRA#unavailable-backends — when the daemon came up without a
         // working container runtime / process manager, every actuation would
         // just error against the unavailable backends. File the overarching
@@ -1459,6 +1480,10 @@ impl Reconciler {
         // spec: FLT#host-faults
         // Both backends are reachable, so the fault no longer holds.
         self.clear_system_fault("container_runtime_unavailable");
+
+        if isolation.is_err() {
+            return true;
+        }
 
         self.retry_host_probes().await;
 

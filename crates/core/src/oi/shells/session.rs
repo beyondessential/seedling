@@ -954,6 +954,14 @@ impl AppShellHost {
             return Ok(None);
         }
 
+        // spec: INFRA#pod-network-sources
+        // spec: INFRA#forwarding-policy
+        // spec: INFRA#pod-traffic-to-the-host
+        if let Err(e) = state.driver.ensure_isolation().await {
+            tracing::warn!(app = %app_name, shell = %shell_name, "{e}");
+            return Err(e.to_string());
+        }
+
         let net_name = format!("seedling-{}", instance.display_name);
         let net_prefix = super::allocate_session_prefix(state, &net_name, instance.kind)
             .map_err(|e| format!("create network failed: {e}"))?;

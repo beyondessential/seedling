@@ -896,11 +896,35 @@ impl Reconciler {
         match outcome {
             Some(Err(e)) => {
                 tracing::error!(error = %e, "{call} failed");
-                self.file_system_fault(fault_kind, &format!("{call} failed: {e}"));
+                self.file_system_fault_for(fault_kind, "", &format!("{call} failed: {e}"));
             }
-            Some(Ok(())) => self.clear_system_fault(fault_kind),
+            Some(Ok(())) => self.clear_system_fault_for(fault_kind, ""),
             None => {}
         }
+    }
+
+    /// File `fault_kind` about `subject` against the host, unless it is
+    /// filed already.
+    // spec: FLT#filing-and-clearing
+    pub(super) fn file_system_fault_for(&self, fault_kind: &str, subject: &str, description: &str) {
+        let key = faults::FaultKey::new(&AppName::new_unchecked("_system"), fault_kind, subject);
+        let description = description.to_owned();
+        self.db.call(move |db| {
+            if let Err(e) = faults::file_once(db, &key, &faults::FaultMeta::default(), &description) {
+                tracing::warn!("failed to file system fault ({}, {:?}): {e}", key.kind, key.subject);
+            }
+        });
+    }
+
+    /// Clear the host's `fault_kind` fault about `subject`, and no other.
+    // spec: FLT#filing-and-clearing
+    pub(super) fn clear_system_fault_for(&self, fault_kind: &str, subject: &str) {
+        let key = faults::FaultKey::new(&AppName::new_unchecked("_system"), fault_kind, subject);
+        self.db.call(move |db| {
+            if let Err(e) = faults::clear_fault_by_key(db, &key) {
+                tracing::warn!("failed to clear system fault ({}, {:?}): {e}", key.kind, key.subject);
+            }
+        });
     }
 
     pub(super) fn clear_system_fault(&self, fault_kind: &str) {
