@@ -292,14 +292,14 @@ The proxy MUST NOT add connection-specific fields to responses to keep a connect
 
 ## Proxy addresses
 
-The proxy MUST be connected to a network of its own, the proxy network, at the addresses below, the IPv6 ones derived from the [host prefix](infrastructure.md#host-prefix):
+The runtime MUST give the proxy network the addresses below, the IPv6 ones derived from the [host prefix](infrastructure.md#host-prefix):
 
 | address | value |
 | --- | --- |
 | proxy network | `<host prefix>:ff00::/64` and `10.89.255.0/24` |
 | host side of the proxy network | `<host prefix>:ff00::1` and `10.89.255.1` |
 
-The runtime MUST NOT connect any other container to the proxy network.
+The runtime MUST connect every proxy instance to the proxy network, and MUST NOT connect any other container to it.
 
 ## Proxy lifecycle
 
