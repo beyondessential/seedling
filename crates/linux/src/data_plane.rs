@@ -149,7 +149,6 @@ impl DataPlane for NftablesDataPlane {
 
 /// The batch that replaces the translation table with `rules`, its
 /// `host_v4_nat64` set holding `host_v4_nat64`.
-// spec: INFRA#host-originated-traffic
 fn translation_batch(rules: &DataPlaneRules, host_v4_nat64: &[Ipv6Net]) -> Batch<'static> {
     let mut batch = Batch::new();
     batch.add(NfListObject::Table(nft::table(nft::TABLE)));
@@ -168,6 +167,7 @@ fn translation_batch(rules: &DataPlaneRules, host_v4_nat64: &[Ipv6Net]) -> Batch
         for stmts in nft::nat64_ingress_rule_stmts(rule) {
             batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
         }
+        // spec: INFRA#host-originated-traffic
         for stmts in nft::output_ingress_rule_stmts(rule) {
             batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_OUT, stmts));
         }

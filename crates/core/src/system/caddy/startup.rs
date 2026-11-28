@@ -411,7 +411,7 @@ pub(crate) async fn teardown_caddy(container: &dyn ContainerRuntime, process: &d
 /// it from either family.
 // spec: PRX#proxy-addresses
 // spec: INFRA#ingress-redirection
-pub(super) fn proxy_addrs(state: &ContainerState) -> Result<(Ipv6Addr, Ipv4Addr), &'static str> {
+fn proxy_addrs(state: &ContainerState) -> Result<(Ipv6Addr, Ipv4Addr), &'static str> {
     match (state.pod_addr, state.pod_addr_v4) {
         (Some(v6), Some(v4)) => Ok((v6, v4)),
         (None, Some(_)) => Err("it has no IPv6 address on the proxy network"),

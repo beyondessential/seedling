@@ -5,7 +5,6 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
-
 use nftables::{
     expr::{
         BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, Map, Meta, MetaKey,
