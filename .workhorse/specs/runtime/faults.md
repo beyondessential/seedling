@@ -213,6 +213,7 @@ A withheld apply MUST neither file nor clear `routes_failed`, `packet_filter_fai
 When installing the rules that keep pod networks apart, as [pod network sources](infrastructure.md#pod-network-sources), the [forwarding policy](infrastructure.md#forwarding-policy) and [pod traffic to the host](infrastructure.md#pod-traffic-to-the-host) set out, fails, the runtime MUST file `packet_filter_failed` with the subject `isolation`, and MUST clear it once those rules are installed.
 Such a fault MUST state that no workloads or shell sessions will start until the rules are installed.
 When following changes to the host's IPv4 addresses into the redirection of [pod traffic to the host](infrastructure.md#pod-traffic-to-the-host) fails, the runtime MUST file `packet_filter_failed` with the subject `host_addresses`, and MUST clear it once it follows them again.
+When writing the translations of [shell sessions' mounts](infrastructure.md#mount-endpoint-addressing) fails other than while a session starts, the runtime MUST file `packet_filter_failed` with the subject `sessions`, and MUST clear it once the translations it holds are those the live sessions need.
 A `container_runtime_unavailable` fault MUST name the unavailable backend and state that no workloads will be actuated until it is reachable.
 A `resolver_failed` or `caddy_failed` fault MUST name the failure.
 
