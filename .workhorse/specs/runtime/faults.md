@@ -175,7 +175,7 @@ If the runtime cannot read whether a usable certificate is served for a hostname
 
 ## Host faults
 
-The runtime MUST file and clear the faults below against `_system`, with an empty subject.
+The runtime MUST file and clear the faults below against `_system`, with an empty subject except where this section names one.
 
 | kind | filed when | clears when | shape |
 | --- | --- | --- | --- |
@@ -209,6 +209,9 @@ The runtime MUST file `app_priorities_unreadable` and `scaling_decisions_unreada
 > The runtime holds back the affected apps while either fault is active, as [unreadable priorities](priority.md#unreadable-priorities) and [unreadable scale](autonomous.md#unreadable-scale) specify.
 
 A withheld apply MUST neither file nor clear `routes_failed`, `packet_filter_failed` or `proxy_failed`.
+
+When installing the rules that keep pod networks apart, as [pod network sources](infrastructure.md#pod-network-sources), the [forwarding policy](infrastructure.md#forwarding-policy) and [pod traffic to the host](infrastructure.md#pod-traffic-to-the-host) set out, fails, the runtime MUST file `packet_filter_failed` with the subject `isolation`, and MUST clear it once those rules are installed.
+Such a fault MUST state that no workloads or shell sessions will start until the rules are installed.
 A `container_runtime_unavailable` fault MUST name the unavailable backend and state that no workloads will be actuated until it is reachable.
 A `resolver_failed` or `caddy_failed` fault MUST name the failure.
 
