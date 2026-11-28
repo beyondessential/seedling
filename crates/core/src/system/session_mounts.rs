@@ -135,9 +135,10 @@ impl SessionMounts {
     }
 
     /// Give the session on `net_name` the translations of `mount`, built from
-    /// the backends of the last applied rules. A session that mounts nothing
-    /// is given none and is not registered. On failure the session is not
-    /// registered and holds no translations.
+    /// the backends of the last applied rules; before any rules are applied it
+    /// holds none, and gains them with the first apply. A session that mounts
+    /// nothing is given none and is not registered. On failure the session is
+    /// not registered and holds no translations.
     // spec: INFRA#mount-endpoint-addressing
     pub async fn register(
         &self,
