@@ -12,8 +12,7 @@ use ipnet::Ipv6Net;
 use nftables::{
     batch::Batch,
     expr::{
-        BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression,
-        SetItem,
+        BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, MetaKey, NamedExpression, SetItem,
     },
     schema::{FlushObject, NfCmd, NfListObject},
     stmt::{Mangle, Match, Operator, Statement},
@@ -22,12 +21,12 @@ use nftables::{
 
 use seedling_core::{
     runtime::nat64_prefix::NAT64_PREFIX_NET,
-    system::{POD_BRIDGE_PREFIX, PROXY_BRIDGE, RESOLVER_BRIDGE, resolver::resolver_addr},
+    system::{PROXY_BRIDGE, RESOLVER_BRIDGE, resolver::resolver_addr},
 };
 
 use super::nft::{
-    NFPROTO_IPV4, NFPROTO_IPV6, base_chain, match_ct_status_dnat, match_eq, match_nfproto,
-    payload_expr, prefix_expr, rule_obj, table,
+    NFPROTO_IPV4, NFPROTO_IPV6, base_chain, match_ct_status_dnat, match_eq, match_meta_eq,
+    match_nfproto, match_pod_bridge, meta, payload_expr, prefix_expr, rule_obj, table,
 };
 
 pub(super) const TABLE: &str = "seedling_isolation";
@@ -272,28 +271,12 @@ fn host_prefix_expr(host_prefix: &Ipv6Net) -> Expression<'static> {
     prefix_expr(host_prefix.network().to_string(), host_prefix.prefix_len())
 }
 
-fn meta(key: MetaKey) -> Expression<'static> {
-    Expression::Named(NamedExpression::Meta(Meta { key }))
-}
-
-fn match_meta_eq(key: MetaKey, value: &'static str) -> Statement<'static> {
-    match_eq(meta(key), Expression::String(Cow::Borrowed(value)))
-}
-
 fn match_meta_neq(key: MetaKey, value: &'static str) -> Statement<'static> {
     Statement::Match(Match {
         left: meta(key),
         right: Expression::String(Cow::Borrowed(value)),
         op: Operator::NEQ,
     })
-}
-
-/// `iifname "sdp-*"` or `oifname "sdp-*"`: any pod network's bridge.
-fn match_pod_bridge(key: MetaKey) -> Statement<'static> {
-    match_eq(
-        meta(key),
-        Expression::String(Cow::Owned(format!("{POD_BRIDGE_PREFIX}*"))),
-    )
 }
 
 /// `meta mark & <mask> == <value>`.

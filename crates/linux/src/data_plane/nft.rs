@@ -14,7 +14,10 @@ use nftables::{
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
 
-use seedling_core::system::types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule};
+use seedling_core::system::{
+    POD_BRIDGE_PREFIX, PROXY_BRIDGE,
+    types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule},
+};
 
 pub(super) const TABLE: &str = "seedling_net";
 pub(super) const CHAIN_PRE: &str = "prerouting";
@@ -133,11 +136,22 @@ pub(super) fn match_eq(
 /// Produces `meta nfproto <num>` — used to restrict inet-table rules to a
 /// single address family without splitting the table by family.
 pub(super) fn match_nfproto(proto_num: u32) -> Statement<'static> {
+    match_eq(meta(MetaKey::Nfproto), Expression::Number(proto_num))
+}
+
+pub(super) fn meta(key: MetaKey) -> Expression<'static> {
+    Expression::Named(NamedExpression::Meta(Meta { key }))
+}
+
+pub(super) fn match_meta_eq(key: MetaKey, value: &'static str) -> Statement<'static> {
+    match_eq(meta(key), Expression::String(Cow::Borrowed(value)))
+}
+
+/// `iifname "sdp-*"` or `oifname "sdp-*"`: any pod network's bridge.
+pub(super) fn match_pod_bridge(key: MetaKey) -> Statement<'static> {
     match_eq(
-        Expression::Named(NamedExpression::Meta(Meta {
-            key: MetaKey::Nfproto,
-        })),
-        Expression::Number(proto_num),
+        meta(key),
+        Expression::String(Cow::Owned(format!("{POD_BRIDGE_PREFIX}*"))),
     )
 }
 
@@ -274,8 +288,30 @@ pub(super) fn mount_rule_stmts(rule: &MountRule) -> Vec<Vec<Statement<'static>>>
     }
 }
 
-// spec: INFRA#service-translation
-pub(super) fn service_dnat_rule_stmts(rule: &ServiceDnatRule) -> Vec<Vec<Statement<'static>>> {
+/// Service translation for traffic arriving from the proxy network, for the
+/// prerouting chain.
+pub(super) fn service_dnat_prerouting_stmts(
+    rule: &ServiceDnatRule,
+) -> Vec<Vec<Statement<'static>>> {
+    // spec: INFRA#service-translation
+    // Only the proxy reaches a service by its address; a pod reaches it
+    // through its mount endpoint.
+    service_dnat_stmts(rule, &[match_meta_eq(MetaKey::Iifname, PROXY_BRIDGE)])
+}
+
+/// Service translation for traffic originating on the host, for the output
+/// chain.
+pub(super) fn service_dnat_output_stmts(rule: &ServiceDnatRule) -> Vec<Vec<Statement<'static>>> {
+    // spec: INFRA#service-translation
+    service_dnat_stmts(rule, &[])
+}
+
+/// One rule per protocol translating `rule`'s service address and port, each
+/// starting with `guard`.
+fn service_dnat_stmts(
+    rule: &ServiceDnatRule,
+    guard: &[Statement<'static>],
+) -> Vec<Vec<Statement<'static>>> {
     if rule.backends.is_empty() {
         return vec![];
     }
@@ -284,15 +320,16 @@ pub(super) fn service_dnat_rule_stmts(rule: &ServiceDnatRule) -> Vec<Vec<Stateme
     let svc_port = rule.service_port as u32;
 
     let make = |proto: &'static str| {
-        let mut stmts = vec![
+        let mut stmts = guard.to_vec();
+        stmts.extend([
             match_nfproto(NFPROTO_IPV6),
             match_eq(
                 payload_expr("ip6", "daddr"),
                 Expression::String(Cow::Owned(svc_ip.clone())),
             ),
             match_eq(payload_expr(proto, "dport"), Expression::Number(svc_port)),
-        ];
-        stmts.push(dnat_lb(&rule.backends));
+            dnat_lb(&rule.backends),
+        ]);
         stmts
     };
 

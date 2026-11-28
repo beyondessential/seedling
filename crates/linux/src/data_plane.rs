@@ -73,8 +73,10 @@ impl NftablesDataPlane {
         }
 
         for rule in &rules.service_dnat {
-            for stmts in nft::service_dnat_rule_stmts(rule) {
-                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts.clone()));
+            for stmts in nft::service_dnat_prerouting_stmts(rule) {
+                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
+            }
+            for stmts in nft::service_dnat_output_stmts(rule) {
                 batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_OUT, stmts));
             }
         }

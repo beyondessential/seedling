@@ -3,14 +3,17 @@ use std::net::{Ipv6Addr, SocketAddr};
 use ipnet::Ipv6Net;
 use serde_json::json;
 
-use seedling_core::system::types::{ForwardProto, IngressRule};
+use seedling_core::system::types::{ForwardProto, IngressRule, ServiceDnatRule};
 
 use super::{
     isolation::{
         MARK_MASK, MARK_MOUNT, MARK_POD_NAT64, forwarding_rules, isolation_batch, nat64_drop_rules,
         nat64_mark_rules, pod_source_rules, to_host_rules,
     },
-    nft::{dnat_lb, ingress_rule_stmts, loopback_masquerade_stmts, output_ingress_rule_stmts},
+    nft::{
+        dnat_lb, ingress_rule_stmts, loopback_masquerade_stmts, output_ingress_rule_stmts,
+        service_dnat_output_stmts, service_dnat_prerouting_stmts,
+    },
 };
 
 fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
@@ -493,4 +496,58 @@ fn the_isolation_table_is_replaced_whole_in_one_batch() {
             .all(|r| r["table"] == "seedling_isolation"),
         "every rule is in the isolation table"
     );
+}
+
+fn service_rule(proto: ForwardProto) -> ServiceDnatRule {
+    ServiceDnatRule {
+        service_ip: "fd5e:1234:5678:fc00::7".parse().unwrap(),
+        service_port: 5432,
+        proto,
+        backends: vec![(Ipv6Addr::new(0xfd5e, 0x1234, 0x5678, 1, 0, 0, 0, 2), 5433)],
+    }
+}
+
+fn service_translation(proto: &str) -> Vec<serde_json::Value> {
+    vec![
+        nfproto(10),
+        json!({"match": {"op": "==", "left": {"payload": {"protocol": "ip6", "field": "daddr"}}, "right": "fd5e:1234:5678:fc00::7"}}),
+        json!({"match": {"op": "==", "left": {"payload": {"protocol": proto, "field": "dport"}}, "right": 5432}}),
+        json!({"dnat": {"addr": "fd5e:1234:5678:1::2", "family": "ip6", "port": 5433}}),
+    ]
+}
+
+// spec: INFRA#service-translation
+#[test]
+fn service_traffic_arriving_from_outside_the_host_is_translated_only_from_the_proxy_network() {
+    let rules: Vec<_> = service_dnat_prerouting_stmts(&service_rule(ForwardProto::Both))
+        .iter()
+        .map(|r| rule_json(r))
+        .collect();
+    let from_proxy = |proto: &str| {
+        let mut stmts = vec![
+            json!({"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "sdl-proxy"}}),
+        ];
+        stmts.extend(service_translation(proto));
+        json!(stmts)
+    };
+    assert_eq!(rules, [from_proxy("tcp"), from_proxy("udp")]);
+}
+
+// spec: INFRA#service-translation
+#[test]
+fn service_traffic_originating_on_the_host_is_translated_from_any_interface() {
+    let rules: Vec<_> = service_dnat_output_stmts(&service_rule(ForwardProto::Tcp))
+        .iter()
+        .map(|r| rule_json(r))
+        .collect();
+    assert_eq!(rules, [json!(service_translation("tcp"))]);
+}
+
+// spec: INFRA#service-translation
+#[test]
+fn a_service_without_backends_is_not_translated() {
+    let mut rule = service_rule(ForwardProto::Tcp);
+    rule.backends.clear();
+    assert!(service_dnat_prerouting_stmts(&rule).is_empty());
+    assert!(service_dnat_output_stmts(&rule).is_empty());
 }
