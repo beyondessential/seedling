@@ -85,6 +85,10 @@ const ISOLATION_FAULT_SUBJECT: &str = "isolation";
 /// IPv4 addresses into the rules held as absolute state between applies.
 const HOST_ADDRESSES_FAULT_SUBJECT: &str = "host_addresses";
 
+/// The subject of the `packet_filter_failed` fault for shell sessions' mount
+/// translations.
+const SESSIONS_FAULT_SUBJECT: &str = "sessions";
+
 /// Enumerate hostnames from the site-ingress snapshot that need TLS this
 /// tick. A hostname is only emitted when its parent ingress is non-stale,
 /// declares a non-`None` TLS provider, *and* carries at least one
@@ -1480,6 +1484,7 @@ impl Reconciler {
                 self.clear_system_fault_for("packet_filter_failed", HOST_ADDRESSES_FAULT_SUBJECT)
             }
         }
+        self.settle_session_mounts_fault();
 
         // spec: INFRA#unavailable-backends — when the daemon came up without a
         // working container runtime / process manager, every actuation would
@@ -1829,6 +1834,7 @@ impl Reconciler {
                 let phases::NftablesBuild {
                     rules: dp_rules,
                     degraded_services_by_app,
+                    backends: rule_backends,
                     coverage: rules_coverage,
                 } = nft_build;
                 let rules_coverage = rules_coverage.and(app_coverage);
@@ -1964,6 +1970,16 @@ impl Reconciler {
                     self.reconcile_dtls_refusals(served).await;
                 }
 
+                // spec: INFRA#mount-endpoint-addressing
+                // Shell sessions' mount translations follow the backends of
+                // the rules applied, and stay on the last applied ones while
+                // an apply is withheld or fails, as pods' do.
+                if matches!(rules_res, Some(Ok(()))) {
+                    self.driver
+                        .session_mounts
+                        .follow(&*self.driver.data_plane, &self.db, Arc::new(rule_backends))
+                        .await;
+                }
                 self.settle_plane_fault("routes_failed", "apply_routes", routes_res);
                 self.settle_plane_fault("packet_filter_failed", "apply_rules", rules_res);
                 match proxy_res {
@@ -2138,6 +2154,25 @@ impl Reconciler {
     /// that have no corresponding active entry in the shell registry.
     /// This cleans up containers and their pod networks that were left behind
     /// after a seedling restart or an unclean session exit.
+    /// Settle the fault for shell sessions' mount translations from what was
+    /// last reported of them.
+    // spec: INFRA#mount-endpoint-addressing
+    // spec: FLT#host-faults
+    fn settle_session_mounts_fault(&self) {
+        match self.driver.session_mounts.failure() {
+            Some(e) => self.file_system_fault_for(
+                "packet_filter_failed",
+                SESSIONS_FAULT_SUBJECT,
+                &format!(
+                    "{e}; shell sessions' mount translations may be out of date, and the pod \
+                     network prefixes of ended sessions stay allocated, until they are written \
+                     again"
+                ),
+            ),
+            None => self.clear_system_fault_for("packet_filter_failed", SESSIONS_FAULT_SUBJECT),
+        }
+    }
+
     async fn reconcile_stray_shells(&self) {
         use crate::system::types::ContainerFilter;
 
@@ -2173,15 +2208,15 @@ impl Reconciler {
                     .container
                     .remove_container(&display_name, true)
                     .await;
-                let net_name = format!("seedling-{display_name}");
-                let _ = self.driver.container.remove_network(&net_name).await;
-                let released = net_name.clone();
-                if let Err(e) = self
-                    .db
-                    .call(move |db| crate::runtime::pod_networks::release(db, &released))
-                {
-                    tracing::warn!(%net_name, "cannot free a pod network prefix: {e}");
-                }
+                self.driver
+                    .session_mounts
+                    .remove_session_network(
+                        &*self.driver.container,
+                        &*self.driver.data_plane,
+                        &self.db,
+                        &format!("seedling-{display_name}"),
+                    )
+                    .await;
             }
         }
     }
@@ -4007,6 +4042,55 @@ mod tests {
         plane.fail_host_addresses(None);
         oi.block_on(reconciler.tick());
         assert!(!filed(&oi), "cleared once the addresses are followed again");
+    }
+
+    // spec: INFRA#mount-endpoint-addressing
+    // spec: FLT#host-faults
+    #[test]
+    fn a_failure_to_write_shell_session_mounts_is_filed_while_it_lasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let container = Arc::new(crate::system::stub::StubContainerRuntime::new(
+            dir.path().join("vols"),
+        ));
+        let process = Arc::new(crate::system::stub::StubProcessManager::new(Arc::clone(
+            &container,
+        )));
+        let backends = crate::system::backends::Backends::working(container, process);
+        let plane = Arc::new(crate::system::stub::StubDataPlane::default());
+        let mut system = crate::system::System::for_tests(
+            backends,
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        );
+        system.data_plane = Arc::clone(&plane) as _;
+        let system = Arc::new(system);
+        let oi = crate::oi::test_support::TestOi::with_driver(Arc::clone(&system));
+        let mut reconciler = test_reconciler(&oi);
+        let filed = |oi: &crate::oi::test_support::TestOi| {
+            active_kinds(oi, "_system").contains(&(
+                "packet_filter_failed".to_owned(),
+                SESSIONS_FAULT_SUBJECT.to_owned(),
+            ))
+        };
+
+        plane.refuse_sessions(true);
+        oi.block_on(system.session_mounts.reset(&*plane));
+        oi.block_on(reconciler.tick());
+        assert!(filed(&oi), "{:?}", active_kinds(&oi, "_system"));
+        assert!(
+            !active_kinds(&oi, "_system")
+                .contains(&("packet_filter_failed".to_owned(), String::new())),
+            "the rule apply's own fault is not filed for it"
+        );
+
+        plane.refuse_sessions(false);
+        oi.block_on(system.session_mounts.follow(
+            &*plane,
+            &oi.state.db,
+            Arc::new(rules::BackendView::default()),
+        ));
+        oi.block_on(reconciler.tick());
+        assert!(!filed(&oi), "cleared once the translations are replaced");
     }
 
     // spec: FLT#filing-and-clearing

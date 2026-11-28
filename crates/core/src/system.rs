@@ -27,6 +27,7 @@ pub mod breadcrumb;
 pub(crate) mod caddy;
 pub mod journal;
 pub mod resolver;
+pub mod session_mounts;
 pub mod startup_cleanup;
 pub mod stub;
 pub(crate) mod unavailable;
@@ -375,6 +376,8 @@ pub struct System {
     /// Whether the isolation rules are installed. While they are not, no
     /// workload container and no shell session starts.
     pub isolation: isolation::Isolation,
+    /// The mount translations of live shell sessions.
+    pub session_mounts: session_mounts::SessionMounts,
 }
 
 impl System {
@@ -472,6 +475,12 @@ impl System {
         // workload until an install succeeds.
         let isolation = isolation::Isolation::default();
         let _ = isolation.ensure(&*platform.data_plane).await;
+        // spec: INFRA#mount-endpoint-addressing
+        // No shell session outlives the runtime, so none still needs the
+        // translations held for it. A failed removal is reported until a later
+        // write replaces them.
+        let session_mounts = session_mounts::SessionMounts::default();
+        session_mounts.reset(&*platform.data_plane).await;
 
         // spec: INFRA#unavailable-backends — bring up the container runtime
         // and process manager best-effort. If either connection fails
@@ -544,6 +553,7 @@ impl System {
             translator: platform.translator,
             backends,
             isolation,
+            session_mounts,
         });
         Ok((system, caddy_admin_client))
     }
@@ -595,6 +605,7 @@ impl System {
             translator: Arc::new(stub::StubTranslator),
             backends,
             isolation: isolation::Isolation::default(),
+            session_mounts: session_mounts::SessionMounts::default(),
         });
         Ok((system, caddy_admin_client))
     }
@@ -625,6 +636,7 @@ impl System {
             translator: Arc::new(stub::StubTranslator),
             backends,
             isolation: isolation::Isolation::default(),
+            session_mounts: session_mounts::SessionMounts::default(),
         });
         Ok((system, caddy_admin_client))
     }
@@ -651,6 +663,7 @@ impl System {
             translator: Arc::new(stub::StubTranslator),
             backends,
             isolation: isolation::Isolation::default(),
+            session_mounts: session_mounts::SessionMounts::default(),
         }
     }
 }

@@ -206,6 +206,9 @@ pub(super) fn classify_site_service_endpoints(
 pub(super) struct NftablesBuild {
     pub rules: DataPlaneRules,
     pub degraded_services_by_app: HashMap<AppName, std::collections::BTreeSet<String>>,
+    /// The backends `rules` route to, from which shell sessions' mount
+    /// translations are built once `rules` are applied.
+    pub backends: rules::BackendView,
     /// `Partial` when an app's rules could not be built, or the site
     /// ingresses, or the site services and external service mappings, could
     /// not be read. Their rules are absent from `rules`, which is applied
@@ -276,6 +279,7 @@ pub(super) fn compute_nftables_rules(
             service_dnat: all_service_dnat,
         },
         degraded_services_by_app: degraded_by_app,
+        backends,
         // spec: SITE#unreadable-site-ingresses
         // spec: SITE#unreadable-site-services
         // The ingress rules are the proxy build's, which is partial when an

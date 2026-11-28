@@ -28,7 +28,7 @@ use crate::{
 };
 
 /// Per-app map from `(service_name, service_port, proto)` to `Vec<(pod_ip, pod_port)>`.
-pub(super) type AppBackendMap = HashMap<(String, u16, ForwardProto), Vec<(Ipv6Addr, u16)>>;
+pub(crate) type AppBackendMap = HashMap<(String, u16, ForwardProto), Vec<(Ipv6Addr, u16)>>;
 
 /// Pre-compute the per-app backend map for every app in the tick so that
 /// external-service bindings whose mapping target is a different app can look
@@ -353,7 +353,7 @@ impl BackendView {
     }
 
     // spec: SITE#endpoint-addressing
-    fn new(
+    pub(crate) fn new(
         by_app: HashMap<AppName, AppBackendMap>,
         snapshot: Option<&ExternalServiceSnapshot>,
         resolve_ctx: &ResolveCtx<'_>,
