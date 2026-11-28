@@ -3,7 +3,9 @@
 //!
 //! Until they are installed, no workload container and no shell session may
 //! start: a container on a pod network without them could reach every other
-//! pod and the host.
+//! pod and the host. Installing them also removes the mount translations held
+//! for shell sessions of an earlier run, which could otherwise match a prefix
+//! given to a new pod and grant it that session's mounts.
 
 use std::time::{Duration, Instant};
 
@@ -60,8 +62,10 @@ impl Default for Isolation {
 }
 
 impl Isolation {
-    /// Install the rules through `data_plane` unless they are installed, or
-    /// the delay since the last failed install has yet to pass.
+    /// Install the rules through `data_plane`, and remove every shell
+    /// session's mount translations, unless that is done or the delay since
+    /// the last failed install has yet to pass. No session can register
+    /// translations before this succeeds, so none of those removed is live.
     ///
     /// Each failed install doubles the delay up to a fixed maximum, at which
     /// it stays, so installing goes on for as long as it fails.
@@ -80,7 +84,14 @@ impl Isolation {
                 *delay
             }
         };
-        match data_plane.ensure_isolation().await {
+        let installed = match data_plane.ensure_isolation().await {
+            Ok(()) => data_plane.reset_sessions().await.map_err(|e| {
+                format!("removing the mount translations of earlier shell sessions failed: {e}")
+                    .into()
+            }),
+            Err(e) => Err(e),
+        };
+        match installed {
             Ok(()) => {
                 *standing = Standing::Installed;
                 tracing::info!("the isolation rules are installed");

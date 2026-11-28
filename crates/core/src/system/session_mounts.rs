@@ -54,17 +54,13 @@ struct State {
     /// translations are gone, so no other pod network is given a prefix that
     /// stale translations still match.
     withdrawn: BTreeSet<String>,
-    /// Whether the data plane may hold translations of sessions from before
-    /// the runtime started, because removing them failed.
-    stale_at_startup: bool,
     /// The last failure to write the translations.
     last_failure: Option<String>,
 }
 
 impl State {
     fn failure(&self) -> Option<String> {
-        let failing = self.stale_at_startup
-            || !self.withdrawn.is_empty()
+        let failing = !self.withdrawn.is_empty()
             || self.live.values().any(|live| live.behind);
         failing.then(|| {
             self.last_failure
@@ -84,7 +80,6 @@ impl State {
     /// earlier failed write left behind remains, so the prefixes held back for
     /// withdrawn sessions are freed.
     fn replaced(&mut self, db: &DbHandle) {
-        self.stale_at_startup = false;
         for net_name in std::mem::take(&mut self.withdrawn) {
             release_prefix(db, &net_name);
         }
@@ -115,23 +110,6 @@ impl SessionMounts {
 
     fn settle(&self, state: &State) {
         *self.failure.lock() = state.failure();
-    }
-
-    /// Remove every session's translations, as at startup, when no session is
-    /// live. A failure is reported until a later write replaces them.
-    pub(crate) async fn reset(&self, data_plane: &dyn DataPlane) {
-        let mut state = self.state.lock().await;
-        match data_plane.reset_sessions().await {
-            Ok(()) => state.stale_at_startup = false,
-            Err(e) => {
-                state.stale_at_startup = true;
-                state.failed(
-                    "removing the mount translations of earlier shell sessions",
-                    &e,
-                );
-            }
-        }
-        self.settle(&state);
     }
 
     /// Give the session on `net_name` the translations of `mount`, built from
@@ -259,7 +237,7 @@ impl SessionMounts {
                 }
             }
         }
-        if state.stale_at_startup || !state.withdrawn.is_empty() {
+        if !state.withdrawn.is_empty() {
             let rewritten = match state.live.iter().next() {
                 Some((net_name, live)) => data_plane.set_session_mounts(net_name, &live.held).await,
                 None => data_plane.reset_sessions().await,
@@ -559,23 +537,5 @@ pub(crate) mod tests {
             [vec![("fd5e:ed11:9000:4002::2".parse().unwrap(), 5432)]]
         );
         assert_eq!(mounts.failure(), None);
-    }
-
-    // spec: INFRA#mount-endpoint-addressing
-    #[tokio::test]
-    async fn a_failed_reset_is_reported_until_the_translations_are_replaced() {
-        let plane = StubDataPlane::default();
-        let db = DbHandle::open_in_memory().unwrap();
-        let mounts = SessionMounts::default();
-        plane.refuse_sessions(true);
-        mounts.reset(&plane).await;
-        assert!(mounts.failure().is_some());
-
-        plane.refuse_sessions(false);
-        mounts
-            .register(&plane, &db, NET, session(".mount(db.port(5432))"))
-            .await
-            .unwrap();
-        assert_eq!(mounts.failure(), None, "the registration replaced them");
     }
 }

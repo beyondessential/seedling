@@ -475,12 +475,7 @@ impl System {
         // workload until an install succeeds.
         let isolation = isolation::Isolation::default();
         let _ = isolation.ensure(&*platform.data_plane).await;
-        // spec: INFRA#mount-endpoint-addressing
-        // No shell session outlives the runtime, so none still needs the
-        // translations held for it. A failed removal is reported until a later
-        // write replaces them.
         let session_mounts = session_mounts::SessionMounts::default();
-        session_mounts.reset(&*platform.data_plane).await;
 
         // spec: INFRA#unavailable-backends — bring up the container runtime
         // and process manager best-effort. If either connection fails
