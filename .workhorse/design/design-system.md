@@ -207,4 +207,4 @@ Reuse the existing meaning for an icon before choosing a new one:
 ## Dark mode
 
 Everything above that reads from the theme follows the operating system into dark mode; check a new surface in both.
-Two known exceptions: the read-only script viewer on a template's page is always light, and the log viewers ask for a `grey.950` background that the palette does not define.
+Code views pass the theme's mode to CodeMirror (`theme={mode}`) so they follow it too.
