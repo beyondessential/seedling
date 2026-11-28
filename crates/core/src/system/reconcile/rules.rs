@@ -4,7 +4,7 @@ use std::{
 };
 
 use ipnet::Ipv6Net;
-use seedling_protocol::names::{AppName, ExternalServiceName, ServiceRef};
+use seedling_protocol::names::{AppName, ExternalServiceName, ServiceRef, SiteServiceName};
 
 use super::RunningPod;
 use crate::{
@@ -33,7 +33,7 @@ pub(super) type AppBackendMap = HashMap<(String, u16, ForwardProto), Vec<(Ipv6Ad
 /// Pre-compute the per-app backend map for every app in the tick so that
 /// external-service bindings whose mapping target is a different app can look
 /// up that app's backends.
-pub(super) fn collect_backends_by_app(
+fn collect_backends_by_app(
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
 ) -> HashMap<AppName, AppBackendMap> {
     running_pods_by_app
@@ -227,17 +227,15 @@ pub(super) fn build_service_dnat_rules(
     registry: &dyn InstanceRegistry,
     running_pods: &[RunningPod],
     app_name: &AppName,
-    snapshot: Option<&ExternalServiceSnapshot>,
-    backends_by_app: &HashMap<AppName, AppBackendMap>,
-    resolve_ctx: &ResolveCtx<'_>,
+    backends: &BackendView,
 ) -> Result<ServiceDnatBuild, RegistryError> {
     let ServiceBackends {
-        filtered: backends,
+        filtered: own_backends,
         degraded_services,
     } = collect_service_backends(running_pods);
     let mut rules = Vec::new();
 
-    for ((svc_name, svc_port, proto), backend_list) in &backends {
+    for ((svc_name, svc_port, proto), backend_list) in &own_backends {
         let svc_instance =
             registry.get_or_create_singleton(app_name, ResourceKind::Service, Some(svc_name))?;
         let service_ip = registry.service_address(node_prefix, &svc_instance)?;
@@ -260,20 +258,10 @@ pub(super) fn build_service_dnat_rules(
     // Without the mappings and site services an external service's rules are
     // unknown, and the caller withholds the rules.
     for (ext_name, svc_port, proto) in collect_external_mounts(running_pods) {
-        let Some(snapshot) = snapshot else {
+        let Some(target) = backends.mappings.get(&(app_name.clone(), ext_name.clone())) else {
             continue;
         };
-        let Some(target) = snapshot.mappings.get(&(app_name.clone(), ext_name.clone())) else {
-            continue;
-        };
-        let resolved_backends = resolve_external_backends(
-            target,
-            svc_port,
-            proto,
-            snapshot,
-            backends_by_app,
-            resolve_ctx,
-        );
+        let resolved_backends = backends.external_backends(target, svc_port, proto);
         let svc_instance = registry.get_or_create_singleton(
             app_name,
             ResourceKind::ExternalService,
@@ -328,49 +316,146 @@ fn collect_external_mounts(
     out
 }
 
-/// Turn a mapping target into the `(backend_ip, backend_port)` list that DNAT
-/// should round-robin over. Empty when the target is offline or no endpoint
-/// matches the requested `(service_port, protocol)`; the DNAT rule is still
-/// installed (the empty backend list blackholes traffic, surfacing the
-/// misconfiguration as a connection failure rather than a silent drop).
-// spec: SITE#endpoint-addressing
-pub(super) fn resolve_external_backends(
-    target: &ServiceRef,
-    svc_port: u16,
-    proto: ForwardProto,
-    snapshot: &ExternalServiceSnapshot,
-    backends_by_app: &HashMap<AppName, AppBackendMap>,
-    resolve_ctx: &ResolveCtx<'_>,
-) -> Vec<(Ipv6Addr, u16)> {
-    match target {
-        ServiceRef::App {
-            app: target_app,
-            service: target_svc,
-        } => backends_by_app
-            .get(target_app)
-            .and_then(|m| m.get(&(target_svc.as_str().to_owned(), svc_port, proto)))
-            .cloned()
-            .unwrap_or_default(),
-        ServiceRef::Site { name: site_name } => snapshot
+/// The backends translations route to, as one rule build sees them: each
+/// app's routing pools, the external service mappings, and each site
+/// service's endpoints resolved to addresses.
+///
+/// The reconciler keeps the view of its last applied rules, from which a shell
+/// session's mount translations are built and rebuilt.
+#[derive(Debug, Default)]
+pub struct BackendView {
+    by_app: HashMap<AppName, AppBackendMap>,
+    mappings: HashMap<(AppName, ExternalServiceName), ServiceRef>,
+    site_endpoints: HashMap<SiteServiceName, Vec<ResolvedEndpoint>>,
+}
+
+/// A site service endpoint and the addresses it resolved to.
+#[derive(Debug)]
+struct ResolvedEndpoint {
+    service_port: u16,
+    protocol: SiteServiceProtocol,
+    addrs: Vec<(Ipv6Addr, u16)>,
+}
+
+impl BackendView {
+    /// The view of the running pods' backends, and of the external services
+    /// `snapshot` maps. Without a snapshot no external service has backends.
+    pub(super) fn collect(
+        running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
+        snapshot: Option<&ExternalServiceSnapshot>,
+        resolve_ctx: &ResolveCtx<'_>,
+    ) -> Self {
+        Self::new(
+            collect_backends_by_app(running_pods_by_app),
+            snapshot,
+            resolve_ctx,
+        )
+    }
+
+    // spec: SITE#endpoint-addressing
+    fn new(
+        by_app: HashMap<AppName, AppBackendMap>,
+        snapshot: Option<&ExternalServiceSnapshot>,
+        resolve_ctx: &ResolveCtx<'_>,
+    ) -> Self {
+        let Some(snapshot) = snapshot else {
+            return Self {
+                by_app,
+                ..Self::default()
+            };
+        };
+        let site_endpoints = snapshot
             .site_endpoints
-            .get(site_name)
-            .map(|eps| {
-                let mut out: Vec<(Ipv6Addr, u16)> = Vec::new();
-                for ep in eps {
-                    if ep.service_port != svc_port || !protocols_match(ep.protocol, proto) {
-                        continue;
-                    }
-                    if let ResolveOutcome::Routable(addrs) =
-                        resolve_endpoint(&ep.remote_host, resolve_ctx)
-                    {
-                        for addr in addrs {
-                            out.push((addr, ep.remote_port));
-                        }
-                    }
-                }
-                out
+            .iter()
+            .map(|(name, endpoints)| {
+                let resolved = endpoints
+                    .iter()
+                    .map(|ep| ResolvedEndpoint {
+                        service_port: ep.service_port,
+                        protocol: ep.protocol,
+                        addrs: match resolve_endpoint(&ep.remote_host, resolve_ctx) {
+                            ResolveOutcome::Routable(addrs) => addrs
+                                .into_iter()
+                                .map(|addr| (addr, ep.remote_port))
+                                .collect(),
+                            _ => Vec::new(),
+                        },
+                    })
+                    .collect();
+                (name.clone(), resolved)
             })
-            .unwrap_or_default(),
+            .collect();
+        Self {
+            by_app,
+            mappings: snapshot.mappings.clone(),
+            site_endpoints,
+        }
+    }
+
+    /// The backends of `app`'s mount of `mount` over `proto`.
+    fn mount_backends(
+        &self,
+        app: &AppName,
+        mount: &ServicePort,
+        proto: ForwardProto,
+    ) -> Vec<(Ipv6Addr, u16)> {
+        match &mount.service {
+            BoundService::App(svc) => self
+                .by_app
+                .get(app)
+                .and_then(|m| m.get(&(svc.name.as_str().to_owned(), mount.port.get(), proto)))
+                .cloned()
+                .unwrap_or_default(),
+            // spec: SVC#external-services
+            // spec: SITE#unreadable-site-services — unknown without the
+            // mappings, and the caller withholds the rules.
+            BoundService::External(ext) => self
+                .mappings
+                .get(&(
+                    app.clone(),
+                    ExternalServiceName::new_unchecked(ext.name.as_str().to_owned()),
+                ))
+                .map(|target| self.external_backends(target, mount.port.get(), proto))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Turn a mapping target into the `(backend_ip, backend_port)` list that
+    /// DNAT should round-robin over. Empty when the target is offline or no
+    /// endpoint matches the requested `(service_port, protocol)`; the DNAT
+    /// rule is still installed (the empty backend list blackholes traffic,
+    /// surfacing the misconfiguration as a connection failure rather than a
+    /// silent drop).
+    // spec: SITE#endpoint-addressing
+    fn external_backends(
+        &self,
+        target: &ServiceRef,
+        svc_port: u16,
+        proto: ForwardProto,
+    ) -> Vec<(Ipv6Addr, u16)> {
+        match target {
+            ServiceRef::App {
+                app: target_app,
+                service: target_svc,
+            } => self
+                .by_app
+                .get(target_app)
+                .and_then(|m| m.get(&(target_svc.as_str().to_owned(), svc_port, proto)))
+                .cloned()
+                .unwrap_or_default(),
+            ServiceRef::Site { name: site_name } => self
+                .site_endpoints
+                .get(site_name)
+                .map(|eps| {
+                    eps.iter()
+                        .filter(|ep| {
+                            ep.service_port == svc_port && protocols_match(ep.protocol, proto)
+                        })
+                        .flat_map(|ep| ep.addrs.iter().copied())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
     }
 }
 
@@ -388,77 +473,52 @@ fn protocols_match(site_proto: SiteServiceProtocol, fwd_proto: ForwardProto) -> 
     )
 }
 
-// spec: INFRA#mount-endpoint-addressing
+/// The mount translations of every running pod of `app_name`.
 pub(super) fn build_mount_rules(
     running_pods: &[RunningPod],
     app_name: &AppName,
-    snapshot: Option<&ExternalServiceSnapshot>,
-    backends_by_app: &HashMap<AppName, AppBackendMap>,
-    resolve_ctx: &ResolveCtx<'_>,
+    backends: &BackendView,
 ) -> Vec<MountRule> {
-    let backend_map = collect_service_backends(running_pods).filtered;
+    running_pods
+        .iter()
+        .flat_map(|pod| mount_rules(backends, app_name, pod.pod_prefix, &pod_service_mounts(pod)))
+        .collect()
+}
+
+/// The translations for one pod network, of `app`, mounting `mounts`: a pod's
+/// or a shell session's.
+// spec: INFRA#mount-endpoint-addressing
+pub fn mount_rules(
+    backends: &BackendView,
+    app: &AppName,
+    pod_prefix: Ipv6Net,
+    mounts: &[ServicePort],
+) -> Vec<MountRule> {
+    let mount_addr = crate::system::translate::proxy::node_mount_addr(&pod_prefix);
     let mut rules = Vec::new();
-
-    for pod in running_pods {
-        let service_mounts = pod_service_mounts(pod);
-        if service_mounts.is_empty() {
-            continue;
-        }
-
-        let mount_addr = crate::system::translate::proxy::node_mount_addr(&pod.pod_prefix);
-
-        for sp in &service_mounts {
-            // Emit a mount rule for each protocol that has backends for this
-            // (service, port) pair.  Most mounts are TCP but UDP is valid too.
-            for proto in [ForwardProto::Tcp, ForwardProto::Udp] {
-                let svc_backends = match &sp.service {
-                    BoundService::App(svc) => backend_map
-                        .get(&(svc.name.as_str().to_owned(), sp.port.get(), proto))
-                        .cloned()
-                        .unwrap_or_default(),
-                    // spec: SVC#external-services
-                    // spec: SITE#unreadable-site-services — unknown without
-                    // the snapshot, and the caller withholds the rules.
-                    BoundService::External(ext) => snapshot
-                        .and_then(|snapshot| {
-                            let target = snapshot.mappings.get(&(
-                                app_name.clone(),
-                                ExternalServiceName::new_unchecked(ext.name.as_str().to_owned()),
-                            ))?;
-                            Some((snapshot, target))
-                        })
-                        .map(|(snapshot, target)| {
-                            resolve_external_backends(
-                                target,
-                                sp.port.get(),
-                                proto,
-                                snapshot,
-                                backends_by_app,
-                                resolve_ctx,
-                            )
-                        })
-                        .unwrap_or_default(),
-                };
-                if svc_backends.is_empty() {
-                    continue;
-                }
-                rules.push(MountRule {
-                    pod_prefix: pod.pod_prefix,
-                    mount_addr,
-                    mount_port: sp.port.get(),
-                    backends: svc_backends,
-                    proto,
-                });
+    for sp in mounts {
+        // Emit a mount rule for each protocol that has backends for this
+        // (service, port) pair.  Most mounts are TCP but UDP is valid too.
+        for proto in [ForwardProto::Tcp, ForwardProto::Udp] {
+            let svc_backends = backends.mount_backends(app, sp, proto);
+            if svc_backends.is_empty() {
+                continue;
             }
+            rules.push(MountRule {
+                pod_prefix,
+                mount_addr,
+                mount_port: sp.port.get(),
+                backends: svc_backends,
+                proto,
+            });
         }
     }
-
     rules
 }
 
 #[cfg(test)]
 mod tests {
-    use seedling_protocol::names::{AppName, AppServiceName, SiteServiceName};
+    use seedling_protocol::names::{AppName, AppServiceName};
 
     use super::*;
     use crate::{
@@ -540,7 +600,8 @@ mod tests {
         let resolver = empty_resolver();
         let pods = [pod];
 
-        let mounts = build_mount_rules(&pods, &app, Some(&snap), &HashMap::new(), &ctx(&resolver));
+        let view = BackendView::new(HashMap::new(), Some(&snap), &ctx(&resolver));
+        let mounts = build_mount_rules(&pods, &app, &view);
         assert_eq!(mounts.len(), 1);
         assert_eq!(mounts[0].mount_port, 5432);
         assert_eq!(mounts[0].backends, vec![(ipv6("fd5e::1"), 6432)]);
@@ -551,9 +612,7 @@ mod tests {
             &registry,
             &pods,
             &app,
-            Some(&snap),
-            &HashMap::new(),
-            &ctx(&resolver),
+            &view,
         )
         .unwrap();
         let tcp = dnat
@@ -593,14 +652,8 @@ mod tests {
         ];
         let snap = snapshot_with_site(site.as_str(), endpoints);
 
-        let backends = resolve_external_backends(
-            &ServiceRef::Site { name: site },
-            3000,
-            ForwardProto::Tcp,
-            &snap,
-            &HashMap::new(),
-            &ctx(&empty_resolver()),
-        );
+        let backends = BackendView::new(HashMap::new(), Some(&snap), &ctx(&empty_resolver()))
+            .external_backends(&ServiceRef::Site { name: site }, 3000, ForwardProto::Tcp);
         let mut sorted = backends;
         sorted.sort();
         assert_eq!(
@@ -631,14 +684,8 @@ mod tests {
         ];
         let snap = snapshot_with_site(site.as_str(), endpoints);
 
-        let backends = resolve_external_backends(
-            &ServiceRef::Site { name: site },
-            80,
-            ForwardProto::Tcp,
-            &snap,
-            &HashMap::new(),
-            &ctx(&empty_resolver()),
-        );
+        let backends = BackendView::new(HashMap::new(), Some(&snap), &ctx(&empty_resolver()))
+            .external_backends(&ServiceRef::Site { name: site }, 80, ForwardProto::Tcp);
         assert_eq!(backends, vec![(ipv6("fd5e::42"), 80)]);
     }
 
@@ -656,17 +703,15 @@ mod tests {
         backends.insert(AppName::new("other-app").unwrap(), inner);
 
         let snap = ExternalServiceSnapshot::default();
-        let resolved = resolve_external_backends(
-            &ServiceRef::App {
-                app: AppName::new("other-app").unwrap(),
-                service: AppServiceName::new("api").unwrap(),
-            },
-            8080,
-            ForwardProto::Tcp,
-            &snap,
-            &backends,
-            &ctx(&empty_resolver()),
-        );
+        let resolved = BackendView::new(backends.clone(), Some(&snap), &ctx(&empty_resolver()))
+            .external_backends(
+                &ServiceRef::App {
+                    app: AppName::new("other-app").unwrap(),
+                    service: AppServiceName::new("api").unwrap(),
+                },
+                8080,
+                ForwardProto::Tcp,
+            );
         assert_eq!(
             resolved,
             vec![(ipv6("fd5e::aa"), 9000), (ipv6("fd5e::bb"), 9000)]
@@ -687,14 +732,12 @@ mod tests {
         }];
         let snap = snapshot_with_site(site.as_str(), endpoints);
 
-        let backends = resolve_external_backends(
-            &ServiceRef::Site { name: site.clone() },
-            5432,
-            ForwardProto::Tcp,
-            &snap,
-            &HashMap::new(),
-            &ctx(&empty_resolver()),
-        );
+        let backends = BackendView::new(HashMap::new(), Some(&snap), &ctx(&empty_resolver()))
+            .external_backends(
+                &ServiceRef::Site { name: site.clone() },
+                5432,
+                ForwardProto::Tcp,
+            );
         assert_eq!(backends, vec![(ipv6("64:ff9b::c000:20a"), 5432)]);
 
         // Same input, NAT64 disabled, returns no backends.
@@ -704,13 +747,10 @@ mod tests {
             has_ipv6_egress: true,
             resolver: &resolver,
         };
-        let backends = resolve_external_backends(
+        let backends = BackendView::new(HashMap::new(), Some(&snap), &no_nat64).external_backends(
             &ServiceRef::Site { name: site },
             5432,
             ForwardProto::Tcp,
-            &snap,
-            &HashMap::new(),
-            &no_nat64,
         );
         assert!(backends.is_empty());
     }
@@ -718,16 +758,14 @@ mod tests {
     #[test]
     fn resolve_returns_empty_when_target_missing() {
         let snap = ExternalServiceSnapshot::default();
-        let empty = resolve_external_backends(
-            &ServiceRef::Site {
-                name: SiteServiceName::new("ghost").unwrap(),
-            },
-            1234,
-            ForwardProto::Tcp,
-            &snap,
-            &HashMap::new(),
-            &ctx(&empty_resolver()),
-        );
+        let empty = BackendView::new(HashMap::new(), Some(&snap), &ctx(&empty_resolver()))
+            .external_backends(
+                &ServiceRef::Site {
+                    name: SiteServiceName::new("ghost").unwrap(),
+                },
+                1234,
+                ForwardProto::Tcp,
+            );
         assert!(empty.is_empty());
     }
 

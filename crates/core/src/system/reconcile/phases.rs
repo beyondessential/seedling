@@ -228,7 +228,7 @@ pub(super) fn compute_nftables_rules(
     resolve_ctx: &ResolveCtx<'_>,
     proxy_build: &ProxyBuildResult,
 ) -> NftablesBuild {
-    let backends_by_app = rules::collect_backends_by_app(running_pods_by_app);
+    let backends = rules::BackendView::collect(running_pods_by_app, ext_snapshot, resolve_ctx);
 
     let mut all_ingress = Vec::new();
     let mut all_mounts = Vec::new();
@@ -243,22 +243,9 @@ pub(super) fn compute_nftables_rules(
             .get(&app.name)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        all_mounts.extend(rules::build_mount_rules(
-            running,
-            &app.name,
-            ext_snapshot,
-            &backends_by_app,
-            resolve_ctx,
-        ));
-        match rules::build_service_dnat_rules(
-            node_prefix,
-            registry,
-            running,
-            &app.name,
-            ext_snapshot,
-            &backends_by_app,
-            resolve_ctx,
-        ) {
+        all_mounts.extend(rules::build_mount_rules(running, &app.name, &backends));
+        match rules::build_service_dnat_rules(node_prefix, registry, running, &app.name, &backends)
+        {
             Ok(dnat) => {
                 all_service_dnat.extend(dnat.rules);
                 if !dnat.degraded_services.is_empty() {
