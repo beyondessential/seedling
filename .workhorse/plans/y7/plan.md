@@ -95,13 +95,14 @@ The design:
 
 ### Translation table
 
-- [ ] `crates/linux/src/data_plane.rs` / `nft.rs`: drop the forward chain and its rule builders (`ct_state_established_related_accept`, `ct_status_dnat_accept`, `seedling_forward_stmts`, `drop_unsolicited_inbound_stmts`) from the translation table; they move to the isolation table.
-- [ ] `service_dnat_rule_stmts`: separate builders for the prerouting copy (gains `iifname "sdl-proxy"`) and the output copy (unchanged). Cite `INFRA#service-translation`.
-- [ ] IPv4 ingress redirection becomes unconditional. The proxy's IPv4 address is required: it comes from the proxy network's own IPv4 subnet, which exists whatever the host's uplink, IPv6-only hosts included. The readiness wait in `caddy/startup.rs` waits for both addresses, `EnsuredCaddy` carries both, and a proxy still missing one at the deadline fails startup with `caddy_failed`. `caddy_v4` stops being an `Option` through `phases.rs`, `rules.rs` and `types.rs`.
-- [ ] Named set `host_v4_nat64` in the translation table: the host's IPv4 addresses in `64:ff9b::` form, plus the proxy and resolver IPv4 subnets. Each apply writes the current addresses, read through rtnetlink.
-- [ ] Ingress redirection gains, per ingress port and protocol, a rule for traffic from `sdp-*` to `@host_v4_nat64` at that port, rewriting it to the proxy's IPv6 address.
-- [ ] `NftablesDataPlane` subscribes to rtnetlink IPv4 address events and adds or removes set elements. The listener and `apply_rules` share one lock, so an event can't land in a table that's about to be replaced. The listener loop backs off and resubscribes on error, and records the failure in the same fault.
-- [ ] Unit tests for the proxy-only service translation, the NAT64 ingress rules and the set contents.
+- [x] `crates/linux/src/data_plane.rs` / `nft.rs`: drop the forward chain and its rule builders (`ct_state_established_related_accept`, `ct_status_dnat_accept`, `seedling_forward_stmts`, `drop_unsolicited_inbound_stmts`) from the translation table; they move to the isolation table.
+- [x] `service_dnat_rule_stmts`: separate builders for the prerouting copy (gains `iifname "sdl-proxy"`) and the output copy (unchanged). Cite `INFRA#service-translation`.
+- [x] IPv4 ingress redirection becomes unconditional. The proxy's IPv4 address is required: it comes from the proxy network's own IPv4 subnet, which exists whatever the host's uplink, IPv6-only hosts included. The readiness wait in `caddy/startup.rs` waits for both addresses, `EnsuredCaddy` carries both, and a proxy still missing one at the deadline fails startup with `caddy_failed`. `caddy_v4` stops being an `Option` through `phases.rs`, `rules.rs` and `types.rs`.
+- [x] Named set `host_v4_nat64` in the translation table: the host's IPv4 addresses in `64:ff9b::` form, plus the proxy and resolver IPv4 subnets. Each apply writes the current addresses, read through rtnetlink.
+- [x] Ingress redirection gains, per ingress port and protocol, a rule for traffic from `sdp-*` to `@host_v4_nat64` at that port, rewriting it to the proxy's IPv6 address.
+- [x] `NftablesDataPlane` subscribes to rtnetlink IPv4 address events and adds or removes set elements. The listener and `apply_rules` share one lock, so an event can't land in a table that's about to be replaced. The listener loop backs off and resubscribes on error, and records the failure in the same fault.
+- [x] Unit tests for the proxy-only service translation, the NAT64 ingress rules and the set contents.
+- The address listener reports through `DataPlane::host_addresses_failure()`, which the reconciler files as `packet_filter_failed` with subject `host_addresses` (faults spec amended). Addresses are tracked per interface; addresses inside the proxy and resolver subnets are left to their `/120`. Each apply flushes the set itself, since `flush table` keeps set elements.
 
 ### Shell session mounts
 
