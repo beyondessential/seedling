@@ -1,0 +1,69 @@
+#!/bin/sh
+# Start the daemon on in-memory backend stubs (no podman, systemd, nftables,
+# Caddy or NAT64, so no root), install the demo apps through the CLI, then run
+# the web server in the foreground on RIG_PORT with authentication off.
+. "$RIG_RECIPE_DIR/lib.sh"
+
+work="$RIG_DATA_DIR/leases/$RIG_LEASE"
+data="$work/daemon"
+state="$work/state"
+mkdir -p "$data" "$state/seedling"
+
+free_port() {
+    node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'
+}
+oi_port="$(free_port)"
+wt_port="$(free_port)"
+
+key="$state/seedling/client.key"
+fingerprint="$("$BIN/seedling-ctl" --key-file "$key" client fingerprint | awk '{print $1; exit}')"
+echo "$fingerprint rig" > "$data/authorized_keys"
+
+ctl="$work/seedling-ctl"
+cat > "$ctl" <<CTL
+#!/bin/sh
+exec "$BIN/seedling-ctl" --endpoint "127.0.0.1:$oi_port" --trust-any --key-file "$key" "\$@"
+CTL
+chmod +x "$ctl"
+
+SEEDLING_LOG="${SEEDLING_LOG:-seedling=info,warn}" \
+    "$BIN/seedling" --stub-backends --without-btrfs \
+    --data-dir "$data" --listen "127.0.0.1:$oi_port" \
+    --audit-log "$data/audit.log" > "$work/daemon.log" 2>&1 &
+daemon_pid=$!
+
+i=0
+until grep -q "seedling ready" "$work/daemon.log"; do
+    if ! kill -0 "$daemon_pid" 2>/dev/null; then
+        echo "daemon exited before it was ready:" >&2
+        cat "$work/daemon.log" >&2
+        exit 1
+    fi
+    i=$((i + 1))
+    if [ "$i" -gt 600 ]; then
+        echo "daemon not ready after 60s:" >&2
+        cat "$work/daemon.log" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+
+"$RIG_RECIPE_DIR/fixtures.sh" "$ctl" "$RIG_SOURCE/demos" > "$work/fixtures.log" 2>&1 || {
+    echo "fixtures failed:" >&2
+    cat "$work/fixtures.log" >&2
+    exit 1
+}
+
+cat > "$RIG_INFO_FILE" <<INFO
+{
+  "ctl": "$ctl",
+  "oiAddress": "127.0.0.1:$oi_port",
+  "daemonLog": "$work/daemon.log"
+}
+INFO
+
+SEEDLING_WEB_LOG="${SEEDLING_WEB_LOG:-seedling_web=info,warn}" \
+    exec "$BIN/seedling-web" --dev-no-auth --daemon-trust-any \
+    --listen "$RIG_HOST:$RIG_PORT" --wt-listen "$RIG_HOST:$wt_port" \
+    --daemon-addr "127.0.0.1:$oi_port" \
+    --key-file "$key"

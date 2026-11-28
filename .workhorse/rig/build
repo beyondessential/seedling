@@ -1,0 +1,21 @@
+#!/bin/sh
+# Build the web UI bundle, then the daemon, web server and CLI. A debug build,
+# because the CLI's --trust-any (how the lease's wrapper reaches the daemon)
+# exists only there. The target directory is the build's own and is removed
+# once the binaries are copied out, to keep a build small on disk.
+. "$RIG_RECIPE_DIR/lib.sh"
+
+cd "$FRONTEND"
+npm run build
+
+cd "$RIG_SOURCE"
+target="$RIG_DATA_DIR/target"
+SKIP_FRONTEND_BUILD=1 \
+CARGO_TARGET_DIR="$target" \
+CARGO_INCREMENTAL=0 \
+CARGO_PROFILE_DEV_DEBUG=line-tables-only \
+    cargo build --locked -p seedling -p seedling-web -p seedling-ctl
+
+mkdir -p "$BIN"
+cp "$target/debug/seedling" "$target/debug/seedling-web" "$target/debug/seedling-ctl" "$BIN/"
+rm -rf "$target"

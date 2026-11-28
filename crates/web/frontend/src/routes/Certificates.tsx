@@ -429,7 +429,7 @@ function SettingsSection({
               <Typography sx={{ fontFamily: "monospace" }}>
                 {settings.contact_email
                   ? settings.contact_email
-                  : <em style={{ color: "var(--mui-palette-text-secondary)" }}>not set</em>}
+                  : <Box component="em" sx={{ color: "text.secondary" }}>not set</Box>}
               </Typography>
               <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
                 Used by every ACME account registration. Required before the

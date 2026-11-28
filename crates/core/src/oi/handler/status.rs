@@ -50,9 +50,7 @@ pub(crate) async fn get_infra_status(state: &Arc<OiState>) -> HandlerResult {
 // spec: STS#server-status
 pub(crate) fn get_status(state: &OiState) -> HandlerResult {
     let uptime = state.start_time.elapsed().as_secs();
-    let hostname = whoami::devicename()
-        .or_else(|_| whoami::hostname())
-        .unwrap_or_else(|_| "unknown".into());
+    let hostname = crate::sysconst::detect_node_name().unwrap_or_else(|_| "unknown".into());
     // A status that cannot be derived leaves both counts undetermined, rather
     // than reporting fewer apps than there are.
     let apps = match app_status::all(&state.registry, &state.scheduler, &state.db) {

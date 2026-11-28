@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "seedling",
+  "deps": {
+    "lockfiles": ["crates/web/frontend/package-lock.json"],
+    "link": ["crates/web/frontend/node_modules"]
+  },
+  "needs": {
+    "postgres": false,
+    "memoryMb": { "deps": 1024, "build": 6144, "serve": 512 }
+  },
+  "serve": { "ready": { "path": "/healthz", "timeoutSeconds": 120 } },
+  "env": {
+    "fromPerson": ["RUSTUP_HOME", "CARGO_HOME", "RUSTC_WRAPPER", "SCCACHE_DIR", "SCCACHE_CACHE_SIZE", "CARGO_BUILD_JOBS"],
+    "personHome": true
+  },
+  "provides": {
+    "baseUrl": "http://127.0.0.1:{port}",
+    "accounts": [
+      { "name": "operator", "how": "no sign-in: the web UI runs with authentication off, as a full operator; switch the safety mode to Write to act" }
+    ],
+    "fixtures": [
+      "the daemon on in-memory backend stubs: no containers, proxy or host networking exist, so resources never become reachable",
+      "demo apps registered and installed: hello-world, http-tour, workloads-tour, actions-and-gates, paired-provider, paired-consumer",
+      "params-tour registered and not installed, missing its required parameter",
+      "info.ctl: a seedling-ctl wrapper already pointed at the lease's daemon and authorised; info.daemonLog: the daemon's log"
+    ]
+  }
+}

@@ -195,7 +195,7 @@ export default function InfraLogs() {
       <Box
         ref={scrollRef}
         onScroll={onScroll}
-        sx={{ flexGrow: 1, overflow: "auto", bgcolor: "grey.950", py: 0.5 }}
+        sx={{ flexGrow: 1, overflow: "auto", py: 0.5 }}
       >
         {entries.length === 0 && !streaming && !error && (
           <Typography

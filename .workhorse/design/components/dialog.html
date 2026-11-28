@@ -1,0 +1,85 @@
+<!-- component: Dialog -->
+<!-- Preview for the Seedling design system; see ../design-system.md and ./dialog.md -->
+<!DOCTYPE html>
+<html lang="en-NZ">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dialog: Seedling design system</title>
+<style>
+:root{
+  --primary:#2e7d32;--success:#2e7d32;--info:#0288d1;--warning:#ed6c02;--error:#d32f2f;
+  --warning-light:#ff9800;--error-light:#ef5350;
+  --text:rgba(0,0,0,0.87);--text2:rgba(0,0,0,0.6);--text3:rgba(0,0,0,0.38);
+  --divider:rgba(0,0,0,0.12);--rule:#e0e0e0;--paper:#fff;--chip:rgba(0,0,0,0.08);
+}
+*{box-sizing:border-box;}
+html{-webkit-font-smoothing:antialiased;}
+body{margin:0;font-family:Roboto,Helvetica,Arial,sans-serif;color:var(--text);background:#fff;font-size:14px;line-height:1.43;letter-spacing:0.01071em;}
+.mono{font-family:monospace;}
+.page{max-width:980px;margin:0 auto;padding:40px 32px 80px;}
+.ds-title{font-size:24px;font-weight:400;line-height:32px;margin:0 0 4px;}
+.ds-sub{font-size:14px;color:var(--text2);margin:0 0 32px;}
+.ds-section{margin-bottom:40px;}
+.ds-h{font-size:16px;font-weight:600;line-height:28px;margin:0 0 8px;}
+.ds-row{display:flex;flex-wrap:wrap;gap:16px;align-items:center;}
+.ds-cell{display:flex;flex-direction:column;gap:8px;align-items:flex-start;}
+.ds-caption{font-size:12px;line-height:20px;letter-spacing:0.03333em;color:var(--text2);}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:4px;font-family:inherit;font-weight:500;text-transform:uppercase;letter-spacing:0.02857em;cursor:pointer;background:transparent;}
+.btn.small{font-size:13px;line-height:22px;padding:4px 10px;}
+.btn.medium{font-size:14px;line-height:24.5px;padding:6px 16px;}
+.btn.contained{color:#fff;box-shadow:0 3px 1px -2px rgba(0,0,0,.2),0 2px 2px 0 rgba(0,0,0,.14),0 1px 5px 0 rgba(0,0,0,.12);}
+.btn.outlined.small{padding:3px 9px;border:1px solid;}
+.btn.text.medium{padding:6px 8px;}
+.c-primary.contained{background:var(--primary);} .c-warning.contained{background:var(--warning);} .c-error.contained{background:var(--error);}
+.c-primary.outlined{color:var(--primary);border-color:rgba(46,125,50,.5);} .c-warning.outlined{color:var(--warning);border-color:rgba(237,108,2,.5);} .c-error.outlined{color:var(--error);border-color:rgba(211,47,47,.5);}
+.c-primary.text{color:var(--primary);}
+.btn.forbidden{color:var(--text);box-shadow:none;cursor:not-allowed;filter:grayscale(0.8);transition:filter 150ms;}
+.btn.forbidden:hover{filter:grayscale(0);}
+.stripe-write{background:repeating-linear-gradient(135deg,rgba(255,152,0,.24),rgba(255,152,0,.24) 6px,rgba(255,152,0,.07) 6px,rgba(255,152,0,.07) 12px);}
+.stripe-dangerous{background:repeating-linear-gradient(45deg,rgba(239,83,80,.24),rgba(239,83,80,.24) 6px,rgba(239,83,80,.07) 6px,rgba(239,83,80,.07) 12px);}
+.btn.plain-disabled{color:rgba(0,0,0,.26);background:rgba(0,0,0,.12);box-shadow:none;cursor:default;}
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:5px;border-radius:50%;border:0;background:transparent;color:rgba(0,0,0,.54);cursor:pointer;}
+.icon-btn:hover{background:rgba(0,0,0,.04);}
+.icon-btn svg,.btn svg{width:20px;height:20px;fill:currentColor;}
+.backdrop{background:rgba(0,0,0,.5);padding:48px 0;display:flex;justify-content:center;border-radius:4px;}
+.dialog{background:#fff;border-radius:4px;box-shadow:0 11px 15px -7px rgba(0,0,0,.2),0 24px 38px 3px rgba(0,0,0,.14),0 9px 46px 8px rgba(0,0,0,.12);width:100%;}
+.dialog.xs{max-width:444px;} .dialog.sm{max-width:600px;}
+.d-title{font-size:20px;font-weight:500;line-height:1.6;letter-spacing:0.0075em;padding:16px 24px;margin:0;}
+.d-content{padding:0 24px 20px;font-size:16px;line-height:1.5;}
+.d-actions{display:flex;justify-content:flex-end;gap:8px;padding:8px;}
+.field{display:flex;flex-direction:column;gap:4px;margin-top:8px;}
+.field label{font-size:12px;color:var(--text2);}
+.field input{font:inherit;font-family:monospace;font-size:16px;padding:16.5px 14px;border:1px solid rgba(0,0,0,.23);border-radius:4px;}
+.stack{display:flex;flex-direction:column;gap:16px;}
+</style>
+</head>
+<body>
+<div class="page">
+<h1 class="ds-title">Dialog</h1>
+<p class="ds-sub">A confirmation and a form, with Cancel left of the confirm.</p>
+
+<section class="ds-section">
+<h2 class="ds-h">Confirmation, xs</h2>
+<div class="backdrop"><div class="dialog xs">
+  <h2 class="d-title">Remove template?</h2>
+  <div class="d-content">Remove <span class="mono">web-stack</span>? Apps already instantiated from it are unaffected.</div>
+  <div class="d-actions"><button class="btn medium text c-primary">Cancel</button><button class="btn medium contained c-error">Remove</button></div>
+</div></div>
+</section>
+
+<section class="ds-section">
+<h2 class="ds-h">Form, sm</h2>
+<div class="backdrop"><div class="dialog sm">
+  <h2 class="d-title">Authorise OI key</h2>
+  <div class="d-content"><div class="stack">
+    <div class="field"><label>Fingerprint</label><input value="8898f4df7b76c8b7458a64bd1a6611f7"></div>
+    <div class="field"><label>Label</label><input value="ops-laptop"></div>
+  </div></div>
+  <div class="d-actions"><button class="btn medium text c-primary">Cancel</button><button class="btn medium contained c-error">Authorise</button></div>
+</div></div>
+</section>
+
+</div>
+</body>
+</html>

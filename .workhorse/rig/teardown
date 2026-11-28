@@ -1,0 +1,4 @@
+#!/bin/sh
+# Remove the lease's daemon data, client key and logs.
+. "$RIG_RECIPE_DIR/lib.sh"
+rm -rf "$RIG_DATA_DIR/leases/$RIG_LEASE"

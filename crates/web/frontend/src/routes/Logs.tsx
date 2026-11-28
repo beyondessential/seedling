@@ -253,7 +253,6 @@ export default function Logs() {
         sx={{
           flexGrow: 1,
           overflow: "auto",
-          bgcolor: "grey.950",
           py: 0.5,
         }}
       >

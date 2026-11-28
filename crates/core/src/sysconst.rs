@@ -136,10 +136,13 @@ pub fn detect_available_threads() -> Result<i64, String> {
     Ok(i64::try_from(n.get()).unwrap_or(i64::MAX))
 }
 
-/// The host's name.
+/// The host's name: its pretty name where one is configured, otherwise its
+/// hostname. Most hosts configure no pretty name.
 // spec: CONST#host-constants
 pub fn detect_node_name() -> Result<String, String> {
-    whoami::devicename().map_err(|e| format!("cannot read the host's name: {e}"))
+    whoami::devicename()
+        .or_else(|_| whoami::hostname())
+        .map_err(|e| format!("cannot read the host's name: {e}"))
 }
 
 /// The host's IANA timezone name, or why it cannot be determined (e.g. an
