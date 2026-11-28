@@ -7,8 +7,8 @@ use seedling_core::system::types::{ForwardProto, IngressRule};
 
 use super::{
     isolation::{
-        MARK_MASK, MARK_MOUNT, MARK_POD_NAT64, forwarding_rules, isolation_batch,
-        nat64_drop_rules, nat64_mark_rules, pod_source_rules, to_host_rules,
+        MARK_MASK, MARK_MOUNT, MARK_POD_NAT64, forwarding_rules, isolation_batch, nat64_drop_rules,
+        nat64_mark_rules, pod_source_rules, to_host_rules,
     },
     nft::{dnat_lb, ingress_rule_stmts, loopback_masquerade_stmts, output_ingress_rule_stmts},
 };
@@ -344,9 +344,7 @@ fn pod_traffic_to_the_nat64_prefix_is_marked_and_mounted_traffic_doubly() {
             }}),
         ]
     };
-    let or_mark = |bit: u32| {
-        json!({"mangle": {"key": {"meta": {"key": "mark"}}, "value": {"|": [{"meta": {"key": "mark"}}, bit]}}})
-    };
+    let or_mark = |bit: u32| json!({"mangle": {"key": {"meta": {"key": "mark"}}, "value": {"|": [{"meta": {"key": "mark"}}, bit]}}});
     let mut pod = to_nat64();
     pod.push(or_mark(MARK_POD_NAT64));
     let mut mount = to_nat64();
@@ -362,7 +360,11 @@ fn pod_traffic_to_the_nat64_prefix_is_marked_and_mounted_traffic_doubly() {
 fn the_marks_keep_clear_of_the_bits_host_tools_route_by() {
     assert_eq!(MARK_MASK, MARK_POD_NAT64 | MARK_MOUNT);
     assert_eq!(MARK_POD_NAT64 & MARK_MOUNT, 0);
-    assert_eq!(MARK_MASK & 0x00ff_ffff, 0, "Tailscale's 0xff0000 and the low 16 bits");
+    assert_eq!(
+        MARK_MASK & 0x00ff_ffff,
+        0,
+        "Tailscale's 0xff0000 and the low 16 bits"
+    );
 }
 
 // spec: INFRA#forwarding-policy

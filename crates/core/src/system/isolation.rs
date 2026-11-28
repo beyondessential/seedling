@@ -141,7 +141,11 @@ mod tests {
             isolation.retry_now().await;
             assert!(isolation.ensure(&plane).await.is_err());
         }
-        assert_eq!(delay(&isolation), MAX_RETRY_DELAY, "the delay stays at the cap");
+        assert_eq!(
+            delay(&isolation),
+            MAX_RETRY_DELAY,
+            "the delay stays at the cap"
+        );
 
         plane.refuse_isolation(false);
         isolation.retry_now().await;

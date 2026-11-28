@@ -68,7 +68,13 @@ pub(super) fn prerouting_chain() -> NfListObject<'static> {
 }
 
 pub(super) fn output_chain() -> NfListObject<'static> {
-    base_chain(TABLE, CHAIN_OUT, NfChainType::NAT, NfHook::Output, PRIO_DSTNAT)
+    base_chain(
+        TABLE,
+        CHAIN_OUT,
+        NfChainType::NAT,
+        NfHook::Output,
+        PRIO_DSTNAT,
+    )
 }
 
 pub(super) fn postrouting_chain() -> NfListObject<'static> {

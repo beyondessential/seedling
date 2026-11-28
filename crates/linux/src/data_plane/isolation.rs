@@ -11,7 +11,10 @@ use std::borrow::Cow;
 use ipnet::Ipv6Net;
 use nftables::{
     batch::Batch,
-    expr::{BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression, SetItem},
+    expr::{
+        BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression,
+        SetItem,
+    },
     schema::{FlushObject, NfCmd, NfListObject},
     stmt::{Mangle, Match, Operator, Statement},
     types::{NfChainType, NfHook},
@@ -67,7 +70,12 @@ pub(super) fn isolation_batch(host_prefix: &Ipv6Net) -> Batch<'static> {
             PRIO_RAW,
             pod_source_rules(host_prefix),
         ),
-        (CHAIN_MARKS, NfHook::Prerouting, PRIO_MARKS, nat64_mark_rules()),
+        (
+            CHAIN_MARKS,
+            NfHook::Prerouting,
+            PRIO_MARKS,
+            nat64_mark_rules(),
+        ),
         (
             CHAIN_FORWARD,
             NfHook::Forward,
@@ -167,7 +175,10 @@ pub(super) fn forwarding_rules(host_prefix: &Ipv6Net) -> Vec<Vec<Statement<'stat
     };
     vec![
         // spec: INFRA#forwarding-policy
-        vec![match_ct_state_established_related(), Statement::Accept(None)],
+        vec![
+            match_ct_state_established_related(),
+            Statement::Accept(None),
+        ],
         // spec: INFRA#forwarding-policy
         vec![match_ct_status_dnat(), Statement::Accept(None)],
         // spec: INFRA#forwarding-policy

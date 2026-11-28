@@ -910,8 +910,13 @@ impl Reconciler {
         let key = faults::FaultKey::new(&AppName::new_unchecked("_system"), fault_kind, subject);
         let description = description.to_owned();
         self.db.call(move |db| {
-            if let Err(e) = faults::file_once(db, &key, &faults::FaultMeta::default(), &description) {
-                tracing::warn!("failed to file system fault ({}, {:?}): {e}", key.kind, key.subject);
+            if let Err(e) = faults::file_once(db, &key, &faults::FaultMeta::default(), &description)
+            {
+                tracing::warn!(
+                    "failed to file system fault ({}, {:?}): {e}",
+                    key.kind,
+                    key.subject
+                );
             }
         });
     }
@@ -922,7 +927,11 @@ impl Reconciler {
         let key = faults::FaultKey::new(&AppName::new_unchecked("_system"), fault_kind, subject);
         self.db.call(move |db| {
             if let Err(e) = faults::clear_fault_by_key(db, &key) {
-                tracing::warn!("failed to clear system fault ({}, {:?}): {e}", key.kind, key.subject);
+                tracing::warn!(
+                    "failed to clear system fault ({}, {:?}): {e}",
+                    key.kind,
+                    key.subject
+                );
             }
         });
     }
