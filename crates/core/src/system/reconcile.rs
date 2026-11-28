@@ -81,6 +81,10 @@ const SLICE_FAULT_THRESHOLD: u32 = 5;
 /// beside the one for the rules held as absolute state, which has none.
 const ISOLATION_FAULT_SUBJECT: &str = "isolation";
 
+/// The subject of the `packet_filter_failed` fault for following the host's
+/// IPv4 addresses into the rules held as absolute state between applies.
+const HOST_ADDRESSES_FAULT_SUBJECT: &str = "host_addresses";
+
 /// Enumerate hostnames from the site-ingress snapshot that need TLS this
 /// tick. A hostname is only emitted when its parent ingress is non-stale,
 /// declares a non-`None` TLS provider, *and* carries at least one
@@ -1457,6 +1461,24 @@ impl Reconciler {
                 &format!("{e}; no workloads or shell sessions will start until they are"),
             ),
             Ok(()) => self.clear_system_fault_for("packet_filter_failed", ISOLATION_FAULT_SUBJECT),
+        }
+        // spec: INFRA#pod-traffic-to-the-host
+        // spec: FLT#host-faults
+        // The data plane follows the host's addresses on its own, so the fault
+        // is settled each iteration from what it last reported.
+        match self.driver.data_plane.host_addresses_failure() {
+            Some(e) => self.file_system_fault_for(
+                "packet_filter_failed",
+                HOST_ADDRESSES_FAULT_SUBJECT,
+                &format!(
+                    "{e}; pod traffic to an ingress port on an IPv4 address the host gains is \
+                     dropped rather than redirected to the proxy until the addresses are \
+                     followed again"
+                ),
+            ),
+            None => {
+                self.clear_system_fault_for("packet_filter_failed", HOST_ADDRESSES_FAULT_SUBJECT)
+            }
         }
 
         // spec: INFRA#unavailable-backends — when the daemon came up without a
@@ -3945,6 +3967,48 @@ mod tests {
         );
     }
 
+    // spec: INFRA#pod-traffic-to-the-host
+    // spec: FLT#host-faults
+    #[test]
+    fn a_failure_to_follow_the_host_addresses_is_filed_while_it_lasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let container = Arc::new(crate::system::stub::StubContainerRuntime::new(
+            dir.path().join("vols"),
+        ));
+        let process = Arc::new(crate::system::stub::StubProcessManager::new(Arc::clone(
+            &container,
+        )));
+        let backends = crate::system::backends::Backends::working(container, process);
+        let plane = Arc::new(crate::system::stub::StubDataPlane::default());
+        plane.fail_host_addresses(Some("the subscription closed"));
+        let mut system = crate::system::System::for_tests(
+            backends,
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        );
+        system.data_plane = Arc::clone(&plane) as _;
+        let oi = crate::oi::test_support::TestOi::with_driver(Arc::new(system));
+        let mut reconciler = test_reconciler(&oi);
+        let filed = |oi: &crate::oi::test_support::TestOi| {
+            active_kinds(oi, "_system").contains(&(
+                "packet_filter_failed".to_owned(),
+                HOST_ADDRESSES_FAULT_SUBJECT.to_owned(),
+            ))
+        };
+
+        oi.block_on(reconciler.tick());
+        assert!(filed(&oi), "{:?}", active_kinds(&oi, "_system"));
+        assert!(
+            !active_kinds(&oi, "_system")
+                .contains(&("packet_filter_failed".to_owned(), String::new())),
+            "the rule apply's own fault is not filed for it"
+        );
+
+        plane.fail_host_addresses(None);
+        oi.block_on(reconciler.tick());
+        assert!(!filed(&oi), "cleared once the addresses are followed again");
+    }
+
     // spec: FLT#filing-and-clearing
     #[test]
     fn the_isolation_and_rule_apply_faults_are_filed_and_cleared_apart() {
@@ -6074,6 +6138,10 @@ mod tests {
             &'a self,
         ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
             Box::pin(async { Ok(()) })
+        }
+
+        fn host_addresses_failure(&self) -> Option<String> {
+            None
         }
 
         fn clear_all<'a>(

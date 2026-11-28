@@ -6,7 +6,7 @@ use serde_json::json;
 use seedling_core::system::types::{ForwardProto, IngressRule, ServiceDnatRule};
 
 use super::{
-    host_addresses::{held_v4, set_elements},
+    host_addresses::{AddrEvent, ElementChange, HostAddrs, Notice, held_v4, notice, set_elements},
     isolation::{
         MARK_MASK, MARK_MOUNT, MARK_POD_NAT64, forwarding_rules, isolation_batch, nat64_drop_rules,
         nat64_mark_rules, pod_source_rules, to_host_rules,
@@ -707,5 +707,135 @@ fn the_translation_table_is_replaced_whole_with_its_nat64_set_holding_only_what_
             .filter_map(|c| c["add"]["rule"].as_object())
             .any(|r| r["expr"].to_string().contains("@host_v4_nat64")),
         "the NAT64 ingress redirect is in the batch"
+    );
+}
+
+fn v4(addr: &str) -> Ipv4Addr {
+    addr.parse().unwrap()
+}
+
+fn net(net: &str) -> Ipv6Net {
+    net.parse().unwrap()
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn an_address_the_host_gains_or_loses_adds_or_deletes_its_element() {
+    let mut addrs = HostAddrs::from_held([(2, v4("192.0.2.10"))]);
+    assert_eq!(
+        addrs.record(AddrEvent::Held {
+            index: 2,
+            addr: v4("198.51.100.7")
+        }),
+        Some(ElementChange::Add(net("64:ff9b::c633:6407/128")))
+    );
+    assert_eq!(
+        addrs.record(AddrEvent::Released {
+            index: 2,
+            addr: v4("192.0.2.10")
+        }),
+        Some(ElementChange::Delete(net("64:ff9b::c000:20a/128")))
+    );
+    assert_eq!(addrs.elements(), set_elements([v4("198.51.100.7")]));
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn an_address_held_on_two_interfaces_keeps_its_element_until_both_release_it() {
+    let addr = v4("192.0.2.10");
+    let mut addrs = HostAddrs::from_held([(2, addr)]);
+    assert_eq!(addrs.record(AddrEvent::Held { index: 3, addr }), None);
+    assert_eq!(addrs.record(AddrEvent::Released { index: 2, addr }), None);
+    assert_eq!(
+        addrs.record(AddrEvent::Released { index: 3, addr }),
+        Some(ElementChange::Delete(net("64:ff9b::c000:20a/128")))
+    );
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn a_notification_already_reflected_changes_nothing() {
+    let addr = v4("192.0.2.10");
+    let mut addrs = HostAddrs::from_held([(2, addr)]);
+    assert_eq!(addrs.record(AddrEvent::Held { index: 2, addr }), None);
+    assert_eq!(
+        addrs.record(AddrEvent::Released {
+            index: 4,
+            addr: v4("203.0.113.1")
+        }),
+        None
+    );
+    assert_eq!(addrs, HostAddrs::from_held([(2, addr)]));
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn an_address_within_the_proxy_or_resolver_subnets_never_changes_the_set() {
+    let mut addrs = HostAddrs::default();
+    for addr in [v4("10.89.255.1"), v4("10.89.254.1")] {
+        assert_eq!(addrs.record(AddrEvent::Held { index: 5, addr }), None);
+        assert_eq!(addrs.record(AddrEvent::Released { index: 5, addr }), None);
+    }
+}
+
+#[test]
+fn address_notifications_and_overruns_are_told_apart_from_the_rest() {
+    use rtnetlink::packet_core::{NetlinkMessage, NetlinkPayload};
+    use rtnetlink::packet_route::{
+        AddressFamily, RouteNetlinkMessage, address::AddressAttribute, link::LinkMessage,
+    };
+
+    let addr = v4("192.0.2.10");
+    let msg = || {
+        address_message(
+            AddressFamily::Inet,
+            vec![AddressAttribute::Local(addr.into())],
+        )
+    };
+    let wrap = |payload| NetlinkMessage::new(Default::default(), payload);
+    assert_eq!(
+        notice(wrap(NetlinkPayload::InnerMessage(
+            RouteNetlinkMessage::NewAddress(msg())
+        )))
+        .unwrap(),
+        Some(Notice::Address(AddrEvent::Held { index: 3, addr }))
+    );
+    assert_eq!(
+        notice(wrap(NetlinkPayload::InnerMessage(
+            RouteNetlinkMessage::DelAddress(msg())
+        )))
+        .unwrap(),
+        Some(Notice::Address(AddrEvent::Released { index: 3, addr }))
+    );
+    assert_eq!(
+        notice(wrap(NetlinkPayload::Overrun(Vec::new()))).unwrap(),
+        Some(Notice::Overrun)
+    );
+    assert_eq!(
+        notice(wrap(NetlinkPayload::InnerMessage(
+            RouteNetlinkMessage::NewLink(LinkMessage::default())
+        )))
+        .unwrap(),
+        None
+    );
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn a_single_element_is_added_and_deleted_by_itself() {
+    let cmd = |change: ElementChange| serde_json::to_value(change.cmd()).unwrap();
+    let element = json!({
+        "family": "inet",
+        "table": "seedling_net",
+        "name": "host_v4_nat64",
+        "elem": ["64:ff9b::c000:20a"],
+    });
+    assert_eq!(
+        cmd(ElementChange::Add(net("64:ff9b::c000:20a/128"))),
+        json!({"add": {"element": element}})
+    );
+    assert_eq!(
+        cmd(ElementChange::Delete(net("64:ff9b::c000:20a/128"))),
+        json!({"delete": {"element": element}})
     );
 }

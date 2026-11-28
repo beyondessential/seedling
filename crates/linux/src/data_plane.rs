@@ -1,3 +1,5 @@
+use std::sync::{Arc, PoisonError};
+
 use ipnet::Ipv6Net;
 use nftables::{
     batch::Batch,
@@ -37,15 +39,28 @@ pub enum DataPlaneError {
 pub struct NftablesDataPlane {
     node_prefix: Ipv6Net,
     handle: Handle,
+    host_v4_nat64: host_addresses::WrittenSet,
+    listener_failure: host_addresses::ListenerFailure,
+    _listener: host_addresses::AbortOnDrop,
 }
 
 impl NftablesDataPlane {
     pub fn new(node_prefix: Ipv6Net) -> std::io::Result<Self> {
         let (connection, handle, _) = rtnetlink::new_connection()?;
         tokio::spawn(connection);
+        let host_v4_nat64 = host_addresses::WrittenSet::default();
+        let listener_failure = host_addresses::ListenerFailure::default();
+        // spec: INFRA#pod-traffic-to-the-host
+        let listener = host_addresses::spawn_listener(
+            Arc::clone(&host_v4_nat64),
+            Arc::clone(&listener_failure),
+        );
         Ok(Self {
             node_prefix,
             handle,
+            host_v4_nat64,
+            listener_failure,
+            _listener: listener,
         })
     }
 }
@@ -55,10 +70,13 @@ impl NftablesDataPlane {
         // spec: INFRA#pod-traffic-to-the-host
         // The set is rewritten whole with the table, so addresses that cannot
         // be read fail the apply rather than leave the set short of them.
+        let mut written = self.host_v4_nat64.lock().await;
         let held = host_addresses::read(&self.handle)
             .await
             .context(HostAddressesSnafu)?;
-        apply_batch(translation_batch(rules, &held.elements())).await
+        apply_batch(translation_batch(rules, &held.elements())).await?;
+        *written = Some(held);
+        Ok(())
     }
 
     async fn ensure_isolation_impl(&self) -> Result<(), DataPlaneError> {
@@ -89,10 +107,14 @@ impl NftablesDataPlane {
     }
 
     async fn clear_all_impl(&self) -> Result<(), DataPlaneError> {
+        let mut written = self.host_v4_nat64.lock().await;
         let mut batch = Batch::new();
         batch.add_cmd(NfCmd::Delete(NfListObject::Table(nft::table(nft::TABLE))));
         let ruleset = batch.to_nftables();
-        let _ = helper::apply_ruleset_async(&ruleset).await;
+        if helper::apply_ruleset_async(&ruleset).await.is_ok() {
+            *written = None;
+        }
+        drop(written);
         self.delete_managed_routes(&self.handle).await
     }
 }
@@ -111,6 +133,13 @@ impl DataPlane for NftablesDataPlane {
 
     fn ensure_isolation<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.ensure_isolation_impl().await.map_err(Into::into) })
+    }
+
+    fn host_addresses_failure(&self) -> Option<String> {
+        self.listener_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {

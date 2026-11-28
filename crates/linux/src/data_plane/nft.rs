@@ -296,6 +296,14 @@ fn host_v4_nat64_elements(elements: &[Ipv6Net]) -> Element<'static> {
     }
 }
 
+pub(super) fn add_host_v4_nat64(element: Ipv6Net) -> NfCmd<'static> {
+    NfCmd::Add(NfListObject::Element(host_v4_nat64_elements(&[element])))
+}
+
+pub(super) fn delete_host_v4_nat64(element: Ipv6Net) -> NfCmd<'static> {
+    NfCmd::Delete(NfListObject::Element(host_v4_nat64_elements(&[element])))
+}
+
 /// The commands that leave the `host_v4_nat64` set holding exactly
 /// `elements`, creating it if it does not exist. Flushing the table leaves
 /// its sets' elements in place, so the set is flushed on its own.

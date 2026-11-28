@@ -907,11 +907,13 @@ impl NetworkProxy for StubNetworkProxy {
 /// aren't observable through any OI surface so there's nothing for tests
 /// to assert against; the runtime still gets the trait so reconciliation
 /// proceeds. It counts installs of the isolation rules, which a test can make
-/// fail.
+/// fail, and reports whatever failure to follow the host's addresses a test
+/// sets.
 #[derive(Default)]
 pub struct StubDataPlane {
     isolation_installs: AtomicUsize,
     refuse_isolation: AtomicBool,
+    host_addresses_failure: Mutex<Option<String>>,
 }
 
 impl StubDataPlane {
@@ -923,6 +925,12 @@ impl StubDataPlane {
     /// Make installing the isolation rules fail, or succeed again.
     pub fn refuse_isolation(&self, refuse: bool) {
         self.refuse_isolation.store(refuse, Ordering::SeqCst);
+    }
+
+    /// Report following the host's addresses as failing for `failure`, or as
+    /// working again for `None`.
+    pub fn fail_host_addresses(&self, failure: Option<&str>) {
+        *self.host_addresses_failure.lock() = failure.map(str::to_owned);
     }
 }
 
@@ -952,6 +960,10 @@ impl DataPlane for StubDataPlane {
             }
         }
         .boxed()
+    }
+
+    fn host_addresses_failure(&self) -> Option<String> {
+        self.host_addresses_failure.lock().clone()
     }
 
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {

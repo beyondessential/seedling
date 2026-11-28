@@ -304,6 +304,12 @@ pub trait DataPlane: Send + Sync + 'static {
     /// runtime.
     fn ensure_isolation<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>>;
 
+    /// Why the rules that depend on the host's own addresses are not following
+    /// changes to them, or `None` while they are. The rules held as absolute
+    /// state take the addresses the host holds whenever they are applied, and
+    /// follow them between applies.
+    fn host_addresses_failure(&self) -> Option<String>;
+
     /// Remove the rules held as absolute state, and the routes. Called on
     /// shutdown.
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>>;
