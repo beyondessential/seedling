@@ -82,15 +82,16 @@ The design:
 
 ### Isolation table
 
-- [ ] New module `crates/linux/src/data_plane/isolation.rs`: table `seedling_isolation`, built from the host prefix alone, replaced wholesale in one batch (add table, flush table, add chains and rules), so the rules never lapse during a replace.
-- [ ] Prerouting filter chain at raw priority: the reverse-path rule for host-prefix sources on every interface but `lo`; on `sdp-*`, drop IPv4 and drop IPv6 sources outside the host prefix, except `::` and `fe80::/10`. Cite `INFRA#pod-network-sources`.
-- [ ] Prerouting filter chain at priority -90: OR the pod NAT64 mark bit into pod packets to `64:ff9b::/96`, plus the mount bit where `ct status dnat` holds. Mark constants and mask in one place.
-- [ ] Forward filter chain: established/related, `ct status dnat`, `iifname "sdl-proxy"`, and TCP/UDP from the host prefix to the resolver address at port 53 are accepted; the rest to the host prefix is dropped. Cite `INFRA#forwarding-policy`.
-- [ ] Input filter chain: on `sdp-*`, accept established/related, `ct status dnat` and ICMPv6 types 133, 135 and 136, and drop the rest. For IPv4, drop packets with the pod bit but no mount bit. Cite `INFRA#pod-traffic-to-the-host`.
-- [ ] Postrouting filter chain: IPv4 to `sdl-proxy` or `sdl-resolver` with the pod bit but no mount bit is dropped; IPv6 to `sdp-*` with the pod bit is dropped (hairpins).
-- [ ] `DataPlane` gains `ensure_isolation()`. Linux and stub implementations.
-- [ ] Startup: install the isolation table before startup cleanup and before any actuation or shell session can start. On failure, gate actuation and session start, file `packet_filter_failed` with subject `isolation`, and retry with back-off from the reconcile loop.
-- [ ] Unit tests in `crates/linux/src/data_plane/tests.rs` for each chain's statements, and a core test that a failed install withholds actuation and files the fault, then clears it on success.
+- [x] New module `crates/linux/src/data_plane/isolation.rs`: table `seedling_isolation`, built from the host prefix alone, replaced wholesale in one batch (add table, flush table, add chains and rules), so the rules never lapse during a replace.
+- [x] Prerouting filter chain at raw priority: the reverse-path rule for host-prefix sources on every interface but `lo`; on `sdp-*`, drop IPv4 and drop IPv6 sources outside the host prefix, except `::` and `fe80::/10`. Cite `INFRA#pod-network-sources`.
+- [x] Prerouting filter chain at priority -90: OR the pod NAT64 mark bit into pod packets to `64:ff9b::/96`, plus the mount bit where `ct status dnat` holds. Mark constants and mask in one place.
+- [x] Forward filter chain: established/related, `ct status dnat`, `iifname "sdl-proxy"`, and TCP/UDP from the host prefix to the resolver address at port 53 are accepted; the rest to the host prefix is dropped. Cite `INFRA#forwarding-policy`.
+- [x] Input filter chain: on `sdp-*`, accept established/related, `ct status dnat` and ICMPv6 types 133, 135 and 136, and drop the rest. For IPv4, drop packets with the pod bit but no mount bit. Cite `INFRA#pod-traffic-to-the-host`.
+- [x] Postrouting filter chain: IPv4 to `sdl-proxy` or `sdl-resolver` with the pod bit but no mount bit is dropped; IPv6 to `sdp-*` with the pod bit is dropped (hairpins).
+- [x] `DataPlane` gains `ensure_isolation()`. Linux and stub implementations.
+- [x] Startup: install the isolation table before startup cleanup and before any actuation or shell session can start. On failure, gate actuation and session start, file `packet_filter_failed` with subject `isolation`, and retry with back-off from the reconcile loop.
+- [x] Unit tests in `crates/linux/src/data_plane/tests.rs` for each chain's statements, and a core test that a failed install withholds actuation and files the fault, then clears it on success.
+- Built with chains `pod_sources`, `nat64_marks`, `forwarding`, `to_host` and `nat64_drops` (nft's parser rejects `mark` and `input` as chain names). Retry pacing copies the backends' (5s doubling to a 300s cap, held there) rather than `RetryGate`, which cycles back down. Faults spec amended so `packet_filter_failed` carries the subject `isolation` for this table.
 
 ### Translation table
 
