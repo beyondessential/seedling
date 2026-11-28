@@ -1,0 +1,6 @@
+#!/bin/sh
+# Install the web UI's npm dependencies. Cargo fetches crates into the
+# person's cargo home during the build.
+. "$RIG_RECIPE_DIR/lib.sh"
+cd "$FRONTEND"
+npm ci --no-audit --no-fund
