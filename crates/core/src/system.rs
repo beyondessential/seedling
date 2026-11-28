@@ -310,6 +310,28 @@ pub trait DataPlane: Send + Sync + 'static {
     /// follow them between applies.
     fn host_addresses_failure(&self) -> Option<String>;
 
+    /// Forget every shell session's mount translations and remove them. Shell
+    /// sessions do not outlive the runtime, so it does this at startup.
+    ///
+    /// This and the other session calls each replace every session's
+    /// translations at once, so one that succeeds also replaces whatever an
+    /// earlier failed one left behind.
+    fn reset_sessions<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>>;
+
+    /// Hold `rules` as the mount translations of the shell session `session`,
+    /// in place of any it held. On failure the session keeps what it held.
+    fn set_session_mounts<'a>(
+        &'a self,
+        session: &'a str,
+        rules: &'a [MountRule],
+    ) -> BoxFuture<'a, Result<(), BoxError>>;
+
+    /// Forget the mount translations of the shell session `session` and remove
+    /// them. The session is forgotten even when removing fails, so the next
+    /// session call that succeeds removes them.
+    fn remove_session_mounts<'a>(&'a self, session: &'a str)
+    -> BoxFuture<'a, Result<(), BoxError>>;
+
     /// Remove the rules held as absolute state, and the routes. Called on
     /// shutdown.
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>>;

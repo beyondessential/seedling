@@ -6144,6 +6144,27 @@ mod tests {
             None
         }
 
+        fn reset_sessions<'a>(
+            &'a self,
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn set_session_mounts<'a>(
+            &'a self,
+            _session: &'a str,
+            _rules: &'a [crate::system::types::MountRule],
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn remove_session_mounts<'a>(
+            &'a self,
+            _session: &'a str,
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            Box::pin(async { Ok(()) })
+        }
+
         fn clear_all<'a>(
             &'a self,
         ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {

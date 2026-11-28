@@ -377,7 +377,7 @@ pub struct IngressRule {
 /// pod-side port. Scoped to traffic from a specific pod's /64 destined for
 /// that pod's mount endpoint address (::1000).
 // spec: INFRA#mount-endpoint-addressing
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountRule {
     /// The mounting pod's /64 prefix.
     pub pod_prefix: Ipv6Net,

@@ -26,7 +26,7 @@ use seedling_protocol::names::AppName;
 use super::{
     BoxError, BoxFuture, ContainerFilter, ContainerHealth, ContainerRuntime, ContainerSpec,
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
-    ExecOutput, ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig,
+    ExecOutput, ImageSummary, MountRule, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig,
     ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
     priority::{AppStandings, UnitStanding},
     types::{ActiveState, SPEC_HASH_LABEL, UnitExit},
@@ -903,17 +903,32 @@ impl NetworkProxy for StubNetworkProxy {
     }
 }
 
+/// A shell session mount call the stub data plane was given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionCall {
+    Reset,
+    Set(String, Vec<MountRule>),
+    Remove(String),
+}
+
+type SessionCallHook = Box<dyn Fn(&SessionCall) + Send + Sync>;
+
 /// Stub `DataPlane`: no-ops everything. nftables / routing-table effects
 /// aren't observable through any OI surface so there's nothing for tests
 /// to assert against; the runtime still gets the trait so reconciliation
 /// proceeds. It counts installs of the isolation rules, which a test can make
 /// fail, and reports whatever failure to follow the host's addresses a test
-/// sets.
+/// sets. It holds shell sessions' mount translations as the host does, records
+/// each session call, and can be made to fail them.
 #[derive(Default)]
 pub struct StubDataPlane {
     isolation_installs: AtomicUsize,
     refuse_isolation: AtomicBool,
     host_addresses_failure: Mutex<Option<String>>,
+    session_mounts: Mutex<BTreeMap<String, Vec<MountRule>>>,
+    session_calls: Mutex<Vec<SessionCall>>,
+    refuse_sessions: AtomicBool,
+    on_session_call: Mutex<Option<SessionCallHook>>,
 }
 
 impl StubDataPlane {
@@ -931,6 +946,49 @@ impl StubDataPlane {
     /// working again for `None`.
     pub fn fail_host_addresses(&self, failure: Option<&str>) {
         *self.host_addresses_failure.lock() = failure.map(str::to_owned);
+    }
+
+    /// The mount translations each shell session holds.
+    pub fn session_mounts(&self) -> BTreeMap<String, Vec<MountRule>> {
+        self.session_mounts.lock().clone()
+    }
+
+    /// Every shell session mount call so far, failed or not.
+    pub fn session_calls(&self) -> Vec<SessionCall> {
+        self.session_calls.lock().clone()
+    }
+
+    /// Make every later shell session mount call fail, or succeed again.
+    pub fn refuse_sessions(&self, refuse: bool) {
+        self.refuse_sessions.store(refuse, Ordering::SeqCst);
+    }
+
+    /// Call `hook` with each later shell session mount call, as it is made.
+    pub fn on_session_call(&self, hook: impl Fn(&SessionCall) + Send + Sync + 'static) {
+        *self.on_session_call.lock() = Some(Box::new(hook));
+    }
+
+    /// Record `call`, then apply `change` to the held translations unless
+    /// session calls are refused or `change` must happen whatever the outcome.
+    fn session_call(
+        &self,
+        call: SessionCall,
+        always: bool,
+        change: impl FnOnce(&mut BTreeMap<String, Vec<MountRule>>),
+    ) -> Result<(), BoxError> {
+        if let Some(hook) = &*self.on_session_call.lock() {
+            hook(&call);
+        }
+        self.session_calls.lock().push(call);
+        let refused = self.refuse_sessions.load(Ordering::SeqCst);
+        if always || !refused {
+            change(&mut self.session_mounts.lock());
+        }
+        if refused {
+            Err("the session mount translations were refused".into())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -964,6 +1022,36 @@ impl DataPlane for StubDataPlane {
 
     fn host_addresses_failure(&self) -> Option<String> {
         self.host_addresses_failure.lock().clone()
+    }
+
+    fn reset_sessions<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
+        let result = self.session_call(SessionCall::Reset, true, BTreeMap::clear);
+        async move { result }.boxed()
+    }
+
+    fn set_session_mounts<'a>(
+        &'a self,
+        session: &'a str,
+        rules: &'a [MountRule],
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        let result = self.session_call(
+            SessionCall::Set(session.to_owned(), rules.to_vec()),
+            false,
+            |held| {
+                held.insert(session.to_owned(), rules.to_vec());
+            },
+        );
+        async move { result }.boxed()
+    }
+
+    fn remove_session_mounts<'a>(
+        &'a self,
+        session: &'a str,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        let result = self.session_call(SessionCall::Remove(session.to_owned()), true, |held| {
+            held.remove(session);
+        });
+        async move { result }.boxed()
     }
 
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {

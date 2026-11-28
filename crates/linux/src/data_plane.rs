@@ -1,4 +1,7 @@
-use std::sync::{Arc, PoisonError};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+};
 
 use ipnet::Ipv6Net;
 use nftables::{
@@ -12,13 +15,14 @@ use tracing::error;
 
 use seedling_core::system::{
     BoxError, BoxFuture, DataPlane,
-    types::{DataPlaneRules, ServiceRoute},
+    types::{DataPlaneRules, MountRule, ServiceRoute},
 };
 
 mod host_addresses;
 mod isolation;
 mod nft;
 pub mod routes;
+mod sessions;
 
 #[derive(Debug, Snafu)]
 pub enum DataPlaneError {
@@ -39,7 +43,12 @@ pub enum DataPlaneError {
 pub struct NftablesDataPlane {
     node_prefix: Ipv6Net,
     handle: Handle,
+    /// Held across every write to the translation and sessions tables, which
+    /// it serialises with each other and with the address listener.
     host_v4_nat64: host_addresses::WrittenSet,
+    /// The mount translations each shell session holds, which the sessions
+    /// table is rewritten from. Changed only while `host_v4_nat64` is held.
+    session_mounts: Mutex<BTreeMap<String, Vec<MountRule>>>,
     listener_failure: host_addresses::ListenerFailure,
     _listener: host_addresses::AbortOnDrop,
 }
@@ -59,6 +68,7 @@ impl NftablesDataPlane {
             node_prefix,
             handle,
             host_v4_nat64,
+            session_mounts: Mutex::default(),
             listener_failure,
             _listener: listener,
         })
@@ -81,6 +91,50 @@ impl NftablesDataPlane {
 
     async fn ensure_isolation_impl(&self) -> Result<(), DataPlaneError> {
         apply_batch(isolation::isolation_batch(&self.node_prefix)).await
+    }
+
+    fn session_mounts(&self) -> MutexGuard<'_, BTreeMap<String, Vec<MountRule>>> {
+        self.session_mounts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    async fn reset_sessions_impl(&self) -> Result<(), DataPlaneError> {
+        let _serial = self.host_v4_nat64.lock().await;
+        self.session_mounts().clear();
+        apply_batch(sessions::reset_batch()).await
+    }
+
+    async fn set_session_mounts_impl(
+        &self,
+        session: &str,
+        rules: &[MountRule],
+    ) -> Result<(), DataPlaneError> {
+        let _serial = self.host_v4_nat64.lock().await;
+        let (batch, previous) = {
+            let mut held = self.session_mounts();
+            let previous = held.insert(session.to_owned(), rules.to_vec());
+            (sessions::sessions_batch(&held), previous)
+        };
+        let applied = apply_batch(batch).await;
+        if applied.is_err() {
+            let mut held = self.session_mounts();
+            match previous {
+                Some(previous) => held.insert(session.to_owned(), previous),
+                None => held.remove(session),
+            };
+        }
+        applied
+    }
+
+    async fn remove_session_mounts_impl(&self, session: &str) -> Result<(), DataPlaneError> {
+        let _serial = self.host_v4_nat64.lock().await;
+        let batch = {
+            let mut held = self.session_mounts();
+            held.remove(session);
+            sessions::sessions_batch(&held)
+        };
+        apply_batch(batch).await
     }
 
     async fn apply_routes_impl(&self, routes: &[ServiceRoute]) -> Result<(), DataPlaneError> {
@@ -140,6 +194,33 @@ impl DataPlane for NftablesDataPlane {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    fn reset_sessions<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.reset_sessions_impl().await.map_err(Into::into) })
+    }
+
+    fn set_session_mounts<'a>(
+        &'a self,
+        session: &'a str,
+        rules: &'a [MountRule],
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.set_session_mounts_impl(session, rules)
+                .await
+                .map_err(Into::into)
+        })
+    }
+
+    fn remove_session_mounts<'a>(
+        &'a self,
+        session: &'a str,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.remove_session_mounts_impl(session)
+                .await
+                .map_err(Into::into)
+        })
     }
 
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {

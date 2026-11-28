@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 use ipnet::Ipv6Net;
 use serde_json::json;
 
-use seedling_core::system::types::{ForwardProto, IngressRule, ServiceDnatRule};
+use seedling_core::system::types::{ForwardProto, IngressRule, MountRule, ServiceDnatRule};
 
 use super::{
     host_addresses::{AddrEvent, ElementChange, HostAddrs, Notice, held_v4, notice, set_elements},
@@ -15,6 +15,7 @@ use super::{
         dnat_lb, ingress_rule_stmts, loopback_masquerade_stmts, nat64_ingress_rule_stmts,
         output_ingress_rule_stmts, service_dnat_output_stmts, service_dnat_prerouting_stmts,
     },
+    sessions::{reset_batch, sessions_batch},
     translation_batch,
 };
 
@@ -838,4 +839,93 @@ fn a_single_element_is_added_and_deleted_by_itself() {
         cmd(ElementChange::Delete(net("64:ff9b::c000:20a/128"))),
         json!({"delete": {"element": element}})
     );
+}
+
+fn session_mount(prefix: &str, port: u16, proto: ForwardProto) -> MountRule {
+    let pod_prefix = net(prefix);
+    MountRule {
+        pod_prefix,
+        mount_addr: seedling_core::system::translate::proxy::node_mount_addr(&pod_prefix),
+        mount_port: port,
+        backends: vec![(Ipv6Addr::new(0xfd5e, 0x1234, 0x5678, 1, 0, 0, 0, 2), 5433)],
+        proto,
+    }
+}
+
+// spec: INFRA#mount-endpoint-addressing
+#[test]
+fn the_sessions_table_is_replaced_whole_with_every_sessions_translations() {
+    let sessions = std::collections::BTreeMap::from([
+        (
+            "seedling-a".to_owned(),
+            vec![session_mount(
+                "fd5e:1234:5678:5001::/64",
+                5432,
+                ForwardProto::Tcp,
+            )],
+        ),
+        (
+            "seedling-b".to_owned(),
+            vec![session_mount(
+                "fd5e:1234:5678:5002::/64",
+                53,
+                ForwardProto::Udp,
+            )],
+        ),
+    ]);
+    let batch = serde_json::to_value(sessions_batch(&sessions).to_nftables()).unwrap();
+    let cmds = batch["nftables"].as_array().unwrap();
+
+    let table = json!({"family": "inet", "name": "seedling_sessions"});
+    assert_eq!(cmds[0], json!({"add": {"table": table}}));
+    assert_eq!(cmds[1], json!({"flush": {"table": table}}));
+    assert_eq!(
+        cmds[2],
+        json!({"add": {"chain": {
+            "family": "inet",
+            "table": "seedling_sessions",
+            "name": "prerouting",
+            "type": "nat",
+            "hook": "prerouting",
+            "prio": -100,
+            "policy": "accept",
+        }}})
+    );
+    let rules: Vec<_> = cmds[3..]
+        .iter()
+        .map(|c| {
+            let rule = &c["add"]["rule"];
+            assert_eq!(rule["table"], "seedling_sessions");
+            assert_eq!(rule["chain"], "prerouting");
+            rule["expr"].clone()
+        })
+        .collect();
+    let translation = |prefix: &str, proto: &str, port: u16| {
+        json!([
+            {"match": {"op": "==", "left": {"payload": {"protocol": "ip6", "field": "saddr"}}, "right": {"prefix": {"addr": prefix, "len": 64}}}},
+            {"match": {"op": "==", "left": {"payload": {"protocol": "ip6", "field": "daddr"}}, "right": "fd5e:1234:5678:fffe::1"}},
+            {"match": {"op": "==", "left": {"payload": {"protocol": proto, "field": "dport"}}, "right": port}},
+            {"dnat": {"addr": "fd5e:1234:5678:1::2", "family": "ip6", "port": 5433}},
+        ])
+    };
+    assert_eq!(
+        rules,
+        [
+            translation("fd5e:1234:5678:5001::", "tcp", 5432),
+            translation("fd5e:1234:5678:5002::", "udp", 53),
+        ]
+    );
+}
+
+// spec: INFRA#mount-endpoint-addressing
+#[test]
+fn resetting_the_sessions_table_deletes_whatever_it_held() {
+    let batch = serde_json::to_value(reset_batch().to_nftables()).unwrap();
+    let cmds = batch["nftables"].as_array().unwrap();
+    let table = json!({"family": "inet", "name": "seedling_sessions"});
+    assert_eq!(cmds[0], json!({"add": {"table": table}}));
+    assert_eq!(cmds[1], json!({"delete": {"table": table}}));
+    assert_eq!(cmds[2], json!({"add": {"table": table}}));
+    assert_eq!(cmds[3]["add"]["chain"]["name"], "prerouting");
+    assert_eq!(cmds.len(), 4, "no translation survives a reset");
 }
