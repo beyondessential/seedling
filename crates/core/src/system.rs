@@ -75,6 +75,13 @@ pub const POD_BRIDGE_PREFIX: &str = "sdp-";
 /// The bridge name of the proxy network.
 pub const PROXY_BRIDGE: &str = "sdl-proxy";
 
+/// The proxy network's IPv4 subnet, which it has whatever the host's uplink,
+/// so the proxy always has an IPv4 address to redirect IPv4 traffic to.
+// spec: PRX#proxy-addresses
+pub fn proxy_ipv4_subnet() -> ipnet::Ipv4Net {
+    "10.89.255.0/24".parse().expect("valid IPv4 subnet")
+}
+
 /// The bridge name of the resolver network.
 pub const RESOLVER_BRIDGE: &str = "sdl-resolver";
 

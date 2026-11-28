@@ -5,7 +5,7 @@ use nftables::{
     schema::{FlushObject, NfCmd, NfListObject},
 };
 use rtnetlink::Handle;
-use snafu::Snafu;
+use snafu::{ResultExt, Snafu};
 use tracing::error;
 
 use seedling_core::system::{
@@ -13,6 +13,7 @@ use seedling_core::system::{
     types::{DataPlaneRules, ServiceRoute},
 };
 
+mod host_addresses;
 mod isolation;
 mod nft;
 pub mod routes;
@@ -24,6 +25,8 @@ pub enum DataPlaneError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("{source}"))]
+    HostAddresses { source: host_addresses::ReadError },
     #[snafu(display("rtnetlink error: {source}"))]
     Netlink {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
@@ -48,44 +51,14 @@ impl NftablesDataPlane {
 }
 
 impl NftablesDataPlane {
-    // spec: INFRA#host-originated-traffic
     async fn apply_rules_impl(&self, rules: &DataPlaneRules) -> Result<(), DataPlaneError> {
-        let mut batch = Batch::new();
-        batch.add(NfListObject::Table(nft::table(nft::TABLE)));
-        batch.add_cmd(NfCmd::Flush(FlushObject::Table(nft::table(nft::TABLE))));
-        batch.add(nft::prerouting_chain());
-        batch.add(nft::output_chain());
-        batch.add(nft::postrouting_chain());
-
-        for rule in &rules.ingress {
-            for stmts in nft::ingress_rule_stmts(rule) {
-                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
-            }
-            for stmts in nft::output_ingress_rule_stmts(rule) {
-                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_OUT, stmts));
-            }
-        }
-
-        for rule in &rules.mounts {
-            for stmts in nft::mount_rule_stmts(rule) {
-                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
-            }
-        }
-
-        for rule in &rules.service_dnat {
-            for stmts in nft::service_dnat_prerouting_stmts(rule) {
-                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
-            }
-            for stmts in nft::service_dnat_output_stmts(rule) {
-                batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_OUT, stmts));
-            }
-        }
-
-        for stmts in nft::loopback_masquerade_stmts() {
-            batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_POST, stmts));
-        }
-
-        apply_batch(batch).await
+        // spec: INFRA#pod-traffic-to-the-host
+        // The set is rewritten whole with the table, so addresses that cannot
+        // be read fail the apply rather than leave the set short of them.
+        let held = host_addresses::read(&self.handle)
+            .await
+            .context(HostAddressesSnafu)?;
+        apply_batch(translation_batch(rules, &held.elements())).await
     }
 
     async fn ensure_isolation_impl(&self) -> Result<(), DataPlaneError> {
@@ -143,6 +116,53 @@ impl DataPlane for NftablesDataPlane {
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.clear_all_impl().await.map_err(Into::into) })
     }
+}
+
+/// The batch that replaces the translation table with `rules`, its
+/// `host_v4_nat64` set holding `host_v4_nat64`.
+// spec: INFRA#host-originated-traffic
+fn translation_batch(rules: &DataPlaneRules, host_v4_nat64: &[Ipv6Net]) -> Batch<'static> {
+    let mut batch = Batch::new();
+    batch.add(NfListObject::Table(nft::table(nft::TABLE)));
+    batch.add_cmd(NfCmd::Flush(FlushObject::Table(nft::table(nft::TABLE))));
+    batch.add(nft::prerouting_chain());
+    batch.add(nft::output_chain());
+    batch.add(nft::postrouting_chain());
+    for cmd in nft::replace_host_v4_nat64(host_v4_nat64) {
+        batch.add_cmd(cmd);
+    }
+
+    for rule in &rules.ingress {
+        for stmts in nft::ingress_rule_stmts(rule) {
+            batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
+        }
+        for stmts in nft::nat64_ingress_rule_stmts(rule) {
+            batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
+        }
+        for stmts in nft::output_ingress_rule_stmts(rule) {
+            batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_OUT, stmts));
+        }
+    }
+
+    for rule in &rules.mounts {
+        for stmts in nft::mount_rule_stmts(rule) {
+            batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
+        }
+    }
+
+    for rule in &rules.service_dnat {
+        for stmts in nft::service_dnat_prerouting_stmts(rule) {
+            batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_PRE, stmts));
+        }
+        for stmts in nft::service_dnat_output_stmts(rule) {
+            batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_OUT, stmts));
+        }
+    }
+
+    for stmts in nft::loopback_masquerade_stmts() {
+        batch.add(nft::rule_obj(nft::TABLE, nft::CHAIN_POST, stmts));
+    }
+    batch
 }
 
 async fn apply_batch(batch: Batch<'_>) -> Result<(), DataPlaneError> {

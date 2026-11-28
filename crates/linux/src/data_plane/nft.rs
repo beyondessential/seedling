@@ -4,12 +4,17 @@ use std::{
     net::{IpAddr, Ipv6Addr},
 };
 
+use ipnet::Ipv6Net;
+
 use nftables::{
     expr::{
         BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, Map, Meta, MetaKey,
         NamedExpression, NgMode, Numgen, Payload, PayloadField, Prefix, SetItem,
     },
-    schema::{Chain, NfListObject, Rule, Table},
+    schema::{
+        Chain, Element, FlushObject, NfCmd, NfListObject, Rule, Set, SetFlag, SetType,
+        SetTypeValue, Table,
+    },
     stmt::{Match, NAT, NATFamily, Operator, Statement},
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
@@ -23,6 +28,9 @@ pub(super) const TABLE: &str = "seedling_net";
 pub(super) const CHAIN_PRE: &str = "prerouting";
 pub(super) const CHAIN_OUT: &str = "output";
 pub(super) const CHAIN_POST: &str = "postrouting";
+/// The host's IPv4 addresses, and the proxy and resolver IPv4 subnets, in
+/// `64:ff9b::` form.
+pub(super) const SET_HOST_V4_NAT64: &str = "host_v4_nat64";
 pub(super) const PRIO_DSTNAT: i32 = -100;
 pub(super) const PRIO_SRCNAT: i32 = 100;
 
@@ -201,28 +209,102 @@ pub(super) fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'stati
 }
 
 fn ingress_rule_stmts_v6(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
-    let ext_port = rule.external_port as u32;
+    ingress_redirects(rule, |dport| {
+        vec![match_nfproto(NFPROTO_IPV6), match_fib_daddr_local(), dport]
+    })
+}
 
-    let make_v6 = |proto: &'static str, dnat: Statement<'static>| {
+/// Pod traffic to an ingress port on one of the host's IPv4 addresses, or
+/// within the proxy or resolver network, by its NAT64 form, redirected to the
+/// proxy's IPv6 address. It is rewritten before NAT64 would translate it, so
+/// it never reaches the host over IPv4.
+pub(super) fn nat64_ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'static>>> {
+    // spec: INFRA#pod-traffic-to-the-host
+    ingress_redirects(rule, |dport| {
         vec![
-            match_nfproto(NFPROTO_IPV6),
-            match_fib_daddr_local(),
-            match_eq(payload_expr(proto, "dport"), Expression::Number(ext_port)),
-            dnat,
+            match_pod_bridge(MetaKey::Iifname),
+            match_eq(
+                payload_expr("ip6", "daddr"),
+                Expression::String(Cow::Owned(format!("@{SET_HOST_V4_NAT64}"))),
+            ),
+            dport,
         ]
-    };
+    })
+}
 
+/// One rule per protocol of `rule`, each the statements `guard` makes from
+/// the ingress port's match, followed by the redirection to the proxy's IPv6
+/// address.
+fn ingress_redirects(
+    rule: &IngressRule,
+    guard: impl Fn(Statement<'static>) -> Vec<Statement<'static>>,
+) -> Vec<Vec<Statement<'static>>> {
+    let ext_port = rule.external_port as u32;
     let ip6 = match rule.caddy_v6.ip() {
         IpAddr::V6(ip) => ip.to_string(),
         IpAddr::V4(ip) => format!("::ffff:{ip}"),
     };
     let dnat6 = dnat_ip6(ip6, rule.caddy_v6.port());
 
+    let make = |proto: &'static str| {
+        let mut stmts = guard(match_eq(
+            payload_expr(proto, "dport"),
+            Expression::Number(ext_port),
+        ));
+        stmts.push(dnat6.clone());
+        stmts
+    };
+
     match rule.proto {
-        ForwardProto::Tcp => vec![make_v6("tcp", dnat6)],
-        ForwardProto::Udp => vec![make_v6("udp", dnat6)],
-        ForwardProto::Both => vec![make_v6("tcp", dnat6.clone()), make_v6("udp", dnat6)],
+        ForwardProto::Tcp => vec![make("tcp")],
+        ForwardProto::Udp => vec![make("udp")],
+        ForwardProto::Both => vec![make("tcp"), make("udp")],
     }
+}
+
+fn host_v4_nat64_set() -> Set<'static> {
+    Set {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(TABLE),
+        name: Cow::Borrowed(SET_HOST_V4_NAT64),
+        handle: None,
+        set_type: SetTypeValue::Single(SetType::Ipv6Addr),
+        policy: None,
+        flags: Some([SetFlag::Interval].into_iter().collect()),
+        elem: None,
+        timeout: None,
+        gc_interval: None,
+        size: None,
+        comment: None,
+    }
+}
+
+fn host_v4_nat64_elements(elements: &[Ipv6Net]) -> Element<'static> {
+    Element {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(TABLE),
+        name: Cow::Borrowed(SET_HOST_V4_NAT64),
+        elem: Cow::Owned(
+            elements
+                .iter()
+                .map(|net| match net.prefix_len() {
+                    128 => Expression::String(Cow::Owned(net.addr().to_string())),
+                    len => prefix_expr(net.network().to_string(), len),
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// The commands that leave the `host_v4_nat64` set holding exactly
+/// `elements`, creating it if it does not exist. Flushing the table leaves
+/// its sets' elements in place, so the set is flushed on its own.
+pub(super) fn replace_host_v4_nat64(elements: &[Ipv6Net]) -> [NfCmd<'static>; 3] {
+    [
+        NfCmd::Add(NfListObject::Set(Box::new(host_v4_nat64_set()))),
+        NfCmd::Flush(FlushObject::Set(Box::new(host_v4_nat64_set()))),
+        NfCmd::Add(NfListObject::Element(host_v4_nat64_elements(elements))),
+    ]
 }
 
 /// Produces `fib daddr type == "local"` — matches packets whose destination

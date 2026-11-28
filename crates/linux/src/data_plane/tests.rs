@@ -6,14 +6,16 @@ use serde_json::json;
 use seedling_core::system::types::{ForwardProto, IngressRule, ServiceDnatRule};
 
 use super::{
+    host_addresses::{held_v4, set_elements},
     isolation::{
         MARK_MASK, MARK_MOUNT, MARK_POD_NAT64, forwarding_rules, isolation_batch, nat64_drop_rules,
         nat64_mark_rules, pod_source_rules, to_host_rules,
     },
     nft::{
-        dnat_lb, ingress_rule_stmts, loopback_masquerade_stmts, output_ingress_rule_stmts,
-        service_dnat_output_stmts, service_dnat_prerouting_stmts,
+        dnat_lb, ingress_rule_stmts, loopback_masquerade_stmts, nat64_ingress_rule_stmts,
+        output_ingress_rule_stmts, service_dnat_output_stmts, service_dnat_prerouting_stmts,
     },
+    translation_batch,
 };
 
 fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
@@ -563,5 +565,147 @@ fn ingress_traffic_of_either_family_is_redirected_to_the_proxys_address_of_that_
             json!([nfproto(10), local, dport, {"dnat": {"addr": "fd5e::1", "family": "ip6", "port": 8080}}]),
             json!([nfproto(2), local, dport, {"dnat": {"addr": "10.89.255.2", "family": "ip", "port": 8080}}]),
         ]
+    );
+}
+
+fn nets(nets: &[&str]) -> Vec<Ipv6Net> {
+    nets.iter().map(|n| n.parse().unwrap()).collect()
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn the_nat64_set_holds_the_proxy_and_resolver_subnets_whatever_the_host_holds() {
+    assert_eq!(
+        set_elements([]),
+        nets(&["64:ff9b::a59:fe00/120", "64:ff9b::a59:ff00/120"])
+    );
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn the_nat64_set_holds_each_host_address_once_outside_the_infrastructure_subnets() {
+    let addrs = [
+        "192.0.2.10",
+        "10.89.255.1",
+        "10.89.254.1",
+        "127.0.0.1",
+        "192.0.2.10",
+    ]
+    .map(|a| a.parse::<Ipv4Addr>().unwrap());
+    assert_eq!(
+        set_elements(addrs),
+        nets(&[
+            "64:ff9b::a59:fe00/120",
+            "64:ff9b::a59:ff00/120",
+            "64:ff9b::7f00:1/128",
+            "64:ff9b::c000:20a/128",
+        ])
+    );
+}
+
+fn address_message(
+    family: rtnetlink::packet_route::AddressFamily,
+    attributes: Vec<rtnetlink::packet_route::address::AddressAttribute>,
+) -> rtnetlink::packet_route::address::AddressMessage {
+    let mut msg = rtnetlink::packet_route::address::AddressMessage::default();
+    msg.header.family = family;
+    msg.header.index = 3;
+    msg.attributes = attributes;
+    msg
+}
+
+#[test]
+fn a_host_address_is_the_local_one_where_the_kernel_reports_a_peer() {
+    use rtnetlink::packet_route::{AddressFamily, address::AddressAttribute};
+
+    let local: Ipv4Addr = "192.0.2.10".parse().unwrap();
+    let peer: Ipv4Addr = "192.0.2.1".parse().unwrap();
+    let ptp = address_message(
+        AddressFamily::Inet,
+        vec![
+            AddressAttribute::Address(peer.into()),
+            AddressAttribute::Local(local.into()),
+        ],
+    );
+    assert_eq!(held_v4(&ptp).unwrap(), Some((3, local)));
+
+    let plain = address_message(
+        AddressFamily::Inet,
+        vec![AddressAttribute::Address(local.into())],
+    );
+    assert_eq!(held_v4(&plain).unwrap(), Some((3, local)));
+
+    let v6 = address_message(
+        AddressFamily::Inet6,
+        vec![AddressAttribute::Address(Ipv6Addr::LOCALHOST.into())],
+    );
+    assert_eq!(held_v4(&v6).unwrap(), None);
+}
+
+#[test]
+fn an_ipv4_address_report_without_the_address_is_an_error_not_an_absence() {
+    let bare = address_message(rtnetlink::packet_route::AddressFamily::Inet, Vec::new());
+    assert!(held_v4(&bare).is_err());
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+#[test]
+fn pod_traffic_to_the_host_over_nat64_at_an_ingress_port_is_redirected_to_the_proxy() {
+    let rules: Vec<_> = nat64_ingress_rule_stmts(&test_rule(443, ForwardProto::Both))
+        .iter()
+        .map(|r| rule_json(r))
+        .collect();
+    let redirect = |proto: &str| {
+        json!([
+            iifname_pods(),
+            {"match": {"op": "==", "left": {"payload": {"protocol": "ip6", "field": "daddr"}}, "right": "@host_v4_nat64"}},
+            {"match": {"op": "==", "left": {"payload": {"protocol": proto, "field": "dport"}}, "right": 443}},
+            {"dnat": {"addr": "fd5e::1", "family": "ip6", "port": 8080}},
+        ])
+    };
+    assert_eq!(rules, [redirect("tcp"), redirect("udp")]);
+}
+
+// spec: INFRA#pod-traffic-to-the-host
+// spec: INFRA#service-translation
+#[test]
+fn the_translation_table_is_replaced_whole_with_its_nat64_set_holding_only_what_is_given() {
+    let rules = seedling_core::system::types::DataPlaneRules {
+        ingress: vec![test_rule(443, ForwardProto::Tcp)],
+        ..Default::default()
+    };
+    let elements = nets(&["64:ff9b::a59:ff00/120", "64:ff9b::c000:20a/128"]);
+    let batch = serde_json::to_value(translation_batch(&rules, &elements).to_nftables()).unwrap();
+    let cmds = batch["nftables"].as_array().unwrap();
+
+    let table = json!({"family": "inet", "name": "seedling_net"});
+    assert_eq!(cmds[0], json!({"add": {"table": table}}));
+    assert_eq!(cmds[1], json!({"flush": {"table": table}}));
+    let set = json!({
+        "family": "inet",
+        "table": "seedling_net",
+        "name": "host_v4_nat64",
+        "type": "ipv6_addr",
+        "flags": ["interval"],
+    });
+    let at = |cmd: serde_json::Value| cmds.iter().position(|c| *c == cmd).expect("present");
+    let add_set = at(json!({"add": {"set": set}}));
+    let flush_set = at(json!({"flush": {"set": set}}));
+    let add_elements = at(json!({"add": {"element": {
+        "family": "inet",
+        "table": "seedling_net",
+        "name": "host_v4_nat64",
+        "elem": [{"prefix": {"addr": "64:ff9b::a59:ff00", "len": 120}}, "64:ff9b::c000:20a"],
+    }}}));
+    let first_rule = cmds
+        .iter()
+        .position(|c| c["add"]["rule"].is_object())
+        .unwrap();
+    assert!(add_set < flush_set && flush_set < add_elements && add_elements < first_rule);
+    assert!(
+        cmds.iter()
+            .filter_map(|c| c["add"]["rule"].as_object())
+            .any(|r| r["expr"].to_string().contains("@host_v4_nat64")),
+        "the NAT64 ingress redirect is in the batch"
     );
 }

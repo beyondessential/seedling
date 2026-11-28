@@ -11,7 +11,7 @@ use snafu::{ResultExt, Snafu};
 use super::config::build_caddy_config;
 use super::proxy::{CaddyAddrs, CaddyProxy};
 use crate::system::{
-    ContainerRuntime, NetworkProxy, PROXY_BRIDGE, ProcessManager,
+    ContainerRuntime, NetworkProxy, PROXY_BRIDGE, ProcessManager, proxy_ipv4_subnet,
     types::{ContainerState, ContainerStatus, ProxyConfig, TransientRestart, TransientUnitSpec},
 };
 use crate::system::{journal::INFRA_FIELD, priority::UnitStanding};
@@ -58,12 +58,6 @@ pub(crate) fn proxy_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
     addr[..6].copy_from_slice(&bytes[..6]);
     addr[6] = 0xff;
     Ipv6Net::new(std::net::Ipv6Addr::from(addr), 64).expect("64 is a valid IPv6 prefix length")
-}
-
-/// Fixed IPv4 /24 subnet for the seedling-proxy network, enabling
-/// dual-stack ingress without IPv4 on pod networks.
-pub(crate) fn proxy_ipv4_subnet() -> ipnet::Ipv4Net {
-    "10.89.255.0/24".parse().expect("valid IPv4 subnet")
 }
 
 #[derive(Debug, Snafu)]
