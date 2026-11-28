@@ -30,6 +30,7 @@ use crate::{
     },
     system::{
         pod_bridge_name,
+        session_mounts::SessionMount,
         translate::container::{ConfigStamp, job_spec},
         types::ExecHandle,
     },
@@ -975,8 +976,31 @@ impl AppShellHost {
             return Err(format!("create network failed: {e}"));
         }
 
+        let service_mounts = exec_target.job_def.pod.lock().service_mounts.clone();
+        // spec: INFRA#mount-endpoint-addressing
+        // In place before the container starts, from the backends of the last
+        // applied rules: a session never waits for an apply that includes it.
+        let registered = state
+            .driver
+            .session_mounts
+            .register(
+                &*state.driver.data_plane,
+                &state.db,
+                &net_name,
+                SessionMount {
+                    app: exec_target.app_name.clone(),
+                    prefix: net_prefix,
+                    mounts: service_mounts.clone(),
+                },
+            )
+            .await;
+        if let Err(e) = registered {
+            super::remove_session_network(state, &net_name).await;
+            tracing::warn!(app = %app_name, shell = %shell_name, %net_name, "translating the session's mounts failed: {e}");
+            return Err(format!("translating the session's mounts failed: {e}"));
+        }
+
         let resolved_mounts: Vec<(u16, Ipv6Addr, u16)> = {
-            let service_mounts = exec_target.job_def.pod.lock().service_mounts.clone();
             if service_mounts.is_empty() {
                 vec![]
             } else {
@@ -1264,75 +1288,282 @@ mod tests {
         assert_eq!(exit_frame(-1), serde_json::json!({ "exit_code": -1 }));
     }
 
-    // spec: INFRA#pod-network-sources
-    // spec: INFRA#forwarding-policy
-    // spec: INFRA#pod-traffic-to-the-host
     #[cfg(unix)]
-    #[test]
-    fn a_session_job_does_not_start_while_the_isolation_rules_are_not_installed() {
+    mod stubbed {
+        use super::*;
         use crate::{
             oi::{
-                shells::tests::jobs::open_streams,
-                test_support::{TestOi, loopback},
+                shells::tests::jobs::{StubRig, open_streams, stub_rig},
+                test_support::loopback,
             },
             runtime::identity::InstanceId,
             system::{
-                System,
-                backends::Backends,
-                stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+                session_mounts::tests::{backends, tools_job},
+                stub::SessionCall,
             },
         };
 
-        let dir = tempfile::tempdir().unwrap();
-        let container = Arc::new(StubContainerRuntime::new(dir.path().join("vols")));
-        let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
-        let plane = Arc::new(StubDataPlane::default());
-        plane.refuse_isolation(true);
-        let mut system = System::for_tests(
-            Backends::working(container, process),
-            Arc::new(StubNetworkProxy),
-            dir.path(),
-        );
-        system.data_plane = plane;
-        let oi = TestOi::with_driver(Arc::new(system));
-        let state = Arc::clone(&oi.state);
-
-        oi.block_on(async {
-            let link = loopback().await;
-            let (mut io, _client_recv) = open_streams(&link).await;
-            let host = AppShellHost {
+        fn host(state: &Arc<OiState>, stop: &StopSignal) -> AppShellHost {
+            AppShellHost {
                 handle: tokio::runtime::Handle::current(),
-                state: Arc::clone(&state),
+                state: Arc::clone(state),
                 session_id: SessionId::generate(),
-                app_name: "app".parse().unwrap(),
+                app_name: "demo".parse().unwrap(),
                 shell_name: "shell".parse().unwrap(),
-                stop: StopSignal::new(),
+                stop: stop.clone(),
                 io: Mutex::new(None),
                 job_exit: Mutex::new(None),
-            };
-            let target = ShellExecTarget {
-                job_def: Default::default(),
-                job_name: "job".to_owned(),
-                app_name: "app".parse().unwrap(),
-                instance_id: InstanceId::generate(),
-            };
+            }
+        }
 
-            let Err(refused) = host.run_job(target, &mut io).await else {
-                panic!("the session's job started");
-            };
-            assert!(
-                refused.contains("isolation rules are not installed"),
-                "{refused}"
-            );
-            assert!(
-                state
-                    .container_runtime
-                    .list_networks("seedling-")
+        /// The `tools` job declared with `mount` appended, with no image to
+        /// pull, and the name of the pod network a session running it gets.
+        fn target(mount: &str) -> (ShellExecTarget, String) {
+            let job_def = tools_job(mount);
+            job_def.pod.lock().container.lock().image = None;
+            let instance_id = InstanceId::generate();
+            let net_name = format!("seedling-demo-tools-{}", instance_id.display_suffix());
+            (
+                ShellExecTarget {
+                    job_def,
+                    job_name: "tools".to_owned(),
+                    app_name: "demo".parse().unwrap(),
+                    instance_id,
+                },
+                net_name,
+            )
+        }
+
+        async fn no_session_networks(state: &OiState) -> bool {
+            state
+                .container_runtime
+                .list_networks("seedling-")
+                .await
+                .unwrap()
+                .is_empty()
+        }
+
+        fn prefix_recorded(state: &OiState, net_name: &str) -> Option<ipnet::Ipv6Net> {
+            let (node_prefix, name) = (state.node_prefix, net_name.to_owned());
+            state
+                .db
+                .call(move |db| {
+                    crate::runtime::pod_networks::recorded_prefix(
+                        db,
+                        &node_prefix,
+                        &name,
+                        ResourceKind::Job,
+                    )
+                })
+                .unwrap()
+        }
+
+        // spec: INFRA#pod-network-sources
+        // spec: INFRA#forwarding-policy
+        // spec: INFRA#pod-traffic-to-the-host
+        #[test]
+        fn a_session_job_does_not_start_while_the_isolation_rules_are_not_installed() {
+            let StubRig {
+                oi, plane, _dir, ..
+            } = stub_rig();
+            plane.refuse_isolation(true);
+            let state = Arc::clone(&oi.state);
+
+            oi.block_on(async {
+                let link = loopback().await;
+                let (mut io, _client_recv) = open_streams(&link).await;
+                let (target, _) = target("");
+
+                let Err(refused) = host(&state, &StopSignal::new())
+                    .run_job(target, &mut io)
                     .await
-                    .unwrap()
-                    .is_empty(),
-                "no pod network is created for the session"
-            );
-        });
+                else {
+                    panic!("the session's job started");
+                };
+                assert!(
+                    refused.contains("isolation rules are not installed"),
+                    "{refused}"
+                );
+                assert!(
+                    no_session_networks(&state).await,
+                    "no pod network is created for the session"
+                );
+            });
+        }
+
+        // spec: INFRA#mount-endpoint-addressing
+        #[test]
+        fn a_sessions_mounts_are_translated_before_its_container_starts_and_removed_after() {
+            let StubRig {
+                oi,
+                plane,
+                container,
+                _dir,
+            } = stub_rig();
+            let state = Arc::clone(&oi.state);
+            let at_registration = Arc::new(Mutex::new(Vec::new()));
+            {
+                let (at_registration, state, container) = (
+                    Arc::clone(&at_registration),
+                    Arc::clone(&state),
+                    Arc::clone(&container),
+                );
+                plane.on_session_call(move |call| {
+                    if let SessionCall::Set(net_name, _) = call {
+                        at_registration
+                            .lock()
+                            .push((container.exec_attempts(), prefix_recorded(&state, net_name)));
+                    }
+                });
+            }
+
+            oi.block_on(async {
+                state
+                    .driver
+                    .session_mounts
+                    .follow(
+                        &*state.driver.data_plane,
+                        &state.db,
+                        backends(&["fd5e:ed11:9000:4001::2"]),
+                    )
+                    .await;
+                let link = loopback().await;
+                let (mut io, _client_recv) = open_streams(&link).await;
+                let (target, net_name) = target(".mount(db.port(5432))");
+
+                // The stub starts no container, which ends the session.
+                let Err(failed) = host(&state, &StopSignal::new())
+                    .run_job(target, &mut io)
+                    .await
+                else {
+                    panic!("the stub started the session's container");
+                };
+                assert!(failed.contains("exec failed"), "{failed}");
+
+                let calls = plane.session_calls();
+                let [SessionCall::Set(set, rules), SessionCall::Remove(removed)] = &calls[..]
+                else {
+                    panic!("{calls:?}");
+                };
+                assert_eq!((set, removed), (&net_name, &net_name));
+                let [(execs, Some(prefix))] = at_registration.lock()[..] else {
+                    panic!("registered once, with the session's prefix allocated");
+                };
+                assert_eq!(execs, 0, "translated before the container was asked for");
+                assert_eq!(container.exec_attempts(), 1);
+                assert_eq!(rules.len(), 1, "{rules:?}");
+                assert_eq!(rules[0].pod_prefix, prefix);
+                assert_eq!(rules[0].mount_port, 5432);
+                assert_eq!(
+                    rules[0].backends,
+                    [("fd5e:ed11:9000:4001::2".parse().unwrap(), 5432)]
+                );
+
+                assert!(plane.session_mounts().is_empty());
+                assert!(no_session_networks(&state).await);
+                assert_eq!(
+                    prefix_recorded(&state, &net_name),
+                    None,
+                    "its prefix is freed"
+                );
+            });
+        }
+
+        // spec: INFRA#mount-endpoint-addressing
+        // spec: SHL#session-startup
+        #[test]
+        fn a_session_stopped_as_its_mounts_are_translated_removes_them() {
+            let StubRig {
+                oi,
+                plane,
+                container,
+                _dir,
+            } = stub_rig();
+            let state = Arc::clone(&oi.state);
+            let stop = StopSignal::new();
+            {
+                let stop = stop.clone();
+                plane.on_session_call(move |call| {
+                    if matches!(call, SessionCall::Set(..)) {
+                        stop.request();
+                    }
+                });
+            }
+
+            oi.block_on(async {
+                let link = loopback().await;
+                let (mut io, _client_recv) = open_streams(&link).await;
+                let (target, net_name) = target(".mount(db.port(5432))");
+
+                let ran = host(&state, &stop).run_job(target, &mut io).await;
+                assert!(matches!(ran, Ok(None)), "the job never runs");
+
+                assert_eq!(
+                    plane.session_calls().last(),
+                    Some(&SessionCall::Remove(net_name))
+                );
+                assert!(plane.session_mounts().is_empty());
+                assert_eq!(container.exec_attempts(), 0);
+                assert!(no_session_networks(&state).await);
+            });
+        }
+
+        // spec: INFRA#mount-endpoint-addressing
+        #[test]
+        fn a_session_whose_mounts_cannot_be_translated_does_not_start() {
+            let StubRig {
+                oi,
+                plane,
+                container,
+                _dir,
+            } = stub_rig();
+            plane.refuse_sessions(true);
+            let state = Arc::clone(&oi.state);
+
+            oi.block_on(async {
+                let link = loopback().await;
+                let (mut io, _client_recv) = open_streams(&link).await;
+                let (target, net_name) = target(".mount(db.port(5432))");
+
+                let Err(failed) = host(&state, &StopSignal::new())
+                    .run_job(target, &mut io)
+                    .await
+                else {
+                    panic!("the session's job started");
+                };
+                assert!(
+                    failed.contains("translating the session's mounts failed"),
+                    "{failed}"
+                );
+                assert_eq!(container.exec_attempts(), 0);
+                assert!(plane.session_mounts().is_empty());
+                assert!(no_session_networks(&state).await);
+                assert_eq!(prefix_recorded(&state, &net_name), None);
+            });
+        }
+
+        // spec: INFRA#mount-endpoint-addressing
+        #[test]
+        fn a_session_that_mounts_nothing_translates_nothing() {
+            let StubRig {
+                oi,
+                plane,
+                container,
+                _dir,
+            } = stub_rig();
+            let state = Arc::clone(&oi.state);
+
+            oi.block_on(async {
+                let link = loopback().await;
+                let (mut io, _client_recv) = open_streams(&link).await;
+                let (target, _) = target("");
+
+                let _ = host(&state, &StopSignal::new())
+                    .run_job(target, &mut io)
+                    .await;
+                assert_eq!(container.exec_attempts(), 1, "the container is asked for");
+                assert!(plane.session_calls().is_empty());
+            });
+        }
     }
 }

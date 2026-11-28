@@ -85,6 +85,8 @@ pub struct StubContainerRuntime {
     refuse_network_listing: std::sync::atomic::AtomicBool,
     /// Images whose pulls do not succeed, and how each goes instead.
     pull_faults: Mutex<HashMap<String, PullFault>>,
+    /// How many shell session containers were asked for.
+    exec_attempts: AtomicUsize,
 }
 
 /// How a pull the stub is told to disturb goes instead of succeeding.
@@ -136,7 +138,13 @@ impl StubContainerRuntime {
             refuse_volume_removal: std::sync::atomic::AtomicBool::new(false),
             refuse_network_listing: std::sync::atomic::AtomicBool::new(false),
             pull_faults: Mutex::default(),
+            exec_attempts: AtomicUsize::new(0),
         }
+    }
+
+    /// How many shell session containers were asked for, though none starts.
+    pub fn exec_attempts(&self) -> usize {
+        self.exec_attempts.load(Ordering::SeqCst)
     }
 
     /// Make every later volume removal fail, or succeed again.
@@ -541,6 +549,7 @@ impl ContainerRuntime for StubContainerRuntime {
     }
 
     fn exec<'a>(&'a self, _spec: ContainerSpec) -> BoxFuture<'a, Result<ExecHandle, BoxError>> {
+        self.exec_attempts.fetch_add(1, Ordering::SeqCst);
         async move {
             // The shell-session OI handlers reach this when an operator opens
             // a shell. UI tests that exercise the shell page need an actual

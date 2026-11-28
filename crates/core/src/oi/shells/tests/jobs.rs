@@ -19,7 +19,18 @@ use crate::{
         state::OiState,
         test_support::{Loopback, TestOi, loopback},
     },
-    system::types::ExecHandle,
+    system::{
+        System,
+        backends::Backends,
+        session_mounts::{
+            SessionMount,
+            tests::{backends, tools_mounts},
+        },
+        stub::{
+            SessionCall, StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager,
+        },
+        types::ExecHandle,
+    },
 };
 
 /// Opens a session stream the way the daemon sees one, returning the server's
@@ -61,6 +72,34 @@ impl AsyncWrite for BrokenStdin {
 
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
+    }
+}
+
+/// A harness on stub backends, with the data plane and container runtime kept
+/// for inspection.
+pub(in crate::oi::shells) struct StubRig {
+    pub(in crate::oi::shells) oi: TestOi,
+    pub(in crate::oi::shells) plane: Arc<StubDataPlane>,
+    pub(in crate::oi::shells) container: Arc<StubContainerRuntime>,
+    pub(in crate::oi::shells) _dir: tempfile::TempDir,
+}
+
+pub(in crate::oi::shells) fn stub_rig() -> StubRig {
+    let dir = tempfile::tempdir().unwrap();
+    let container = Arc::new(StubContainerRuntime::new(dir.path().join("vols")));
+    let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+    let plane = Arc::new(StubDataPlane::default());
+    let mut system = System::for_tests(
+        Backends::working(Arc::clone(&container) as _, process),
+        Arc::new(StubNetworkProxy),
+        dir.path(),
+    );
+    system.data_plane = Arc::clone(&plane) as _;
+    StubRig {
+        oi: TestOi::with_driver(Arc::new(system)),
+        plane,
+        container,
+        _dir: dir,
     }
 }
 
@@ -258,5 +297,62 @@ fn stop_after_the_job_is_running_ends_the_session() {
         assert!(!process_exists(pid));
         let frame = client_recv.read_to_end(1024).await.expect("exit frame");
         assert_eq!(frame, b"{\"exit_code\":143}\n");
+    });
+}
+
+// spec: INFRA#mount-endpoint-addressing
+#[test]
+fn the_end_of_a_running_session_removes_its_mount_translations() {
+    let StubRig {
+        oi, plane, _dir, ..
+    } = stub_rig();
+    let state = Arc::clone(&oi.state);
+
+    oi.block_on(async {
+        let link = loopback().await;
+        let (io, _client_recv) = open_streams(&link).await;
+        let Started {
+            session_id,
+            stop,
+            live,
+            output,
+            ..
+        } = started(&state, tokio::io::sink()).await;
+        let net_name = live.net_name.clone();
+        state
+            .driver
+            .session_mounts
+            .follow(
+                &*state.driver.data_plane,
+                &state.db,
+                backends(&["fd5e:ed11:9000:4001::2"]),
+            )
+            .await;
+        state
+            .driver
+            .session_mounts
+            .register(
+                &*state.driver.data_plane,
+                &state.db,
+                &net_name,
+                SessionMount {
+                    app: "demo".parse().unwrap(),
+                    prefix: "fd5e:ed11:9000:1::/64".parse().unwrap(),
+                    mounts: tools_mounts(".mount(db.port(5432))"),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(plane.session_mounts().contains_key(&net_name));
+
+        // The job's output ending ends the session, as the client going does.
+        drop(output);
+        run_to_exit(&state, &events(&state), session_id, &stop, live, io).await;
+
+        assert_eq!(
+            plane.session_calls().last(),
+            Some(&SessionCall::Remove(net_name.clone()))
+        );
+        assert!(plane.session_mounts().is_empty());
     });
 }

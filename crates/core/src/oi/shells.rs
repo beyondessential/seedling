@@ -29,16 +29,20 @@ pub(super) fn allocate_session_prefix(
         .map_err(|e| e.to_string())
 }
 
-/// Remove a session's pod network and free its prefix.
+/// Remove a session's pod network and its mount translations, and free its
+/// prefix.
 // spec: INFRA#pod-networks
+// spec: INFRA#mount-endpoint-addressing
 pub(super) async fn remove_session_network(state: &crate::oi::state::OiState, net_name: &str) {
-    let _ = state.container_runtime.remove_network(net_name).await;
-    let name = net_name.to_owned();
-    if let Err(e) = state
-        .db
-        .call(move |db| crate::runtime::pod_networks::release(db, &name))
-    {
-        tracing::warn!(%net_name, "cannot free a pod network prefix: {e}");
-    }
+    state
+        .driver
+        .session_mounts
+        .remove_session_network(
+            &*state.container_runtime,
+            &*state.driver.data_plane,
+            &state.db,
+            net_name,
+        )
+        .await;
 }
 pub use volume_session::{VOLUME_SHELL_IMAGE, build_volume_shell_image};

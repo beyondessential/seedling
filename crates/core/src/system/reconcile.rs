@@ -4093,6 +4093,70 @@ mod tests {
         assert!(!filed(&oi), "cleared once the translations are replaced");
     }
 
+    // spec: INFRA#mount-endpoint-addressing
+    #[test]
+    fn reaping_a_stray_shell_removes_its_mount_translations() {
+        let dir = tempfile::tempdir().unwrap();
+        let container = Arc::new(crate::system::stub::StubContainerRuntime::new(
+            dir.path().join("vols"),
+        ));
+        let process = Arc::new(crate::system::stub::StubProcessManager::new(Arc::clone(
+            &container,
+        )));
+        let plane = Arc::new(crate::system::stub::StubDataPlane::default());
+        let mut system = crate::system::System::for_tests(
+            crate::system::backends::Backends::working(Arc::clone(&container) as _, process),
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        );
+        system.data_plane = Arc::clone(&plane) as _;
+        let system = Arc::new(system);
+        let oi = crate::oi::test_support::TestOi::with_driver(Arc::clone(&system));
+        let reconciler = test_reconciler(&oi);
+        let net_name = "seedling-demo-tools-1";
+        container.seed_container(
+            "demo-tools-1",
+            &[(crate::system::types::SESSION_LABEL, "shell")],
+        );
+        oi.block_on(async {
+            system
+                .session_mounts
+                .follow(
+                    &*system.data_plane,
+                    &oi.state.db,
+                    crate::system::session_mounts::tests::backends(&["fd5e:ed11:9000:4001::2"]),
+                )
+                .await;
+            system
+                .session_mounts
+                .register(
+                    &*system.data_plane,
+                    &oi.state.db,
+                    net_name,
+                    crate::system::session_mounts::SessionMount {
+                        app: "demo".parse().unwrap(),
+                        prefix: "fd5e:ed11:9000:5001::/64".parse().unwrap(),
+                        mounts: crate::system::session_mounts::tests::tools_mounts(
+                            ".mount(db.port(5432))",
+                        ),
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(plane.session_mounts().contains_key(net_name));
+
+            reconciler.reconcile_stray_shells().await;
+        });
+
+        assert_eq!(
+            plane.session_calls().last(),
+            Some(&crate::system::stub::SessionCall::Remove(
+                net_name.to_owned()
+            ))
+        );
+        assert!(plane.session_mounts().is_empty());
+    }
+
     // spec: FLT#filing-and-clearing
     #[test]
     fn the_isolation_and_rule_apply_faults_are_filed_and_cleared_apart() {

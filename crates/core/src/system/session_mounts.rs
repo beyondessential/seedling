@@ -282,7 +282,7 @@ fn release_prefix(db: &DbHandle, net_name: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
 
     use super::*;
@@ -301,8 +301,9 @@ mod tests {
         AppName::new_unchecked("demo")
     }
 
-    /// The service ports the `tools` job of a `demo` app mounts.
-    fn tools_mounts(mount: &str) -> Vec<ServicePort> {
+    /// The `tools` job of a `demo` app, declared with `mount` appended, which
+    /// can mount the `database` service at port 5432.
+    pub(crate) fn tools_job(mount: &str) -> crate::defs::job::JobDef {
         let def = crate::tests::run_test_script_app(&format!(
             r#"
             let db = app.service("database");
@@ -320,7 +321,12 @@ mod tests {
         else {
             panic!("the job is declared");
         };
-        job.def.lock().pod.lock().service_mounts.clone()
+        job.def.lock().clone()
+    }
+
+    /// The service ports the `tools` job mounts.
+    pub(crate) fn tools_mounts(mount: &str) -> Vec<ServicePort> {
+        tools_job(mount).pod.lock().service_mounts.clone()
     }
 
     fn session(mount: &str) -> SessionMount {
@@ -331,8 +337,8 @@ mod tests {
         }
     }
 
-    /// Backends of the `database` service at port 5432 over TCP.
-    fn backends(addrs: &[&str]) -> Arc<BackendView> {
+    /// Backends of the `demo` app's `database` service at port 5432 over TCP.
+    pub(crate) fn backends(addrs: &[&str]) -> Arc<BackendView> {
         let pool = addrs
             .iter()
             .map(|addr| (addr.parse().unwrap(), 5432))
