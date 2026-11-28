@@ -3882,6 +3882,105 @@ mod tests {
         let _ = &mut reconciler;
     }
 
+    // spec: INFRA#pod-network-sources
+    // spec: INFRA#forwarding-policy
+    // spec: INFRA#pod-traffic-to-the-host
+    // spec: FLT#host-faults
+    #[test]
+    fn no_workload_is_started_until_the_isolation_rules_are_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let container = Arc::new(crate::system::stub::StubContainerRuntime::new(
+            dir.path().join("vols"),
+        ));
+        let process = Arc::new(crate::system::stub::StubProcessManager::new(Arc::clone(
+            &container,
+        )));
+        let backends = crate::system::backends::Backends::working(container, process);
+        let plane = Arc::new(crate::system::stub::StubDataPlane::default());
+        plane.refuse_isolation(true);
+        let mut system = crate::system::System::for_tests(
+            backends,
+            Arc::new(crate::system::stub::StubNetworkProxy),
+            dir.path(),
+        );
+        system.data_plane = Arc::clone(&plane) as _;
+        let system = Arc::new(system);
+        let oi = crate::oi::test_support::TestOi::with_driver(Arc::clone(&system));
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"app.deployment("web").image("docker.io/library/nginx:1.29");"#,
+            }),
+        )
+        .unwrap();
+        *oi.state.registry.read().get("demo").unwrap().phase.lock() = AppPhase::Installed;
+        let mut reconciler = test_reconciler(&oi);
+        let isolation_fault = |oi: &crate::oi::test_support::TestOi| {
+            active_kinds(oi, "_system")
+                .contains(&("packet_filter_failed".to_owned(), "isolation".to_owned()))
+        };
+        let units = |oi: &crate::oi::test_support::TestOi| {
+            oi.block_on(oi.state.driver.process.list_units("seedling-"))
+                .unwrap()
+        };
+
+        assert!(oi.block_on(reconciler.tick()));
+        assert!(isolation_fault(&oi), "{:?}", active_kinds(&oi, "_system"));
+        assert!(units(&oi).is_empty(), "started {:?}", units(&oi));
+        assert!(
+            oi.block_on(oi.state.driver.ensure_isolation()).is_err(),
+            "a shell session would not start"
+        );
+
+        plane.refuse_isolation(false);
+        oi.block_on(system.isolation.retry_now());
+        oi.block_on(reconciler.tick());
+        assert!(!isolation_fault(&oi), "cleared once installed");
+        // The resolver comes up ahead of any workload, so its start shows the
+        // iteration has gone past the gate.
+        assert!(
+            units(&oi)
+                .iter()
+                .any(|u| u.name.starts_with("seedling-resolver-")),
+            "actuation goes on once the rules are installed: {:?}",
+            units(&oi)
+        );
+    }
+
+    // spec: FLT#filing-and-clearing
+    #[test]
+    fn the_isolation_and_rule_apply_faults_are_filed_and_cleared_apart() {
+        let oi = crate::oi::test_support::TestOi::new();
+        let reconciler = test_reconciler(&oi);
+        let filed = |subject: &str| {
+            active_kinds(&oi, "_system")
+                .contains(&("packet_filter_failed".to_owned(), subject.to_owned()))
+        };
+
+        reconciler.file_system_fault_for(
+            "packet_filter_failed",
+            ISOLATION_FAULT_SUBJECT,
+            "refused",
+        );
+        reconciler.settle_plane_fault(
+            "packet_filter_failed",
+            "apply_rules",
+            Some(Err("the ruleset was refused".into())),
+        );
+        assert!(filed(ISOLATION_FAULT_SUBJECT) && filed(""));
+
+        reconciler.settle_plane_fault("packet_filter_failed", "apply_rules", Some(Ok(())));
+        assert!(
+            filed(ISOLATION_FAULT_SUBJECT),
+            "an apply clears only its own fault"
+        );
+        assert!(!filed(""));
+
+        reconciler.clear_system_fault_for("packet_filter_failed", ISOLATION_FAULT_SUBJECT);
+        assert!(!filed(ISOLATION_FAULT_SUBJECT));
+    }
+
     // spec: DNS#resolver-lifecycle
     #[test]
     fn no_workload_is_started_while_the_resolver_is_not_up() {
@@ -5971,6 +6070,12 @@ mod tests {
             routes: &'a [crate::system::types::ServiceRoute],
         ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
             self.routes.lock().push(routes.to_vec());
+            Box::pin(async { Ok(()) })
+        }
+
+        fn ensure_isolation<'a>(
+            &'a self,
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
             Box::pin(async { Ok(()) })
         }
 

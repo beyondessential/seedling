@@ -1263,4 +1263,76 @@ mod tests {
     fn exit_frame_carries_only_the_exit_code() {
         assert_eq!(exit_frame(-1), serde_json::json!({ "exit_code": -1 }));
     }
+
+    // spec: INFRA#pod-network-sources
+    // spec: INFRA#forwarding-policy
+    // spec: INFRA#pod-traffic-to-the-host
+    #[cfg(unix)]
+    #[test]
+    fn a_session_job_does_not_start_while_the_isolation_rules_are_not_installed() {
+        use crate::{
+            oi::{
+                shells::tests::jobs::open_streams,
+                test_support::{TestOi, loopback},
+            },
+            runtime::identity::InstanceId,
+            system::{
+                System,
+                backends::Backends,
+                stub::{StubContainerRuntime, StubDataPlane, StubNetworkProxy, StubProcessManager},
+            },
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let container = Arc::new(StubContainerRuntime::new(dir.path().join("vols")));
+        let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+        let plane = Arc::new(StubDataPlane::default());
+        plane.refuse_isolation(true);
+        let mut system = System::for_tests(
+            Backends::working(container, process),
+            Arc::new(StubNetworkProxy),
+            dir.path(),
+        );
+        system.data_plane = plane;
+        let oi = TestOi::with_driver(Arc::new(system));
+        let state = Arc::clone(&oi.state);
+
+        oi.block_on(async {
+            let link = loopback().await;
+            let (mut io, _client_recv) = open_streams(&link).await;
+            let host = AppShellHost {
+                handle: tokio::runtime::Handle::current(),
+                state: Arc::clone(&state),
+                session_id: SessionId::generate(),
+                app_name: "app".parse().unwrap(),
+                shell_name: "shell".parse().unwrap(),
+                stop: StopSignal::new(),
+                io: Mutex::new(None),
+                job_exit: Mutex::new(None),
+            };
+            let target = ShellExecTarget {
+                job_def: Default::default(),
+                job_name: "job".to_owned(),
+                app_name: "app".parse().unwrap(),
+                instance_id: InstanceId::generate(),
+            };
+
+            let Err(refused) = host.run_job(target, &mut io).await else {
+                panic!("the session's job started");
+            };
+            assert!(
+                refused.contains("isolation rules are not installed"),
+                "{refused}"
+            );
+            assert!(
+                state
+                    .container_runtime
+                    .list_networks("seedling-")
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "no pod network is created for the session"
+            );
+        });
+    }
 }

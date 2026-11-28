@@ -24,7 +24,7 @@ use crate::{
 
 /// Opens a session stream the way the daemon sees one, returning the server's
 /// streams for the session and the client's read side of the session stream.
-async fn open_streams(link: &Loopback) -> (SessionIo, quinn::RecvStream) {
+pub(in crate::oi::shells) async fn open_streams(link: &Loopback) -> (SessionIo, quinn::RecvStream) {
     let (mut client_send, client_recv) = link.client.open_bi().await.expect("open bi");
     client_send.write_all(b"\n").await.expect("first bytes");
     let (send, server_recv) = link.server.accept_bi().await.expect("accept bi");

@@ -15,7 +15,7 @@ use crate::{
 };
 
 #[cfg(unix)]
-mod jobs;
+pub(super) mod jobs;
 
 /// A host standing in for the daemon's: it records each attachment it is asked
 /// for and answers with a fixed result, after `hold` if given.
