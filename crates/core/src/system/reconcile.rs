@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    net::{Ipv4Addr, Ipv6Addr},
+    net::Ipv6Addr,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -429,7 +429,6 @@ pub struct Reconciler {
     observer: Observer,
     actuator: Actuator,
     caddy_admin_client: Arc<AsyncRwLock<reqwest::Client>>,
-    caddy_v4_addr: Option<Ipv4Addr>,
     /// Whether the `caddy_failed` fault on file is for a rejected proxy
     /// upgrade, which clears only when an upgrade succeeds.
     // spec: FLT#host-faults
@@ -820,7 +819,6 @@ impl Reconciler {
             observer,
             actuator,
             caddy_admin_client,
-            caddy_v4_addr: None,
             caddy_upgrade_rejected: false,
             data_dir,
             db,
@@ -1667,7 +1665,6 @@ impl Reconciler {
                         CaddyFaultAction::Hold => {}
                     }
                     *self.caddy_admin_client.write().await = client;
-                    self.caddy_v4_addr = ensured.addrs.v4;
                     Some(ensured.addrs)
                 }
                 Err(e) => {
@@ -1774,6 +1771,7 @@ impl Reconciler {
         // --- Compute nftables + proxy (sync, gated on caddy) ---
         let nft_and_proxy = caddy_addrs.map(|addrs| {
             let caddy_ip = addrs.v6;
+            let caddy_v4 = addrs.v4;
 
             let proxy_build = phases::compute_proxy_config(
                 &apps,
@@ -1792,7 +1790,7 @@ impl Reconciler {
                 &apps,
                 &running_pods_by_app,
                 caddy_ip,
-                self.caddy_v4_addr,
+                caddy_v4,
                 &self.node_prefix,
                 &*self.registry,
                 ext_snapshot.as_ref(),
@@ -2177,7 +2175,6 @@ impl Reconciler {
         caddy::teardown_caddy(&*self.driver.container, &*self.driver.process).await;
         // spec: DNS#resolver-lifecycle
         resolver::teardown_resolver(&*self.driver.container, &*self.driver.process).await;
-        self.caddy_v4_addr = None;
         self.resolver_addr = None;
         // spec: FLT#host-faults
         // A stopped proxy and resolver are neither failing to come up nor
@@ -6232,7 +6229,7 @@ mod tests {
                 &apps,
                 &HashMap::new(),
                 std::net::Ipv6Addr::LOCALHOST,
-                None,
+                std::net::Ipv4Addr::LOCALHOST,
                 &node_prefix,
                 &registry,
                 Some(&external),
@@ -6522,7 +6519,7 @@ mod tests {
                 &apps,
                 &HashMap::new(),
                 std::net::Ipv6Addr::LOCALHOST,
-                None,
+                std::net::Ipv4Addr::LOCALHOST,
                 &node_prefix,
                 &registry,
                 external,

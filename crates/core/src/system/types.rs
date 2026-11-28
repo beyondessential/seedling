@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
     time::{Duration, SystemTime},
 };
@@ -369,8 +369,8 @@ pub struct IngressRule {
     pub proto: ForwardProto,
     /// Caddy's IPv6 address:port on the proxy network.
     pub caddy_v6: SocketAddr,
-    /// Caddy's IPv4 address:port, if the proxy network is dual-stack.
-    pub caddy_v4: Option<SocketAddr>,
+    /// Caddy's IPv4 address:port on the proxy network.
+    pub caddy_v4: SocketAddrV4,
 }
 
 /// DNAT6 rule translating a mount endpoint to a backing pod's address and

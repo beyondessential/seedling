@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4},
 };
 
 use ipnet::Ipv6Net;
@@ -169,7 +169,7 @@ fn select_pool(entries: Vec<TaggedBackend>) -> (Vec<(Ipv6Addr, u16)>, bool) {
 pub(super) fn build_ingress_rules(
     config: &ProxyConfig,
     caddy_ip: Ipv6Addr,
-    caddy_v4: Option<Ipv4Addr>,
+    caddy_v4: Ipv4Addr,
 ) -> Vec<IngressRule> {
     use std::collections::BTreeMap;
 
@@ -207,7 +207,7 @@ pub(super) fn build_ingress_rules(
                 _ => ForwardProto::Tcp,
             },
             caddy_v6: SocketAddr::new(IpAddr::V6(caddy_ip), port),
-            caddy_v4: caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), port)),
+            caddy_v4: SocketAddrV4::new(caddy_v4, port),
         })
         .collect()
 }
@@ -797,10 +797,32 @@ mod tests {
     }
 
     fn rules_for(config: &ProxyConfig) -> Vec<(u16, ForwardProto)> {
-        build_ingress_rules(config, ipv6("fd5e::ff"), None)
+        build_ingress_rules(config, ipv6("fd5e::ff"), "10.89.255.2".parse().unwrap())
             .into_iter()
             .map(|r| (r.external_port, r.proto))
             .collect()
+    }
+
+    // spec: INFRA#ingress-redirection
+    #[test]
+    fn every_redirected_port_goes_to_both_of_the_proxys_addresses_at_that_port() {
+        let config = ProxyConfig {
+            listeners: vec![
+                listener(80, ProxyListenerProto::Http),
+                listener(443, ProxyListenerProto::Https),
+            ],
+            ..Default::default()
+        };
+        let v4: Ipv4Addr = "10.89.255.2".parse().unwrap();
+        let rules = build_ingress_rules(&config, ipv6("fd5e::ff"), v4);
+        assert_eq!(rules.len(), 2);
+        for rule in rules {
+            assert_eq!(
+                rule.caddy_v6,
+                SocketAddr::new(IpAddr::V6(ipv6("fd5e::ff")), rule.external_port)
+            );
+            assert_eq!(rule.caddy_v4, SocketAddrV4::new(v4, rule.external_port));
+        }
     }
 
     // spec: PRX#plaintext-ingresses

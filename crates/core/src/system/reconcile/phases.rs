@@ -221,7 +221,7 @@ pub(super) fn compute_nftables_rules(
     apps: &[AppSnapshot],
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     caddy_ip: std::net::Ipv6Addr,
-    caddy_v4_addr: Option<Ipv4Addr>,
+    caddy_v4_addr: Ipv4Addr,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     ext_snapshot: Option<&ExternalServiceSnapshot>,

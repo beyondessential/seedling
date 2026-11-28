@@ -1,4 +1,4 @@
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 
 use ipnet::Ipv6Net;
 use serde_json::json;
@@ -24,7 +24,7 @@ fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
             std::net::IpAddr::V6(Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1)),
             8080,
         ),
-        caddy_v4: None,
+        caddy_v4: SocketAddrV4::new(Ipv4Addr::new(10, 89, 255, 2), 8080),
     }
 }
 
@@ -56,11 +56,7 @@ fn output_rules_have_fib_daddr_local_guard() {
 // spec: INFRA#host-originated-traffic
 #[test]
 fn output_rules_are_ipv6_only_though_the_proxy_has_an_ipv4_address() {
-    let mut rule = test_rule(80, ForwardProto::Both);
-    rule.caddy_v4 = Some(SocketAddr::new(
-        std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2)),
-        8080,
-    ));
+    let rule = test_rule(80, ForwardProto::Both);
 
     let pre = ingress_rule_stmts(&rule);
     assert_eq!(pre.len(), 4, "prerouting covers IPv6 and IPv4");
@@ -550,4 +546,22 @@ fn a_service_without_backends_is_not_translated() {
     rule.backends.clear();
     assert!(service_dnat_prerouting_stmts(&rule).is_empty());
     assert!(service_dnat_output_stmts(&rule).is_empty());
+}
+
+// spec: INFRA#ingress-redirection
+#[test]
+fn ingress_traffic_of_either_family_is_redirected_to_the_proxys_address_of_that_family() {
+    let rules: Vec<_> = ingress_rule_stmts(&test_rule(443, ForwardProto::Tcp))
+        .iter()
+        .map(|r| rule_json(r))
+        .collect();
+    let local = json!({"match": {"op": "==", "left": {"fib": {"result": "type", "flags": ["daddr"]}}, "right": "local"}});
+    let dport = json!({"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 443}});
+    assert_eq!(
+        rules,
+        [
+            json!([nfproto(10), local, dport, {"dnat": {"addr": "fd5e::1", "family": "ip6", "port": 8080}}]),
+            json!([nfproto(2), local, dport, {"dnat": {"addr": "10.89.255.2", "family": "ip", "port": 8080}}]),
+        ]
+    );
 }

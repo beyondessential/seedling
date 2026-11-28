@@ -186,19 +186,14 @@ pub(super) fn ingress_rule_stmts(rule: &IngressRule) -> Vec<Vec<Statement<'stati
         ]
     };
 
-    if let Some(v4) = &rule.caddy_v4 {
-        let ip4 = match v4.ip() {
-            IpAddr::V4(ip) => ip.to_string(),
-            IpAddr::V6(ip) => ip.to_string(),
-        };
-        let dnat4 = dnat_ip4(ip4, v4.port());
-        match rule.proto {
-            ForwardProto::Tcp => rules.push(make_v4("tcp", dnat4)),
-            ForwardProto::Udp => rules.push(make_v4("udp", dnat4)),
-            ForwardProto::Both => {
-                rules.push(make_v4("tcp", dnat4.clone()));
-                rules.push(make_v4("udp", dnat4));
-            }
+    // spec: INFRA#ingress-redirection
+    let dnat4 = dnat_ip4(rule.caddy_v4.ip().to_string(), rule.caddy_v4.port());
+    match rule.proto {
+        ForwardProto::Tcp => rules.push(make_v4("tcp", dnat4)),
+        ForwardProto::Udp => rules.push(make_v4("udp", dnat4)),
+        ForwardProto::Both => {
+            rules.push(make_v4("tcp", dnat4.clone()));
+            rules.push(make_v4("udp", dnat4));
         }
     }
 

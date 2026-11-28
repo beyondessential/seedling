@@ -1,4 +1,5 @@
 use std::{
+    net::{Ipv4Addr, Ipv6Addr},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -11,7 +12,7 @@ use super::config::build_caddy_config;
 use super::proxy::{CaddyAddrs, CaddyProxy};
 use crate::system::{
     ContainerRuntime, NetworkProxy, PROXY_BRIDGE, ProcessManager,
-    types::{ContainerStatus, ProxyConfig, TransientRestart, TransientUnitSpec},
+    types::{ContainerState, ContainerStatus, ProxyConfig, TransientRestart, TransientUnitSpec},
 };
 use crate::system::{journal::INFRA_FIELD, priority::UnitStanding};
 
@@ -82,8 +83,12 @@ pub(crate) enum CaddyStartupError {
         source: std::io::Error,
         backtrace: snafu::Backtrace,
     },
-    #[snafu(display("Caddy did not become healthy within the timeout"))]
-    Timeout { backtrace: snafu::Backtrace },
+    // spec: FLT#host-faults
+    #[snafu(display("Caddy did not become ready within the timeout: {waiting_for}"))]
+    Timeout {
+        waiting_for: &'static str,
+        backtrace: snafu::Backtrace,
+    },
     #[snafu(display("database error: {source}"))]
     Db {
         source: rusqlite::Error,
@@ -100,9 +105,10 @@ pub(crate) enum CaddyStartupError {
         backtrace: snafu::Backtrace,
     },
     // spec: PRX#proxy-upgrades
-    #[snafu(display("{message}; the running proxy has no address to serve from"))]
+    #[snafu(display("{message}; the running proxy cannot serve, as {missing}"))]
     UpgradeRejected {
         message: String,
+        missing: &'static str,
         backtrace: snafu::Backtrace,
     },
 }
@@ -406,9 +412,23 @@ pub(crate) async fn teardown_caddy(container: &dyn ContainerRuntime, process: &d
     }
 }
 
-/// Poll `container_name` until it is running and Caddy's admin API responds
-/// on the Unix socket, or until the deadline elapses. Returns `CaddyAddrs`
-/// on success.
+/// The proxy's IPv6 and IPv4 addresses on the proxy network, or what it
+/// lacks of them. A proxy without both cannot take the traffic redirected to
+/// it from either family.
+// spec: PRX#proxy-addresses
+// spec: INFRA#ingress-redirection
+pub(super) fn proxy_addrs(state: &ContainerState) -> Result<(Ipv6Addr, Ipv4Addr), &'static str> {
+    match (state.pod_addr, state.pod_addr_v4) {
+        (Some(v6), Some(v4)) => Ok((v6, v4)),
+        (None, Some(_)) => Err("it has no IPv6 address on the proxy network"),
+        (Some(_), None) => Err("it has no IPv4 address on the proxy network"),
+        (None, None) => Err("it has neither an IPv6 nor an IPv4 address on the proxy network"),
+    }
+}
+
+/// Poll `container_name` until it is running with both of its addresses and
+/// Caddy's admin API responds on the Unix socket, or until the deadline
+/// elapses, when the error names what it was still waiting for.
 #[tracing::instrument(skip_all, fields(%container_name))]
 async fn poll_until_healthy(
     container_name: &str,
@@ -417,21 +437,31 @@ async fn poll_until_healthy(
     socket_path: &Path,
 ) -> Result<CaddyAddrs, CaddyStartupError> {
     let proxy = CaddyProxy::new(socket_path).context(ClientBuildSnafu)?;
+    let mut waiting_for = "its container has not been inspected";
     loop {
         if tokio::time::Instant::now() >= deadline {
-            return TimeoutSnafu.fail();
+            return TimeoutSnafu { waiting_for }.fail();
         }
-        if let Ok(Some(state)) = container.inspect(container_name).await
-            && matches!(state.status, ContainerStatus::Running)
-            && let Some(ip) = state.pod_addr
-            && proxy.is_healthy().await.unwrap_or(false)
-        {
-            return Ok(CaddyAddrs {
-                v6: ip,
-                v4: state.pod_addr_v4,
-                admin_socket: socket_path.to_owned(),
-            });
-        }
+        waiting_for = match container.inspect(container_name).await {
+            Ok(Some(state)) if matches!(state.status, ContainerStatus::Running) => {
+                match proxy_addrs(&state) {
+                    Ok((v6, v4)) => {
+                        if proxy.is_healthy().await.unwrap_or(false) {
+                            return Ok(CaddyAddrs {
+                                v6,
+                                v4,
+                                admin_socket: socket_path.to_owned(),
+                            });
+                        }
+                        "its admin API does not answer"
+                    }
+                    Err(missing) => missing,
+                }
+            }
+            Ok(Some(_)) => "it is not running",
+            Ok(None) => "its container does not exist",
+            Err(_) => "its container cannot be inspected",
+        };
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -589,30 +619,31 @@ pub(crate) async fn ensure_caddy_running(
             if state.image_id.as_deref() == Some(&desired_id) {
                 // Correct image — check if already healthy.
                 let socket_path = admin_socket_path(data_dir, &active);
-                if let Some(ip) = state.pod_addr {
-                    let healthy = match CaddyProxy::new(&socket_path) {
-                        Ok(p) => p.is_healthy().await.unwrap_or(false),
-                        Err(_) => false,
-                    };
-                    if healthy {
-                        return Ok(EnsuredCaddy {
-                            addrs: CaddyAddrs {
-                                v6: ip,
-                                v4: state.pod_addr_v4,
-                                admin_socket: socket_path,
-                            },
-                            image: ProxyImageOutcome::Current,
-                        });
+                match proxy_addrs(&state) {
+                    Ok((v6, v4)) => {
+                        let healthy = match CaddyProxy::new(&socket_path) {
+                            Ok(p) => p.is_healthy().await.unwrap_or(false),
+                            Err(_) => false,
+                        };
+                        if healthy {
+                            return Ok(EnsuredCaddy {
+                                addrs: CaddyAddrs {
+                                    v6,
+                                    v4,
+                                    admin_socket: socket_path,
+                                },
+                                image: ProxyImageOutcome::Current,
+                            });
+                        }
+                        tracing::warn!(
+                            container = %active,
+                            "caddy running with correct image but health check failed; restarting"
+                        );
                     }
-                    tracing::warn!(
+                    Err(missing) => tracing::warn!(
                         container = %active,
-                        "caddy running with correct image but health check failed; restarting"
-                    );
-                } else {
-                    tracing::warn!(
-                        container = %active,
-                        "caddy running with correct image but has no pod IPv6 address; restarting"
-                    );
+                        "caddy running with correct image but {missing}; restarting"
+                    ),
                 }
                 // Not healthy — stop and fall through to fresh start.
                 stop_slot(&active, process, container).await;
@@ -650,17 +681,18 @@ pub(crate) async fn ensure_caddy_running(
                         // reported as the proxy to use along with the rejection.
                         let rejection =
                             format!("upgraded Caddy rejected the replayed proxy config: {e}");
-                        return match state.pod_addr {
-                            Some(ip) => Ok(EnsuredCaddy {
+                        return match proxy_addrs(&state) {
+                            Ok((v6, v4)) => Ok(EnsuredCaddy {
                                 addrs: CaddyAddrs {
-                                    v6: ip,
-                                    v4: state.pod_addr_v4,
+                                    v6,
+                                    v4,
                                     admin_socket: admin_socket_path(data_dir, &active),
                                 },
                                 image: ProxyImageOutcome::UpgradeRejected(rejection),
                             }),
-                            None => Err(CaddyStartupError::UpgradeRejected {
+                            Err(missing) => Err(CaddyStartupError::UpgradeRejected {
                                 message: rejection,
+                                missing,
                                 backtrace: snafu::Backtrace::capture(),
                             }),
                         };
@@ -720,6 +752,55 @@ pub(crate) async fn ensure_caddy_running(
         addrs,
         image: ProxyImageOutcome::Replaced,
     })
+}
+
+#[cfg(test)]
+mod addr_tests {
+    use super::*;
+    use crate::system::types::ContainerHealth;
+
+    fn proxy_state(v6: Option<Ipv6Addr>, v4: Option<Ipv4Addr>) -> ContainerState {
+        ContainerState {
+            status: ContainerStatus::Running,
+            health: ContainerHealth::Healthy,
+            pid: None,
+            exit_code: None,
+            started_at: None,
+            finished_at: None,
+            pod_addr: v6,
+            pod_addr_v4: v4,
+            image_id: None,
+            spec_hash: None,
+        }
+    }
+
+    // spec: PRX#proxy-addresses
+    // spec: INFRA#ingress-redirection
+    #[test]
+    fn the_proxy_is_ready_only_with_both_of_its_addresses() {
+        let v6: Ipv6Addr = "fd5e:1234:5678:ff00::2".parse().unwrap();
+        let v4: Ipv4Addr = "10.89.255.2".parse().unwrap();
+        assert_eq!(proxy_addrs(&proxy_state(Some(v6), Some(v4))), Ok((v6, v4)));
+        for (state, family) in [
+            (proxy_state(Some(v6), None), "IPv4"),
+            (proxy_state(None, Some(v4)), "IPv6"),
+        ] {
+            let missing = proxy_addrs(&state).unwrap_err();
+            assert!(missing.contains(family), "{missing}");
+        }
+        assert!(proxy_addrs(&proxy_state(None, None)).is_err());
+    }
+
+    // spec: FLT#host-faults
+    #[test]
+    fn a_proxy_that_never_became_ready_says_what_it_lacked() {
+        let missing = proxy_addrs(&proxy_state(Some(Ipv6Addr::LOCALHOST), None)).unwrap_err();
+        let e = TimeoutSnafu {
+            waiting_for: missing,
+        }
+        .build();
+        assert!(e.to_string().contains("no IPv4 address"), "{e}");
+    }
 }
 
 #[cfg(test)]

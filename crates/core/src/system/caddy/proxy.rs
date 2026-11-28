@@ -18,8 +18,8 @@ use crate::system::{BoxError, BoxFuture, NetworkProxy, types::ProxyConfig};
 pub(crate) struct CaddyAddrs {
     /// Container's IPv6 address on the proxy network (used for nftables rules).
     pub v6: Ipv6Addr,
-    /// Container's IPv4 address on the proxy network, if present.
-    pub v4: Option<Ipv4Addr>,
+    /// Container's IPv4 address on the proxy network.
+    pub v4: Ipv4Addr,
     /// Host-side path of the Unix socket for the Caddy admin API.
     pub admin_socket: PathBuf,
 }
