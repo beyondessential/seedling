@@ -4,7 +4,7 @@
 # the web server in the foreground on RIG_PORT with authentication off.
 . "$RIG_RECIPE_DIR/lib.sh"
 
-work="$RIG_SCRATCH_DIR"
+work="$RIG_DATA_DIR/leases/$RIG_LEASE"
 data="$work/daemon"
 state="$work/state"
 mkdir -p "$data" "$state/seedling"
