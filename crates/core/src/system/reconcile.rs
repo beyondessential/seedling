@@ -1456,7 +1456,7 @@ impl Reconciler {
             Err(e) => self.file_system_fault_for(
                 "packet_filter_failed",
                 ISOLATION_FAULT_SUBJECT,
-                &format!("{e}; no workloads will be actuated until they are"),
+                &format!("{e}; no workloads or shell sessions will start until they are"),
             ),
             Ok(()) => self.clear_system_fault_for("packet_filter_failed", ISOLATION_FAULT_SUBJECT),
         }
