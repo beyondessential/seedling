@@ -13,6 +13,7 @@ import {
   Stack,
   TextField,
   Typography,
+  useTheme,
 } from "@mui/material";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useState } from "react";
@@ -43,6 +44,7 @@ function appNameError(name: string): string | null {
 export default function TemplateDetail() {
   const { name = "" } = useParams<{ name: string }>();
   const navigate = useNavigate();
+  const { palette: { mode } } = useTheme();
   const {
     data: template,
     loading,
@@ -206,6 +208,7 @@ export default function TemplateDetail() {
             <CodeMirror
               value={template.body}
               extensions={[rhaiLanguage]}
+              theme={mode}
               editable={false}
               basicSetup={{
                 lineNumbers: true,
